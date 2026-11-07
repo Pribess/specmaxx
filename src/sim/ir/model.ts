@@ -5,6 +5,9 @@
  * (e.g. 3 GatedDeltaNet layers per full-attention layer), dense first layers before MoE layers, and alternating
  * sliding-window layers. Lowering (`src/sim/lower/`) turns blocks into per-device ops for a given workload and
  * parallelism. All dimensions are LOGICAL (unsharded) sizes. See docs/simulation-model.md §2.
+ *
+ * Cross-layer references (`kvCacheFromLayer`, a `'reuse'` sparse selection, `IndexerSpec.ownsKeys: false`) name
+ * an EARLIER layer by its index in `ModelSpec.layers`; `modelSpecErrors` (ir/validateModel.ts) checks them.
  */
 
 import type { Dtype, TensorFormat } from './dtype';
@@ -13,7 +16,7 @@ import type { Dtype, TensorFormat } from './dtype';
 export interface ModelSpec {
   /** Display name, e.g. `'Qwen3-8B'`. */
   name: string;
-  /** Residual-stream width d_model. Unit: elements. */
+  /** Width of ONE residual stream d_model (the embedding width). Unit: elements. */
   hidden: number;
   /** Vocabulary size (embedding and LM-head rows). Count. */
   vocab: number;
@@ -21,8 +24,16 @@ export interface ModelSpec {
   tieEmbeddings: boolean;
   /** Decoder layers in execution order (heterogeneous). */
   layers: LayerSpec[];
-  /** Norm applied before the LM head. */
-  finalNorm: 'rmsnorm' | 'layernorm';
+  /**
+   * Norm applied before the LM head. `'none'`: no final norm (Qwen4Exp, whose final hyper-connection collapse
+   * normalizes instead).
+   */
+  finalNorm: 'rmsnorm' | 'layernorm' | 'none';
+  /**
+   * Parallel residual streams N (hyper-connections); default 1. Each token carries `residualStreams · hidden`
+   * residual elements between blocks and layers (the PP activation send uses that width). Count.
+   */
+  residualStreams?: number;
   /** Where the dims came from (e.g. a Hugging Face model ID or paper URL). */
   source?: string;
 }
@@ -41,9 +52,14 @@ export type BlockSpec =
   | ResidualBlock
   | GqaAttentionBlock
   | MlaAttentionBlock
+  | CsaAttentionBlock
   | LinearAttentionBlock
   | MlpBlock
-  | MoeBlock;
+  | MoeBlock
+  | HcPreBlock
+  | HcPostBlock
+  | NgramEmbeddingBlock
+  | ShortConvBlock;
 
 /** A normalization over the last dimension (per token). */
 export interface NormBlock {
@@ -65,21 +81,90 @@ export interface ResidualBlock {
   dim: number;
 }
 
-/** Sparse-attention indexer parameters (DeepSeek-V3.2 DSA "lightning indexer"). */
-export interface IndexerSpec {
-  /** Indexer heads. Count. */
-  heads: number;
-  /** Indexer head dimension (also the indexer key-cache elements per token). Unit: elements. */
-  headDim: number;
-  /** Keys kept per query. Unit: tokens. */
-  topK: number;
-  /** Storage dtype of the indexer key cache; default: the KV-cache dtype. */
-  keyDtype?: Dtype;
+/** A dense projection with its own weight matrix `inputDim → outputDim` (k = inputDim, n = outputDim), no bias. */
+export interface ProjectionSpec {
+  /** Display name, e.g. `'hc.down'`. */
+  name: string;
+  /** Input features k. Unit: elements. */
+  inputDim: number;
+  /** Output features n. Unit: elements. */
+  outputDim: number;
 }
 
 /**
+ * Top-k sparse-attention indexer (DeepSeek-V3.2 DSA "lightning indexer" and its relatives: GLM k-pool, Qwen QSA,
+ * MiniMax MSA, DeepSeek-V4.1 CSA). Per query it scores the visible indexer keys with `heads` small heads and keeps
+ * the top `topK` for the main attention. Defaults reproduce DSA: one key per token, from the hidden state, with
+ * head weights, owned by this layer.
+ */
+export interface IndexerSpec {
+  /** Indexer heads H_I. Count. */
+  heads: number;
+  /** Indexer head dimension hd_I (also the indexer key-cache elements per indexer key). Unit: elements. */
+  headDim: number;
+  /**
+   * Keys the main attention reads per query, in the attention's key units: tokens for gqa/mla (a pooled indexer
+   * keeps `topK / keyPoolTokens` pools and expands them to tokens), compressed entries for csa (one indexer key
+   * per entry). Unit: tokens (gqa/mla) or entries (csa).
+   */
+  topK: number;
+  /**
+   * Tokens pooled into one indexer key p; default 1. Scored pairs and the key cache are divided by p.
+   * Qwen QSA `indexer_compress_ratio` 4, GLM `index_kpool` 4, DeepSeek-V4.1: the layer's compress ratio r.
+   * Unit: tokens per key.
+   */
+  keyPoolTokens?: number;
+  /**
+   * True if pooling uses a learned gate (GLM `index_kpool_compress_gate`): an extra `h → hd_I` GEMM per token and
+   * `p · hd_I` positional (APE) params. Default false.
+   */
+  keyPoolGate?: boolean;
+  /**
+   * Input width of the key projection kIn; default the block's hidden. DeepSeek-V4.1's `wk` reads the 512-wide
+   * compressed KV latent. Unit: elements.
+   */
+  keyInputDim?: number;
+  /**
+   * True (default) if this layer computes and caches its own indexer keys. False: it reads the key cache of the
+   * nearest earlier layer whose indexer owns keys (DeepSeek-V4.1 "Reindex" layers 24/28/32/36): no key GEMM, no
+   * key norm, no key write, no key-cache memory; it still runs its own query GEMM and scoring.
+   */
+  ownsKeys?: boolean;
+  /**
+   * Upper bound on the keys scored per query (a hierarchical candidate pool); absent = every visible key.
+   * DeepSeek-V4.1 indexers after `candidate_source_layer_id`: `candidate_topk_blocks · candidate_block_size`
+   * = 16384. Unit: indexer keys.
+   */
+  maxScoredKeys?: number;
+  /**
+   * True (default) if a head-weight projection `h → H_I` (DSA `weights_proj`) combines the per-head scores.
+   * False for Qwen QSA (fused `index_qk_proj`) and MiniMax MSA.
+   */
+  headWeights?: boolean;
+}
+
+/** How a sparse-attention layer gets its top-k key selection. */
+export type SparseSelection =
+  /** Runs its own indexer in this layer. */
+  | {
+      kind: 'indexer';
+      /** The indexer this layer runs. */
+      indexer: IndexerSpec;
+    }
+  /**
+   * Reuses the top-k indices of the nearest earlier layer that ran an indexer (GLM-5.3 / Mistral Large 4
+   * `indexer_types` 'shared', DeepSeek-V4.1 "Reuse"): no indexer ops, no indexer key cache, no indexer weights.
+   */
+  | {
+      kind: 'reuse';
+      /** Keys read per query, in the attention's key units (see {@link IndexerSpec.topK}). */
+      topK: number;
+    };
+
+/**
  * Multi-head / grouped-query / multi-query attention (MHA when kvHeads = heads, MQA when kvHeads = 1), with
- * optional q/k-norm, output gate, sliding window, or top-k sparse selection.
+ * optional q/k-norm, output gate, sliding window, top-k sparse selection, a learned relative-position bias and
+ * short convs on K and V.
  */
 export interface GqaAttentionBlock {
   kind: 'gqa_attention';
@@ -107,13 +192,30 @@ export interface GqaAttentionBlock {
   outputGate: boolean;
   /** Sliding-window size; absent = full attention. Mutually exclusive with `sparse`. Unit: tokens. */
   slidingWindow?: number;
-  /** Top-k sparse attention via an indexer; absent = dense. Mutually exclusive with `slidingWindow`. */
-  sparse?: IndexerSpec;
+  /** Top-k sparse attention; absent = dense. Mutually exclusive with `slidingWindow`. */
+  sparse?: SparseSelection;
+  /**
+   * Input-dependent relative-position bias added to the attention scores (Inkling, used with `rope: false`): a
+   * projection `h → heads · relDim` per token, then per (query, head) a `relDim × extentTokens` product with a
+   * learned profile bank, gathered by distance. Absent = none.
+   */
+  relativeBias?: {
+    /** Relative-state width per head d_rel (Inkling `d_rel` 16). Unit: elements. */
+    relDim: number;
+    /** Distances covered by the bias (Inkling `rel_extent` 1024; sliding-window layers use the window). Unit: tokens. */
+    extentTokens: number;
+  };
+  /**
+   * Width of the depthwise causal convs on K and on V after their projections (Inkling `sconv_kernel_size` 4),
+   * each with its own `(K−1)`-token rolling state; absent = none. Unit: tokens (taps).
+   */
+  kvConvKernel?: number;
 }
 
 /**
  * Multi-head latent attention (DeepSeek-V2/V3): K/V are compressed to a low-rank latent; the KV cache holds
- * `kvLoraRank + qkRopeDim` elements per token per layer (shared by all heads).
+ * `kvLoraRank + qkRopeDim` elements per token per layer (shared by all heads). `qkRopeDim: 0` is legal (NoPE
+ * layers: GLM-5.3-Flash, Mistral Large 4 every 4th layer).
  */
 export interface MlaAttentionBlock {
   kind: 'mla_attention';
@@ -133,20 +235,74 @@ export interface MlaAttentionBlock {
   qkRopeDim: number;
   /** Per-head value dimension (dv). Unit: elements. */
   vHeadDim: number;
-  /** DeepSeek-V3.2 DSA top-k sparse attention; absent = dense. */
-  sparse?: IndexerSpec;
+  /** Top-k sparse attention (DSA); absent = dense. */
+  sparse?: SparseSelection;
+  /**
+   * Index of the earlier layer whose latent cache this layer reads (Mistral Large 4 `kv_source_layers`); absent =
+   * this layer computes and caches its own latent. A consumer has no `kv_a` projection, no `kv_a_norm`, no
+   * cache write and no cache memory, but keeps its own `kv_b` up-projection and its own query path.
+   */
+  kvCacheFromLayer?: number;
 }
 
 /**
- * Linear-attention / SSM token mixer (GatedDeltaNet, Mamba2, plain linear attention) with a fixed-size state.
- * State per sequence = `vHeads · keyDim · valueDim` elements, plus the conv1d rolling state.
+ * DeepSeek-V4.1 compressed sparse attention (CSA). Every token has ONE cached vector of `headDim` elements used as
+ * both key and value (K = V). Each query attends the layer's own raw sliding window of `windowTokens` and, when
+ * `global` is set, `topK` entries of a compressed global KV (r tokens pooled into one entry), concatenated into one
+ * softmax. q is low-rank (`q_a → q_norm → q_b`); the output projection is low-rank and grouped (`wo_a` is
+ * block-diagonal over `outGroups`, then `wo_b`). Source: DeepSeek-V4.1 `inference/model.py` `Attention`,
+ * `Compressor`, `Indexer`.
+ */
+export interface CsaAttentionBlock {
+  kind: 'csa_attention';
+  /** Display name, e.g. `'attn'`. */
+  name: string;
+  /** Input/output width (one residual stream). Unit: elements. */
+  hidden: number;
+  /** Query heads H (64). Count. */
+  heads: number;
+  /** q/k dim = v dim = the one cached vector per token or entry (`head_dim` 512). Unit: elements. */
+  headDim: number;
+  /** RoPE part of headDim (`qk_rope_head_dim` 64). Unit: elements. */
+  ropeDim: number;
+  /** Query compression rank rq (`q_lora_rank` 1280). Unit: elements. */
+  qLoraRank: number;
+  /** Output groups G (`o_groups` 8): `wo_a` maps each group's `H·hd/G` features to `outLoraRank`. Count. */
+  outGroups: number;
+  /** Output rank per group R_o (`o_lora_rank` 1024); `wo_b` maps `G·R_o → h`. Unit: elements. */
+  outLoraRank: number;
+  /** Raw sliding window every layer attends and caches (`sliding_window` 128). Unit: tokens. */
+  windowTokens: number;
+  /** The compressed global branch; absent when `compress_ratios[i] == 0` (SWA-only layers 0 and 1). */
+  global?: CsaGlobalSpec;
+}
+
+/** The compressed global branch of a {@link CsaAttentionBlock}. */
+export interface CsaGlobalSpec {
+  /** Tokens pooled into one global KV entry r ≥ 1 (`compress_ratios[i]`; r = 1 is a plain projection). Count. */
+  compressRatio: number;
+  /**
+   * Index of the earlier layer whose global (compressed) KV cache this layer reads; absent = this layer runs the
+   * compressor and owns the cache (a `kv_source_layer_ids` layer). A consumer has no compressor and no global cache.
+   */
+  kvCacheFromLayer?: number;
+  /** Which entries each query reads: its own indexer, or the top-k of an earlier one. topK in entries (`index_topk` 512). */
+  selection: SparseSelection;
+}
+
+/**
+ * Linear-attention / SSM token mixer (GatedDeltaNet, Kimi Delta Attention, Mamba2, plain linear attention) with a
+ * fixed-size state. State per sequence = `vHeads · keyDim · valueDim` elements, plus the conv1d rolling state.
  */
 export interface LinearAttentionBlock {
   kind: 'linear_attention';
   /** Display name, e.g. `'linear_attn'`. */
   name: string;
-  /** Recurrence variant. */
-  variant: 'gated_delta_net' | 'mamba2' | 'linear';
+  /**
+   * Recurrence variant. `'kda'` (Kimi Delta Attention, GLM-5.3-Flash): separate full q/k/v projections with their
+   * own convs, a per-channel forget gate and an output gate, both low-rank (`gateRank`), and a β projection.
+   */
+  variant: 'gated_delta_net' | 'kda' | 'mamba2' | 'linear';
   /** Input/output width (the residual stream). Unit: elements. */
   hidden: number;
   /** q/k heads (Mamba2: B/C groups). Count. */
@@ -159,8 +315,13 @@ export interface LinearAttentionBlock {
   valueDim: number;
   /** Causal depthwise conv width over the q, k, v channels; 0 = no conv. Unit: tokens (taps). */
   convKernel: number;
-  /** True if the output passes a z-gate (gated rmsnorm) before the output projection. */
+  /** True if the output passes a z-gate (gated rmsnorm) before the output projection. Must be true for `'kda'`. */
   outputGate: boolean;
+  /**
+   * Rank r of the low-rank forget gate (`f_a: h → r`, `f_b: r → vH·dk`) and output gate (`g_a: h → r`,
+   * `g_b: r → vH·dv`); set iff `variant` is `'kda'` (GLM: r = head_dim 128). Unit: elements.
+   */
+  gateRank?: number;
 }
 
 /** Dense feed-forward block: `down(act(gate(x)) ⊙ up(x))` if gated, else `down(act(up(x)))`. */
@@ -203,27 +364,202 @@ export interface MoeBlock {
   sharedIntermediate: number;
 }
 
+/**
+ * Hyper-connection "pre" step: collapses N residual streams (N·D elements per token) into the D-wide input of one
+ * sublayer, with mixing weights computed from the streams themselves. Covers Qwen4Exp "Gated Residual"
+ * (normalize, low-rank down/up gate, average, plus the `inject` weights its post step uses) and DeepSeek/GLM mHC
+ * (RMS statistic over N·D, one `N·D → (2+N)·N` projection for the pre/post/comb coefficients, Sinkhorn on the
+ * N×N comb matrix). Also the final collapse before the LM head (Qwen `hyper_connection_mixer`, DeepSeek `hc_pre`
+ * without projection, GLM `hc_head` mean). The coefficients a step computes may be used by a later step
+ * (DeepSeek); each projection is counted once where it is computed.
+ */
+export interface HcPreBlock {
+  kind: 'hc_pre';
+  /** Display name, e.g. `'attn_hc_pre'`. */
+  name: string;
+  /** Residual streams N (`hc_count` / `hc_mult`). Count. */
+  streams: number;
+  /** Width of one stream D (= model hidden). Unit: elements. */
+  dim: number;
+  /**
+   * True if the streams pass a learned RMSNorm γ over N·D (Qwen `hc_norm`, N·D params); false: RMS statistics
+   * only, no params (DeepSeek/GLM).
+   */
+  normGamma: boolean;
+  /**
+   * The mixing projections, each a GEMM per token. Qwen: `[down N·D→rank, up rank→N·D, inject N·D→N]` (final
+   * collapse: no inject); DeepSeek/GLM: `[fn N·D→(2+N)·N]`; final DeepSeek/GLM collapse: `[]`.
+   */
+  projections: ProjectionSpec[];
+  /** Sinkhorn normalization iterations on the N×N comb matrix: 0 for Qwen, `hc_sinkhorn_iters` (20) for mHC. Count. */
+  sinkhornIters: number;
+  /** Small vectors outside the projections (mHC `base` (2+N)·N + `scale` 3). Unit: params. */
+  vectorParams: number;
+}
+
+/**
+ * Hyper-connection "post" step: writes a sublayer output (D wide) back into the N residual streams, replacing the
+ * residual add. mHC: `y_i = post_i · out + Σ_j comb_ij · res_j`; Qwen: `y_i = res_i + w_i · out`. Its coefficients
+ * come from the matching {@link HcPreBlock}; no params of its own.
+ */
+export interface HcPostBlock {
+  kind: 'hc_post';
+  /** Display name, e.g. `'attn_hc_post'`. */
+  name: string;
+  /** Residual streams N. Count. */
+  streams: number;
+  /** Width of one stream D (= model hidden). Unit: elements. */
+  dim: number;
+  /** True if the streams are mixed by the N×N comb matrix (mHC); false: each stream only adds `w_i · out` (Qwen). */
+  mixesStreams: boolean;
+}
+
+/**
+ * Hashed n-gram embedding written into the residual stream (Qwen4Exp PLE, DeepSeek-V4.1 Engram). Per token, the
+ * hashes of its preceding n-grams pick `rowsPerToken` rows of a huge lookup table; the gathered rows
+ * (`rowsPerToken · rowDim` elements) pass through `projections` and a gate against the residual stream, and the
+ * result (`outputDim` wide) is added to the residual. The table is memory capacity: each token reads only its own
+ * rows, so it counts toward total but not active params.
+ */
+export interface NgramEmbeddingBlock {
+  kind: 'ngram_embedding';
+  /** Display name, e.g. `'ple'` or `'engram'`. */
+  name: string;
+  /**
+   * Table rows, summed over hash heads. DeepSeek: `engram_num_embeddings[j]`. Qwen: each of the
+   * `(ngram_size−1)·heads_per_ngram` heads has a prime-sized slice just above `ngram_vocab_size_base`, padded to a
+   * multiple of `make_ngram_vocab_size_divisible_by`; mappers use `heads · ngram_vocab_size_base` rounded up to that
+   * multiple (relative error below 1e-4; exact 320,001,536 rows vs 320,000,000 for Qwen3.8-Flash-Next). Count.
+   */
+  tableRows: number;
+  /** Elements per table row (Qwen `ple_embed_dim / ((ngram_size−1)·heads_per_ngram)` 160; DeepSeek `engram_head_dim` 256). Unit: elements. */
+  rowDim: number;
+  /** Rows gathered per token (Qwen `(ngram_size−1)·heads_per_ngram` 16; DeepSeek `(engram_max_ngram_size−1)·engram_n_heads` 24). Count. */
+  rowsPerToken: number;
+  /**
+   * GEMMs on the gathered rows, each with `inputDim = rowsPerToken · rowDim`. Qwen: key 2560→10240, value
+   * 2560→2560; DeepSeek: `wkv` 6144→(N+1)·D.
+   */
+  projections: ProjectionSpec[];
+  /** Width written into the residual, N·D (all streams). Unit: elements. */
+  outputDim: number;
+  /**
+   * Depthwise causal conv over `outputDim` after the gate (Qwen `ple_conv_kernel_size` 4, dilation `ngram_size` 3);
+   * absent = none.
+   */
+  conv?: {
+    /** Taps. Unit: tokens. */
+    kernel: number;
+    /** Spacing between taps; the rolling state holds `(kernel−1)·dilation` tokens. Unit: tokens. */
+    dilation: number;
+  };
+  /** Small vectors outside the table and projections (Qwen 3 norm γ of N·D; DeepSeek q/k weights 2·N·D). Unit: params. */
+  vectorParams: number;
+}
+
+/**
+ * Short depthwise causal conv plus residual on a branch output, `y = x + conv(x)` (Inkling `use_sconv` on the
+ * attention and MLP outputs), with a `(kernel−1)`-token rolling state per sequence.
+ */
+export interface ShortConvBlock {
+  kind: 'short_conv';
+  /** Display name, e.g. `'attn_sconv'`. */
+  name: string;
+  /** Channels (the branch width). Unit: elements. */
+  dim: number;
+  /** Taps K (Inkling `sconv_kernel_size` 4). Unit: tokens. */
+  kernel: number;
+}
+
+/**
+ * Linear-layer module classes that quantized checkpoints treat differently (e.g. NVFP4 routed experts with FP8
+ * attention and BF16 hyper-connections). Each linear GEMM belongs to exactly one class. Sub-classes fall back to
+ * their parent when `QuantConfig.modules` does not list them ({@link WEIGHT_MODULE_FALLBACK}): `attention_kv_down`
+ * and `attention_kv_up` → `attention`; `indexer_key` and `indexer_head_weights` → `indexer`.
+ */
+export type WeightModule =
+  /** GQA q/k/v/o, MLA q path and o_proj, CSA q path, window `wkv` and output projections. */
+  | 'attention'
+  /**
+   * Projections from the hidden state into a cached KV latent: MLA `kv_a` (`kv_a_proj_with_mqa`), the CSA
+   * compressor (`wkv`, `wgate`). Falls back to `attention`. (Mistral Large 4 FP8 keeps `wkv_a` BF16.)
+   */
+  | 'attention_kv_down'
+  /**
+   * Up-projection of the MLA latent, `kv_b`, and its absorbed slices (`q_absorb` = W_UK, `v_absorb` = W_UV).
+   * Falls back to `attention`. (GLM-5.3-Flash FP8 keeps `kv_b_proj` BF16 while q_a/q_b/kv_a/o are FP8.)
+   */
+  | 'attention_kv_up'
+  /** GatedDeltaNet / KDA / Mamba projections. */
+  | 'linear_attention'
+  /** Sparse-attention indexer query projection (`wq` / `wq_b`); parent of the other indexer classes. */
+  | 'indexer'
+  /** Indexer key projection `wk` and the k-pool gate. Falls back to `indexer`. */
+  | 'indexer_key'
+  /** Indexer head-weight projection `weights_proj`. Falls back to `indexer`. */
+  | 'indexer_head_weights'
+  /** Dense MLP projections. */
+  | 'dense_mlp'
+  /** MoE shared-expert projections. */
+  | 'shared_experts'
+  /** MoE routed-expert projections. */
+  | 'routed_experts'
+  /** Hyper-connection projections; default `{ dtype: highPrecision }` (not `weights`), never structured-sparse. */
+  | 'residual_mixer'
+  /** n-gram / Engram projections (not the lookup table: see `QuantConfig.lookupTables`). */
+  | 'ngram';
+
+/** The parent each weight-module sub-class falls back to when `QuantConfig.modules` does not list it. */
+export const WEIGHT_MODULE_FALLBACK: Partial<Record<WeightModule, WeightModule>> = {
+  attention_kv_down: 'attention',
+  attention_kv_up: 'attention',
+  indexer_key: 'indexer',
+  indexer_head_weights: 'indexer',
+};
+
+/** Numeric format of one {@link WeightModule} class. */
+export interface ModuleQuant {
+  /** Weight storage format. */
+  weights: TensorFormat;
+  /** Dtype the GEMM input is quantized to (W8A8, W4A4); default `QuantConfig.activations` (weight-only quant). */
+  gemmInput?: Dtype;
+}
+
 /** Numeric formats of a deployment (weights, activations, caches). */
 export interface QuantConfig {
-  /** Linear-layer weights (attention/mixer projections, MLP, experts). */
+  /** Linear-layer weights (attention/mixer projections, MLP, experts) of every class not in `modules`. */
   weights: TensorFormat;
   /** GEMM inputs and intermediate activations. */
   activations: Dtype;
-  /** KV, MLA latent and indexer key caches (unless `IndexerSpec.keyDtype` is set). */
+  /** KV, MLA latent and CSA window caches; default of `compressedKvCache` and `indexerKeyCache`. */
   kvCache: TensorFormat;
+  /**
+   * Per-module overrides. An absent class uses its {@link WEIGHT_MODULE_FALLBACK} parent's entry if listed, else
+   * `{ weights }` (except `residual_mixer`: `{ dtype: highPrecision }`). Router, LM head, embeddings and lookup
+   * tables are not modules (they have their own fields).
+   */
+  modules?: Partial<Record<WeightModule, ModuleQuant>>;
+  /** n-gram / Engram lookup tables; default: the `embeddings` format. */
+  lookupTables?: TensorFormat;
+  /** CSA global (compressed) KV cache; default `kvCache`. */
+  compressedKvCache?: TensorFormat;
+  /** Indexer key cache; default `kvCache`. */
+  indexerKeyCache?: TensorFormat;
   /** Recurrent (linear-attention/SSM) state; default `'fp32'`. */
   recurrentState?: Dtype;
   /** Embedding table; default `{ dtype: highPrecision }`. */
   embeddings?: TensorFormat;
-  /** LM head; default: `embeddings`. */
+  /** LM head weights; default: `embeddings`. */
   lmHead?: TensorFormat;
+  /** Dtype the LM-head GEMM input is quantized to (e.g. NVFP4 W4A4 heads); default `activations`. */
+  lmHeadGemmInput?: Dtype;
   /** Norm weights, router, biases, conv taps; default `'bf16'`. */
   highPrecision?: Dtype;
   /** Attention-core math dtype (Q·Kᵀ, P·V); default: `activations`. */
   attentionMath?: Dtype;
   /** Requested float matmul accumulator; default `'fp32'` (bf16/tf32/fp32 inputs always accumulate in fp32). */
   accumulate?: 'fp32' | 'fp16';
-  /** Structured sparsity of linear-layer weights; default `'dense'`. */
+  /** Structured sparsity of linear-layer weights (every module but `residual_mixer`); default `'dense'`. */
   weightSparsity?: 'dense' | '2:4';
 }
 

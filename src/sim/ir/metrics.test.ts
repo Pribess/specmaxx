@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attendedPairs, kvTokensRead, opBytes, opFlops } from './metrics';
+import { attendedPairs, attentionPairs, indexerPairs, kvTokensRead, opBytes, opFlops } from './metrics';
 import type { AttentionOp, GemmOp, IndexerOp, RecurrentOp } from './ops';
 import { lowerBlock, type LoweringContext } from '../lower/lower';
 import { REF_DENSE_8B } from '../models/reference';
@@ -116,7 +116,10 @@ describe('T2d indexer', () => {
     causal: true,
     topK: 256,
     keyCache: { dtype: 'fp8_e4m3' },
-    keyCacheElemsPerToken: 32,
+    keyElemsPerKey: 32,
+    keyPoolTokens: 1,
+    keyWriteElemsPerToken: 32,
+    headWeights: true,
     math: 'fp8',
     accumulate: 'fp32',
     activationDtype: 'bf16',
@@ -131,6 +134,109 @@ describe('T2d indexer', () => {
   });
 });
 
+describe('pooled / compressed keys (r tokens per key)', () => {
+  it('r = 1 reproduces the token formulas exactly', () => {
+    for (const sel of [{ kind: 'full' } as const, { kind: 'topk', topK: 64 } as const, { kind: 'window', windowTokens: 32 } as const]) {
+      expect(attendedPairs(100, 300, true, sel, 1)).toBe(attendedPairs(100, 300, true, sel));
+      expect(kvTokensRead(100, 300, sel, 1)).toBe(kvTokensRead(100, 300, sel));
+    }
+  });
+  it('r = 2, by hand', () => {
+    // full: qLen 4, past 6: (4·6 + 4·5/2)/2 = (24 + 10)/2 = 17   (queries see 3.5, 4, 4.5, 5 entries)
+    expect(attendedPairs(4, 10, true, { kind: 'full' }, 2)).toBe(17);
+    // capped at 4 entries: j0 = clamp(4·2 − 6, 0, 4) = 2 → (2·6 + 3)/2 + 2·4 = 7.5 + 8 = 15.5
+    expect(attendedPairs(4, 10, true, { kind: 'topk', topK: 4 }, 2)).toBe(15.5);
+    // keys read: full ceil(10/2) = 5; top-k min(5, 2·4) = 5; decode at 1000: top-k 64 of 500 → 64
+    expect(kvTokensRead(4, 10, { kind: 'full' }, 2)).toBe(5);
+    expect(kvTokensRead(1, 1000, { kind: 'topk', topK: 64 }, 2)).toBe(64);
+  });
+  it('attention with a secondary (compressed) key set in the same softmax', () => {
+    const op: AttentionOp = {
+      kind: 'attention',
+      name: 'csa',
+      seqs: 1,
+      heads: 2,
+      kvHeads: 1,
+      qkHeadDim: 64,
+      vHeadDim: 64,
+      qLen: 1,
+      kvLen: 1000,
+      causal: true,
+      kvSelection: { kind: 'window', windowTokens: 128 },
+      kvRead: { format: { dtype: 'bf16' }, elemsPerToken: 64 },
+      kvWrite: { format: { dtype: 'bf16' }, elemsPerToken: 64 },
+      secondaryKv: {
+        tokensPerEntry: 4,
+        kvSelection: { kind: 'topk', topK: 32 },
+        kvRead: { format: { dtype: 'fp8_e4m3' }, elemsPerToken: 64 },
+        kvWrite: { format: { dtype: 'fp8_e4m3' }, elemsPerToken: 16 },
+      },
+      math: 'bf16',
+      accumulate: 'fp32',
+      activationDtype: 'bf16',
+    };
+    expect(attentionPairs(op)).toBe(128 + 32);
+    expect(opFlops(op)).toBe(2 * 2 * 160 * 128); // 2·heads·pairs·(qk + v)
+    const b = opBytes(op);
+    expect(b.kvReadBytes).toBe(128 * 64 * 2 + 32 * 64); // window bf16 + 32 entries fp8
+    expect(b.kvWriteBytes).toBe(64 * 2 + 16); // window vector + hd/r of the compressed cache
+    expect(b.activationReadBytes).toBe(2 * 64 * 2); // Q read once
+  });
+  it('indexer with pooled keys, a scoring cap, no head weights, foreign keys', () => {
+    const op: IndexerOp = {
+      kind: 'indexer',
+      name: 'idx',
+      seqs: 1,
+      heads: 4,
+      headDim: 32,
+      qLen: 1,
+      kvLen: 1000,
+      causal: true,
+      topK: 16,
+      keyCache: { dtype: 'bf16' },
+      keyElemsPerKey: 32,
+      keyPoolTokens: 4,
+      maxScoredKeys: 100,
+      keyWriteElemsPerToken: 0,
+      headWeights: false,
+      math: 'bf16',
+      accumulate: 'fp32',
+      activationDtype: 'bf16',
+    };
+    // 1000/4 = 250 visible keys, capped at 100
+    expect(indexerPairs(op)).toBe(100);
+    expect(opFlops(op)).toBe(2 * 4 * 100 * 32);
+    const b = opBytes(op);
+    expect(b.kvReadBytes).toBe(100 * 32 * 2);
+    expect(b.kvWriteBytes).toBe(0);
+    expect(b.activationReadBytes).toBe(4 * 32 * 2); // q only
+    expect(indexerPairs({ ...op, maxScoredKeys: undefined } as IndexerOp)).toBe(250);
+  });
+  it('KDA reads dk + 1 gate elements per token and head', () => {
+    const op: RecurrentOp = {
+      kind: 'recurrent',
+      name: 'kda',
+      variant: 'kda',
+      seqs: 1,
+      qLen: 1,
+      heads: 2,
+      qkHeads: 2,
+      keyDim: 64,
+      valueDim: 64,
+      mode: 'step',
+      chunkLen: 1,
+      stateFlopsPerElemPerToken: 7,
+      gateElemsPerTokenPerHead: 65,
+      hasPriorState: true,
+      stateDtype: 'fp32',
+      activationDtype: 'bf16',
+      math: 'bf16',
+      accumulate: 'fp32',
+    };
+    // q,k 2·2·64·2 = 512; v 2·64·2 = 256; gates 2·65·2 = 260
+    expect(opBytes(op).activationReadBytes).toBe(512 + 256 + 260);
+  });
+});
 describe('T2e recurrent GatedDeltaNet (vH 8, qkH 4, dk = dv = 64, fp32 state)', () => {
   const base: RecurrentOp = {
     kind: 'recurrent',
@@ -145,6 +251,7 @@ describe('T2e recurrent GatedDeltaNet (vH 8, qkH 4, dk = dv = 64, fp32 state)', 
     mode: 'step',
     chunkLen: 1,
     stateFlopsPerElemPerToken: 7,
+    gateElemsPerTokenPerHead: 2,
     hasPriorState: true,
     stateDtype: 'fp32',
     activationDtype: 'bf16',

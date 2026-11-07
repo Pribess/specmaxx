@@ -134,7 +134,7 @@ describe('T4 dense structure (REF_DENSE_8B)', () => {
       layers: [
         decoderLayer({
           hidden: 256,
-          mixer: { kind: 'gqa', heads: 4, kvHeads: 2, headDim: 64, sparse: { heads: 2, headDim: 16, topK: 32 } },
+          mixer: { kind: 'gqa', heads: 4, kvHeads: 2, headDim: 64, sparse: { kind: 'indexer', indexer: { heads: 2, headDim: 16, topK: 32 } } },
           ffn: { kind: 'dense', intermediate: 512 },
         }),
       ],

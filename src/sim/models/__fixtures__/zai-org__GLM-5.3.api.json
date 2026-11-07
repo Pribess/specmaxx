@@ -1,0 +1,30 @@
+{
+  "id": "zai-org/GLM-5.3",
+  "sha": "ba32f8c19c8738e2c57c71798c601d477a7bf844",
+  "gated": false,
+  "private": false,
+  "tags": [
+    "transformers",
+    "safetensors",
+    "glm_moe_dsa",
+    "text-generation",
+    "conversational",
+    "en",
+    "zh",
+    "arxiv:2602.15763",
+    "license:other",
+    "eval-results",
+    "endpoints_compatible",
+    "fp8",
+    "deploy:sagemaker",
+    "region:us"
+  ],
+  "safetensors": {
+    "parameters": {
+      "BF16": 2103729152,
+      "F8_E4M3": 751226191872,
+      "F32": 19456
+    },
+    "total": 753329940480
+  }
+}

@@ -1,0 +1,2374 @@
+{
+  "architectures": [
+    "DeepseekV41ForCausalLM"
+  ],
+  "model_type": "deepseek_v41",
+  "dtype": "bfloat16",
+  "transformers_version": "5.6.0",
+  "bos_token_id": 0,
+  "eos_token_id": 1,
+  "pad_token_id": 2,
+  "image_token_id": 129264,
+  "quantization_config": {
+    "quant_method": "auto-round",
+    "packing_format": "auto_round:auto_gptq",
+    "bits": 4,
+    "group_size": 32,
+    "sym": true,
+    "data_type": "int",
+    "iters": 0,
+    "model_free": true,
+    "autoround_version": "0.15.0",
+    "block_name_to_quantize": "layers,mtp",
+    "extra_config": {
+      "aligner.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "aligner.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.0.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.0.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.0.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.0.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.1.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.1.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.1.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.1.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.10.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.10.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.10.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.10.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.11.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.11.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.11.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.11.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.12.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.12.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.12.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.12.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.13.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.13.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.13.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.13.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.14.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.14.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.14.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.14.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.15.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.15.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.15.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.15.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.16.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.16.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.16.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.16.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.17.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.17.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.17.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.17.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.18.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.18.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.18.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.18.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.19.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.19.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.19.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.19.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.2.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.2.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.2.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.2.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.20.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.20.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.20.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.20.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.21.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.21.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.21.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.21.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.22.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.22.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.22.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.22.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.23.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.23.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.23.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.23.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.24.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.24.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.24.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.24.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.25.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.25.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.25.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.25.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.26.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.26.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.26.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.26.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.27.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.27.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.27.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.27.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.28.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.28.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.28.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.28.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.29.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.29.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.29.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.29.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.3.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.3.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.3.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.3.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.30.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.30.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.30.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.30.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.31.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.31.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.31.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.31.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.4.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.4.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.4.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.4.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.5.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.5.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.5.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.5.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.6.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.6.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.6.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.6.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.7.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.7.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.7.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.7.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.8.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.8.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.8.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.8.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.9.attn.wo": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.9.attn.wqkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.9.mlp.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "vision.blocks.9.mlp.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.3.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.3.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.3.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.3.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.3.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.3.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.3.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.3.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.3.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.0.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.0.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.0.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.0.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.0.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.0.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.0.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.0.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.0.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.1.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.1.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.1.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.1.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.1.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.1.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.1.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.1.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.1.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.2.attn.compressor.wgate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.2.attn.compressor.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.2.attn.indexer.weights_proj": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.2.attn.indexer.wk": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.2.attn.indexer.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.2.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.2.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.2.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.2.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.2.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.2.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.2.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.2.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.2.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.4.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.4.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.4.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.4.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.4.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.4.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.4.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.4.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.4.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.5.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.5.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.5.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.5.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.5.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.5.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.5.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.5.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.5.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.6.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.6.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.6.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.6.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.6.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.6.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.6.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.6.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.6.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.7.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.7.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.7.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.7.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.7.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.7.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.7.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.7.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.7.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.8.attn.compressor.wgate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.8.attn.compressor.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.8.attn.indexer.weights_proj": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.8.attn.indexer.wk": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.8.attn.indexer.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.8.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.8.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.8.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.8.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.8.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.8.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.8.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.8.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.8.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.9.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.9.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.9.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.9.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.9.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.9.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.9.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.9.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.9.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.10.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.10.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.10.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.10.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.10.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.10.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.10.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.10.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.10.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.11.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.11.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.11.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.11.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.11.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.11.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.11.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.11.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.11.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.12.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.12.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.12.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.12.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.12.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.12.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.12.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.12.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.12.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.13.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.13.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.13.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.13.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.13.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.13.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.13.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.13.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.13.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.14.attn.compressor.wgate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.14.attn.compressor.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.14.attn.indexer.weights_proj": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.14.attn.indexer.wk": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.14.attn.indexer.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.14.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.14.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.14.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.14.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.14.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.14.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.14.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.14.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.14.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.15.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.15.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.15.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.15.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.15.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.15.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.15.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.15.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.15.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.17.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.17.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.17.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.17.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.17.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.17.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.17.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.17.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.17.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.16.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.16.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.16.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.16.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.16.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.16.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.16.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.16.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.16.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.18.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.18.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.18.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.18.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.18.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.18.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.18.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.18.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.18.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.19.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.19.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.19.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.19.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.19.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.19.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.19.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.19.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.19.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.20.attn.compressor.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.20.attn.indexer.weights_proj": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.20.attn.indexer.wk": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.20.attn.indexer.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.20.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.20.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.20.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.20.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.20.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.20.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.20.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.20.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.20.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.21.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.21.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.21.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.21.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.21.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.21.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.21.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.21.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.21.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.22.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.22.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.22.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.22.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.22.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.22.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.22.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.22.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.22.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.23.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.23.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.23.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.23.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.23.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.23.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.23.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.23.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.23.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.24.attn.indexer.weights_proj": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.24.attn.indexer.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.24.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.24.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.24.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.24.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.24.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.24.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.24.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.24.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.24.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.26.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.26.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.26.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.26.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.26.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.26.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.26.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.26.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.26.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.25.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.25.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.25.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.25.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.25.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.25.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.25.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.25.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.25.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.28.attn.indexer.weights_proj": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.28.attn.indexer.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.28.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.28.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.28.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.28.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.28.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.28.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.28.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.28.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.28.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.27.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.27.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.27.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.27.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.27.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.27.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.27.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.27.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.27.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.29.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.29.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.29.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.29.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.29.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.29.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.29.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.29.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.29.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.30.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.30.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.30.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.30.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.30.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.30.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.30.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.30.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.30.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.31.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.31.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.31.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.31.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.31.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.31.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.31.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.31.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.31.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.32.attn.indexer.weights_proj": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.32.attn.indexer.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.32.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.32.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.32.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.32.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.32.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.32.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.32.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.32.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.32.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.33.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.33.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.33.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.33.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.33.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.33.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.33.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.33.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.33.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.35.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.35.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.35.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.35.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.35.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.35.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.35.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.35.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.35.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.34.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.34.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.34.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.34.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.34.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.34.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.34.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.34.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.34.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.36.attn.indexer.weights_proj": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.36.attn.indexer.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.36.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.36.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.36.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.36.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.36.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.36.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.36.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.36.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.36.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "head": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.37.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.37.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.37.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.37.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.37.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.37.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.37.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.37.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.37.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.0.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.0.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.0.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.0.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.0.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.0.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.0.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.0.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.0.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.0.main_proj": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.1.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.1.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.1.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.1.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.1.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.1.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.1.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.1.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.1.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.2.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.2.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.2.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.2.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.2.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.2.confidence_head.proj": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.2.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.2.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.2.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.2.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "mtp.2.markov_head.head": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.38.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.38.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.38.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.38.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.38.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.38.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.38.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.38.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.38.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.39.attn.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.39.attn.wo_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.39.attn.wo_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.39.attn.wq_a": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.39.attn.wq_b": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.39.ffn.gate": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.39.ffn.shared_experts.w1": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.39.ffn.shared_experts.w2": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.39.ffn.shared_experts.w3": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.14.engram.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      },
+      "layers.1.engram.wkv": {
+        "bits": 16,
+        "data_type": "float"
+      }
+    }
+  },
+  "text_config": {
+    "model_type": "deepseek_v41_text",
+    "vocab_size": 129280,
+    "hidden_size": 5120,
+    "moe_intermediate_size": 2304,
+    "num_hidden_layers": 40,
+    "num_attention_heads": 64,
+    "num_key_value_heads": 1,
+    "head_dim": 512,
+    "qk_rope_head_dim": 64,
+    "q_lora_rank": 1280,
+    "o_lora_rank": 1024,
+    "o_groups": 8,
+    "hidden_act": "silu",
+    "swiglu_limit": 10.0,
+    "rms_norm_eps": 1e-20,
+    "attention_bias": false,
+    "attention_dropout": 0.0,
+    "initializer_range": 0.02,
+    "use_cache": true,
+    "tie_word_embeddings": false,
+    "max_position_embeddings": 1048576,
+    "rope_theta": 10000,
+    "rope_scaling": {
+      "rope_type": "yarn",
+      "factor": 16,
+      "beta_fast": 32,
+      "beta_slow": 1,
+      "original_max_position_embeddings": 65536
+    },
+    "n_routed_experts": 384,
+    "n_shared_experts": 1,
+    "num_experts_per_tok": 6,
+    "scoring_func": "sqrtsoftplus",
+    "topk_method": "noaux_tc",
+    "norm_topk_prob": true,
+    "routed_scaling_factor": 1.5,
+    "sliding_window": 128,
+    "compress_ratios": [
+      0,
+      0,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      0,
+      0
+    ],
+    "compress_rope_theta": 160000,
+    "kv_source_layer_ids": [
+      2,
+      8,
+      14,
+      20
+    ],
+    "index_source_layer_ids": [
+      2,
+      8,
+      14,
+      20,
+      24,
+      28,
+      32,
+      36
+    ],
+    "index_n_heads": 32,
+    "index_head_dim": 128,
+    "index_topk": 512,
+    "candidate_source_layer_id": 20,
+    "candidate_topk_blocks": 2048,
+    "candidate_block_size": 8,
+    "hc_mult": 4,
+    "hc_sinkhorn_iters": 20,
+    "hc_eps": 1e-06,
+    "engram_layer_ids": [
+      1,
+      14
+    ],
+    "engram_num_embeddings": [
+      384006168,
+      384016682
+    ],
+    "engram_max_ngram_size": 4,
+    "engram_vocab_size": 16000000,
+    "engram_n_heads": 8,
+    "engram_head_dim": 256,
+    "engram_pad_token_id": 2,
+    "engram_compressed_vocab_size": 99092,
+    "num_nextn_predict_layers": 3,
+    "dspark_block_size": 5,
+    "dspark_noise_token_id": 128799,
+    "dspark_target_layer_ids": [
+      37,
+      38,
+      39
+    ],
+    "dspark_markov_rank": 256,
+    "dspark_n_routed_experts": 128,
+    "dspark_num_experts_per_tok": 3
+  },
+  "vision_config": {
+    "model_type": "deepseek_v41_vision",
+    "num_hidden_layers": 32,
+    "hidden_size": 1024,
+    "num_attention_heads": 16,
+    "intermediate_size": 2816,
+    "patch_size": 14,
+    "rope_theta": 10000,
+    "downsample_ratio": 3,
+    "max_image_tokens": 1024,
+    "min_pixels": 295936,
+    "max_wh_ratio": null
+  }
+}

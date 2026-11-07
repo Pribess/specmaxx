@@ -1,0 +1,25 @@
+{
+  "id": "Qwen/Qwen3.8-27B",
+  "sha": "37561816e66b5b9153b1b64c10968c18c1e6f4a0",
+  "gated": false,
+  "private": false,
+  "tags": [
+    "transformers",
+    "safetensors",
+    "qwen3_5",
+    "image-text-to-text",
+    "conversational",
+    "license:apache-2.0",
+    "eval-results",
+    "endpoints_compatible",
+    "deploy:azure",
+    "deploy:sagemaker",
+    "region:us"
+  ],
+  "safetensors": {
+    "parameters": {
+      "BF16": 27781427952
+    },
+    "total": 27781427952
+  }
+}

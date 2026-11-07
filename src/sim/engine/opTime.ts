@@ -8,7 +8,7 @@
  * variants and modifiers"), so nothing here knows about variants.
  */
 
-import { opBytes, opFlops, attendedPairs, type ByteBreakdown } from '../ir/metrics';
+import { attentionPairs, indexerPairs, opBytes, opFlops, type ByteBreakdown } from '../ir/metrics';
 import type {
   AttentionOp,
   CollectiveOp,
@@ -100,7 +100,7 @@ export function gemmShape(op: GemmOp): GemmShape {
  * one KV head are packed into the rows; the keys a query sees on average form the columns.
  */
 export function attentionShape(op: AttentionOp): GemmShape {
-  const pairs = attendedPairs(op.qLen, op.kvLen, op.causal, op.kvSelection);
+  const pairs = attentionPairs(op); // primary + secondary keys (one softmax)
   // Formula: batch = seqs·kvHeads, m = qLen·heads/kvHeads, n = ceil(pairs/qLen), k = qkHeadDim
   // See docs/simulation-model.md §4 ("Shape efficiency")
   return {
@@ -113,7 +113,7 @@ export function attentionShape(op: AttentionOp): GemmShape {
 
 /** The equivalent batched-GEMM shape of the indexer (all heads share one key per token, so they pack into rows). */
 export function indexerShape(op: IndexerOp): GemmShape {
-  const pairsFull = attendedPairs(op.qLen, op.kvLen, op.causal, { kind: 'full' });
+  const pairsFull = indexerPairs(op); // scored (pooled, capped) keys
   // Formula: batch = seqs, m = qLen·heads, n = ceil(pairs_full/qLen), k = headDim
   // See docs/simulation-model.md §4 ("Shape efficiency")
   return { batch: op.seqs, m: op.qLen * op.heads, n: Math.ceil(pairsFull / op.qLen), k: op.headDim };

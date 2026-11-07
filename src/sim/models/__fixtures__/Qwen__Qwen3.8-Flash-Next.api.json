@@ -1,0 +1,24 @@
+{
+  "id": "Qwen/Qwen3.8-Flash-Next",
+  "sha": "812d96e10a0dd82b69d749e68693698cf6c36daa",
+  "gated": false,
+  "private": false,
+  "tags": [
+    "transformers",
+    "safetensors",
+    "qwen4_exp",
+    "image-text-to-text",
+    "conversational",
+    "license:other",
+    "eval-results",
+    "endpoints_compatible",
+    "region:us"
+  ],
+  "safetensors": {
+    "parameters": {
+      "BF16": 179999981424,
+      "I64": 35
+    },
+    "total": 179999981459
+  }
+}

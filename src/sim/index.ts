@@ -10,12 +10,16 @@ export * from './ir/metrics';
 export * from './ir/model';
 export * from './ir/builders';
 export * from './ir/params';
+export * from './ir/validateModel';
 
 // Lowering: model + workload step + parallelism → per-device ops.
 export * from './lower/lower';
 
 // Reference models.
 export * from './models/reference';
+
+// Hugging Face config.json → model IR mapping (pure; fetching lives in src/hf/).
+export * from './models/hf/index';
 
 // Hardware: schema, units, peaks, shape efficiency, modifiers, unlock axes, validation, presets (devices, links,
 // topologies, unlock axes per device).

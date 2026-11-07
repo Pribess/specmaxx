@@ -1,0 +1,27 @@
+{
+  "id": "thinkingmachines/Inkling-Small",
+  "sha": "8cc5877b44d343f88b92086aa1fb72897950f06a",
+  "gated": false,
+  "private": false,
+  "tags": [
+    "transformers",
+    "safetensors",
+    "inkling_mm_model",
+    "image-text-to-text",
+    "conversational",
+    "audio-text-to-text",
+    "moe",
+    "license:apache-2.0",
+    "eval-results",
+    "endpoints_compatible",
+    "deploy:sagemaker",
+    "region:us"
+  ],
+  "safetensors": {
+    "parameters": {
+      "F32": 10280,
+      "BF16": 265956428810
+    },
+    "total": 265956439090
+  }
+}

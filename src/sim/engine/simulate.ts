@@ -12,7 +12,9 @@
 
 import { applyDeviceModifiers, applyLinkModifiers, describeDeviceModifier, describeLinkModifier } from '../hw/modifiers';
 import type { DeviceSpec, HardwareStack, TopologySpec } from '../hw/types';
-import { lowerModel, type LoweredModel, type LoweringContext } from '../lower/lower';
+import { crossLayerReferences } from '../ir/validateModel';
+import type { ModelSpec } from '../ir/model';
+import { lowerModel, stageLayerRange, type LoweredModel, type LoweringContext } from '../lower/lower';
 import type { AllReduceAlgorithm, CollectivePath } from './collectives';
 import { memoryReport } from './memory';
 import { engineMemBandwidthBytesPerSec, opTime, type OpTimeContext } from './opTime';
@@ -49,6 +51,28 @@ export function effectiveHardware(hardware: HardwareStack): EffectiveHardware {
     ...interMods.map((m) => `interNode ${describeLinkModifier(m)}`),
   ];
   return { device, topology, notes };
+}
+
+/**
+ * One warning per cross-layer reference (shared KV cache, reused top-k, shared indexer keys) whose source layer
+ * sits on an earlier pipeline stage than its consumer. Documented approximation: the consumer's stage is assumed to
+ * hold the data (no transfer is costed, and the data is not counted twice in memory). See docs §9.
+ */
+export function crossStageWarnings(model: ModelSpec, pp: number): string[] {
+  const stageOf = (layer: number): number => {
+    for (let s = 0; s < pp; s++) {
+      const [start, end] = stageLayerRange(model.layers.length, pp, s);
+      if (layer >= start && layer < end) return s;
+    }
+    return -1;
+  };
+  return crossLayerReferences(model)
+    .filter((ref) => stageOf(ref.source) !== stageOf(ref.consumer))
+    .map(
+      (ref) =>
+        `layer ${ref.consumer} reads the ${ref.what.replaceAll('_', ' ')} of layer ${ref.source} on another pipeline stage; ` +
+        'its transfer is not modeled',
+    );
 }
 
 /** Lowers and costs one phase (prefill or decode) for one microbatch, then applies the pipeline and DP rules. */
@@ -102,7 +126,11 @@ export function simulate(input: SimInput): SimResult {
   const device = hw.device;
   const engine = device.engines.find((e) => e.id === (input.hardware.engineId ?? device.engines[0].id));
   if (engine === undefined) throw new Error(`engine '${input.hardware.engineId}' not found`);
-  const warnings: string[] = [...hw.notes, ...checkPlacement(parallel, hw.topology).warnings];
+  const warnings: string[] = [
+    ...hw.notes,
+    ...checkPlacement(parallel, hw.topology).warnings,
+    ...crossStageWarnings(model, parallel.pp),
+  ];
   const algorithm: AllReduceAlgorithm = options.collectiveAlgorithm;
   const base = {
     engine,

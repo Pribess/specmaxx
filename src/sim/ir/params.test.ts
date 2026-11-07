@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { activeBlockParams, activeParamsPerToken, blockParams, countParams } from './params';
-import { decoderLayer } from './builders';
-import type { MlaAttentionBlock, MoeBlock } from './model';
+import { decoderLayer, decoderModel, hyperCollapse, type HcPreParams } from './builders';
+import type {
+  CsaAttentionBlock,
+  GqaAttentionBlock,
+  HcPreBlock,
+  IndexerSpec,
+  LinearAttentionBlock,
+  MlaAttentionBlock,
+  MoeBlock,
+  NgramEmbeddingBlock,
+} from './model';
 import { REF_DENSE_8B, TINY_DENSE, TINY_HYBRID, TINY_HYBRID_DENSE_FIRST, TINY_MLA_SPARSE } from '../models/reference';
 
 describe('T3 countParams', () => {
@@ -104,9 +113,304 @@ describe('builders', () => {
     expect(() =>
       decoderLayer({
         hidden: 64,
-        mixer: { kind: 'gqa', heads: 2, kvHeads: 1, headDim: 32, slidingWindow: 8, sparse: { heads: 1, headDim: 8, topK: 4 } },
+        mixer: { kind: 'gqa', heads: 2, kvHeads: 1, headDim: 32, slidingWindow: 8, sparse: { kind: 'indexer', indexer: { heads: 1, headDim: 8, topK: 4 } } },
         ffn: { kind: 'dense', intermediate: 128 },
       }),
     ).toThrow();
+  });
+});
+
+// Hand-derived counts for the new blocks, built with the real dims of the shortlist models. Tensor shapes from the
+// research notes (safetensors headers): Qwen3.8-Flash-Next, DeepSeek-V4.1-Flash, GLM-5.3-Flash, Mistral Large 4,
+// Inkling-Small.
+
+/** A GLM-5.3-Flash KDA layer: 64 heads, dk = dv = 128, conv 4, gate rank 128, h 4096. */
+const GLM_KDA: LinearAttentionBlock = {
+  kind: 'linear_attention',
+  name: 'linear_attn',
+  variant: 'kda',
+  hidden: 4096,
+  qkHeads: 64,
+  vHeads: 64,
+  keyDim: 128,
+  valueDim: 128,
+  convKernel: 4,
+  outputGate: true,
+  gateRank: 128,
+};
+
+/** DeepSeek-V4.1-Flash CSA attention without its global branch (layers 0-1). */
+const DS_CSA_SWA: CsaAttentionBlock = {
+  kind: 'csa_attention',
+  name: 'attn',
+  hidden: 5120,
+  heads: 64,
+  headDim: 512,
+  ropeDim: 64,
+  qLoraRank: 1280,
+  outGroups: 8,
+  outLoraRank: 1024,
+  windowTokens: 128,
+};
+
+/** DeepSeek-V4.1 layer-2 indexer: 32 heads × 128, top-512 entries, keys from the 512-wide latent pooled by r = 2. */
+const DS_INDEXER: IndexerSpec = { heads: 32, headDim: 128, topK: 512, keyPoolTokens: 2, keyInputDim: 512 };
+
+describe('new block parameter counts', () => {
+  it('KDA (GLM-5.3-Flash): q,k,v,f,g,b projections 104,071,168', () => {
+    // q,k,v 4096·3·8192 = 100,663,296; β 4096·64 = 262,144; forget 4096·128 + 128·8192 = 1,572,864;
+    // out gate 1,572,864 → 104,071,168 (R3 §5 "104.07 M"); conv 3·8192·4 = 98,304; A_log 64; dt_bias 8192;
+    // o_norm 128; o_proj 8192·4096 = 33,554,432
+    expect(blockParams(GLM_KDA)).toBe(104_071_168 + 98_304 + 64 + 8192 + 128 + 33_554_432);
+  });
+
+  it('CSA (DeepSeek-V4.1-Flash): attention without compressor/indexer is 126.6 M', () => {
+    // q_a 5120·1280 = 6,553,600 + q_norm 1280 + q_b 1280·64·512 = 41,943,040; wkv 5120·512 = 2,621,440 + kv_norm 512;
+    // wo_a 8·1024·4096 = 33,554,432; wo_b 8192·5120 = 41,943,040
+    expect(blockParams(DS_CSA_SWA)).toBe(126_617_344);
+  });
+
+  it('CSA kv-source layer (r = 2) adds the compressor and the indexer; a consumer adds nothing', () => {
+    const owner: CsaAttentionBlock = {
+      ...DS_CSA_SWA,
+      global: { compressRatio: 2, selection: { kind: 'indexer', indexer: DS_INDEXER } },
+    };
+    // compressor wkv + wgate 2·5120·512 + norm 512 = 5,243,392
+    // indexer wq_b 1280·32·128 = 5,242,880 + wk 512·128 = 65,536 + key norm 2·128 + weights_proj 5120·32 = 163,840
+    //   = 5,472,512 (the checkpoint's RMSNorm k_norm has 128 params, not 256)
+    expect(blockParams(owner)).toBe(126_617_344 + 5_243_392 + 5_472_512);
+    const r1Owner: CsaAttentionBlock = { ...owner, global: { ...owner.global!, compressRatio: 1 } };
+    // r = 1: wkv 5120·512 + norm 512 = 2,621,952
+    expect(blockParams(r1Owner)).toBe(126_617_344 + 2_621_952 + 5_472_512);
+    const consumer: CsaAttentionBlock = {
+      ...DS_CSA_SWA,
+      global: { compressRatio: 2, kvCacheFromLayer: 2, selection: { kind: 'reuse', topK: 512 } },
+    };
+    expect(blockParams(consumer)).toBe(126_617_344);
+    // Reindex layer (24): own query and head weights, keys read from layer 20
+    const reindex: CsaAttentionBlock = {
+      ...DS_CSA_SWA,
+      global: {
+        compressRatio: 1,
+        kvCacheFromLayer: 20,
+        selection: { kind: 'indexer', indexer: { ...DS_INDEXER, keyPoolTokens: 1, ownsKeys: false, maxScoredKeys: 16384 } },
+      },
+    };
+    expect(blockParams(reindex)).toBe(126_617_344 + 5_242_880 + 163_840);
+  });
+
+  it('indexer variants: GLM k-pool gate, Qwen QSA without head weights, reuse', () => {
+    const mla = (sparse: MlaAttentionBlock['sparse']): MlaAttentionBlock => ({
+      kind: 'mla_attention',
+      name: 'attn',
+      hidden: 4096,
+      heads: 64,
+      qLoraRank: 1536,
+      kvLoraRank: 512,
+      qkNopeDim: 256,
+      qkRopeDim: 0,
+      vHeadDim: 256,
+      ...(sparse !== undefined ? { sparse } : {}),
+    });
+    const glmIndexer: IndexerSpec = { heads: 32, headDim: 128, topK: 2048, keyPoolTokens: 4, keyPoolGate: true };
+    // wq_b 1536·32·128 = 6,291,456; wk 4096·128 + k_norm 256 = 524,544; gate 4096·128 + APE 4·128 = 524,800;
+    // weights_proj 4096·32 = 131,072 → 7,471,872 (R3 §5 "indexer 7.4 M")
+    expect(blockParams(mla({ kind: 'indexer', indexer: glmIndexer })) - blockParams(mla(undefined))).toBe(7_471_872);
+    expect(blockParams(mla({ kind: 'reuse', topK: 2048 }))).toBe(blockParams(mla(undefined)));
+
+    const qwenAttn: GqaAttentionBlock = {
+      kind: 'gqa_attention',
+      name: 'attn',
+      hidden: 2560,
+      heads: 24,
+      kvHeads: 2,
+      headDim: 256,
+      qkvBias: false,
+      outBias: false,
+      qkNorm: true,
+      rope: true,
+      causal: true,
+      outputGate: true,
+    };
+    const qsa: IndexerSpec = { heads: 4, headDim: 128, topK: 2048, keyPoolTokens: 4, headWeights: false };
+    // index_qk_proj 640·2560 = 1,638,400 = q 2560·4·128 + k 2560·128; q/k layernorm 2·128 = 256
+    const withQsa = blockParams({ ...qwenAttn, sparse: { kind: 'indexer', indexer: qsa } });
+    expect(withQsa - blockParams(qwenAttn)).toBe(1_638_400 + 256);
+  });
+
+  it('GQA with relative bias and K/V convs (Inkling-Small global layer)', () => {
+    const inkling: GqaAttentionBlock = {
+      kind: 'gqa_attention',
+      name: 'attn',
+      hidden: 4096,
+      heads: 32,
+      kvHeads: 8,
+      headDim: 128,
+      qkvBias: false,
+      outBias: false,
+      qkNorm: true,
+      rope: false,
+      causal: true,
+      outputGate: false,
+      relativeBias: { relDim: 16, extentTokens: 1024 },
+      kvConvKernel: 4,
+    };
+    // wq 4096·4096 = 16,777,216; wk, wv 2·1024·4096 = 8,388,608; wo 16,777,216; q/k norm 256;
+    // wr 4096·32·16 = 2,097,152; rel profile 16·1024 = 16,384; k/v sconv 2·1024·4 = 8192
+    expect(blockParams(inkling)).toBe(44_065_024);
+  });
+
+  it('MLA reading an earlier latent drops kv_a and its norm (Mistral Large 4 layer 39)', () => {
+    const own: MlaAttentionBlock = {
+      kind: 'mla_attention',
+      name: 'attn',
+      hidden: 6144,
+      heads: 64,
+      qLoraRank: 0,
+      kvLoraRank: 512,
+      qkNopeDim: 128,
+      qkRopeDim: 0,
+      vHeadDim: 128,
+    };
+    // h·(rkv + dr) + rkv = 6144·512 + 512
+    expect(blockParams(own) - blockParams({ ...own, kvCacheFromLayer: 35 })).toBe(3_146_240);
+  });
+
+  it('hc_pre: Qwen Gated Residual, DeepSeek mHC, GLM mHC; hc_post is free', () => {
+    const qwenPre: HcPreParams = {
+      normGamma: true,
+      projections: [
+        { name: 'hc.down', inputDim: 10240, outputDim: 320 },
+        { name: 'hc.up', inputDim: 320, outputDim: 10240 },
+        { name: 'hc.inject', inputDim: 10240, outputDim: 4 },
+      ],
+      sinkhornIters: 0,
+      vectorParams: 0,
+    };
+    const qwen: HcPreBlock = { kind: 'hc_pre', name: 'hc', streams: 4, dim: 2560, ...qwenPre };
+    // hc_norm 10240 + down 3,276,800 + up 3,276,800 + inject 40,960 (R1 tensors) → ×2·48 = 634,060,800
+    expect(blockParams(qwen)).toBe(6_604_800);
+    // final hyper_connection_mixer: hc_norm + down + up, no inject
+    const final = hyperCollapse({ streams: 4, dim: 2560, pre: { ...qwenPre, projections: qwenPre.projections.slice(0, 2) } });
+    expect(blockParams(final)).toBe(6_563_840);
+
+    const mhc = (dim: number): HcPreBlock => ({
+      kind: 'hc_pre',
+      name: 'hc',
+      streams: 4,
+      dim,
+      normGamma: false,
+      projections: [{ name: 'hc.fn', inputDim: 4 * dim, outputDim: 24 }],
+      sinkhornIters: 20,
+      vectorParams: 24 + 3,
+    });
+    // DeepSeek hc_attn_fn [24, 20480] + base 24 + scale 3; two per layer × 40 = 39.3 M
+    expect(blockParams(mhc(5120))).toBe(24 * 20480 + 27);
+    expect(40 * 2 * blockParams(mhc(5120))).toBe(39_323_760);
+    // GLM hc_attn_fn [24, 16384] + 27; two per layer = 786,486 ("0.79 M")
+    expect(2 * blockParams(mhc(4096))).toBe(786_486);
+    expect(blockParams({ kind: 'hc_post', name: 'p', streams: 4, dim: 4096, mixesStreams: true })).toBe(0);
+  });
+
+  it('ngram: Qwen PLE table counts in total, only the gathered rows in active', () => {
+    const ple: NgramEmbeddingBlock = {
+      kind: 'ngram_embedding',
+      name: 'ple',
+      // 16 heads · 20,000,000 rounded up to 128; the checkpoint's 128 × 2,500,012 = 320,001,536 rows (rel. err 4.8e-6)
+      tableRows: 320_000_000,
+      rowDim: 160,
+      rowsPerToken: 16,
+      projections: [
+        { name: 'ple.key', inputDim: 2560, outputDim: 10240 },
+        { name: 'ple.value', inputDim: 2560, outputDim: 2560 },
+      ],
+      outputDim: 10240,
+      conv: { kernel: 4, dilation: 3 },
+      vectorParams: 3 * 10240,
+    };
+    // table 51,200,000,000; key 26,214,400 + value 6,553,600 + conv 10240·4 = 40,960 + norms 30,720 = 32,839,680
+    expect(blockParams(ple)).toBe(51_200_000_000 + 32_839_680);
+    expect(Math.abs(320_000_000 * 160 - 51_200_245_760) / 51_200_245_760).toBeLessThan(1e-4);
+    // active: the 16 gathered rows of 160 instead of the table
+    expect(activeBlockParams(ple)).toBe(32_839_680 + 16 * 160);
+
+    const engram: NgramEmbeddingBlock = {
+      kind: 'ngram_embedding',
+      name: 'engram',
+      tableRows: 384_006_168,
+      rowDim: 256,
+      rowsPerToken: 24,
+      projections: [{ name: 'engram.wkv', inputDim: 6144, outputDim: 5 * 5120 }],
+      outputDim: 4 * 5120,
+      vectorParams: 2 * 4 * 5120,
+    };
+    // table 98,305,579,008 + wkv 157,286,400 + q/k weights 40,960
+    expect(blockParams(engram)).toBe(98_305_579_008 + 157_286_400 + 40_960);
+  });
+
+  it('short_conv: dim·K', () => {
+    expect(blockParams({ kind: 'short_conv', name: 'sc', dim: 4096, kernel: 4 })).toBe(16_384);
+  });
+
+  it("finalNorm 'none' has no final-norm params", () => {
+    const layers = TINY_DENSE.layers;
+    const none = decoderModel({ name: 'n', hidden: 256, vocab: 1000, tieEmbeddings: false, layers, finalNorm: 'none' });
+    expect(countParams(TINY_DENSE) - countParams(none)).toBe(256);
+  });
+});
+
+describe('builders: hyper-connections, n-gram, short conv, beforeHead', () => {
+  const pre: HcPreParams = {
+    normGamma: false,
+    projections: [{ name: 'hc.fn', inputDim: 256, outputDim: 24 }],
+    sinkhornIters: 20,
+    vectorParams: 27,
+  };
+  it('hyper layout with sub-norms (DeepSeek/GLM) and without (Qwen)', () => {
+    const p = {
+      hidden: 64,
+      mixer: { kind: 'gqa', heads: 2, kvHeads: 1, headDim: 32 },
+      ffn: { kind: 'dense', intermediate: 128 },
+    } as const;
+    const ds = decoderLayer({ ...p, residual: { kind: 'hyper', streams: 4, pre, mixesStreams: true, subNorms: true } });
+    expect(ds.blocks.map((b) => b.kind)).toEqual(['hc_pre', 'norm', 'gqa_attention', 'hc_post', 'hc_pre', 'norm', 'mlp', 'hc_post']);
+    const qwen = decoderLayer({ ...p, residual: { kind: 'hyper', streams: 4, pre, mixesStreams: false, subNorms: false } });
+    expect(qwen.blocks.map((b) => b.kind)).toEqual(['hc_pre', 'gqa_attention', 'hc_post', 'hc_pre', 'mlp', 'hc_post']);
+  });
+  it('ngram goes first; short convs follow each branch (Inkling)', () => {
+    const layer = decoderLayer({
+      hidden: 64,
+      mixer: { kind: 'gqa', heads: 2, kvHeads: 1, headDim: 32 },
+      ffn: { kind: 'dense', intermediate: 128 },
+      shortConv: { kernel: 4 },
+      ngram: { tableRows: 100, rowDim: 8, rowsPerToken: 2, projections: [], outputDim: 64, vectorParams: 0 },
+    });
+    expect(layer.blocks.map((b) => b.kind)).toEqual([
+      'ngram_embedding',
+      'norm',
+      'gqa_attention',
+      'short_conv',
+      'residual',
+      'norm',
+      'mlp',
+      'short_conv',
+      'residual',
+    ]);
+  });
+  it('beforeHead blocks are appended to the last layer', () => {
+    const layer = (name: string) =>
+      decoderLayer({ name, hidden: 64, mixer: { kind: 'gqa', heads: 2, kvHeads: 1, headDim: 32 }, ffn: { kind: 'dense', intermediate: 128 } });
+    const model = decoderModel({
+      name: 'm',
+      hidden: 64,
+      vocab: 10,
+      tieEmbeddings: true,
+      layers: [layer('layer.0'), layer('layer.1')],
+      residualStreams: 4,
+      beforeHead: [hyperCollapse({ streams: 4, dim: 64, pre: { ...pre, projections: [] } })],
+    });
+    expect(model.residualStreams).toBe(4);
+    expect(model.layers[0].blocks.at(-1)?.kind).toBe('residual');
+    expect(model.layers[1].blocks.at(-1)?.kind).toBe('hc_pre');
   });
 });

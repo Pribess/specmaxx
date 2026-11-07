@@ -1,0 +1,30 @@
+{
+  "id": "zai-org/GLM-5.3-Flash",
+  "sha": "46a050bec13002ad29ee795c16e61cf4fa3c4a9c",
+  "gated": false,
+  "private": false,
+  "tags": [
+    "transformers",
+    "safetensors",
+    "glm5_next",
+    "image-text-to-text",
+    "conversational",
+    "en",
+    "zh",
+    "arxiv:2602.15763",
+    "license:mit",
+    "eval-results",
+    "endpoints_compatible",
+    "fp8",
+    "deploy:azure",
+    "region:us"
+  ],
+  "safetensors": {
+    "parameters": {
+      "BF16": 6926096640,
+      "F8_E4M3": 314396639232,
+      "F32": 295518
+    },
+    "total": 321323031390
+  }
+}

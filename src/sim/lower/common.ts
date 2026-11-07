@@ -13,15 +13,25 @@ import {
   type MathFormat,
   type TensorFormat,
 } from '../ir/dtype';
+import { WEIGHT_MODULE_FALLBACK, type ModuleQuant, type WeightModule } from '../ir/model';
 import type { CollectiveOp, ElementwiseOp, GemmOp } from '../ir/ops';
 import type { LoweringContext } from './lower';
 
+/** Elementwise functions whose FLOP per element depend on their shape: their lowering sets `flopsPerElem`. */
+export type ShapeDependentFn = 'causal_conv1d' | 'hc_collapse' | 'hc_expand' | 'sinkhorn';
+
+/** The elementwise functions whose FLOP per element depend on their shape (set by their lowering). */
+export const SHAPE_DEPENDENT_FNS: readonly ShapeDependentFn[] = ['causal_conv1d', 'hc_collapse', 'hc_expand', 'sinkhorn'];
+
 /**
  * Vector FLOP per output element of each elementwise function (documented approximations; they only feed the
- * vector-compute time). `causal_conv1d` is `2·kernelWidth` and is set by its lowering. `router_topk` is per logit.
+ * vector-compute time). Functions whose cost depends on their shape take an explicit `flopsPerElem` from their
+ * lowering ({@link SHAPE_DEPENDENT_FNS}): `causal_conv1d` 2·K, `hc_collapse` 2·N, `hc_expand` 2N+2 (mixing) or 2,
+ * `sinkhorn` 4·iters per N×N element. `router_topk` is per logit. `ngram_gate` ≈ 8 (two norm statistics, a dot
+ * product, a sigmoid and the fused add); `kv_pool` ≈ 4 (softmax weight, multiply, add).
  * Unit: FLOP/element. See docs/simulation-model.md §3 "Elementwise".
  */
-export const ELEMENTWISE_FLOPS_PER_ELEM: Record<Exclude<ElementwiseOp['fn'], 'causal_conv1d'>, number> = {
+export const ELEMENTWISE_FLOPS_PER_ELEM: Record<Exclude<ElementwiseOp['fn'], ShapeDependentFn>, number> = {
   rmsnorm: 4,
   layernorm: 8,
   residual_add: 1,
@@ -37,6 +47,8 @@ export const ELEMENTWISE_FLOPS_PER_ELEM: Record<Exclude<ElementwiseOp['fn'], 'ca
   gated_rmsnorm: 9,
   router_topk: 5,
   moe_combine: 2,
+  ngram_gate: 8,
+  kv_pool: 4,
 };
 
 /** Tokens processed per device step: `T = seqs·qLen`. Unit: tokens. */
@@ -113,19 +125,58 @@ export function attentionMath(ctx: LoweringContext): { math: MathFormat; accumul
 export interface GemmOptions {
   /** Grouped-GEMM batch (distinct weights per entry); default 1. Count. */
   batch?: number;
-  /** Weight format; default `quant.weights` (a linear layer). */
-  weight?: TensorFormat;
-  /** Weight sparsity; default `quant.weightSparsity ?? 'dense'` for linear layers, 'dense' if `weight` is given. */
+  /**
+   * Module class of a linear layer: selects its weight format, GEMM input dtype and sparsity through
+   * {@link moduleQuant}. Exclusive with `format`. Neither given: `quant.weights` with `quant.activations` inputs.
+   */
+  module?: WeightModule;
+  /**
+   * Explicit format of a non-module GEMM (router, LM head): weights and GEMM input (default `quant.activations`);
+   * dense unless `sparsity` says otherwise.
+   */
+  format?: ModuleQuant;
+  /** Weight sparsity; default the module's (see {@link moduleQuant}), `quant.weightSparsity` with neither, 'dense' with `format`. */
   sparsity?: 'dense' | '2:4';
-  /** Input dtype; default `quant.activations`. */
+  /** Input dtype of the op, without changing `math` (MLA kv_b reads the cached latent); default the resolved `gemmInput`. */
   inputDtype?: Dtype;
   /** Adds an `n`-element bias per batch entry in the high-precision dtype. */
   bias?: boolean;
 }
 
+/** The resolved numeric format of one weight-module class. */
+export interface ResolvedModuleQuant {
+  /** Weight storage format. */
+  weights: TensorFormat;
+  /** Dtype the GEMM input is quantized to. */
+  gemmInput: Dtype;
+  /** Structured sparsity of the weights. */
+  sparsity: 'dense' | '2:4';
+}
+
 /**
- * A GEMM `m×k · k×n` with the quantization rules applied: `math = resolveGemmMath(w, act)`,
+ * Format of a weight-module class: `quant.modules[module]` if given, else the entry of its fallback parent
+ * (`WEIGHT_MODULE_FALLBACK`, e.g. `attention_kv_up` → `attention`) if given, else `{ weights: quant.weights }`,
+ * except `residual_mixer`, whose default is `{ dtype: highPrecision }`. `gemmInput` defaults to `quant.activations`,
+ * also for a sub-class override that gives only `weights`: it does NOT inherit the parent's `gemmInput` (a BF16
+ * `attention_kv_up` under W8A8 `attention` is weight-only).
+ * `quant.weightSparsity` applies to every module but `residual_mixer` (always dense).
+ * See docs/simulation-model.md §2 "Dtypes, math and accumulate".
+ */
+export function moduleQuant(ctx: LoweringContext, module: WeightModule): ResolvedModuleQuant {
+  const parent = WEIGHT_MODULE_FALLBACK[module];
+  const override = ctx.quant.modules?.[module] ?? (parent === undefined ? undefined : ctx.quant.modules?.[parent]);
+  const defaultWeights = module === 'residual_mixer' ? { dtype: highPrecision(ctx) } : ctx.quant.weights;
+  return {
+    weights: override?.weights ?? defaultWeights,
+    gemmInput: override?.gemmInput ?? ctx.quant.activations,
+    sparsity: module === 'residual_mixer' ? 'dense' : (ctx.quant.weightSparsity ?? 'dense'),
+  };
+}
+
+/**
+ * A GEMM `m×k · k×n` with the quantization rules applied: `math = resolveGemmMath(w, gemmInput)`,
  * `accumulate = resolveAccumulate(math, quant.accumulate ?? 'fp32')`. Shapes in elements (m = tokens).
+ * The weight format, GEMM input and sparsity come from `opts.module` ({@link moduleQuant}), or `opts.format`.
  */
 export function linearGemm(
   name: string,
@@ -133,10 +184,19 @@ export function linearGemm(
   ctx: LoweringContext,
   opts: GemmOptions = {},
 ): GemmOp {
+  if (opts.module !== undefined && opts.format !== undefined) {
+    throw new Error(`${name}: give a module or an explicit format, not both`);
+  }
   const act = ctx.quant.activations;
-  const weight = opts.weight ?? ctx.quant.weights;
-  const sparsity = opts.sparsity ?? (opts.weight === undefined ? (ctx.quant.weightSparsity ?? 'dense') : 'dense');
-  const math = resolveGemmMath(weight.dtype, act);
+  const fmt: ResolvedModuleQuant =
+    opts.module !== undefined
+      ? moduleQuant(ctx, opts.module)
+      : opts.format !== undefined
+        ? { weights: opts.format.weights, gemmInput: opts.format.gemmInput ?? act, sparsity: 'dense' }
+        : { weights: ctx.quant.weights, gemmInput: act, sparsity: ctx.quant.weightSparsity ?? 'dense' };
+  const weight = fmt.weights;
+  const sparsity = opts.sparsity ?? fmt.sparsity;
+  const math = resolveGemmMath(weight.dtype, fmt.gemmInput);
   const op: GemmOp = {
     kind: 'gemm',
     name,
@@ -144,7 +204,7 @@ export function linearGemm(
     m: shape.m,
     n: shape.n,
     k: shape.k,
-    inputDtype: opts.inputDtype ?? act,
+    inputDtype: opts.inputDtype ?? fmt.gemmInput,
     weight,
     outputDtype: act,
     math,
@@ -173,6 +233,11 @@ export interface ElementwiseFields {
   stateWriteBytes?: number;
 }
 
+/** True for the functions of {@link SHAPE_DEPENDENT_FNS}. */
+function isShapeDependent(fn: ElementwiseOp['fn']): fn is ShapeDependentFn {
+  return (SHAPE_DEPENDENT_FNS as readonly string[]).includes(fn);
+}
+
 /** An elementwise op over activations of dtype `quant.activations`. */
 export function elementwise(
   name: string,
@@ -182,7 +247,7 @@ export function elementwise(
 ): ElementwiseOp {
   let flopsPerElem = f.flopsPerElem;
   if (flopsPerElem === undefined) {
-    if (fn === 'causal_conv1d') throw new Error('causal_conv1d needs an explicit flopsPerElem (2·kernelWidth)');
+    if (isShapeDependent(fn)) throw new Error(`${fn} needs an explicit flopsPerElem (set by its lowering)`);
     flopsPerElem = ELEMENTWISE_FLOPS_PER_ELEM[fn];
   }
   return {
@@ -226,6 +291,50 @@ export function normOp(
     },
     ctx,
   );
+}
+
+/** True unless this step starts the sequence (first prefill chunk): a prior rolling/recurrent state exists. */
+export function hasPriorState(ctx: LoweringContext): boolean {
+  return ctx.kvLen > ctx.qLen;
+}
+
+/**
+ * A depthwise causal conv over `tokens × channels` activations with `kernel` taps (dilated by `dilation`):
+ * FLOP 2·K per element (+1 with a fused residual add), taps `channels·K·bpe(hp)`, and a rolling state of
+ * `(K−1)·dilation` tokens per sequence, read when a prior state exists and written every step.
+ */
+export function causalConvOp(
+  name: string,
+  tokens: number,
+  channels: number,
+  conv: { kernel: number; dilation?: number; residual?: boolean },
+  ctx: LoweringContext,
+): ElementwiseOp {
+  const elems = tokens * channels;
+  const act = actBpe(ctx);
+  const stateBytes = ctx.seqs * channels * convStateTokens(conv) * act;
+  // Formula: elems = T·C; flopsPerElem = 2·K (+1 residual); taps C·K·bpe(hp); state seqs·C·(K−1)·dil·bpe(act)
+  // See docs/simulation-model.md §5 "Short convs"
+  return elementwise(
+    name,
+    'causal_conv1d',
+    {
+      elems,
+      flopsPerElem: 2 * conv.kernel + (conv.residual === true ? 1 : 0),
+      activationReadBytes: elems * act,
+      activationWriteBytes: elems * act,
+      weightBytes: channels * conv.kernel * hpBpe(ctx),
+      stateReadBytes: hasPriorState(ctx) ? stateBytes : 0,
+      stateWriteBytes: stateBytes,
+    },
+    ctx,
+  );
+}
+
+/** Tokens held by a causal conv's rolling state: `(K−1)·dilation`. Unit: tokens. */
+export function convStateTokens(conv: { kernel: number; dilation?: number }): number {
+  // Formula: S_tokens = (K−1)·dilation
+  return Math.max(conv.kernel - 1, 0) * (conv.dilation ?? 1);
 }
 
 /**
