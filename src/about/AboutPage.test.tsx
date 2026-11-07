@@ -33,6 +33,19 @@ describe('repository Markdown', () => {
       .toEqual(['same', 'same-1', 'same-1-1', 'same-2']);
     expect(renderMarkdown('# Same')).toContain('id="same"');
   });
+  it('rewrites rendered document links and leaves unavailable repository references as text', () => {
+    const container = document.createElement('div');
+    container.innerHTML = renderMarkdown(
+      '[Model](simulation-model.md) [Checks](sanity-check.md) '
+      + '[Section](simulation-model.md#per-op-time) [Source](../src/sim/) '
+      + '[Other](assets/example.json) [Web](https://example.com)',
+      ['simulation-model.md', 'sanity-check.md'],
+    );
+    expect(Array.from(container.querySelectorAll('a'), node => node.getAttribute('href')))
+      .toEqual(['#simulation-model', '#sanity-check', '#per-op-time', 'https://example.com']);
+    expect(container.textContent).toContain('Source Other');
+    expect(renderMarkdown('[Checks](sanity-check.md)')).toBe('<p>Checks</p>\n');
+  });
 
   it('renders GFM tables in a keyboard-focusable scroll region', () => {
     const container = document.createElement('div');
@@ -43,6 +56,20 @@ describe('repository Markdown', () => {
 });
 
 describe('About page', () => {
+  it('renders both documents without repository paths and resolves all fragment links', () => {
+    const { container } = render(<AboutPage />);
+    expect(screen.getByRole('article', { name: 'Sanity checks' })).toBeTruthy();
+    const ids = new Set(Array.from(container.querySelectorAll('[id]'), node => node.id));
+    for (const link of container.querySelectorAll<HTMLAnchorElement>('a[href]')) {
+      const href = link.getAttribute('href')!;
+      // External benchmark sources can legitimately end in .md (e.g. GitHub files).
+      if (!/^https?:\/\//i.test(href)) expect(href, href).not.toMatch(/\.md(?:$|#)/);
+      expect(href.startsWith('../'), href).toBe(false);
+      if (href.startsWith('#')) {
+        expect(ids.has(decodeURIComponent(href.slice(1))), href).toBe(true);
+      }
+    }
+  });
   it('renders the Memory fit heading and document navigation', () => {
     render(<AboutPage />);
     expect(screen.getByRole('heading', { name: 'Memory fit' })).toBeTruthy();

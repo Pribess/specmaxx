@@ -4,8 +4,11 @@ import { renderMarkdown } from './markdown';
 const optionalDocs = import.meta.glob<string>('../../docs/sanity-check.md', {
   query: '?raw', import: 'default', eager: true,
 });
-const simulationHtml = renderMarkdown(simulationModel);
 const sanitySource = optionalDocs['../../docs/sanity-check.md'];
+const renderedDocs = sanitySource
+  ? ['simulation-model.md', 'sanity-check.md']
+  : ['simulation-model.md'];
+const simulationHtml = renderMarkdown(simulationModel, renderedDocs);
 
 /** Restore the estimate's query without trusting a cross-origin referrer or stored URL. */
 export function estimateHref(): string {
@@ -48,7 +51,7 @@ export function AboutPage() {
         <article className="about-prose" id="simulation-model" aria-label="Simulation model"
           dangerouslySetInnerHTML={{ __html: simulationHtml }} />
         {sanitySource && <article className="about-prose" id="sanity-check" aria-label="Sanity checks"
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(sanitySource) }} />}
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(sanitySource, renderedDocs) }} />}
         <footer className="about-footer"><a href={estimateHref()}>Back to the estimate</a></footer>
       </main>
     </>
