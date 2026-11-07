@@ -1,0 +1,251 @@
+/**
+ * Per-op time on one device: the roofline `max(compute, memory)` for compute ops, the vector peak for
+ * elementwise ops and recurrent steps, memory only for embedding gathers, and the alpha-beta model for
+ * collectives. One exhaustive `switch (op.kind)`.
+ * See docs/simulation-model.md §7 ("Per-op time").
+ *
+ * Inputs are plain specs: device and link modifiers were already applied by `simulate` (docs §4 "Device
+ * variants and modifiers"), so nothing here knows about variants.
+ */
+
+import { opBytes, opFlops, attendedPairs, type ByteBreakdown } from '../ir/metrics';
+import type {
+  AttentionOp,
+  CollectiveOp,
+  ElementwiseOp,
+  GemmOp,
+  IndexerOp,
+  Op,
+  RecurrentOp,
+} from '../ir/ops';
+import type { AccumulateType, MathFormat } from '../ir/dtype';
+import { gemmComputeSec, type GemmShape } from '../hw/efficiency';
+import { matmulPeakFlopsPerSec, vectorPeakFlopsPerSec } from '../hw/peaks';
+import type { ComputeEngine } from '../hw/types';
+import { collectiveTime, type AllReduceAlgorithm, type CollectivePath } from './collectives';
+import type { Bound, OpResult, SimOptions } from './types';
+
+/** Everything the per-op cost needs besides the op itself. Plain data, built once per stage by `simulate`. */
+export interface OpTimeContext {
+  /** The compute engine the run uses (after device modifiers). */
+  engine: ComputeEngine;
+  /**
+   * Memory bandwidth this engine sees, per device: `min(memory.bandwidthBytesPerSec, engine cap)`.
+   * Unit: B/s (read + write combined, as vendors quote it).
+   */
+  memBandwidthBytesPerSec: number;
+  /** Where each parallel group's collectives run (from placement): TP group, EP group, and this stage's PP send. */
+  collectivePaths: { tp: CollectivePath; ep: CollectivePath; pp: CollectivePath };
+  /** All-reduce algorithm (SimOptions.collectiveAlgorithm). */
+  collectiveAlgorithm: AllReduceAlgorithm;
+  /** Elementwise fusion assumption (SimOptions.elementwiseFusion). */
+  elementwiseFusion: SimOptions['elementwiseFusion'];
+  /** Peak-fallback warnings are appended here (human-readable lines; `simulate` de-duplicates them). */
+  warnings: string[];
+}
+
+/** Memory-effective bandwidth of `engine` on a device with peak memory bandwidth `deviceMemBandwidthBytesPerSec` (B/s). */
+export function engineMemBandwidthBytesPerSec(engine: ComputeEngine, deviceMemBandwidthBytesPerSec: number): number {
+  // Formula: memBW = min(device.memory.bandwidthBytesPerSec, engine.memBandwidthCapBytesPerSec ?? ∞)
+  // See docs/simulation-model.md §7 ("Per-op time")
+  return Math.min(deviceMemBandwidthBytesPerSec, engine.memBandwidthCapBytesPerSec ?? Infinity);
+}
+
+/**
+ * Roofline of one op: the larger of its compute and memory times (seconds) sets the op time; a tie counts as
+ * compute-bound.
+ */
+export function roofline(computeSec: number, memorySec: number): { sec: number; bound: Bound } {
+  // Formula: t = max(t_compute, t_memory)
+  // See docs/simulation-model.md §7 ("Per-op time")
+  return computeSec >= memorySec ? { sec: computeSec, bound: 'compute' } : { sec: memorySec, bound: 'memory' };
+}
+
+/** Cost of one op on one device (see the module doc for the rule per op kind). */
+export function opTime(op: Op, ctx: OpTimeContext): OpResult {
+  switch (op.kind) {
+    case 'gemm':
+      return tensorOpTime(op, gemmShape(op), op.math, op.accumulate, op.sparsity, ctx);
+    case 'attention':
+      return tensorOpTime(op, attentionShape(op), op.math, op.accumulate, 'dense', ctx);
+    case 'indexer':
+      return tensorOpTime(op, indexerShape(op), op.math, op.accumulate, 'dense', ctx);
+    case 'recurrent':
+      return op.mode === 'chunked'
+        ? tensorOpTime(op, recurrentChunkShape(op), op.math, op.accumulate, 'dense', ctx)
+        : vectorOpTime(op, op.stateDtype, opBytes(op), ctx);
+    case 'elementwise':
+      return vectorOpTime(op, op.dtype, elementwiseBytesUnderFusion(op, ctx.elementwiseFusion), ctx);
+    case 'embedding':
+      return memoryOnlyOpTime(op, ctx);
+    case 'collective':
+      return collectiveOpTime(op, ctx);
+    default: {
+      const _never: never = op;
+      throw new Error(`unknown op ${JSON.stringify(_never)}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Tensor ops: GEMM, attention, indexer, chunked recurrent. All use the shape-efficiency model as a batched GEMM.
+
+/** The GEMM shape of a GEMM op: its own (batch, m, n, k). Unit: elements. */
+export function gemmShape(op: GemmOp): GemmShape {
+  return { batch: op.batch, m: op.m, n: op.n, k: op.k };
+}
+
+/**
+ * The equivalent batched-GEMM shape of the fused attention core, for the efficiency model: GQA query heads of
+ * one KV head are packed into the rows; the keys a query sees on average form the columns.
+ */
+export function attentionShape(op: AttentionOp): GemmShape {
+  const pairs = attendedPairs(op.qLen, op.kvLen, op.causal, op.kvSelection);
+  // Formula: batch = seqs·kvHeads, m = qLen·heads/kvHeads, n = ceil(pairs/qLen), k = qkHeadDim
+  // See docs/simulation-model.md §4 ("Shape efficiency")
+  return {
+    batch: op.seqs * op.kvHeads,
+    m: (op.qLen * op.heads) / op.kvHeads,
+    n: Math.ceil(pairs / op.qLen),
+    k: op.qkHeadDim,
+  };
+}
+
+/** The equivalent batched-GEMM shape of the indexer (all heads share one key per token, so they pack into rows). */
+export function indexerShape(op: IndexerOp): GemmShape {
+  const pairsFull = attendedPairs(op.qLen, op.kvLen, op.causal, { kind: 'full' });
+  // Formula: batch = seqs, m = qLen·heads, n = ceil(pairs_full/qLen), k = headDim
+  // See docs/simulation-model.md §4 ("Shape efficiency")
+  return { batch: op.seqs, m: op.qLen * op.heads, n: Math.ceil(pairsFull / op.qLen), k: op.headDim };
+}
+
+/** The equivalent batched-GEMM shape of a chunked recurrent mixer: one chunk × value dim × key dim per (seq, head, chunk). */
+export function recurrentChunkShape(op: RecurrentOp): GemmShape {
+  // Formula: batch = seqs·heads·ceil(qLen/chunkLen), m = chunkLen, n = valueDim, k = keyDim
+  // See docs/simulation-model.md §4 ("Shape efficiency")
+  return { batch: op.seqs * op.heads * Math.ceil(op.qLen / op.chunkLen), m: op.chunkLen, n: op.valueDim, k: op.keyDim };
+}
+
+/**
+ * Roofline of a tensor op: the matmul peak for its (math, accumulate, sparsity) key (with fallback), the shape
+ * efficiency of `shape`, and its compulsory memory traffic.
+ */
+function tensorOpTime(
+  op: GemmOp | AttentionOp | IndexerOp | RecurrentOp,
+  shape: GemmShape,
+  math: MathFormat,
+  accumulate: AccumulateType,
+  sparsity: 'dense' | '2:4',
+  ctx: OpTimeContext,
+): OpResult {
+  const flops = opFlops(op);
+  const bytes = opBytes(op);
+  const peak = matmulPeakFlopsPerSec(ctx.engine, math, accumulate, sparsity, ctx.warnings);
+  const tiling = ctx.engine.gemmTiling[peak.usedInput] ?? ctx.engine.gemmTiling.default;
+  const { efficiency } = gemmComputeSec(shape, peak.flopsPerSec, ctx.engine.computeUnits, tiling);
+  // Formula: t_compute = F / (peak · efficiency);  t_memory = bytes / memBW
+  // See docs/simulation-model.md §7 ("Per-op time")
+  const computeSec = flops === 0 ? 0 : flops / (peak.flopsPerSec * efficiency);
+  const memorySec = bytes.totalBytes / ctx.memBandwidthBytesPerSec;
+  const { sec, bound } = roofline(computeSec, memorySec);
+  return {
+    op,
+    flops,
+    bytes,
+    computeSec,
+    memorySec,
+    commLatencySec: 0,
+    commBandwidthSec: 0,
+    sec,
+    bound,
+    efficiency,
+    peakFlopsPerSec: peak.flopsPerSec,
+    usedInput: peak.usedInput,
+    usedAccumulate: peak.usedAccumulate,
+  };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Vector ops: elementwise, recurrent step.
+
+/**
+ * Memory traffic of an elementwise op under the fusion assumption: `'none'` = its own fields; `'ideal'` = the
+ * activation read and write are 0 (fused into a neighbour), weight and state bytes stay. Unit: bytes.
+ */
+export function elementwiseBytesUnderFusion(op: ElementwiseOp, fusion: SimOptions['elementwiseFusion']): ByteBreakdown {
+  const bytes = opBytes(op);
+  switch (fusion) {
+    case 'none':
+      return bytes;
+    case 'ideal': {
+      // Formula: bytes_ideal = weight + stateRead + stateWrite   (activations stay on chip)
+      // See docs/simulation-model.md §7 ("Per-op time")
+      const totalBytes = bytes.totalBytes - bytes.activationReadBytes - bytes.activationWriteBytes;
+      return { ...bytes, activationReadBytes: 0, activationWriteBytes: 0, totalBytes };
+    }
+    default: {
+      const _never: never = fusion;
+      throw new Error(`unknown elementwise fusion ${String(_never)}`);
+    }
+  }
+}
+
+/** Roofline of a vector op: FLOP at the engine's vector peak for `dtype` (no efficiency term) vs memory traffic. */
+function vectorOpTime(op: ElementwiseOp | RecurrentOp, dtype: ElementwiseOp['dtype'], bytes: ByteBreakdown, ctx: OpTimeContext): OpResult {
+  const flops = opFlops(op);
+  const peakFlopsPerSec = vectorPeakFlopsPerSec(ctx.engine, dtype);
+  // Formula: t_compute = F / vectorPeak(dtype);  t_memory = bytes / memBW
+  // See docs/simulation-model.md §7 ("Per-op time")
+  const computeSec = flops / peakFlopsPerSec;
+  const memorySec = bytes.totalBytes / ctx.memBandwidthBytesPerSec;
+  const { sec, bound } = roofline(computeSec, memorySec);
+  return { op, flops, bytes, computeSec, memorySec, commLatencySec: 0, commBandwidthSec: 0, sec, bound, peakFlopsPerSec };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Embedding, collectives.
+
+/** An embedding gather: no FLOP, memory time only. */
+function memoryOnlyOpTime(op: Op, ctx: OpTimeContext): OpResult {
+  const bytes = opBytes(op);
+  // Formula: t = bytes / memBW
+  // See docs/simulation-model.md §7 ("Per-op time")
+  const memorySec = bytes.totalBytes / ctx.memBandwidthBytesPerSec;
+  return { op, flops: 0, bytes, computeSec: 0, memorySec, commLatencySec: 0, commBandwidthSec: 0, sec: memorySec, bound: 'memory' };
+}
+
+/** The link level a collective path uses (absent for a group of one). */
+function linkLevelOf(path: CollectivePath): OpResult['linkLevel'] {
+  switch (path.kind) {
+    case 'none':
+      return undefined;
+    case 'flat':
+      return path.level;
+    case 'hierarchical':
+      return 'hierarchical';
+    default: {
+      const _never: never = path;
+      throw new Error(`unknown collective path ${JSON.stringify(_never)}`);
+    }
+  }
+}
+
+/** A collective: alpha-beta time on the path of its group (docs §6); no FLOP, no HBM traffic in this model. */
+function collectiveOpTime(op: CollectiveOp, ctx: OpTimeContext): OpResult {
+  const path = ctx.collectivePaths[op.group];
+  const t = collectiveTime(op.collective, op.messageBytes, op.groupSize, path, ctx.collectiveAlgorithm);
+  const result: OpResult = {
+    op,
+    flops: 0,
+    bytes: opBytes(op),
+    computeSec: 0,
+    memorySec: 0,
+    commLatencySec: t.latencySec,
+    commBandwidthSec: t.bandwidthSec,
+    sec: t.totalSec,
+    bound: 'comm',
+  };
+  const linkLevel = linkLevelOf(path);
+  if (linkLevel !== undefined) result.linkLevel = linkLevel;
+  return result;
+}
