@@ -30,9 +30,13 @@ Layout:
   - `engine/`: collectives, placement, per-op time, stage/pipeline schedule, memory fit, input validation,
     `simulate()`.
   - `__fixtures__/`: synthetic hardware for tests.
+  - `__sanity__/`: the sanity check against community benchmarks (harness, sibling model specs, reports as data,
+    the `simulated ≥ 0.9 × reported` test); see docs/sanity-check.md.
 - `docs/simulation-model.md`: the simulation model (formulas, assumptions, exclusions, extension checklists);
   the code links to its sections and it links back to the functions.
 - `docs/hf-loader.md`: the Hugging Face loader (fetch, token, caching, dispatch, adding a family, quant defaults,
   param check, the supported model shortlist).
+- `docs/sanity-check.md`: simulated maxima vs 43 community benchmark reports (method, ratios, flagged cases,
+  follow-ups).
 - `src/hf/`: browser-side Hub fetch (`loadHfModel`: api + config.json + sidecars, token, cache, errors).
 - `src/App.tsx`, `src/main.tsx`: the UI (a placeholder page with one demo line for now).
