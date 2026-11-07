@@ -1,0 +1,276 @@
+# Sanity check: simulated maxima vs community benchmarks
+
+The simulator gives **theoretical maxima** (only hardware and math limits, see
+[simulation-model.md §1](simulation-model.md#1-scope-and-conventions)). A real measurement must therefore come
+out below it: for every compared metric we require
+
+```
+simulated ≥ 0.9 × reported            (ratio = reported / simulated ≤ 1.11)
+```
+
+A report above that bound means the simulator underestimates (a wrong preset number, a wrong op cost, or a missing
+hardware feature), unless the case is explained and listed as a known exception. A very low ratio is not a failure,
+but it is examined too (an engine far from the hardware, or a report artefact).
+
+Code: [`src/sim/__sanity__/`](../src/sim/__sanity__/)
+
+| File | What |
+|---|---|
+| `harness.ts` | `simulateReport(input)`: model + weight quant + hardware (+ unlocks) + workload → `simulate()`; quant presets (GGUF, MLX, FP8, NVFP4, …); `simpleDecoder` for hand-written specs |
+| `models.ts` | hand-written specs of sibling models the HF loader does not map (gpt-oss, GLM-4.5-Air, Qwen3-30B-A3B, Llama-3.x-70B, QwQ-32B, Qwen3-Next-80B-A3B), dims from each repo's config.json |
+| `reports.ts` | the 43 reports as typed data, each with its harness input and its check mode |
+| `reports.test.ts` | the assertion, the known-exception check, a weight-file-size cross-check, and the printed ratio table |
+| `configs.testutil.ts` | loads HF configs from `__sanity__/configs/` or the shared fixtures |
+
+Run: `npx vitest run src/sim/__sanity__` (the comparison table and the ratio summary are printed).
+
+## Method
+
+### Settings: the most favourable honest upper bound
+
+Nothing below was tuned to fit a report. Every choice is the one that gives the simulator the best case that is
+still physically honest for the engine that ran.
+
+| Setting | Choice | Why |
+|---|---|---|
+| Elementwise fusion | `'ideal'` (`UPPER_BOUND_OPTIONS`) | Real engines fuse norms, activations and residual adds into GEMM epilogues. The simulator's default `'none'` would make prefill lower than a fused kernel can reach ([§7 "Per-op time"](simulation-model.md#per-op-time)). |
+| Comm / compute overlap, all-reduce | defaults (`'ideal'`, `'best'`) | Already the favourable case. |
+| GEMM input, llama.cpp GGUF | `int8` (`LLAMACPP_MMQ`) on CUDA, HIP, Vulkan and SYCL | MMQ quantizes the activations to q8_1 and runs int8 MMA / dot products. The Vulkan and SYCL integer-dot paths do the same. On every device used here the int8 peak is ≥ the fp16 peak, so int8 also bounds the dequantize-to-fp16 path a backend may pick instead. Weight-only fp16 would put the RTX 4090 pp512 ceiling for an 8B Q4_K_M model at 10.7k tok/s, which the community beats. |
+| GEMM input, Metal / MLX | the activation dtype (fp16 / bf16) | llama.cpp Metal and MLX dequantize inside fp16 / bf16 matmuls. |
+| GEMM input, vLLM / SGLang | the checkpoint's own format | Native W8A8 FP8, W4A4 NVFP4 and W4A16 come from the quant fixture. On Ampere (no fp8 / fp4 tensor cores) the run is weight-only (Marlin): `weightOnly: true`, or the `fp8-wo` preset. |
+| Accumulator | fp32 (the default) | No engine here asks for fp16-accumulate GEMMs. Marlin and MMQ accumulate in fp32 / int32. |
+| Prefill metric | `perSequence` (prompt / TTFT) for batch 1, `aggregate` for batched reports | With a pipeline (layer split), `prefill.tokensPerSec` assumes a stream of batches, about pp × the per-sequence rate (see "Sim quirks"). |
+| Decode metric | per stream at batch 1, aggregate when the report gives an aggregate | — |
+| Decode context | `contextDepth + ceil(genLen / 2)` | The midpoint of the generated run. Decode time is about affine in the context, so this is the run's average rate. `contextDepth` includes the prompt wherever generation follows it (servers, vLLM, `mlx_lm.benchmark`, llama-batched-bench); only llama-bench's `tg` test starts from an empty cache (plus `-d`). The test checks this for every row. |
+| Prefill at depth (`pp @ dN`) | simulated from an empty cache | `simulate` has no prefill at depth. Depth 0 is faster, so it is still an upper bound. |
+| Unknown details | resolved in the simulator's favour | P2P driver when not stated, the faster of the stated link widths, the lower end of a bits-per-weight range, the largest memory option. |
+| Unlocks | only when the report states them | lm-01 / lm-02: the run notes say "Zagitta/gpu-unlock", so the 3090 `tensor-rate` axis is on. |
+
+### Weight formats
+
+GGUF and MLX have no exact dtype, so `bpwFormat(bpw)` stores them as `int4` (below 8 bpw) or `int8` with the rest
+of the bits in `extraBitsPerElem`. Byte counts are exact; compute stays honest because these are weight-only schemes
+(the GEMM runs in the activation or int8 format, [§2 "GEMM input class"](simulation-model.md#dtypes-math-and-accumulate)).
+
+| Preset / format | bits / weight | Embeddings / LM head |
+|---|---|---|
+| `q4_0` | 4.5 | 4.5 / Q6_K 6.5625 |
+| `q4_k_m` | 4.85 (Q4_K 4.5 with some Q6_K; ±0.1 by model) | Q4_K 4.5 / Q6_K 6.5625 |
+| `q5_k_m` | ≈ 5.7 | 5.5 / 6.5625 |
+| `q6_k` / `q8_0` | 6.5625 / 8.5 | same |
+| UD / IQ GGUFs (`ggufBpw`) | the researcher's range, lower end: UD-Q4_K_XL 4.9, IQ4_XS 4.25, UD-IQ3_XXS 3.1, UD-Q2_K_XL 2.9 | same |
+| `mlx-4bit` / `mlx-8bit` | 4.5 / 8.5 (affine g64: 16-bit scale + bias per 64) | quantized too |
+| MLX 4-bit g32 | 5.0 | quantized too |
+| gpt-oss GGUF | MXFP4 routed experts (4.25), everything else ≈ Q8_0 (8.5) | Q8_0 |
+| `fp8`, `nvfp4`, `int4-g128`, native | from the dtype table / quant fixture | unquantized unless the repo says otherwise |
+
+Cross-check: for the 6 reports that give a file size, the simulated resident weight bytes are 0.964–1.010 × the
+file (the test requires ±8 %): lm-10 0.964, web-01 0.997, web-07 1.000, web-14 0.997, web-50 1.009, web-51 1.010.
+
+Below 4 bpw (UD-IQ3_XXS, UD-Q2_K_XL), `extraBitsPerElem` is negative. Nothing validates it and the byte counts come
+out right, but it is a workaround (follow-up 5).
+
+### Data
+
+- **LocalMaxxing** (`lm-NN` = the row in the researchers' curated table): records from
+  `https://localmaxxing.com/api/speed-tests`, snapshot 2026-11-07/08. **Prefill there is promptTokens / client
+  TTFT** over the ~220–350-token canonical prompt, with HTTP, tokenization and the first decode step included, so
+  very low prefill ratios are expected. These rows test decode much better than prefill.
+- **Web** (`web-NN` = the row in the web table): the llama.cpp DGX Spark benchmark file and GitHub discussions,
+  r/LocalLLaMA, the mlx-lm BENCHMARKS.md, blogs and gists. llama-bench `ppN` / `tgN` are separate tests from an
+  empty cache.
+- Selection: every usable tier-A/B LocalMaxxing row (one or two per setup), the most informative tier-C rows (Apple,
+  Spark, multi-GPU, the only DeepSeek and Inkling data), and web rows covering multi-GPU (3090 PCIe with and without
+  P2P, 4090 ×6, 5090 ×2), Apple (M3 Ultra, M4 Max, M5 Max), DGX Spark (single and 4-node), Strix Halo, MI300X and
+  H100. **43 reports** (26 LocalMaxxing + 17 web), 37 prefill and 43 decode numbers, **35 distinct (model, device)
+  pairs** over 13 models and 16 device presets.
+- Siblings (not shortlist models) are hand-written specs (`models.ts`) whose dims come from the real HF config.json;
+  approximations (gpt-oss attention sinks and expert biases, GLM partial RoPE, the Qwen3-Next shared-expert gate) are
+  listed on each spec. No 2-node DGX Spark report exists; the 4-node ones are used.
+
+## Comparison table
+
+Ratio = reported / simulated (≤ 1.11 passes). Bound = the simulator's dominant bound in prefill / decode
+(c compute, m memory). `agg` = aggregate over the batch. "B / p / g / d" = batch / prompt / generated / depth.
+
+| Report | Tier | Model | Quant | Hardware | Engine | B / p / g / d | pp rep | pp sim | pp ratio | tg rep | tg sim | tg ratio | Bound |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| [lm-01](https://localmaxxing.com/en/models/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF?run=cmw13j1dv0aeioa01vc2babep) | A | Qwen3.8-27B | Q4_K_M, KV q4_0 | 1× RTX 3090 (gpu-unlock) | llama.cpp b12030 CUDA | 1/2048/512/2048 | 1284 | 5582 | 0.23 | 43.2 | 57.9 | 0.75 | c/m |
+| [lm-02](https://localmaxxing.com/en/models/RedHatAI/Qwen3.8-27B-INT4?run=cmvu9h7cs0hbqs6017yhvimid) | A | Qwen3.8-27B | INT4 W4A16 g128 | 1× RTX 3090 (gpu-unlock) | vLLM 0.32.0 | 1/296/512/296 | 1938 | 2550 | 0.76 | 48.6 | 60.5 | 0.80 | c/m |
+| [lm-04](https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmszmr3yy0e75ms01z8t64io4) | B | Qwen3.8-27B | UD-Q4_K_XL, KV q8_0 | 1× RTX 4090 | llama.cpp b8101 CUDA (bench) | 1/8192/512/0 | 1559 | 11690 | 0.13 | 45.7 | 62.9 | 0.73 | c/m |
+| [lm-05](https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmsxftgtn0b99ms01ubcci7my) | B | Qwen3.8-27B | UD-Q4_K_XL | 1× RTX 5090 | llama.cpp b10470 CUDA (bench) | 1/512/128/0 | 3097 | 15818 | 0.20 | 62.8 | 112 | 0.56 | c/m |
+| [lm-06](https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-NVFP4?run=cmsxzbo3t0cnbms016n4fdk9x) | B | Qwen3.8-27B | NVFP4, KV fp8 | 1× RTX 5090 | vLLM 0.27.1 | 1/1037/1024/1037 | 9145 | 16365 | 0.56 | 71.1 | 96.8 | 0.73 | c/m |
+| [lm-07](https://localmaxxing.com/en/models/Qwen/Qwen3.8-27B-FP8?run=cmtpbv6tt02hin701q3p40kpp) | A | Qwen3.8-27B | FP8 | 1× B200 | vLLM 0.28.0 | 1/347/1024/347 | 9352 | 65698 | 0.14 | 106.2 | 282 | 0.38 | c/m |
+| [lm-08](https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmtpbzgly02htn701f9arg2ui) | A | Qwen3.8-27B | UD-Q4_K_M | 1× B200 | llama.cpp 74a7c89 CUDA | 1/347/1024/347 | 549 | 68218 | **0.008** | 86.8 | 476 | 0.18 | c/m |
+| [lm-09](https://localmaxxing.com/en/models/Qwen/Qwen3.8-27B-FP8?run=cmtrfjhhv00dcpa013a8uyn0j) | C | Qwen3.8-27B | FP8 | 1× H200 SXM | vLLM 0.24.1 (Pareton, MTP) | 1/345/512/345 | 7748 | 31655 | 0.24 | 274.9 | 176 | 1.56 (excl.) | c/m |
+| [lm-10](https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmtm14eqs00wgoe01mmqnbok9) | B | Qwen3.8-27B | Q4_0 | 1× R9700 | llama.cpp b10711 Vulkan (bench) | 1/512/128/0 | 932 | 7403 | 0.13 | 34.9 | 42.5 | 0.82 | c/m |
+| [lm-11](https://localmaxxing.com/en/models/amd/Qwen3.8-27B-Quark-AWQ-MXFP4?run=cmtx6ay860ai3ps011oye4gtx) | B | Qwen3.8-27B | MXFP4 W4A8, KV fp8 | 2× R9700 TP2 | vllm-radiance 1.0.16 ROCm | 1/573/512/573 | 3487 | 13767 | 0.25 | 45.2 | 79.2 | 0.57 | c/m |
+| [lm-13](https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmsxtoccy0cjlms01lnbw0pzu) | B | Qwen3.8-27B | Q6_K | 1× Arc Pro B60 | llama.cpp SYCL/Vulkan (bench) | 1/512/128/0 | 643 | 3877 | 0.17 | 16.0 | 21.4 | 0.75 | c/m |
+| [lm-15](https://localmaxxing.com/en/models/Qwen/Qwen3.8-27B?run=cmvrc4jz300j0s601ppkoyo08) | A | Qwen3.8-27B | Q8_0 | 1× Arc Pro B65 | llama.cpp b11913 | 1/343/256/343 | 419 | 3765 | 0.11 | 15.9 | 22.0 | 0.72 | c/m |
+| [lm-18](https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmsxndz0o0bxsms01v7pv9o2d) | B | Qwen3.8-27B | Q6_K | 1× Arc Pro B70 | llama.cpp SYCL/Vulkan (bench) | 1/512/128/0 | 905 | 7121 | 0.13 | 20.7 | 28.5 | 0.73 | c/m |
+| [lm-20](https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmvpm4oa7028vng011l44ex55) | A | Qwen3.8-27B | UD-Q4_K_M | Ryzen AI Max+ 395 | llama.cpp b11901 Vulkan | 1/349/256/349 | 262 | 1077 | 0.24 | 12.9 | 15.8 | 0.81 | c/m |
+| [lm-22](https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmtmy9ugn004ppb01hljz9pcq) | C | Qwen3.8-27B | Q4_K_M | Apple M5 Max 40c | Ollama Metal | 1/75/256/75 | 882 | 1194 | 0.74 | 24.3 | 38.0 | 0.64 | c/m |
+| [lm-23](https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-NVFP4?run=cmt5s1z0103m7pu01km9fczpa) | C | Qwen3.8-27B | NVFP4 | 1× DGX Spark | vLLM | 1/74/256/74 | 374 | 1055 | 0.35 | 10.1 | 14.8 | 0.68 | m/m |
+| [lm-24](https://localmaxxing.com/en/models/Qwen/Qwen3.8-Flash-Next?run=cmw1704i40ajcoa01fwx8w8m9) | B | Qwen3.8-Flash-Next | UD-IQ3_XXS | 3× R9700 layer split | llama.cpp rdna-boosts ROCm | 1/573/256/573 | 1013 | 5812 | 0.17 | 47.5 | 156 | 0.30 | m/m |
+| [lm-27](https://localmaxxing.com/en/models/unsloth/Qwen3.8-Flash-Next-GGUF?run=cmvpm4rw10292ng01k4wnsipr) | A | Qwen3.8-Flash-Next | UD-Q2_K_XL | Ryzen AI Max+ 395 | llama.cpp b11901 Vulkan | 1/345/256/345 | 298 | 1463 | 0.20 | 32.0 | 65.2 | 0.49 | m/m |
+| [lm-28](https://localmaxxing.com/en/models/Qwen/Qwen3.8-Flash-Next?run=cmtexccjm00bgn0011lvaqdyi) | C | Qwen3.8-Flash-Next | MLX 4-bit g32 | Apple M3 Ultra 80c | oMLX 0.6.3 | 1/619/256/619 | 310 | 1999 | 0.15 | 14.8 | 129 | 0.11 | c/m |
+| [lm-32](https://localmaxxing.com/en/models/nvidia/GLM-5.3-Flash-FP4-Local?run=cmvfggz3n014srf01ulz9qf41) | A | GLM-5.3-Flash | NVFP4 + FP8 (Marlin), KV fp8 | 8× RTX 3090 TP8/EP8 | vLLM 0.28.1 SM86 fork | 1/278/966/278 | 721 | 5920 | 0.12 | 81.3 | 233 | 0.35 | m/m |
+| [lm-34](https://localmaxxing.com/en/models/zai-org/GLM-5.3-Flash?run=cmtipc711066gp401ddtg1b3p) | C | GLM-5.3-Flash | MLX 4-bit | Apple M3 Ultra 80c | oMLX 0.6.4 | 1/574/256/574 | 345 | 857 | 0.40 | 32.9 | 69.5 | 0.47 | c/m |
+| [lm-35](https://localmaxxing.com/en/models/zai-org/GLM-5.3-Flash?run=cmum3byy10j02lq01b6821y8t) | B | GLM-5.3-Flash | NVFP4 (local checkpoint; simulated as the nvidia NVFP4 layout), KV fp8 | 4× DGX Spark TP4 | vLLM 0.30.1 Ray | 1/253/768/253 | — | — | — | 74.6 | 46.6 | **1.60 (exception, unresolved)** | –/m |
+| [lm-36](https://localmaxxing.com/en/models/deepseek-ai/DeepSeek-V4.1-Flash?run=cmuhen2200drdlq01fa2qr70h) | C | DeepSeek-V4.1-Flash | FP8 + MXFP4 | 4× DGX Spark TP4 | SGLang (DSPARK spec) | 1/274/1024/274 | 888 | 931 | **0.95** | 76.0 | 61.5 | 1.24 (excl.) | m/m |
+| [lm-38](https://localmaxxing.com/en/models/unsloth/Inkling-Small-GGUF?run=cms90mh5r0045pm01lf9n6cre) | B | Inkling-Small | UD-IQ4_XS | 6× RTX 3090 layer split | llama.cpp inkling-exp CUDA | 1/367/508/367 | 148 | 2222 | **0.067** | 47.4 | 149 | 0.32 | m/m |
+| [lm-39](https://localmaxxing.com/en/models/RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead?run=cmtx753t70aiups01lmudzstu) | C | Qwen3.8-27B | NVFP4 | 2× RTX 5090 TP2, P2P | SGLang (DFlash2 spec) | 1/512/1024/512 | 17563 | 31336 | 0.56 | 227.3 | 190 | 1.20 (excl.) | c/m |
+| [lm-42](https://localmaxxing.com/en/models/Qwen/Qwen3.8-27B?run=cmvjl3vpc03vcrf01vc9hojva) | C | Qwen3.8-27B | BF16 | 4× Arc Pro B65 TP4 | vLLM 0.32.0rc1 XPU | 16/345/256/345 | 239 | 494 | 0.48 | 372 agg | 660 | 0.56 | c/m |
+| [web-01](https://github.com/ggml-org/llama.cpp/blob/master/benches/dgx-spark/dgx-spark.md) | — | gpt-oss-120b | MXFP4 GGUF | 1× DGX Spark | llama.cpp b7941 CUDA | 1/2048/32/0 | 2444 | 7416 | 0.33 | 58.7 | 76.5 | 0.77 | m/m |
+| [web-02](https://github.com/ggml-org/llama.cpp/blob/master/benches/dgx-spark/dgx-spark.md) | — | gpt-oss-120b | MXFP4 GGUF | 1× DGX Spark | llama.cpp b7941 CUDA | 1/2048/32/32768 | 1567 | 7416 | 0.21 | 42.8 | 57.1 | 0.75 | m/m |
+| [web-04](https://github.com/ggml-org/llama.cpp/blob/master/benches/dgx-spark/dgx-spark.md) | — | gpt-oss-120b | MXFP4 GGUF | 1× DGX Spark | llama-batched-bench B=32 | 32/4096/32/4096 | 2411 agg | 22916 | 0.11 | 262 agg | 129 | **2.03 (exception)** | c/m |
+| [web-07](https://www.reddit.com/r/LocalLLaMA/comments/1o7k7zz/dgx_spark_compiled_llamacpp_benchmarks_compared/) | — | GLM-4.5-Air | Q4_K (5.45 bpw) | 1× DGX Spark | llama.cpp CUDA (Oct 2025) | 1/2048/32/0 | 841 | 4609 | 0.18 | 22.6 | 31.1 | 0.73 | m/m |
+| [web-12](https://www.reddit.com/r/LocalLLaMA/comments/1o7k7zz/dgx_spark_compiled_llamacpp_benchmarks_compared/) | — | gpt-oss-120b | MXFP4 GGUF | Apple M4 Max 40c | llama.cpp Metal | 1/2048/32/0 | 871 | 1707 | 0.51 | 62.9 | 150 | 0.42 | c/**c** |
+| [web-14](https://github.com/ggml-org/llama.cpp/discussions/15396) | — | gpt-oss-20b | MXFP4 GGUF | Apple M3 Ultra 80c | llama.cpp b6310 Metal | 1/2048/128/0 | 2816 | 4542 | 0.62 | 115.5 | 309 | 0.37 | c/m |
+| [web-26](https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/BENCHMARKS.md) | — | Qwen3-30B-A3B | MLX 4-bit | Apple M4 Max 40c 64 GB | mlx-lm 0.28.2 | 1/2048/128/2048 | 1754 | 2561 | 0.68 | 113.3 | 269 | 0.42 | c/m |
+| [web-29](https://www.reddit.com/r/LocalLLaMA/comments/1m6b151/updated_strix_halo_ryzen_ai_max_395_llm_benchmark/) | — | Qwen3-30B-A3B | UD-Q4_K_XL | Ryzen AI Max+ 395 | llama.cpp b5863 Vulkan | 1/512/128/0 | 605 | 5311 | 0.11 | 66.3 | 131 | 0.51 | m/m |
+| [web-31](https://www.reddit.com/r/LocalLLaMA/comments/1m6b151/updated_strix_halo_ryzen_ai_max_395_llm_benchmark/) | — | Llama-3.x-70B | i1-Q4_K_M | Ryzen AI Max+ 395 | llama.cpp b5863 HIP / Vulkan | 1/512/128/0 | 94.7 | 426 | 0.22 | 4.5 | 6.0 | 0.75 | c/m |
+| [web-36](https://www.reddit.com/r/LocalLLaMA/comments/1x023z4/qwen38flashnext_on_6x3090_6x4090_without_nvlink/) | — | Qwen3.8-Flash-Next | UD-Q4_K_XL, KV q8_0 | 6× RTX 4090 layer split | llama.cpp df03399b8 stock | 1/50000/128/50000 | 1728 | 27367 | **0.063** | 46.2 | 184 | 0.25 | c/m |
+| [web-41](https://www.reddit.com/r/LocalLLaMA/comments/1r66jyp/vllm_maximum_performance_on_multi3090/) | — | Qwen3-Coder-Next (80B-A3B) | FP8 (Marlin) | 4× RTX 3090 TP4, P2P | vLLM | 1/512/512/512 | — | — | — | 144.6 | 595 | 0.24 | –/m |
+| [web-42](https://himeshp.blogspot.com/2025/03/vllm-performance-benchmarks-4x-rtx-3090.html) | — | QwQ-32B | FP8 (Marlin) | 4× RTX 3090 TP4, no P2P | vLLM | 1/1024/128/1024 | — | — | — | 44.0 | 64.3 | 0.68 | –/m |
+| [web-44](https://www.reddit.com/r/LocalLLaMA/comments/1jobe0u/benchmark_dualgpu_boosts_speed_despire_all_common/) | — | QwQ-32B | AWQ 4-bit | 1× H100 SXM | vLLM | 1/512/512/512 | — | — | — | 78.0 | 186 | 0.42 | –/m |
+| [web-45](https://www.reddit.com/r/LocalLLaMA/comments/1jobe0u/benchmark_dualgpu_boosts_speed_despire_all_common/) | — | QwQ-32B | AWQ 4-bit | 1× RTX 5090 | vLLM | 1/512/512/512 | — | — | — | 65.0 | 99.6 | 0.65 | –/m |
+| [web-48](https://www.reddit.com/r/LocalLLaMA/comments/1jobe0u/benchmark_dualgpu_boosts_speed_despire_all_common/) | — | QwQ-32B | AWQ 4-bit | 1× RTX 4090 | vLLM | 1/512/512/512 | — | — | — | 43.0 | 56.0 | 0.77 | –/m |
+| [web-50](https://github.com/ggml-org/llama.cpp/discussions/14640) | — | Qwen3-8B (R1-0528 distill) | Q4_K_M | 1× MI300X | llama.cpp b5873–5898 HIP | 1/512/128/0 | 5840 | 142677 | **0.041** | 161.5 | 1116 | 0.14 | c/m |
+| [web-51](https://github.com/ggml-org/llama.cpp/discussions/14640) | — | Llama-3.x-70B (R1 distill) | Q4_K_M | 1× MI300X | llama.cpp b5873–5898 HIP | 1/512/128/0 | 950 | 16745 | **0.057** | 36.3 | 125 | 0.29 | c/m |
+
+## Ratio distribution
+
+Excluded metrics (speculative decoding: lm-09, lm-36 and lm-39 decode) are left out; the two known exceptions
+(web-04, lm-35) are included.
+
+| Phase | n | min | p25 | median | p75 | max |
+|---|---|---|---|---|---|---|
+| prefill | 37 | 0.008 | 0.126 | 0.204 | 0.402 | 0.953 |
+| decode | 40 | 0.115 | 0.376 | 0.605 | 0.746 | 2.034 |
+
+| Ratio bucket | [0, 0.1) | [0.1, 0.25) | [0.25, 0.5) | [0.5, 0.75) | [0.75, 0.9) | [0.9, 1) | ≥ 1 |
+|---|---|---|---|---|---|---|---|
+| prefill | 5 | 19 | 5 | 6 | 1 | 1 | 0 |
+| decode | 0 | 4 | 12 | 17 | 5 | 0 | 2 |
+
+What this shows:
+
+- **Decode** clusters at 0.6–0.82 for clean, bandwidth-bound llama.cpp / vLLM single-GPU runs, which is what
+  70–85 % of the memory bandwidth looks like in practice: lm-01, lm-02, lm-10, lm-20, web-31 and web-48 sit at
+  0.75–0.82 on NVIDIA and AMD GPUs and APUs. (The researchers' Arc B70 Q6_K vs Q8_0 pair on one box scales with
+  bytes too, at ≈ 75 % of 608 GB/s.) No asserted decode ratio is above 0.82, so no single-device bandwidth preset
+  looks too low; the two decode exceptions are a batched MoE run and a multi-node run with an unknown checkpoint.
+- **Prefill** is mostly 0.1–0.25. That is expected for LocalMaxxing, whose prefill is the client TTFT over a
+  ~300-token prompt, and for llama.cpp on large GPUs. The highest clean prefill ratios are compute-bound Apple runs
+  (0.62–0.74) and the vLLM INT4 3090 run (0.76).
+
+## Flagged cases
+
+### Reported above 0.9 × simulated (possible underestimate)
+
+| Report | Ratio | Cause | Verdict |
+|---|---|---|---|
+| web-04 decode (gpt-oss-120b, Spark, B=32 aggregate) | 2.03 | **Simulator modelling.** MoE routing is "balanced" ([§5 "MoE modes A/B"](simulation-model.md#moe-modes-ab)): 32 × top-4 = 128 assignments touch min(E, T·k) = all 128 experts per layer, so every decode step reads all 63 GB (129 tok/s). Real routing touches fewer distinct experts. Uniform random gives 128·(1 − (1 − 4/128)³²) ≈ 82, about 46 GB/step including the KV, or 192 tok/s. The measured 262 tok/s needs ≤ 33 GB/step at 273 GB/s, so real routing is even more concentrated. Not an artefact: llama-batched-bench has fed random tokens since llama.cpp #15398 (Aug 2025), so the 32 sequences do not share their routing. | **Known exception**, asserted to still fail. Follow-up 1. For batched MoE decode the simulator is not an upper bound today. |
+| lm-36 prefill (DeepSeek-V4.1-Flash, 4× Spark) | 0.95 | Passes, but at the bound. Prefill of 274 tokens is memory-bound: balanced routing reads every routed expert (≈ 80 GB per device at 273 GB/s), and TTFT is 309 ms. Reaching 95 % of LPDDR5X peak is implausible, so the likely cause is on the report side: SGLang's radix prefix cache is on by default and LocalMaxxing reuses its canonical prompt, so part of the prompt was probably cached. Less-than-all experts touched (follow-up 1) would also explain it. | Asserted (passes); watch. |
+| lm-35 decode (GLM-5.3-Flash, 4× Spark TP4) | 1.60 | **Unresolved.** The run used a local checkpoint (`/models/glm-5.3-flash-nvfp4`); the record says only "NVFP4 4-bit weights" and gives no module layout or measured bpw (the researchers' ≈ 4.5 bpw is a format estimate). It is simulated with the closest published checkpoint, `nvidia/GLM-5.3-Flash-NVFP4`, which keeps attention, KDA and shared experts in BF16: ≈ 22 GB read per token over the 4 devices → 46.6 tok/s, below the reported 74.6. Possible causes: (a) the local checkpoint quantizes more modules than the published one; for scale, an all-linear NVFP4 layout would simulate to 88.8 tok/s (ratio 0.84), but nothing in the record shows that layout, so it is a scenario, not the mapping; (b) the simulator underestimates this setup (TP4 over RoCE, KDA decode). Not decided without the checkpoint's quant config. | **Known exception**, asserted to still fail; kept as an open flag. |
+| lm-09, lm-36, lm-39 decode | 1.56, 1.24, 1.20 | Speculative decoding (MTP 8 drafts, DSPARK, DFlash2) can legitimately beat the autoregressive bound. | Excluded from the assertion (printed). |
+
+Two more observations, consistent with the bound but worth knowing:
+
+- **lm-02 confirms the RTX 3090 tensor-rate unlock.** vLLM Marlin (fp16 MMA, fp32 accumulate) prefills
+  296 tokens of a 27B model in 153 ms, about 104 TFLOP/s. The stock fp16 / fp32-accumulate peak is 71 TFLOP/s
+  (GA102 whitepaper), so the stock preset would give ratio 1.5. With the unlock the run notes state (142 TFLOP/s),
+  the ratio is 0.76.
+- **Some Apple decode GEMMs are compute-bound in the simulator (web-12: decode bound "compute").** Decode GEMMs have
+  one token row. The shape-efficiency model pads that row to the device's tensor tile ([§4 "Shape
+  efficiency"](simulation-model.md#shape-efficiency)), giving efficiency ≈ 0.07–0.1, and on the M3/M4 SIMD engines
+  (13–29 TFLOP/s for 410–819 GB/s) the compute term of some decode GEMMs passes their memory term. Real Metal kernels
+  run these as GEMVs (`mul_mv`) without padding. The effect is small: summing only the memory terms gives 153 tok/s
+  instead of 150 for the M4 Max gpt-oss-120b row, and 115 instead of 111 for a dense 8B Q4 decode on the M4 Max
+  (2–3 %). Follow-up 2.
+
+### Ratio below 0.1 (gross overestimate or report artefact)
+
+| Report | Ratio | Likely cause |
+|---|---|---|
+| lm-08 prefill (B200, llama.cpp) | 0.008 | **Report / engine.** 347-token prompt measured as client TTFT (632 ms) on a GPU whose compute finishes it in about 5 ms. The submitter calls the run kernel-launch-bound on sm_100 for this hybrid Gated-DeltaNet model (decode 0.18 too). vLLM on the same B200 reaches 0.14. Not a sim issue. |
+| web-50 / web-51 prefill (MI300X, llama.cpp HIP) | 0.041 / 0.057 | **Engine.** llama.cpp's ROCm kernels of July 2025 are not tuned for CDNA3 (the post says vLLM / ATOM are much faster). The simulator uses the int8 MFMA peak (2.6 POP/s), which is right for an upper bound. Decode is also low (0.14 / 0.29) on a 5.3 TB/s part, which points to engine overhead, not to a wrong preset. |
+| lm-38 prefill (Inkling-Small, 6× 3090 layer split) | 0.067 | **Report / engine.** Custom `inkling-exp` branch, client TTFT on 367 tokens (2.5 s), no flags or notes. Decode is 0.32. |
+| web-36 prefill (Flash-Next, 6× 4090, 50k prompt, stock llama.cpp) | 0.063 | **Engine.** The poster's patched fork prefills the same 50k session at 7050 tok/s (ratio 0.26); stock upstream loses most of it to the indexer top-k path, by the poster's own analysis. |
+
+Others near the threshold, noted but not flagged: lm-28 decode 0.115 (oMLX on Flash-Next: a 7 B-active MoE at
+14.8 tok/s on 819 GB/s, engine / MoE-gather-bound per the researchers), lm-15 prefill 0.11 and web-29 prefill 0.11
+(TTFT and early Strix Halo builds).
+
+## Fixes made
+
+- **No preset or engine number was changed.** No report could be traced to a wrong hardware number. The
+  underestimates are the MoE routing limit (web-04, a modelling choice) and lm-35, whose checkpoint layout is unknown
+  (unresolved, see above). The six file-size cross-checks put the simulated weight bytes within −3.6 % to +1.0 % of
+  the GGUF files, so the bpw mapping holds.
+- `reports.ts` web-26: `mlx_lm.benchmark` generates from the cache of its 2048-token prompt (v0.28.2
+  `benchmark.py`), so decode is now simulated at context 2048 + 64 instead of 64 (decode ratio 0.38 → 0.42). A
+  regression test checks it, and a test now checks every row's decode context against its recorded depth (only
+  llama-bench rows may decode below the prompt length). No other row had the same mistake: every server, vLLM,
+  MLX and batched-bench row already decoded after its prompt.
+
+## Follow-ups (proposed, not done)
+
+1. **MoE routing locality for batched decode** (`src/sim/lower/moe.ts`). Add a routing option. "Balanced" (today)
+   gives min(E, T·k) distinct experts, the worst case for bytes. An expected-value option `E·(1 − (1 − k/E)^T)`
+   (already named as future work in [§9](simulation-model.md#9-deliberately-excluded-and-approximations)) and a
+   best case (`k` distinct experts) would make the simulator an upper bound for batched MoE decode. That is needed
+   to assert web-04; even uniform random routing (≈ 192 tok/s) stays below the reported 262.
+2. **GEMV path for decode** (minor; `src/sim/hw/efficiency.ts` / `engine/opTime.ts`). Price GEMMs with very few
+   token rows without padding the token dimension to the tensor tile, as real GEMV kernels do. Today M3/M4 Apple
+   decode loses 2–3 % to it (web-12).
+3. **Prefill at depth** (`workload.prefillDepth`). `simulate` always prefills from an empty cache. llama-bench
+   `pp @ dN` and LocalMaxxing depth rows can only be checked against the depth-0 bound.
+4. **fp32-accumulate default on GeForce.** It halves the fp16 tensor rate on GeForce parts (§2). It is right for the
+   paths used here (Marlin and MMQ accumulate in fp32 / int32), but a kernel that accumulates in fp16 would beat the
+   bound. `numerics.accumulate: 'fp16'` exists per report; the UI should say which engines can use it.
+5. **Sub-4-bpw weight formats.** IQ1–IQ3 / Q2_K / Q3_K GGUFs are stored as `int4` with a negative
+   `extraBitsPerElem` (lm-24 3.1 bpw, lm-27 2.9 bpw). Byte counts are right, but a real `bitsPerWeight` storage format
+   (or `int2` / `int3` dtypes) would be cleaner, and validation should reject negative extras otherwise.
+
+## Sim quirks noticed (not bugs, but they affect comparisons)
+
+- With pp > 1 at batch 1, `prefill.tokensPerSec` assumes a stream of batches (≈ pp × the per-sequence rate);
+  layer-split llama.cpp prefill of one prompt must be compared with `prefillPerSequenceTokensPerSec`.
+- `hgxCluster` puts the IB link name in the topology id even for one node, and `DGX_SPARK_PAIR`'s id repeats
+  "dgx-spark"; topology preset ids are long, so `reports.ts` uses the builders.
+- `memCapacityBytes` must be one of the preset's options: the 96 GB Strix Halo records use the 128 GB option (same
+  bandwidth).
+
+## Data-quality notes (from the researchers' files)
+
+- **Speculative decoding and MTP flags are unreliable** on LocalMaxxing: `specDecoding = false` on more than 500 runs
+  whose command line or notes show MTP / DFlash / ngram drafts; conversely `true` sometimes marks an always-on
+  engine. Rows were filtered on the command text, and the three spec rows kept here have their decode excluded.
+- **CPU-offload flags are unreliable**: hundreds of Flash-Next / GLM-5.3-Flash runs spill experts to system RAM
+  without saying so; all of them are excluded.
+- **Hardware mislabeling**: DGX Spark clusters are recorded as one GB10 with 128–512 GB (lm-35 says "128 GB" but runs
+  on 4 nodes); "R9700 × 3" records that used 2 GPUs; "B65 × 3" that is data parallel; Apple records carry no GPU-core
+  count (inferred here from the RAM size, which is only sold with one GPU configuration).
+- **LocalMaxxing prefill is client-side TTFT** over short prompts; `prefillTokens` is mostly 0 / null.
+- **Same config, very different decode**: R9700 27B llama.cpp records span 1.2–52.7 tok/s (the top ones exceed the
+  640 GB/s weight-streaming bound); Strix Halo Q8_0 7.8–14.9 tok/s (the top value exceeds 256 GB/s / 28.7 GB).
+  Only rows with notes that explain them were used.
+- **Intel Arc llama.cpp decode is not bandwidth-bound on the B65 rig** (flat across Q4–Q8), but scales with bytes on
+  the B70 box: the simulator is a bound for both, tighter for the B70.
+- **Web rows**: web-12 is second-hand (a nitter post quoted on reddit) and noisy; web-31 mixes backends (pp from HIP
+  rocWMMA, tg from another run); web-41 is one vLLM log line; web-42/44/45/48 do not state prompt or output lengths
+  (vLLM `benchmark_serving` defaults 1024 / 128 or 512 / 512 were assumed; they only move the decode context).
+- **Coverage holes**: no LocalMaxxing run on H100, B300, MI3xx/MI4xx, RX 9070 XT, Arc B580, M4 Max, M3 Ultra 60c or
+  M5 Ultra; no non-spec DeepSeek-V4.1-Flash decode anywhere; no 2-node DGX Spark report; MiniMax-M3 has a single
+  eval-suite-average record (not used).
+
+## Sources that could not be fetched directly
+
+- **reddit.com** blocks the extraction service; r/LocalLLaMA threads were read through a redlib mirror (same post
+  text; URLs here point at reddit).
+- **localmaxxing.com** HTML returns 403 to the fetcher; the JSON API (`/api/speed-tests?hfId=…`) works, and the run
+  links here are the site's `?run=` model-page URLs from that API.
+- The hardware-corner article tables (M5 Max gpt-oss-120b, RTX PRO 6000) and the gpt-oss guide rows beyond the
+  truncated page text were not used where the numbers could not be seen verbatim.
