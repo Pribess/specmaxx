@@ -6,7 +6,7 @@ import { REF_DENSE_8B, TINY_HYBRID } from '../models/reference';
 import { singleDevice } from '../hw/presets';
 import type { TopologySpec } from '../hw/types';
 import type { SimInput } from './types';
-import { validateInput } from './validate';
+import { blockShardingErrors, validateInput } from './validate';
 
 const BF16: QuantConfig = { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } };
 
@@ -110,5 +110,20 @@ describe('T17 input errors', () => {
       input({}, { hardware: { device: SYNTH_GPU, topology: singleDevice(SYNTH_GPU), linkModifiers: { intraNode: [{ kind: 'linkBandwidth', bandwidthPerDirectionBytesPerSec: 1e9, note: 'x', sources: [], estimatedReason: 'test' }] } } }),
       /has no intraNode link/,
     );
+  });
+});
+
+describe('blockShardingErrors', () => {
+  it('reports sharding errors from model, quant and parallel alone, prefixed with the layer name', () => {
+    const errors = blockShardingErrors({ model: REF_DENSE_8B, quant: BF16, parallel: { tp: 3, pp: 1, dp: 1, ep: 1 } });
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors[0]).toMatch(/^layer\.0: .*must be divisible by tp \(3\)/);
+    expect(blockShardingErrors({ model: REF_DENSE_8B, quant: BF16, parallel: { tp: 8, pp: 1, dp: 1, ep: 1 } })).toEqual([]);
+  });
+
+  it('is part of validateInput', () => {
+    const sharding = blockShardingErrors({ model: REF_DENSE_8B, quant: BF16, parallel: { tp: 3, pp: 1, dp: 1, ep: 1 } });
+    const all = validateInput(input({ tp: 3 }));
+    for (const e of sharding) expect(all).toContain(e);
   });
 });

@@ -191,6 +191,10 @@ export type HfMapResult =
       model: ModelSpec;
       /** Family that built it, e.g. `'qwen'`. */
       family: string;
+      /** The config's `model_type` (top-level, else text_config), or null; shown as the detected architecture. */
+      modelType: string | null;
+      /** The config's `architectures[0]` (top-level, else text_config), or null. */
+      architecture: string | null;
       /** Notes from unwrap, family build, quant derivation and param check, in that order. */
       notes: string[];
       /** What the IR leaves out of the checkpoint. */

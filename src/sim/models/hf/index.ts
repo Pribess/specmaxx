@@ -72,7 +72,17 @@ export function mapHfModel(files: HfRepoFiles, families: readonly FamilyEntry[] 
   if (files.configFrom && files.configFrom !== files.id) notes.push(`config.json read from ${files.configFrom}`);
   if (paramCheck.status !== 'ok') notes.push(`param check (${paramCheck.status}): ${paramCheck.note}`);
 
-  return { kind: 'ok', model: built.model, family: hit.entry.family, notes, excluded, quant, paramCheck };
+  return {
+    kind: 'ok',
+    model: built.model,
+    family: hit.entry.family,
+    modelType,
+    architecture,
+    notes,
+    excluded,
+    quant,
+    paramCheck,
+  };
 }
 
 /**

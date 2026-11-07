@@ -1,6 +1,6 @@
 # specmaxx
 
-A simulator runtime for LLM inference: given a model and a hardware stack, estimate performance numbers (throughput, latency, memory).
+A frontend-only estimator of the theoretical maximum prefill and decode tokens/s for a Hugging Face model on your hardware. Compare rigs, quantization and parallelism, with per-op limits and a memory-fit verdict. These are hardware ceilings, not inference-engine benchmark predictions.
 
 ## Development
 
@@ -11,8 +11,25 @@ what Vitest 5, Vite 8 and @vitejs/plugin-react 6 support; Node 20 and 23 are not
 npm ci            # install the locked dependencies
 npm run dev       # Vite dev server
 npm run test      # unit tests (vitest), once; npm run test:watch to watch
-npm run check     # typecheck + lint + test + build: must pass before submitting
+npm run check     # typecheck + lint + unit/component tests + build + worker smoke test
+npm run e2e       # Playwright smoke against the production build (run npm run build first)
+npm run screenshots # rebuild and regenerate docs/screenshots/*.png
+npm run format -- src/ui/components/MemoryFit.tsx # format only the files you changed
 ```
+
+The browser tests need Chromium: `npx playwright install chromium --only-shell`. HF responses are mocked
+from checked-in fixtures, so the tests do not call the live Hub.
+Screenshots include the 1440×900 and 390×844 light/dark views, extra tall desktop views showing all
+input controls (`desktop-full-*.png`), and a viewport-sized About page.
+
+The app starts with a built-in 8B reference, without a network request. Load an HF model ID to read its
+config directly from the Hub. Gated models can use an optional HF token stored in this browser's
+localStorage; it is sent only to Hugging Face, never included in the shareable URL. Use **Forget token**
+to remove it. Every simulation input (including custom spec edits) is encoded in the URL. Copy the
+address to share an estimate. The app follows your system's light/dark preference.
+
+**How it works** opens `about.html`, which renders the simulation-model documentation (and the sanity
+check document when present). Its back-link restores your estimate.
 
 Layout:
 
@@ -39,4 +56,10 @@ Layout:
 - `docs/sanity-check.md`: simulated maxima vs 43 community benchmark reports (method, ratios, flagged cases,
   follow-ups).
 - `src/hf/`: browser-side Hub fetch (`loadHfModel`: api + config.json + sidecars, token, cache, errors).
-- `src/App.tsx`, `src/main.tsx`: the UI (a placeholder page with one demo line for now).
+- `src/ui/`: React controls, roofline and throughput charts, memory fit and op breakdown.
+  - `state/`: pure state/reducer, URL codec, hardware resolution, validation, summaries and batch sweep.
+  - `sim/`: the real web-worker runner (32-entry LRU) and an injectable inline runner for component tests.
+- `src/styles/tokens.css`: shared Archivo typography and semantic light/dark palette.
+- `src/about/`, `about.html`: the readable methodology page with working documentation anchors.
+- `src/main.tsx`: React entry point.
+- `e2e/`: fixture-backed production-worker smoke test and desktop/phone screenshot generation.

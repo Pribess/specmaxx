@@ -1,0 +1,10 @@
+{
+  // Node-side TypeScript: Playwright specs (e2e/) and the Playwright config. Type-checked separately so the
+  // app's tsconfig.json never sees node types.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"]
+  },
+  "include": ["e2e/**/*.ts", "playwright.config.ts"]
+}

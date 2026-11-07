@@ -40,6 +40,8 @@ describe('mapHfModel', () => {
     expect(seen.top).toBe(config);
     if (r.kind !== 'ok') throw new Error(JSON.stringify(r));
     expect(r.family).toBe('fake');
+    expect(r.modelType).toBe('fake');
+    expect(r.architecture).toBe('FakeForConditionalGeneration');
     expect(r.model).toBe(REF_DENSE_8B);
     expect(r.excluded).toEqual({ mtpParamsEstimate: 10, visionParamsEstimate: 20, parts: ['MTP layer', 'vision tower'] });
     expect(r.paramCheck).toMatchObject({ status: 'ok', expected: total, actual: total, relError: 0 });

@@ -12,7 +12,7 @@ import {
 import { RTX_3090, RTX_3090_UNLOCKS, RTX_4090_UNLOCKS, RTX_5090_UNLOCKS } from './nvidia';
 import {
   ARC_PRO_B60_PCIE_2, DGX_SPARK_PAIR, HGX_B200_16_NDR, HGX_B300_16_XDR, HGX_H100_16_NDR,
-  MI300X_XGMI_8, RTX_3090_NVLINK_2, TOPOLOGY_PRESETS, hgxCluster, pcieBox, socCluster,
+  MI300X_XGMI_8, RTX_3090_NVLINK_2, TOPOLOGY_PRESETS, hgxCluster, linkPresetId, nodeTopology, pcieBox, socCluster,
 } from './topologies';
 
 describe('interconnect presets', () => {
@@ -129,5 +129,27 @@ describe('topology presets and builders', () => {
     expect(cluster).toMatchObject({ devicesPerNode: 1, nodes: 3, interNode: TB5_RDMA });
     expect(validateTopology(cluster)).toEqual([]);
     expect(validateTopology(socCluster(RTX_3090, 0, TB5_RDMA))).not.toEqual([]);
+  });
+
+  it('gives every link preset a unique, readable id', () => {
+    const ids = LINK_PRESETS.map(linkPresetId);
+    expect(new Set(ids).size).toBe(LINK_PRESETS.length);
+    expect(linkPresetId(PCIE_5_X16)).toBe('pcie-5-0-x16-host-bounce');
+    for (const id of ids) expect(id).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
+  });
+
+  it('builds general node topologies with links only at the levels that exist', () => {
+    const single = nodeTopology({ devicesPerNode: 1, nodes: 1, intraNode: PCIE_5_X16, interNode: IB_NDR_400 });
+    expect(single.intraNode).toBeUndefined();
+    expect(single.interNode).toBeUndefined();
+    const box = nodeTopology({ devicesPerNode: 4, nodes: 1, intraNode: PCIE_4_X16, interNode: IB_NDR_400, device: RTX_3090 });
+    expect(box).toMatchObject({ devicesPerNode: 4, nodes: 1, intraNode: PCIE_4_X16 });
+    expect(box.interNode).toBeUndefined();
+    expect(box.id).toBe('node-4x1-rtx-3090-intra-pcie-4-0-x16-host-bounce');
+    expect(box.name).toBe(`4 × ${RTX_3090.name} / PCIe 4.0 x16 (host bounce)`);
+    const cluster = nodeTopology({ devicesPerNode: 8, nodes: 2, intraNode: NVLINK_4, interNode: IB_NDR_400 });
+    expect(cluster).toMatchObject({ intraNode: NVLINK_4, interNode: IB_NDR_400 });
+    for (const t of [single, box, cluster]) expect(validateTopology(t)).toEqual([]);
+    expect(new Set([single.id, box.id, cluster.id]).size).toBe(3);
   });
 });
