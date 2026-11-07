@@ -1,0 +1,175 @@
+import { describe, expect, it } from 'vitest';
+import { attendedPairs, kvTokensRead, opBytes, opFlops } from './metrics';
+import type { AttentionOp, GemmOp, IndexerOp, RecurrentOp } from './ops';
+import { lowerBlock, type LoweringContext } from '../lower/lower';
+import { REF_DENSE_8B } from '../models/reference';
+import type { QuantConfig } from './model';
+
+const BF16: QuantConfig = { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } };
+
+const gemm = (sparsity: 'dense' | '2:4'): GemmOp => ({
+  kind: 'gemm',
+  name: 'test',
+  batch: 1,
+  m: 16,
+  n: 4096,
+  k: 4096,
+  inputDtype: 'bf16',
+  weight: { dtype: 'bf16' },
+  outputDtype: 'bf16',
+  math: 'bf16',
+  accumulate: 'fp32',
+  sparsity,
+});
+
+describe('T2 GEMM b1 m16 n4096 k4096 bf16', () => {
+  it('counts FLOP and bytes', () => {
+    const op = gemm('dense');
+    expect(opFlops(op)).toBe(536_870_912); // 2·16·4096·4096
+    const b = opBytes(op);
+    expect(b.weightBytes).toBe(33_554_432); // 4096·4096·2
+    expect(b.activationReadBytes).toBe(131_072); // 16·4096·2
+    expect(b.activationWriteBytes).toBe(131_072); // 16·4096·2
+    expect(b.totalBytes).toBe(33_554_432 + 2 * 131_072);
+  });
+  it('2:4 stores half the values plus 2-bit indices, same FLOP', () => {
+    const op = gemm('2:4');
+    expect(opBytes(op).weightBytes).toBe(18_874_368); // 4096²·(16/2 + 1)/8 = 4096²·9/8
+    expect(opFlops(op)).toBe(536_870_912); // dense-equivalent: unchanged
+  });
+  it('adds the bias', () => {
+    const op: GemmOp = { ...gemm('dense'), biasDtype: 'bf16' };
+    expect(opBytes(op).weightBytes).toBe(33_554_432 + 8192); // + n·2 = 4096·2
+  });
+});
+
+describe('T2b attendedPairs', () => {
+  const full = { kind: 'full' } as const;
+  it('causal full', () => {
+    expect(attendedPairs(4096, 4096, true, full)).toBe(8_390_656); // 4096·4097/2
+    expect(attendedPairs(1, 1024, true, full)).toBe(1024); // decode: 1·1023 + 1
+    expect(attendedPairs(4, 10, true, full)).toBe(34); // 4·6 + 4·5/2 = 24 + 10
+  });
+  it('sliding window', () => {
+    // W 4, q8 kv8: past 0, j0 = 4 → 0 + 4·5/2 + (8 − 4)·4 = 10 + 16
+    expect(attendedPairs(8, 8, true, { kind: 'window', windowTokens: 4 })).toBe(26);
+    // W 4, q4 kv10: past 6, j0 = clamp(4 − 6) = 0 → 4·4
+    expect(attendedPairs(4, 10, true, { kind: 'window', windowTokens: 4 })).toBe(16);
+  });
+  it('non-causal', () => {
+    expect(attendedPairs(3, 5, false, full)).toBe(15); // 3·5
+    expect(attendedPairs(3, 5, false, { kind: 'topk', topK: 2 })).toBe(6); // 3·min(2, 5)
+  });
+  it('top-k', () => {
+    // topK 256, q = kv = 512: j0 = 256 → 256·257/2 + 256·256 = 32,896 + 65,536
+    expect(attendedPairs(512, 512, true, { kind: 'topk', topK: 256 })).toBe(98_432);
+    expect(attendedPairs(1, 1000, true, { kind: 'topk', topK: 256 })).toBe(256); // decode: min(256, 1000)
+  });
+});
+
+describe('kvTokensRead', () => {
+  it('caps the union of touched keys', () => {
+    expect(kvTokensRead(8, 100, { kind: 'full' })).toBe(100);
+    expect(kvTokensRead(8, 100, { kind: 'window', windowTokens: 4 })).toBe(11); // 4 + 8 − 1
+    expect(kvTokensRead(1, 1000, { kind: 'topk', topK: 64 })).toBe(64); // min(1000, 64·1)
+    expect(kvTokensRead(512, 512, { kind: 'topk', topK: 256 })).toBe(512); // min(512, 256·512)
+  });
+});
+
+describe('T2c REF_DENSE_8B attention layer', () => {
+  const attnBlock = REF_DENSE_8B.layers[0].blocks.find((b) => b.kind === 'gqa_attention');
+  if (attnBlock === undefined) throw new Error('no attention block');
+  const ctxOf = (phase: 'prefill' | 'decode', qLen: number, kvLen: number): LoweringContext => ({
+    phase,
+    seqs: 1,
+    qLen,
+    kvLen,
+    quant: BF16,
+    parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
+  });
+  const attentionOf = (ctx: LoweringContext): AttentionOp => {
+    const op = lowerBlock(attnBlock, ctx).find((o) => o.kind === 'attention');
+    if (op === undefined || op.kind !== 'attention') throw new Error('no attention op');
+    return op;
+  };
+  it('prefill T 4096 FLOP: exact causal triangle', () => {
+    // 2·heads·pairs·(qk + v) = 2·32·8,390,656·(128 + 128). (The plan's 137,438,953,472 used 4096²/2 pairs,
+    // i.e. it omitted the diagonal; the triangle with the diagonal is 4096·4097/2.)
+    expect(opFlops(attentionOf(ctxOf('prefill', 4096, 4096)))).toBe(137_472_507_904);
+  });
+  it('decode ctx 1024 reads the whole KV cache', () => {
+    // 1024 tokens · (2·8 KV heads·128) elems · 2 B
+    expect(opBytes(attentionOf(ctxOf('decode', 1, 1024))).kvReadBytes).toBe(4_194_304);
+    expect(opBytes(attentionOf(ctxOf('decode', 1, 1024))).kvWriteBytes).toBe(4096); // 1 token · 2048 elems · 2 B
+  });
+});
+
+describe('T2d indexer', () => {
+  const op: IndexerOp = {
+    kind: 'indexer',
+    name: 'idx',
+    seqs: 1,
+    heads: 4,
+    headDim: 32,
+    qLen: 1,
+    kvLen: 1000,
+    causal: true,
+    topK: 256,
+    keyCache: { dtype: 'fp8_e4m3' },
+    keyCacheElemsPerToken: 32,
+    math: 'fp8',
+    accumulate: 'fp32',
+    activationDtype: 'bf16',
+  };
+  it('scores every visible key', () => {
+    expect(opFlops(op)).toBe(256_000); // 2·4 heads·1000 pairs·32
+    const b = opBytes(op);
+    expect(b.kvReadBytes).toBe(32_000); // 1000 tokens·32 elems·1 B
+    expect(b.kvWriteBytes).toBe(32); // 1 new token·32·1 B
+    expect(b.activationWriteBytes).toBe(1024); // 256 int32 indices·4 B
+    expect(b.activationReadBytes).toBe(264); // q 4·32·2 = 256 + head weights 4·2 = 8
+  });
+});
+
+describe('T2e recurrent GatedDeltaNet (vH 8, qkH 4, dk = dv = 64, fp32 state)', () => {
+  const base: RecurrentOp = {
+    kind: 'recurrent',
+    name: 'gdn',
+    variant: 'gated_delta_net',
+    seqs: 2,
+    qLen: 1,
+    heads: 8,
+    qkHeads: 4,
+    keyDim: 64,
+    valueDim: 64,
+    mode: 'step',
+    chunkLen: 1,
+    stateFlopsPerElemPerToken: 7,
+    hasPriorState: true,
+    stateDtype: 'fp32',
+    activationDtype: 'bf16',
+    math: 'bf16',
+    accumulate: 'fp32',
+  };
+  it('step, seqs 2', () => {
+    expect(opFlops(base)).toBe(458_752); // 2 seqs·1·8 heads·7·4096
+    const b = opBytes(base);
+    expect(b.stateReadBytes).toBe(262_144); // 2·8·4096·4
+    expect(b.stateWriteBytes).toBe(262_144);
+  });
+  it('chunked, seqs 1, q128, C 64, no prior state', () => {
+    const op: RecurrentOp = {
+      ...base,
+      seqs: 1,
+      qLen: 128,
+      mode: 'chunked',
+      chunkLen: 64,
+      stateFlopsPerElemPerToken: 4,
+      hasPriorState: false,
+    };
+    expect(opFlops(op)).toBe(25_296_896); // 128·8·(4·4096 + 65·128)
+    const b = opBytes(op);
+    expect(b.stateReadBytes).toBe(0);
+    expect(b.stateWriteBytes).toBe(131_072); // 1·8·4096·4
+  });
+});

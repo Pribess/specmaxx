@@ -1,0 +1,11 @@
+{
+  // The simulation core must stay pure TypeScript: no DOM lib, no ambient types (no node, no vite/client).
+  // Tests are excluded because they import vitest; tsconfig.json type-checks them.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": []
+  },
+  "include": ["src/sim/**/*.ts"],
+  "exclude": ["src/sim/**/*.test.ts"]
+}
