@@ -202,7 +202,9 @@ No FLOP, no memory traffic (`opBytes` returns zeros); its time is `messageBytes`
 ## 4. Hardware
 
 Schema: `src/sim/hw/types.ts` (`DeviceSpec`, `ComputeEngine`, `MatmulPeak`, `GemmTiling`, `MemorySpec`,
-`LinkSpec`, `TopologySpec`, `HardwareStack`). Presets: `src/sim/hw/presets/` (`RTX_5090`, `singleDevice`).
+`LinkSpec`, `TopologySpec`, `HardwareStack`). Presets: `src/sim/hw/presets/` (registry `index.ts`:
+`DEVICE_PRESETS`, `DEVICE_PRESET_GROUPS`, `DEVICE_UNLOCKS`, `deviceUnlocks`, `singleDevice`; the vendor files,
+`LINK_PRESETS` and `TOPOLOGY_PRESETS`: see "Preset library" below). Unlock axes: `src/sim/hw/unlocks.ts`.
 
 - A device has ≥ 1 **compute engine** (GPU tensor cores, NPU, TPU MXU); a run uses exactly one
   (`HardwareStack.engineId`, default `engines[0]`). An engine lists matmul peaks, vector (non-tensor) peaks,
@@ -305,6 +307,110 @@ property of the link.
 - `simulate` applies `HardwareStack.deviceModifiers` and `linkModifiers` **once, up front**
   (`src/sim/engine/simulate.ts: effectiveHardware`); all cost code sees plain specs. Each applied modifier
   becomes a `variant: …` line in `SimResult.warnings`, and `SimResult.effectiveDevice` is the modified spec.
+
+### Preset library
+
+`src/sim/hw/presets/index.ts: DEVICE_PRESET_GROUPS, DEVICE_PRESETS, DEVICE_UNLOCKS, deviceUnlocks, singleDevice`;
+checked by `src/sim/hw/presets.test.ts` (every preset) and one `<vendor>.test.ts` per file (vendor ratios and
+spot values against the datasheet).
+
+| File | Covers | Export |
+|---|---|---|
+| `presets/nvidia.ts` | GeForce RTX 3090, 4090, 5090 and their unlock axes | `NVIDIA_CONSUMER_DEVICE_PRESETS`, `RTX_3090_UNLOCKS`, `RTX_4090_UNLOCKS`, `RTX_5090_UNLOCKS` |
+| `presets/nvidia-datacenter.ts` | DGX Spark (GB10), H100 SXM, H200 SXM, B200, B300 | `NVIDIA_DATACENTER_DEVICE_PRESETS` |
+| `presets/apple.ts` | M4 Max, M3 Ultra, M5 Max, M5 Ultra; binned GPU-core counts as separate SKUs | `APPLE_DEVICE_PRESETS` |
+| `presets/amd.ts` | Radeon AI PRO R9700, RX 9070 XT, Ryzen AI Max+ 395 (Strix Halo iGPU), Instinct MI300X / MI325X / MI355X / MI455X | `AMD_DEVICE_PRESETS` |
+| `presets/intel.ts` | Arc Pro B70, B65, B60, Arc B580 | `INTEL_DEVICE_PRESETS` |
+| `presets/links.ts` | PCIe, NVLink bridge / NVLink 4 / 5, InfiniBand, ConnectX-7, xGMI, Thunderbolt, USB4, Ethernet | `LINK_PRESETS`, `HOST_BOUNCE_PCIE_LINKS` |
+| `presets/topologies.ts` | PCIe boxes, SoC clusters, HGX nodes, MI300X xGMI node | `TOPOLOGY_PRESETS`, `pcieBox`, `socCluster`, `hgxCluster` |
+
+`DEVICE_PRESET_GROUPS` is the display order: consumer / prosumer first (GeForce, Apple, AMD Radeon and Strix
+Halo, Intel Arc, DGX Spark), datacenter last; `DEVICE_PRESETS` is the groups flattened.
+
+Conventions every preset follows (each file's header states its own traps):
+
+- **Source kinds** (`SourceRef.kind`): `'vendor'` (absent = vendor; datasheet, whitepaper, ISA manual, official
+  spec page), `'review'` (independent technical reviews and databases: Chips and Cheese, TechPowerUp, ...),
+  `'community'` (forum, GitHub, seller or user measurements). Every source has an `https://` URL and a title,
+  and its `note` quotes the table or sentence the numbers come from.
+- **Estimated fields**: numbers no vendor publishes (CTA tiles, CTAs per unit, Apple GPU FLOPS derived as cores ×
+  FLOP/clk × a community-measured clock, Intel FP16 XMX from per-core rates, dense rates derived as ½ a sparse
+  headline) are in `estimated[]` with the derivation as the reason, or in a source whose note shows the
+  arithmetic. Peaks are per device at the clock the header names (vendor boost / max clock unless stated).
+- **Single-issue vs dual-issue vector**: AMD's RDNA "FP32 Vector" headline counts dual issue (VOPD / wave64),
+  which compilers rarely emit for FMA; `vectorFlopsPerSec.fp32` is the single-issue rate (half the headline).
+  CDNA, NVIDIA and Intel have no such caveat.
+- **Sparse-headline trap**: NVIDIA datacenter and DGX Spark headlines are 2:4 sparse ("1 PFLOP FP4" on DGX
+  Spark is sparse; dense is half). Sparse figures go only in `'2:4'` entries; dense entries hold the printed
+  dense figure, else ½ the sparse one (estimated). AMD's "4:2" structured sparsity is the same pattern and is
+  recorded as `'2:4'`.
+- **GeForce fp32-accumulate half rate**: on GeForce, fp16 / fp8 matmuls with fp32 accumulate run at half the
+  fp16-accumulate rate, and bf16 / tf32 accumulate only in fp32, so GeForce lists both accumulators.
+  Datacenter parts, DGX Spark, AMD and Intel run both accumulators at one rate and list only fp32-accumulate
+  entries (peak lookup step 2 maps an fp16-accumulate request onto them).
+- Formats a vendor gives no rate for are omitted (the lookup falls back to a wider format and warns), not
+  invented. Capacities are recorded as quoted (SI bytes), unified-memory devices list their SKU options.
+
+### Unlock axes
+
+`src/sim/hw/unlocks.ts: UnlockAxis, UnlockOption, UnlockSelection, resolveUnlocks, allUnlockSelections,
+unlockAxesErrors`; per device in `src/sim/hw/presets/index.ts: DEVICE_UNLOCKS` (keyed by `DeviceSpec.id`).
+
+An **unlock axis** is one independent way a base device is modified in practice. Its options are mutually
+exclusive; "stock" is always implied and not listed. Each option is just lists of the typed modifiers above
+(`deviceModifiers`, and `intraNodeLinkModifiers` for the topology's intra-node link), so the base preset is
+never copied and every number keeps its provenance.
+
+- UI: one control per axis: a **checkbox** when the axis has one option, a **radio group** (stock + options) when
+  it has several. Axes combine freely.
+- `resolveUnlocks(axes, selection)` concatenates the chosen options' modifiers **in axis order** (not selection
+  order), ready for `HardwareStack.deviceModifiers` / `linkModifiers.intraNode`; an unknown axis or option id
+  throws (a UI bug).
+- `allUnlockSelections(axes)` enumerates all ∏ (options + 1) selections. `hw/presets.test.ts` checks, for every
+  device with unlocks, `unlockAxesErrors == []` and that EVERY selection passes `validateDeviceModifiers` and
+  (link modifiers) `validateLinkModifiers` on each stock host-bounce PCIe link (`HOST_BOUNCE_PCIE_LINKS`).
+
+Axes per consumer card (`src/sim/hw/presets/nvidia.ts`):
+
+| Card | Axis (`id`) | Option: modifiers | Source class |
+|---|---|---|---|
+| RTX 3090 | `tensor-rate` | `full-rate`: `peakScale ×2` on fp16 / bf16 / tf32 with fp32 accumulate (dense and 2:4) | community (Zagitta gpu-unlock, listed stable) |
+| RTX 3090 | `pcie-p2p` | `direct`: link `p2p → 'direct'` (bandwidth and latency kept) | community (patched open kernel driver) |
+| RTX 4090 | `tensor-rate` | as the 3090 | community (listed experimental) |
+| RTX 4090 | `vram-mod` | `48gb`: `memoryCapacity [48 GB]` (bandwidth unchanged: unverified) | review + community (teardown, GPU Lab) |
+| RTX 4090 | `pcie-p2p` | as the 3090 | community (tinygrad driver) |
+| RTX 4090 | `memory-overclock` | `1545mhz`: `memoryBandwidth` 1545 MHz × 16 × 384 bit / 8 = 1186.56 GB/s (theoretical bus peak) | review (TechPowerUp OC table) |
+| RTX 5090 | `pcie-p2p` | as the 3090 | community (tinygrad driver) |
+| RTX 5090 | `power-clock` | `575w`: `clockScale` 2768 / 2407 ≈ 1.150; `400w`: `clockScale` 2465 / 2407 ≈ 1.024 (measured sustained SM clocks under an AI load, relative to the 2407 MHz boost clock the vendor peaks assume; memory unchanged) | community (measured SM clocks) |
+
+Rejected as UI choices (no capacity test or debunked; listed with links at the end of `nvidia.ts`): 3090 48 GB,
+4090 96 GB, 5090 64 / 96 / 128 GB, a Blackwell tensor unlock. The 3090 NVLink bridge is a topology
+(`RTX_3090_NVLINK_2`), not an unlock. Other vendors' devices have no unlock axes.
+
+### Links and topologies
+
+`src/sim/hw/presets/links.ts: LINK_PRESETS, HOST_BOUNCE_PCIE_LINKS`;
+`src/sim/hw/presets/topologies.ts: TOPOLOGY_PRESETS, pcieBox, socCluster, hgxCluster`; costed in §6
+(`src/sim/engine/collectives.ts`).
+
+- **Per direction, per device**: `bandwidthPerDirectionBytesPerSec` is what one device can inject in one
+  direction, never a bidirectional sum (vendor "900 GB/s NVLink" bidirectional → 450 GB/s).
+- **Theoretical bandwidth, hardware-floor latency**: bandwidth is the line-rate ceiling (PCIe: GT/s × lanes ×
+  128/130 ÷ 8, before packet overhead); `latencySec` is a one-way hardware / verbs-level floor (P2P write,
+  `ib_write_lat`, the transport's measured minimum for TCP / RDMA over Thunderbolt and USB4), never an NCCL /
+  RCCL software floor. Latencies no vendor publishes are `estimated`.
+- **Host bounce**: stock GeForce PCIe links are `p2p: 'host_bounce'` (`HOST_BOUNCE_PCIE_LINKS`, Gen4 / Gen5 × x8 /
+  x16), with `hostBounce.hostMemBandwidthBytesPerSec` an assumed dual-channel DDR5-6000 host (96 GB/s,
+  estimated: replace for the actual host) and `extraLatencySec` 12 µs (community P2P matrices). The
+  `pcie-p2p` unlock switches the link to `'direct'`; Intel Arc Pro boxes use the `_DIRECT` links (stock driver).
+  The cost is §6 "Host bounce".
+- **xGMI aggregate**: `XGMI_MI300X_8_GPU` (used by `MI300X_XGMI_8`) is 7 peers × 64 GB/s = 448 GB/s per
+  direction, the full-mesh injection ceiling, because the collective formulas treat B as a device's aggregate
+  injection; it is optimistic for subgroups and send/recv. `XGMI_MI300X_PER_PEER` (64 GB/s) is the one-peer link.
+- Topologies: `pcieBox` (one node, N devices, one PCIe link each; shared switch / root-complex uplinks not
+  modeled), `socCluster` (N single-SoC machines, one link budget per device, no port aggregation; Ethernet
+  assumes a non-oversubscribed switch), `hgxCluster` (8-GPU NVLink nodes, one full-rate NIC per GPU). Device and
+  node counts are user configuration and cite no source.
 
 ---
 
@@ -650,3 +756,14 @@ These checklists are binding for later tasks. TypeScript's exhaustive `never` ch
    `linkModifierErrors` (and `describe*Modifier`).
 3. This document, §4 "Device variants and modifiers" (the table).
 4. A test in `src/sim/hw/modifiers.test.ts`.
+
+**New device preset**
+
+1. The vendor file in `src/sim/hw/presets/`: an exported `DeviceSpec` const with a JSDoc header (what it is, the
+   clock its peaks assume, footnote traps), every number in `sources[].fields` or `estimated[]`; add it to the
+   file's `<VENDOR>_DEVICE_PRESETS` array.
+2. `src/sim/hw/presets/index.ts`: add it to a `DEVICE_PRESET_GROUPS` group (the coverage test fails otherwise);
+   unlock axes, if any, as an exported `UnlockAxis[]` in the vendor file and a `DEVICE_UNLOCKS` entry.
+3. Spot values and vendor ratios in the vendor's `<vendor>.test.ts`; `hw/presets.test.ts` covers validation,
+   every unlock selection and a `simulate()` smoke run automatically.
+4. This document, §4 "Preset library" (and "Unlock axes" for new axes).

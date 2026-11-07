@@ -27,6 +27,15 @@ export interface SourceRef {
   fields: string[];
   /** Optional note (page, table, how a number was derived from the quoted one). */
   note?: string;
+  /**
+   * What kind of evidence the source is. Absent means `'vendor'`.
+   * - `'vendor'`: a datasheet, whitepaper, ISA manual or official spec page of the vendor.
+   * - `'review'`: an independent technical review or database that measured or compiled the number
+   *   (Chips and Cheese, TechPowerUp, ServeTheHome, ...).
+   * - `'community'`: a community measurement or report (forum post, GitHub issue, benchmark repo, seller
+   *   listing), i.e. NOT a datasheet number. The UI should flag numbers that rest on these.
+   */
+  kind?: 'vendor' | 'review' | 'community';
 }
 
 /** A spec number no vendor publishes, with the reason for the chosen value. */

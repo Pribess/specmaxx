@@ -1,7 +1,34 @@
 import { describe, expect, it } from 'vitest';
 import { SYNTH_CLUSTER, SYNTH_GPU, SYNTH_PCIE_HOSTBOUNCE, SYNTH_UNIFIED } from '../__fixtures__/synthetic';
-import { DEVICE_PRESETS, RTX_5090, singleDevice } from './presets';
-import { numericLeafPaths, validateDevice, validateLink, validateTopology } from './validate';
+import { simulate } from '../engine/simulate';
+import type { SimInput } from '../engine/types';
+import type { ParallelConfig, QuantConfig } from '../ir/model';
+import { REF_DENSE_8B } from '../models/reference';
+import {
+  AMD_DEVICE_PRESETS,
+  APPLE_DEVICE_PRESETS,
+  DEVICE_PRESET_GROUPS,
+  DEVICE_PRESETS,
+  DEVICE_UNLOCKS,
+  HOST_BOUNCE_PCIE_LINKS,
+  INTEL_DEVICE_PRESETS,
+  LINK_PRESETS,
+  NVIDIA_CONSUMER_DEVICE_PRESETS,
+  NVIDIA_DATACENTER_DEVICE_PRESETS,
+  RTX_5090,
+  TOPOLOGY_PRESETS,
+  deviceUnlocks,
+  singleDevice,
+} from './presets';
+import { allUnlockSelections, resolveUnlocks, unlockAxesErrors } from './unlocks';
+import {
+  numericLeafPaths,
+  validateDevice,
+  validateDeviceModifiers,
+  validateLink,
+  validateLinkModifiers,
+  validateTopology,
+} from './validate';
 import type { AccumulateType, MathFormat } from '../ir/dtype';
 import type { DeviceSpec } from './types';
 
@@ -94,5 +121,145 @@ describe('validate rules', () => {
     if (link === undefined) throw new Error('fixture has an intraNode link');
     expect(validateLink(link)).toEqual([]);
     expect(validateLink({ ...link, p2p: 'direct' }).some((x) => x.includes('hostBounce must be present iff'))).toBe(true);
+  });
+});
+
+/** The library's device ids, for readable failure messages (`it.each` titles). */
+const DEVICE_CASES = DEVICE_PRESETS.map((d) => [d.id, d] as const);
+
+describe('preset library: every device preset', () => {
+  it('DEVICE_PRESETS holds every vendor array entry exactly once, in the groups order', () => {
+    const vendorArrays = [
+      NVIDIA_CONSUMER_DEVICE_PRESETS,
+      NVIDIA_DATACENTER_DEVICE_PRESETS,
+      APPLE_DEVICE_PRESETS,
+      AMD_DEVICE_PRESETS,
+      INTEL_DEVICE_PRESETS,
+    ];
+    const fromVendors = vendorArrays.flat();
+    expect(DEVICE_PRESETS.length).toBe(fromVendors.length);
+    expect(new Set(DEVICE_PRESETS)).toEqual(new Set(fromVendors));
+    expect(DEVICE_PRESETS).toEqual(DEVICE_PRESET_GROUPS.flatMap((g) => g.devices));
+    expect(DEVICE_PRESET_GROUPS.every((g) => g.devices.length > 0)).toBe(true);
+    // Datacenter last (consumer / prosumer first).
+    expect(DEVICE_PRESET_GROUPS[DEVICE_PRESET_GROUPS.length - 1].name).toBe('Datacenter');
+  });
+
+  it('device ids are unique', () => {
+    const ids = DEVICE_PRESETS.map((d) => d.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it.each(DEVICE_CASES)('%s passes validateDevice', (_id, d) => {
+    expect(validateDevice(d)).toEqual([]);
+  });
+
+  it.each(DEVICE_CASES)('%s: sources non-empty, each with an https url and a title', (_id, d) => {
+    expect(d.sources.length).toBeGreaterThan(0);
+    for (const s of d.sources) {
+      expect(s.url.startsWith('https://'), s.url).toBe(true);
+      expect(s.title.trim()).not.toBe('');
+    }
+  });
+
+  it.each(DEVICE_CASES)('%s: every matmul peak > 0 and every 2:4 peak ≥ its dense peak', (_id, d) => {
+    for (const e of d.engines) {
+      expect(e.matmulPeaks.length).toBeGreaterThan(0);
+      for (const p of e.matmulPeaks) {
+        expect(p.flopsPerSec).toBeGreaterThan(0);
+        if (p.sparsity !== '2:4') continue;
+        const dense = e.matmulPeaks.find((x) => x.input === p.input && x.accumulate === p.accumulate && x.sparsity === 'dense');
+        expect(dense, `${e.id} ${p.input}/${p.accumulate} 2:4 has a dense twin`).toBeDefined();
+        expect(p.flopsPerSec).toBeGreaterThanOrEqual(dense?.flopsPerSec ?? Infinity);
+      }
+    }
+  });
+});
+
+describe('preset library: links and topologies', () => {
+  it('topology ids are unique', () => {
+    const ids = TOPOLOGY_PRESETS.map((t) => t.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it.each(TOPOLOGY_PRESETS.map((t) => [t.id, t] as const))('%s passes validateTopology', (_id, t) => {
+    expect(validateTopology(t)).toEqual([]);
+  });
+
+  it('every link preset passes validateLink, and every single-device topology validates', () => {
+    for (const l of LINK_PRESETS) expect(validateLink(l)).toEqual([]);
+    for (const d of DEVICE_PRESETS) expect(validateTopology(singleDevice(d))).toEqual([]);
+  });
+});
+
+describe('preset library: unlock axes', () => {
+  it('DEVICE_UNLOCKS keys are preset device ids; deviceUnlocks is empty for a device without unlocks', () => {
+    const ids = new Set(DEVICE_PRESETS.map((d) => d.id));
+    for (const id of Object.keys(DEVICE_UNLOCKS)) expect(ids.has(id), id).toBe(true);
+    expect(deviceUnlocks(RTX_5090)).toBe(DEVICE_UNLOCKS[RTX_5090.id]);
+    expect(deviceUnlocks({ id: 'no-such-device' })).toEqual([]);
+  });
+
+  const withUnlocks = DEVICE_PRESETS.filter((d) => deviceUnlocks(d).length > 0).map((d) => [d.id, d] as const);
+
+  it('the GeForce cards have unlock axes', () => {
+    expect(withUnlocks.map(([id]) => id).sort()).toEqual(['rtx-3090', 'rtx-4090', 'rtx-5090']);
+  });
+
+  it.each(withUnlocks)('%s: axes are well-formed and EVERY selection validates (device + each host-bounce PCIe link)', (_id, d) => {
+    const axes = deviceUnlocks(d);
+    expect(unlockAxesErrors(axes)).toEqual([]);
+    const selections = allUnlockSelections(axes);
+    expect(selections.length).toBe(axes.reduce((n, a) => n * (a.options.length + 1), 1));
+    for (const selection of selections) {
+      const resolved = resolveUnlocks(axes, selection);
+      const label = JSON.stringify(selection);
+      expect(validateDeviceModifiers(d, resolved.deviceModifiers), label).toEqual([]);
+      for (const link of HOST_BOUNCE_PCIE_LINKS) {
+        expect(validateLinkModifiers(link, resolved.intraNodeLinkModifiers), `${label} on ${link.name}`).toEqual([]);
+      }
+    }
+  });
+});
+
+describe('preset library: simulate() smoke test (REF_DENSE_8B, bf16, batch 1, prompt 4096, ctx 1024)', () => {
+  const BF16: QuantConfig = { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } };
+  const P1: ParallelConfig = { tp: 1, pp: 1, dp: 1, ep: 1 };
+
+  function smokeInput(d: DeviceSpec, engineId: string): SimInput {
+    return {
+      model: REF_DENSE_8B,
+      quant: BF16,
+      parallel: P1,
+      workload: { batch: 1, promptLen: 4096, decodeContextLen: 1024 },
+      hardware: { device: d, topology: singleDevice(d), engineId },
+    };
+  }
+
+  // Every engine of every device (e.g. Apple M5's Neural Accelerators and its SIMD path).
+  const cases = DEVICE_PRESETS.flatMap((d) => d.engines.map((e) => [`${d.id}/${e.id}`, d, e.id] as const));
+
+  it.each(cases)('%s yields finite positive prefill / decode tokens/s and a memory-fit verdict', (_label, d, engineId) => {
+    const r = simulate(smokeInput(d, engineId));
+    for (const tps of [r.prefill.tokensPerSec, r.decode.tokensPerSec]) {
+      expect(Number.isFinite(tps)).toBe(true);
+      expect(tps).toBeGreaterThan(0);
+    }
+    expect(typeof r.memory.fits).toBe('boolean');
+    // Decode cannot beat the memory roofline: the bf16 GEMM weights alone, 15,136,194,560 B (e2e.test.ts T9),
+    // stream once per token, so tokens/s ≤ memory bandwidth / 15e9 B.
+    expect(r.decode.tokensPerSec).toBeLessThanOrEqual(d.memory.bandwidthBytesPerSec / 15e9);
+  });
+
+  it('the fully unlocked RTX 4090 (every axis on) simulates', () => {
+    const d = DEVICE_PRESETS.find((x) => x.id === 'rtx-4090');
+    if (d === undefined) throw new Error('rtx-4090 preset missing');
+    const axes = deviceUnlocks(d);
+    const all = Object.fromEntries(axes.map((a) => [a.id, a.options[0].id]));
+    const { deviceModifiers } = resolveUnlocks(axes, all);
+    const base = simulate(smokeInput(d, 'gpu'));
+    const r = simulate({ ...smokeInput(d, 'gpu'), hardware: { ...smokeInput(d, 'gpu').hardware, deviceModifiers } });
+    expect(r.decode.tokensPerSec).toBeGreaterThan(base.decode.tokensPerSec); // memory overclock
+    expect(r.prefill.tokensPerSec).toBeGreaterThan(base.prefill.tokensPerSec); // bf16 tensor ×2
   });
 });
