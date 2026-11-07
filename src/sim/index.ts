@@ -17,12 +17,14 @@ export * from './lower/lower';
 // Reference models.
 export * from './models/reference';
 
-// Hardware: schema, units, peaks, shape efficiency, modifiers, validation, presets.
+// Hardware: schema, units, peaks, shape efficiency, modifiers, unlock axes, validation, presets (devices, links,
+// topologies, unlock axes per device).
 export * from './hw/types';
 export * from './hw/units';
 export * from './hw/peaks';
 export * from './hw/efficiency';
 export * from './hw/modifiers';
+export * from './hw/unlocks';
 export * from './hw/validate';
 export * from './hw/presets/index';
 

@@ -21,8 +21,10 @@ Layout:
   - `ir/`: dtypes, the op catalogue, FLOP/byte metrics, the model architecture spec, builders, parameter counts.
   - `lower/`: model spec + workload step + quantization + parallelism → per-device ops (one file per block kind).
   - `models/`: hand-written reference models (`REF_DENSE_8B` and tiny fixtures for every block kind).
-  - `hw/`: hardware spec schema, units, peak lookup, shape efficiency, device/link variant modifiers, validation,
-    presets (`hw/presets/`).
+  - `hw/`: hardware spec schema, units, peak lookup, shape efficiency, device/link variant modifiers, unlock axes
+    (`unlocks.ts`), validation, presets (`hw/presets/`: one file per vendor family (`nvidia.ts`,
+    `nvidia-datacenter.ts`, `apple.ts`, `amd.ts`, `intel.ts`), `links.ts`, `topologies.ts`, and the registry
+    `index.ts`; see docs/simulation-model.md §4 "Preset library").
   - `engine/`: collectives, placement, per-op time, stage/pipeline schedule, memory fit, input validation,
     `simulate()`.
   - `__fixtures__/`: synthetic hardware for tests.
