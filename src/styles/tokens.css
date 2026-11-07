@@ -1,0 +1,63 @@
+@import '@fontsource-variable/archivo/wdth.css';
+
+/* Silicon and Graphite are the UI; the three regime colours encode bounds only. */
+:root {
+  color-scheme: light dark;
+  --silicon: #edf0f3;
+  --graphite: #18202b;
+  --bandwidth: #0b7a83;
+  --tensor: #6a3dc2;
+  --link: #a86a00;
+  --overflow: #b3261e;
+  --muted: #5b6573;
+  --input-band: #e3e8ed;
+  --rule: color-mix(in srgb, var(--graphite) 22%, var(--silicon));
+  --font-family: 'Archivo Variable', system-ui, sans-serif;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.3125rem;
+  --text-2xl: 1.5rem;
+  --text-3xl: 2.25rem;
+  --text-4xl: 3rem;
+  --text-5xl: 4.5rem;
+  --text-answer: var(--text-5xl);
+  --control-radius: 6px;
+  font-family: var(--font-family);
+  color: var(--graphite);
+  background: var(--silicon);
+  font-synthesis: none;
+  line-height: 1.5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --silicon: #15202e;
+    --graphite: #e4e9ef;
+    --bandwidth: #47c1c9;
+    --tensor: #a88bf0;
+    --link: #f0b44c;
+    --overflow: #ff7a6e;
+    --muted: #9aa6b5;
+    --input-band: #1b2838;
+  }
+}
+
+@media (max-width: 700px) {
+  :root { --text-answer: var(--text-4xl); }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; }
+button, input, select, textarea { font: inherit; }
+a { color: inherit; text-underline-offset: 0.18em; }
+:focus-visible { outline: 2px solid var(--graphite); outline-offset: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

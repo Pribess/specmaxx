@@ -15,9 +15,57 @@ import {
   TB4_TCP, TB5_RDMA, USB4_HALO_RDMA, USB4_HALO_TCP, XGMI_MI300X_8_GPU,
 } from './links';
 
-/** Readable link-name slug for builder ids; names distinguish lane width, transport and staging mode. */
-function linkId(link: LinkSpec): string {
+/**
+ * Stable, readable id of a link preset: its name slugged (lowercase, runs of other characters → `-`), e.g.
+ * `'PCIe 5.0 x16 (host bounce)'` → `'pcie-5-0-x16-host-bounce'`. Names distinguish lane width, transport and
+ * staging mode, so the ids are unique over `LINK_PRESETS` (topologies.test.ts). Used in builder ids and by the
+ * UI's URL (`LinkSpec` has no id field).
+ */
+export function linkPresetId(link: Pick<LinkSpec, 'name'>): string {
   return link.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+/** Arguments of {@link nodeTopology}. */
+export interface NodeTopologyArgs {
+  /** Devices per node (scale-up domain), integer ≥ 1. Count. */
+  devicesPerNode: number;
+  /** Nodes, integer ≥ 1. Count. */
+  nodes: number;
+  /** Link between the devices of one node; kept only when `devicesPerNode > 1`. */
+  intraNode?: LinkSpec;
+  /** Link between nodes; kept only when `nodes > 1`. */
+  interNode?: LinkSpec;
+  /** Device that supplies the display name and the id part; omitted: a generic "device". */
+  device?: Pick<DeviceSpec, 'id' | 'name'>;
+}
+
+/**
+ * A general `devicesPerNode × nodes` topology, for configurations the named presets do not cover (the UI composes
+ * device count, node count and link presets freely). A link is present only when that level exists: `intraNode`
+ * when `devicesPerNode > 1`, `interNode` when `nodes > 1`; a link given for an absent level is dropped. A level
+ * that exists but has no link is left without one, so a parallel group that needs it fails placement
+ * (`engine/placement.ts`). Counts are user configuration and cite no source.
+ */
+export function nodeTopology(args: NodeTopologyArgs): TopologySpec {
+  const { devicesPerNode, nodes } = args;
+  const intraNode = devicesPerNode > 1 ? args.intraNode : undefined;
+  const interNode = nodes > 1 ? args.interNode : undefined;
+  const deviceId = args.device?.id ?? 'device';
+  const deviceName = args.device?.name ?? 'device';
+  const idParts = [`node-${devicesPerNode}x${nodes}`, deviceId];
+  if (intraNode !== undefined) idParts.push(`intra-${linkPresetId(intraNode)}`);
+  if (interNode !== undefined) idParts.push(`inter-${linkPresetId(interNode)}`);
+  const inNode = `${devicesPerNode} × ${deviceName}${intraNode !== undefined ? ` / ${intraNode.name}` : ''}`;
+  const name = nodes > 1 ? `${nodes} nodes × (${inNode})${interNode !== undefined ? ` / ${interNode.name}` : ''}` : inNode;
+  return {
+    id: idParts.join('-'),
+    name,
+    devicesPerNode,
+    nodes,
+    ...(intraNode !== undefined ? { intraNode } : {}),
+    ...(interNode !== undefined ? { interNode } : {}),
+    sources: [],
+  };
 }
 
 /**
@@ -27,7 +75,7 @@ function linkId(link: LinkSpec): string {
  */
 export function pcieBox(device: Pick<DeviceSpec, 'id' | 'name'>, devices: number, link: LinkSpec = PCIE_5_X16): TopologySpec {
   return {
-    id: `pcie-${devices}-${device.id}-${linkId(link)}`,
+    id: `pcie-${devices}-${device.id}-${linkPresetId(link)}`,
     name: `${devices} × ${device.name} / ${link.name}`,
     devicesPerNode: devices, nodes: 1, intraNode: link, sources: [],
   };
@@ -41,7 +89,7 @@ export function pcieBox(device: Pick<DeviceSpec, 'id' | 'name'>, devices: number
  */
 export function socCluster(device: Pick<DeviceSpec, 'id' | 'name'>, nodes: number, link: LinkSpec): TopologySpec {
   return {
-    id: `cluster-${nodes}-${device.id}-${linkId(link)}`,
+    id: `cluster-${nodes}-${device.id}-${linkPresetId(link)}`,
     name: `${nodes} × ${device.name} / ${link.name}`,
     devicesPerNode: 1, nodes, interNode: link, sources: [],
   };
@@ -58,7 +106,7 @@ export function hgxCluster(generation: 'h100' | 'b200' | 'b300', nodes = 1, inte
     ? 'https://www.nvidia.com/en-us/data-center/dgx-h100/'
     : `https://www.nvidia.com/en-us/data-center/dgx-${generation}/`;
   return {
-    id: `hgx-${generation}-${nodes}-nodes-${linkId(network)}`,
+    id: `hgx-${generation}-${nodes}-nodes-${linkPresetId(network)}`,
     name: `${nodes} × HGX ${generation.toUpperCase()} (8 GPUs/node)`,
     devicesPerNode: 8, nodes, intraNode,
     ...(nodes > 1 ? { interNode: network } : {}),

@@ -3,8 +3,16 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   plugins: [react()],
+  // Module workers (`new Worker(new URL(...), { type: 'module' })`) are bundled as ES modules.
+  worker: { format: 'es' },
+  build: {
+    // Two HTML entries: the estimator and the About page (renders docs/simulation-model.md).
+    rollupOptions: { input: { main: 'index.html', about: 'about.html' } },
+  },
   test: {
-    include: ['src/**/*.test.ts'],
+    // Unit and component tests only; Playwright specs live in e2e/*.spec.ts and never match.
+    // The environment is node; component tests opt in with a `// @vitest-environment jsdom` docblock.
+    include: ['src/**/*.test.{ts,tsx}'],
     environment: 'node',
   },
 });

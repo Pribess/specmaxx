@@ -518,7 +518,8 @@ Rejected as UI choices (no capacity test or debunked; listed with links at the e
 ### Links and topologies
 
 `src/sim/hw/presets/links.ts: LINK_PRESETS, HOST_BOUNCE_PCIE_LINKS`;
-`src/sim/hw/presets/topologies.ts: TOPOLOGY_PRESETS, pcieBox, socCluster, hgxCluster`; costed in §6
+`src/sim/hw/presets/topologies.ts: TOPOLOGY_PRESETS, pcieBox, socCluster, hgxCluster, nodeTopology, linkPresetId`;
+costed in §6
 (`src/sim/engine/collectives.ts`).
 
 - **Per direction, per device**: `bandwidthPerDirectionBytesPerSec` is what one device can inject in one
@@ -537,8 +538,11 @@ Rejected as UI choices (no capacity test or debunked; listed with links at the e
   injection; it is optimistic for subgroups and send/recv. `XGMI_MI300X_PER_PEER` (64 GB/s) is the one-peer link.
 - Topologies: `pcieBox` (one node, N devices, one PCIe link each; shared switch / root-complex uplinks not
   modeled), `socCluster` (N single-SoC machines, one link budget per device, no port aggregation; Ethernet
-  assumes a non-oversubscribed switch), `hgxCluster` (8-GPU NVLink nodes, one full-rate NIC per GPU). Device and
-  node counts are user configuration and cite no source.
+  assumes a non-oversubscribed switch), `hgxCluster` (8-GPU NVLink nodes, one full-rate NIC per GPU), and the
+  general `nodeTopology` (`devicesPerNode × nodes`, a link only at the levels that exist; the UI composes it from
+  device and node counts and link presets). Device and node counts are user configuration and cite no source.
+- **Link ids**: `LinkSpec` has no id; `linkPresetId(link)` slugs the name (`'PCIe 5.0 x16 (host bounce)'` →
+  `'pcie-5-0-x16-host-bounce'`), unique over `LINK_PRESETS`. Builder ids and the UI's URL use it.
 
 ---
 
@@ -546,6 +550,9 @@ Rejected as UI choices (no capacity test or debunked; listed with links at the e
 
 `src/sim/lower/` (`lower.ts: lowerModel, lowerBlock`; one file per block kind; shared rules in `common.ts`).
 `ParallelConfig { tp, pp, dp, ep }`, world = `tp·pp·dp` (ep groups live inside it).
+The divisibility rules (heads, KV heads, widths over tp; experts and MoE modes over ep) are checked by lowering
+each block once for a one-token step: `src/sim/engine/validate.ts: blockShardingErrors` (called by
+`validateInput`; exported so the UI can attribute TP / EP errors to their fields).
 
 ### TP sharding
 
@@ -964,8 +971,9 @@ The simulator gives **12,892 tok/s** with `elementwiseFusion 'none'` (0.93 of th
 **Memory**: weights 16,381,470,720 B + KV at 4096 tokens 603,979,776 B + activation peak 301,989,888 B
 (the prefill `silu_mul`) = 17.29e9 B ≤ 32e9 B: fits.
 
-The demo line in `src/App.tsx` runs the same model with prompt 1024 and decode context 1024 (≈ 12,800 prefill
-tok/s, 117.1 decode tok/s).
+The estimator's default state (`src/ui/state/appState.ts`, rendered by `src/ui/App.tsx`) runs the same
+model with prompt 1024 and decode context 1024 (≈ 12,800 prefill tok/s, 117.1 decode tok/s). The UI lets
+you change the model and hardware; the About page renders this document.
 
 ---
 

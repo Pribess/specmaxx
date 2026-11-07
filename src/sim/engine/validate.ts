@@ -22,10 +22,15 @@ function positiveIntegerErrors(value: number, label: string): string[] {
 
 /**
  * Sharding errors of every block (heads, KV heads, widths divisible by tp; MoE expert parallelism), found by
- * lowering each block once for a one-token step: the lowering rules throw on an uneven split, and the message
- * names the block. Duplicate messages (identical layers) are reported once.
+ * lowering each block once for a one-token step: the lowering rules throw on an uneven split. Each message is
+ * prefixed with the layer name (`'<layer>: <rule message>'`); identical messages are reported once.
+ *
+ * Exported so the UI can attribute TP / EP errors to their fields (and list the valid degrees) without a full
+ * {@link validateInput}, which calls it too. Only `model`, `quant` and `parallel` are read; the workload and
+ * hardware do not affect sharding. Rules: docs/simulation-model.md §5 ("TP sharding", "KV-head replication",
+ * "MoE modes A/B").
  */
-function blockShardingErrors(input: SimInput): string[] {
+export function blockShardingErrors(input: Pick<SimInput, 'model' | 'quant' | 'parallel'>): string[] {
   const ctx: LoweringContext = {
     phase: 'decode',
     seqs: 1,

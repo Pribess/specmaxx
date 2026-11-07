@@ -15,8 +15,9 @@ loadHfModel(id, { revision?, token? })                       src/hf/load.ts
      5. checkParams         IR + excluded parts vs safetensors   paramCheck.ts
 ```
 
-`mapHfModel` never throws for bad input. It returns `ok` (model, family, quant defaults, excluded parts, param check,
-notes), `unsupported` (unknown `model_type` / architecture, with the supported list) or `invalid_config`
+`mapHfModel` never throws for bad input. It returns `ok` (model, family, the detected `modelType` and
+`architecture` (`architectures[0]`), quant defaults, excluded parts, param check, notes), `unsupported` (unknown
+`model_type` / architecture, with the supported list) or `invalid_config`
 (path-qualified errors such as `text_config.hidden_size: missing number`).
 
 ## 1. Fetching (`src/hf/`)
