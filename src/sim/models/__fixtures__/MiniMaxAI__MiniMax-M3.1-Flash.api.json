@@ -1,0 +1,35 @@
+{
+  "id": "MiniMaxAI/MiniMax-M3.1-Flash",
+  "sha": "ce7f4df87d2e05262f5775f373dac4772f134041",
+  "gated": false,
+  "private": false,
+  "tags": [
+    "transformers",
+    "safetensors",
+    "minimax_m3_vl",
+    "image-text-to-text",
+    "multimodal",
+    "moe",
+    "agent",
+    "coding",
+    "video",
+    "conversational",
+    "custom_code",
+    "arxiv:2606.13392",
+    "license:other",
+    "eval-results",
+    "endpoints_compatible",
+    "8-bit",
+    "mxfp8",
+    "region:us"
+  ],
+  "safetensors": {
+    "parameters": {
+      "F32": 46339200,
+      "BF16": 3323222528,
+      "F8_E4M3": 10560208896,
+      "U8": 206561083392
+    },
+    "total": 220490854016
+  }
+}

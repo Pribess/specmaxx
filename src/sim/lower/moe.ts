@@ -21,6 +21,7 @@ import {
   highPrecision,
   hpBpe,
   linearGemm,
+  moduleQuant,
   reduceBpe,
   reduceDtype,
   shardWidth,
@@ -136,7 +137,7 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext): Op[] {
   // Router: m = Ts, n = E, k = h in high precision, replicated; then top-k over Ts·E logits
   // (reads the logits, writes k int32 indices + k weights per token).
   const hp = { dtype: highPrecision(ctx) };
-  ops.push(linearGemm('moe.router', { m: routedTokens, n: E, k: h }, ctx, { weight: hp }));
+  ops.push(linearGemm('moe.router', { m: routedTokens, n: E, k: h }, ctx, { format: { weights: hp } }));
   const logits = routedTokens * E;
   ops.push(
     elementwise(
@@ -160,9 +161,9 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext): Op[] {
   // Grouped expert GEMMs over a active experts, mE tokens each.
   // Formula: gate_up: batch = a, m = mE, n = (gated ? 2 : 1)·fe/etp, k = h; down: batch = a, m = mE, n = h, k = fe/etp
   const upWidth = (block.gated ? 2 : 1) * feLocal;
-  ops.push(linearGemm('moe.gate_up', { m: mE, n: upWidth, k: h }, ctx, { batch: a }));
+  ops.push(linearGemm('moe.gate_up', { m: mE, n: upWidth, k: h }, ctx, { module: 'routed_experts', batch: a }));
   ops.push(activationOp('moe.act', block, a * mE, feLocal, ctx));
-  ops.push(linearGemm('moe.down', { m: mE, n: h, k: feLocal }, ctx, { batch: a }));
+  ops.push(linearGemm('moe.down', { m: mE, n: h, k: feLocal }, ctx, { module: 'routed_experts', batch: a }));
 
   if (layout.mode === 'B') {
     // Formula: combine S = Ts·k·h·reduceBpe
@@ -187,7 +188,7 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext): Op[] {
   if (block.sharedExperts > 0) {
     // Mode A: TP-sharded by tp (reduced by the one all-reduce below); mode B: unsharded on the Ts slice.
     const shards = layout.mode === 'A' ? tp : 1;
-    ops.push(...lowerDenseFfn('moe.shared', sharedFfnShape(block), routedTokens, shards, ctx));
+    ops.push(...lowerDenseFfn('moe.shared', sharedFfnShape(block), routedTokens, shards, 'shared_experts', ctx));
   }
 
   if (layout.mode === 'A') {
@@ -214,15 +215,17 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext): Op[] {
 export function moeResidentWeightBytes(block: MoeBlock, ctx: LoweringContext): number {
   const layout = moeLayout(block, ctx.parallel);
   const h = block.hidden;
-  const sparsity = ctx.quant.weightSparsity ?? 'dense';
+  const routedFmt = moduleQuant(ctx, 'routed_experts');
+  const sharedFmt = moduleQuant(ctx, 'shared_experts');
   const matrices = block.gated ? 3 : 2;
   const feLocal = block.expertIntermediate / layout.expertTp;
   const sharedShards = layout.mode === 'A' ? ctx.parallel.tp : 1;
   const sharedLocal = (block.sharedExperts * block.sharedIntermediate) / sharedShards;
-  // Formula: W = Eloc·(gated ? 3 : 2)·h·fe/etp·bpe(w) + E·h·bpe(hp) + (gated ? 3 : 2)·h·S·fs/(mode A ? tp : 1)·bpe(w)
+  // Formula: W = Eloc·(gated ? 3 : 2)·h·fe/etp·bpe(w_routed) + E·h·bpe(hp)
+  //            + (gated ? 3 : 2)·h·S·fs/(mode A ? tp : 1)·bpe(w_shared)
   // See docs/simulation-model.md §8 "Memory fit"
-  const experts = gemmWeightBytes(layout.localExperts * matrices, h, feLocal, ctx.quant.weights, sparsity);
+  const experts = gemmWeightBytes(layout.localExperts * matrices, h, feLocal, routedFmt.weights, routedFmt.sparsity);
   const router = block.experts * h * hpBpe(ctx);
-  const shared = gemmWeightBytes(matrices, h, sharedLocal, ctx.quant.weights, sparsity);
+  const shared = gemmWeightBytes(matrices, h, sharedLocal, sharedFmt.weights, sharedFmt.sparsity);
   return experts + router + shared;
 }

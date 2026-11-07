@@ -56,9 +56,43 @@ elements as the field name says.
 A model is described by an **architecture spec** (`src/sim/ir/model.ts`: `ModelSpec`, `LayerSpec`,
 `BlockSpec`), with logical (unsharded) dimensions and no tokens or parallelism. Layers are heterogeneous: each
 `LayerSpec` is its own ordered list of blocks (`norm`, `residual`, `gqa_attention`, `mla_attention`,
-`linear_attention`, `mlp`, `moe`), which covers hybrid linear/full attention stacks, dense first layers before
-MoE, and alternating sliding-window layers. The builders (`src/sim/ir/builders.ts`: `decoderLayer`,
-`decoderModel`, `repeatLayers`) produce pre-norm decoder layers from `MixerParams` + `FfnParams`.
+`csa_attention`, `linear_attention`, `mlp`, `moe`, `hc_pre`, `hc_post`, `ngram_embedding`, `short_conv`), which
+covers hybrid linear/full attention stacks, dense first layers before MoE, and alternating sliding-window layers.
+The builders (`src/sim/ir/builders.ts`: `decoderLayer`, `decoderModel`, `repeatLayers`, `hyperCollapse`) produce
+pre-norm decoder layers from `MixerParams` + `FfnParams` (+ optional `residual`, `ngram`, `shortConv`):
+
+- plain residual: `[ngram] → norm → mixer → [short_conv] → [post-norm] → residual → norm → ffn → [short_conv] →
+  [post-norm] → residual`;
+- hyper-connections (`residual.kind: 'hyper'`, N streams): each `norm … residual` pair becomes
+  `hc_pre → [norm if subNorms] … hc_post`. DeepSeek-V4.1 and GLM-5.3-Flash keep the sub-norms, Qwen4Exp does not.
+- `decoderModel({ beforeHead })` appends blocks (the final hyper-connection collapse) to the LAST layer, so they are
+  lowered and pipeline-staged as part of it. `finalNorm: 'none'` (Qwen4Exp) has no final norm.
+- `ModelSpec.residualStreams` N (default 1): each token carries `N·hidden` residual elements; the PP activation
+  send is `T·N·h·bpe(act)` (`lower.ts: lowerModel`).
+
+**Cross-layer sharing** names an earlier layer by index: `MlaAttentionBlock.kvCacheFromLayer` (Mistral Large 4:
+read another layer's latent; no `kv_a`, no cache), `CsaGlobalSpec.kvCacheFromLayer` (DeepSeek-V4.1: read a
+source's compressed KV; no compressor), `SparseSelection {kind: 'reuse'}` (GLM-5.3, Mistral, DeepSeek "Reuse": take
+the nearest earlier indexer's top-k; no indexer ops, no key cache, no indexer weights) and `IndexerSpec.ownsKeys:
+false` (DeepSeek "Reindex": read an earlier indexer's keys). `src/sim/ir/validateModel.ts: modelSpecErrors` checks
+that each reference points to a compatible earlier layer, that `gateRank` is set iff the variant is `kda`, and that
+hyper-connection and n-gram widths equal `residualStreams·hidden`.
+
+New block kinds (lowered in `src/sim/lower/{csa,hyperConnection,ngram,shortConv}.ts`, §5):
+
+- `csa_attention` (DeepSeek-V4.1): one cached `headDim` vector per token used as K and V; every layer attends its
+  own `windowTokens` raw window, plus (with `global`) `topK` entries of a KV compressed `compressRatio`:1; low-rank
+  q (`qLoraRank`) and grouped low-rank output (`outGroups` × `outLoraRank`).
+- `hc_pre` / `hc_post`: hyper-connections over N streams (Qwen "Gated Residual", DeepSeek/GLM mHC). `hc_pre`
+  collapses the streams through its `projections` (and an optional γ over N·D, Sinkhorn iterations); `hc_post`
+  writes the sublayer output back, mixing the streams (`mixesStreams`, mHC) or not (Qwen).
+- `ngram_embedding` (Qwen PLE, DeepSeek Engram): a hashed lookup table of `tableRows × rowDim` (memory
+  capacity), `rowsPerToken` rows gathered per token, then `projections`, a gate and an optional dilated conv,
+  written into the `outputDim = N·D` residual.
+- `short_conv` (Inkling): `x + conv(x)`, a depthwise causal conv of `kernel` taps on a branch output.
+- New fields: `IndexerSpec.{keyPoolTokens, keyPoolGate, keyInputDim, ownsKeys, maxScoredKeys, headWeights}` (GLM
+  k-pool, Qwen QSA, MiniMax MSA, DeepSeek CSA indexers); `GqaAttentionBlock.{relativeBias, kvConvKernel}`
+  (Inkling); `LinearAttentionBlock.variant 'kda'` with `gateRank` (GLM-5.3-Flash Kimi Delta Attention).
 
 **Lowering** (§5, `src/sim/lower/lower.ts: lowerModel`) turns spec + workload step + quantization +
 parallelism into the ops ONE device runs per stage, with concrete shapes and dtypes (§3).
@@ -77,9 +111,57 @@ parallelism into the ops ONE device runs per stage, with concrete shapes and dty
 - **Accumulator** (`resolveAccumulate`): integer inputs → `int32`; bf16 / tf32 / fp32 → always `fp32`;
   fp16 / fp8 / fp6 / fp4 → the requested `QuantConfig.accumulate` (**default `fp32`**). This default matters on
   GeForce parts, where fp32 accumulate runs at half the fp16-accumulate rate.
-- `QuantConfig` fields: `weights` (linear layers), `activations`, `kvCache` (KV, MLA latent and indexer keys),
+- `QuantConfig` fields: `weights` (linear layers), `activations`, `kvCache` (KV, MLA latent, CSA window),
   `recurrentState` (default fp32), `embeddings` / `lmHead` (default `highPrecision`), `highPrecision` (norms,
-  router, biases, conv taps; default bf16), `attentionMath`, `accumulate`, `weightSparsity`.
+  router, biases, conv taps; default bf16), `attentionMath`, `accumulate`, `weightSparsity`, and:
+  - `modules` (per `WeightModule` class): `{ weights, gemmInput? }`. Classes: `attention` (GQA q/k/v/o, MLA q path
+    and o_proj, CSA q path, window `wkv` and output), `attention_kv_down` (MLA `kv_a`, CSA compressor),
+    `attention_kv_up` (MLA `kv_b` and its absorbed slices `q_absorb`, `v_absorb`), `linear_attention`, `indexer`
+    (query `wq`/`wq_b`), `indexer_key` (`wk`, k-pool gate), `indexer_head_weights` (`weights_proj`), `dense_mlp`,
+    `shared_experts`, `routed_experts`, `residual_mixer`, `ngram`.
+  - Resolution (`WEIGHT_MODULE_FALLBACK`): an absent class uses its parent's entry if listed
+    (`attention_kv_down`, `attention_kv_up` → `attention`; `indexer_key`, `indexer_head_weights` → `indexer`), else
+    `{ weights }`; `residual_mixer` defaults to `{ dtype: highPrecision }`. This expresses e.g. GLM-5.3-Flash FP8
+    (`kv_b_proj` BF16, other MLA projections FP8) and Mistral Large 4 FP8 (`kv_a`, `kv_b`, indexer `wk`,
+    `weights_proj` BF16).
+  - `gemmInput` (W8A8, W4A4) defaults to `activations` and is the GEMM's input dtype, so
+    `math = resolveGemmMath(w, gemmInput)`. `weightSparsity` applies to every class but `residual_mixer`; the router
+    and the LM head are not modules (`src/sim/lower/common.ts: moduleQuant`, `linearGemm({ module | format })`).
+  - `lmHeadGemmInput`: the LM-head GEMM input dtype (default `activations`; NVFP4 W4A4 heads set `nvfp4`).
+  - `lookupTables` (n-gram tables; default the `embeddings` format), `compressedKvCache` (CSA global KV; default
+    `kvCache`), `indexerKeyCache` (indexer keys; default `kvCache`).
+
+### Quant overheads
+
+The Hugging Face quantization readers (`src/sim/models/hf/quant/`) turn each checkpoint's scale layout into a
+`TensorFormat`. MX and NV formats carry their block scale inside the dtype (`ir/dtype.ts: DTYPE_INFO`); every other
+scale or zero point outside the dtype goes into `extraBitsPerElem`, amortized per element
+(`quant/common.ts: blockScaleBits, groupScaleBits, dtypeNameBits`):
+
+- 2-D block scale, one `s`-bit scale per `r × c` block: `extra = s/(r·c)` (`blockScaleBits`).
+- group scale along the input dim, one `s`-bit scale and one `z`-bit zero point (asymmetric only) per `g`
+  elements: `extra = (s + z)/g` (`groupScaleBits`).
+- Per-channel and per-tensor scales are ≈ 0 and are left out.
+
+| Scheme | Storage dtype | Overhead (bits/element) | Reader |
+|---|---|---|---|
+| fp8 block 128×128, fp32 scales (DeepSeek-V3 / GLM / Qwen FP8, ModelOpt `FP8_PB_WO`, `FP8_BLOCK_SCALES`) | `fp8_e4m3` | 32/16384 ≈ 0.00195 | `fp8.ts`, `modelopt.ts`, `compressedTensors.ts`, `quark.ts` |
+| fp8 block 32×32, ue8m0 scales (DeepSeek-V4.1, Quark `float8_e8m0fnu`) | `fp8_e4m3` | 8/1024 ≈ 0.0078 | `fp8.ts`, `quark.ts` |
+| fp8 per-tensor / per-channel (`FP8`, `float-quantized` channel) | `fp8_e4m3` | ≈ 0 | `modelopt.ts`, `compressedTensors.ts` |
+| mxfp8 (block 1×32 e8m0, `mxfp8-quantized`, ModelOpt `MXFP8`) | `mxfp8` | in the dtype: 8/32 = 0.25 | `fp8.ts`, `compressedTensors.ts`, `modelopt.ts`, `mlx.ts` |
+| mxfp4 (e2m1, g32 e8m0; Quark fp4 g32 e8m0, `mxfp4-pack-quantized`, DeepSeek `expert_dtype: fp4`) | `mxfp4` | in the dtype: 8/32 = 0.25 | `fp8.ts`, `compressedTensors.ts`, `modelopt.ts`, `quark.ts`, `gptq.ts`, `mlx.ts` |
+| nvfp4 (e2m1, g16 e4m3 + an fp32 per-tensor `weight_scale_2`) | `nvfp4` | in the dtype: 8/16 = 0.5; the per-tensor scale ≈ 0 | `modelopt.ts`, `compressedTensors.ts`, `quark.ts`, `gptq.ts`, `mlx.ts` |
+| GPTQ / AWQ / AutoRound int`b` g`g` (fp16 scale + packed `b`-bit `qzeros`, also when symmetric) | `int4` / `int8` | (16 + b)/g: g128 0.15625, g32 0.625; `group_size -1` ≈ 0 | `gptq.ts` |
+| compressed-tensors int`b` group (`scale_dtype`, default bf16; zero point `zp_dtype` only when `symmetric: false`) | `int4` / `int8` | (16 + z)/g: sym g128 0.125, asym g32 int8 zp 0.75 | `compressedTensors.ts` |
+| ModelOpt `INT4_AWQ` / `W4A16_AWQ` / `W4A8_AWQ` | `int4` | 16/g | `modelopt.ts` |
+| Quark int4 / uint4 per_group g | `int4` | (16 + z)/g, z = 4 when asymmetric or uint | `quark.ts` |
+| bitsandbytes NF4 / FP4, absmax per 64 (codes stored as `int4`) | `int4` | fp32 absmax 32/64 = 0.5; double quant 8/64 + 32/(64·256) ≈ 0.127 | `bnb.ts` |
+| bitsandbytes int8 (LLM.int8(), per-row fp32 scale; fp16 outlier columns not modeled) | `int8` | ≈ 0 | `bnb.ts` |
+| MLX affine `b`-bit g`g` (16-bit scale + 16-bit bias per group) | `int4` / `int8` (widths without a dtype round up, noted) | 32/g: g64 0.5 | `mlx.ts` |
+
+Weight-only schemes leave `gemmInput` unset (the GEMM runs at the activations' format, §2 "GEMM input class");
+schemes that also quantize activations (`input_activations`, W8A8 / W4A4 algorithms, AutoRound `act_bits` < 16)
+set `ModuleQuant.gemmInput`.
 
 ### Parameter counts
 
@@ -87,14 +169,30 @@ parallelism into the ops ONE device runs per stage, with concrete shapes and dty
 totals (unsharded), used to sanity-check mappers against published sizes.
 
 - gqa: `h·(heads + 2·kvHeads)·hd` (+ `h·heads·hd` with an output gate) + `heads·hd·h` (o) + biases + `2·hd`
-  (q/k norm) + indexer.
+  (q/k norm) + indexer; + `h·heads·relDim + relDim·extent` with `relativeBias`; + `2·kvHeads·hd·K` with
+  `kvConvKernel`.
 - mla: q path `h·rq + rq + rq·H·(dn+dr)` (or `h·H·(dn+dr)` when rq = 0), kv `h·(rkv+dr) + rkv + rkv·H·(dn+dv)`,
-  o `H·dv·h`, + indexer (q input rq or h).
-- indexer: `qIn·heads_I·hd_I + h·hd_I + h·heads_I + 2·hd_I` (key LayerNorm γ, β).
+  o `H·dv·h`, + indexer (q input rq or h). With `kvCacheFromLayer` the `h·(rkv+dr) + rkv` term is dropped.
+- csa: q `h·rq + rq + rq·H·hd`, kv `h·hd + hd`, out `G·R_o·(H·hd/G) + G·R_o·h`; compressor (owner only)
+  `2·h·hd + hd` for r > 1, `h·hd + hd` for r = 1; + the global selection's indexer (q input rq). DeepSeek-V4.1:
+  126.6 M per layer without compressor and indexer.
+- indexer: `qIn·H_I·hd_I` + [ownsKeys] `kIn·hd_I + 2·hd_I` (key norm γ, β) + [keyPoolGate] `h·hd_I + p·hd_I`
+  + [headWeights] `h·H_I`. A `'reuse'` selection has 0.
 - linear_attention: in_proj `h·(2·qkH·dk + vH·dv·(gate?2:1) + 2·vH)`, conv `(2·qkH·dk + vH·dv)·K`, `2·vH`
   (A_log, dt_bias), `dv` (out norm), out_proj `vH·dv·h`.
+- kda: `h·(2·qkH·dk + vH·dv)` (q, k, v) + `h·vH` (β) + `h·r + r·vH·dk` (forget gate) + `h·r + r·vH·dv` (output
+  gate) + conv `(2·qkH·dk + vH·dv)·K` + `vH` (A_log) + `vH·dk` (dt_bias) + `dv` (o_norm) + `vH·dv·h` (o_proj).
+  GLM-5.3-Flash: q, k, v, f, g, b projections 104.07 M per layer.
 - mlp `(gated?3:2)·h·f`; moe `E·(gated?3:2)·h·fe + E·h + S·(gated?3:2)·h·fs`; active MoE uses `k` instead of `E`
   for the routed experts.
+- hc_pre: [normGamma] `N·D` + `Σ in·out` + `vectorParams`; hc_post 0. Qwen3.8-Flash-Next 6,604,800 per sublayer
+  (634 M in 48 layers, final collapse 6.56 M); DeepSeek-V4.1 `24·20480 + 27` per sublayer (39.3 M); GLM-5.3-Flash
+  0.79 M per layer.
+- ngram_embedding: `tableRows·rowDim + Σ in·out + [conv] outputDim·K + vectorParams`. **Active** params drop the
+  table and add the gathered rows `rowsPerToken·rowDim`: the table counts toward weight memory and total
+  params, not active params.
+- short_conv: `dim·K`.
+- Final norm: `h` (rmsnorm), `2·h` (layernorm), 0 (`'none'`).
 
 ### First-class vs expressed
 
@@ -107,6 +205,16 @@ totals (unsharded), used to sanity-check mappers against published sizes.
 | Gated attention output | `sigmoid_mul` + a wider q projection | no |
 | MoE shared experts, dense first layers | `MoeBlock.sharedExperts`; heterogeneous `layers[]` | no |
 | Attention sinks (gpt-oss) | ignored (negligible cost) | no |
+| DeepSeek-V4.1 CSA (K = V, window + compressed top-k, grouped low-rank output) | block `csa_attention`; one `AttentionOp` with `secondaryKv` (§5 "CSA") | no |
+| Hyper-connections (Qwen Gated Residual, mHC) | blocks `hc_pre` / `hc_post` → GEMMs + `hc_collapse`, `hc_expand`, `sinkhorn`; `ModelSpec.residualStreams` | no |
+| n-gram / Engram tables | block `ngram_embedding` → `EmbeddingOp` gather + GEMMs + `ngram_gate`; `QuantConfig.lookupTables` | no |
+| Short convs on branch outputs / K, V (Inkling) | block `short_conv`; `GqaAttentionBlock.kvConvKernel` → `causal_conv1d` | no |
+| Relative-position bias (Inkling) | `GqaAttentionBlock.relativeBias` → two GEMMs | no |
+| KDA (low-rank gates, per-channel decay) | `LinearAttentionBlock.variant 'kda'` + `gateRank` → GEMMs + `RecurrentOp` (`gateElemsPerTokenPerHead`) | no |
+| Pooled / gated / foreign-key / bounded indexers | `IndexerSpec` optional fields → `IndexerOp.{keyPoolTokens, maxScoredKeys, keyWriteElemsPerToken, headWeights}` + `kv_pool` | no |
+| Shared top-k (indexer reuse) | `SparseSelection {kind: 'reuse'}`: `KvSelection {topk}`, no `IndexerOp` | no |
+| Cross-layer KV sharing | `MlaAttentionBlock.kvCacheFromLayer`, `CsaGlobalSpec.kvCacheFromLayer`: no producer GEMMs, `kvWrite` 0 | no |
+| Per-module weight formats (NVFP4 experts, FP8 attention, BF16 hyper-connections) | `QuantConfig.modules` per `WeightModule`, `linearGemm({ module })` | no |
 
 ---
 
@@ -128,33 +236,46 @@ have distinct weights (grouped experts, MLA per-head absorb).
 
 ### Attended pairs
 
-`metrics.ts: attendedPairs`. (query, key) pairs per sequence per head. `cap` = window size or top-k (∞ for full).
+`metrics.ts: attendedPairs`. (query, key) pairs per sequence per head. `cap` = window size or top-k (∞ for full),
+`r` = tokens per key (1 for plain tokens; r for compressed CSA entries or pooled indexer keys). A query at absolute
+position `p` sees `p/r` keys (continuous: against `floor(p/r)` this overcounts by fewer than `qLen/2` pairs, §9).
 
-- non-causal: `qLen·min(cap, kvLen)`
-- causal, full: `qLen·past + qLen(qLen+1)/2` — **the causal triangle is counted exactly, diagonal included**
-  (masked tiles are skipped); e.g. q = kv = 4096 → 8,390,656 pairs.
-- causal, capped: `j0 = clamp(cap − past, 0, qLen)`; pairs = `j0·past + j0(j0+1)/2 + (qLen − j0)·cap`.
+- non-causal: `qLen·min(cap, ceil(kvLen/r))`
+- causal, full: `(qLen·past + qLen(qLen+1)/2)/r` — **the causal triangle is counted exactly, diagonal included**
+  (masked tiles are skipped); e.g. q = kv = 4096, r = 1 → 8,390,656 pairs.
+- causal, capped: `j0 = clamp(cap·r − past, 0, qLen)`; pairs = `(j0·past + j0(j0+1)/2)/r + (qLen − j0)·cap`.
+- r = 1 is exactly the token formula (tested in `metrics.test.ts`).
 
-`metrics.ts: kvTokensRead` (distinct keys touched per sequence): full `kvLen`; window `min(kvLen, W + qLen − 1)`;
-top-k `min(kvLen, topK·qLen)` (worst case: disjoint selections).
+`metrics.ts: kvTokensRead` (distinct keys touched per sequence): full `ceil(kvLen/r)`; window
+`min(ceil(kvLen/r), W + qLen − 1)`; top-k `min(ceil(kvLen/r), topK·qLen)` (worst case: disjoint selections).
 
 ### Attention
 
-`metrics.ts: attentionFlops, attentionBytes`. Fused QKᵀ → softmax → ·V (FlashAttention-style: scores never
-reach memory).
+`metrics.ts: attentionFlops, attentionBytes, attentionPairs`. Fused QKᵀ → softmax → ·V (FlashAttention-style:
+scores never reach memory). An optional **secondary key set** (`AttentionOp.secondaryKv: AttentionKvSource`, CSA's
+compressed global entries next to its raw window) shares the same softmax: Q is read once and O written once.
 
+- `pairs = attendedPairs(primary) + attendedPairs(secondary, r)` (`attentionPairs`, also used by the shape model)
 - `F = 2·seqs·heads·pairs·(qkHeadDim + vHeadDim)` (softmax not counted, §9)
 - read Q `seqs·qLen·heads·qk·bpe(act)`, write O `seqs·qLen·heads·v·bpe(act)`
 - kvRead `seqs·kvTokensRead·kvRead.elemsPerToken·bpe(kvRead)`; kvWrite `seqs·qLen·kvWrite.elemsPerToken·bpe(kvWrite)`
+- secondary: kvRead `seqs·kvTokensRead(sel, r)·elemsPerEntry·bpe`; kvWrite `seqs·qLen·elemsPerNewToken·bpe` (the
+  owner of a compressed cache writes `entryElems/r` per token, a consumer 0). Lowering it as two attention ops
+  would add a second Q read, an O round trip and a merge, which in batched decode cost as much as the compressed
+  KV read itself.
 
 ### Indexer
 
-`metrics.ts: indexerFlops, indexerBytes`. DeepSeek DSA "lightning indexer": `score(q, s) = Σ_h w_h·ReLU(q_h·k_s)`,
-top-k per query. It scores every visible key.
+`metrics.ts: indexerFlops, indexerBytes, indexerPairs`. DeepSeek DSA "lightning indexer":
+`score(q, s) = Σ_h w_h·ReLU(q_h·k_s)`, top-k per query. It scores every visible indexer key, each pooling
+`p = keyPoolTokens` tokens (GLM k-pool, Qwen QSA, DeepSeek compressed entries), at most `maxScoredKeys` per query
+(DeepSeek's hierarchical candidate pool).
 
-- `F = 2·seqs·heads·pairs_full·headDim`
-- read q `seqs·qLen·heads·headDim·bpe(act)` + head weights `seqs·qLen·heads·bpe(act)`
-- key cache read `seqs·kvLen·keyElems·bpe(key)`, write `seqs·qLen·keyElems·bpe(key)`; indices `seqs·qLen·topK·4`
+- `pairs_I = attendedPairs(qLen, kvLen, causal, cap = maxScoredKeys ?? ∞, r = p)`; `F = 2·seqs·heads·pairs_I·headDim`
+- read q `seqs·qLen·heads·headDim·bpe(act)` + head weights `seqs·qLen·heads·bpe(act)` (only with `headWeights`)
+- key cache read `seqs·min(ceil(kvLen/p), (maxScoredKeys ?? ∞)·qLen)·keyElemsPerKey·bpe(key)`; write
+  `seqs·qLen·keyWriteElemsPerToken·bpe(key)` (an owner writes `hd_I/p` per token; a layer reading another's keys 0)
+- indices `seqs·qLen·topK·4`, `topK` in indexer keys
 
 ### Recurrent
 
@@ -164,14 +285,18 @@ State per sequence = `heads·dk·dv` elements.
 - `F = seqs·qLen·heads·( c_s·dk·dv + (chunked ? (C+1)·(dk+dv) : 0) )`; the second term is causal attention
   inside a chunk of C tokens ((C+1)/2 keys per query on average, 2 FLOP per element over dk + dv).
 - `c_s` (documented approximations): chunked 4 for all variants (inter-chunk output 2 + state update 2);
-  step: GatedDeltaNet 7 (Sᵀk 2 + delta outer product 2 + decay 1 + output 2), Mamba2 5, linear 4.
+  step: GatedDeltaNet and KDA 7 (Sᵀk 2 + delta outer product 2 + decay 1 + output 2; KDA's per-channel decay is
+  still 1 FLOP per state element), Mamba2 5, linear 4.
 - state read `hasPriorState ? seqs·heads·dk·dv·bpe(state) : 0`, state write `seqs·heads·dk·dv·bpe(state)`;
   chunked mode keeps intermediate chunk states on chip.
-- read q, k `2·T·qkHeads·dk·bpe(act)`, v `T·heads·dv·bpe(act)`, gates `2·T·heads·bpe(act)`; write o `T·heads·dv·bpe(act)`.
+- read q, k `2·T·qkHeads·dk·bpe(act)`, v `T·heads·dv·bpe(act)`, gates `T·heads·g·bpe(act)` with
+  `g = gateElemsPerTokenPerHead` (2 for GatedDeltaNet / Mamba2; KDA `dk + 1`: per-channel decay plus β); write o
+  `T·heads·dv·bpe(act)`.
 
 ### Elementwise
 
-`metrics.ts: opFlops (elementwise), elementwiseBytes`; `lower/common.ts: ELEMENTWISE_FLOPS_PER_ELEM`.
+`metrics.ts: opFlops (elementwise), elementwiseBytes`; `lower/common.ts: ELEMENTWISE_FLOPS_PER_ELEM`,
+`SHAPE_DEPENDENT_FNS` (set by their lowering).
 `F = elems·flopsPerElem`; bytes are the op's explicit fields (activation read/write, weights, state).
 
 | fn | FLOP / elem | fn | FLOP / elem |
@@ -184,6 +309,9 @@ State per sequence = `heads·dk·dv` elements.
 | relu_mul | 2 | sigmoid_mul | 5 |
 | gated_rmsnorm | 9 | causal_conv1d | 2·kernelWidth |
 | router_topk | 5 per logit | moe_combine | 2 |
+| hc_collapse | 2·N per output elem | hc_expand | 2N + 2 (mixing), else 2 |
+| sinkhorn | 4·iters per T·N² elem | ngram_gate | 8 (two norm statistics, dot, sigmoid, fused add) |
+| kv_pool | 4 (softmax weight, multiply, add) | causal_conv1d (+ residual) | 2·K + 1 |
 
 These only feed the vector time; elementwise ops are memory-bound in practice.
 
@@ -477,10 +605,98 @@ gather: cross-shard sampling exchanges O(Tout·tp) scalars, treated as free.
 
 ### Sparse attention indexer
 
-`lower/indexer.ts: lowerIndexer, indexerSequenceStateBytes, indexerSelection`. Ops: `idx.q (n = heads_I·hd_I,
-k = qIn)` (qIn = h, or rq for MLA with q compression) → `idx.k (n = hd_I, k = h)` → key LayerNorm over `T·hd_I`
-→ `idx.w (n = heads_I, k = h)` → the `indexer` op (key cache `keyDtype ?? kvCache`, `hd_I` elems per token).
-Replicated on every TP rank. The main attention gets `kvSelection {topk, topK}`.
+`lower/indexer.ts: lowerSparseSelection, sparseSelectionStateBytes, indexerKeyStateBytes, indexerSelection`. Ops:
+`idx.q (n = H_I·hd_I, k = qIn)` (qIn = h, or rq for MLA with q compression and for CSA) → if the layer owns its
+keys: `idx.k (n = hd_I, k = keyInputDim ?? h)` → key LayerNorm over `T·hd_I` → with `keyPoolGate`:
+`idx.pool_gate (n = hd_I, k = h)` → `kv_pool` (APE `p·hd_I`) → with `headWeights`: `idx.w (n = H_I, k = h)` →
+the `indexer` op (key cache `QuantConfig.indexerKeyCache ?? kvCache`, `hd_I` elems per key, `p` tokens per key,
+`hd_I/p` written per token by an owner, 0 by a layer with `ownsKeys: false`; `topK_I = ceil(topK·t/p)` indexer
+keys, t = tokens per main-attention key: 1, or r for CSA). Replicated on every TP rank. The main attention gets
+`kvSelection {topk, topK}`. Module formats: `idx.q` `indexer`, `idx.k` / `idx.pool_gate` `indexer_key`, `idx.w`
+`indexer_head_weights`. Sequence state: the owned keys `ceil(ctx/p)·hd_I·bpe(key)`.
+
+### Top-k reuse
+
+A `SparseSelection {kind: 'reuse', topK}` (GLM-5.3 / Mistral Large 4 'shared' indexers, DeepSeek-V4.1 "Reuse")
+emits no ops and keeps no keys: the attention gets `kvSelection {topk, topK}` from the nearest earlier indexer
+(MLA stays in the absorbed form in prefill, as with an own indexer).
+
+### KV sharing
+
+`lower/mla.ts`. An MLA block with `kvCacheFromLayer` reads an earlier layer's latent (Mistral Large 4
+`kv_source_layers`): no `kv_a`, no `kv_a_norm`, rope only on q (`T·Hl·dr`), `kvWrite` 0 elements and no
+sequence state of its own (except its own indexer keys); `kv_b` / the absorb GEMMs are kept. A CSA global branch
+with `kvCacheFromLayer` (DeepSeek-V4.1 consumers) runs no compressor and writes no compressed entries. MLA with
+`qkRopeDim` 0 (NoPE) emits no rope op.
+
+### CSA
+
+`lower/csa.ts: lowerCsa, csaSequenceStateBytes, compressedKvFormat`. `Hl = H/tp`, `Gl = G/tp` (tp must divide both);
+the one K = V vector per token, the compressor, the indexer and all caches are replicated (one KV head).
+
+1. `csa.q_a (n rq, k h)` → rmsnorm(T·rq) → `csa.q_b (n Hl·hd, k rq)` → rope over `T·Hl·dr`.
+2. `csa.wkv (n hd, k h)` → rmsnorm(T·hd) → rope over `T·dr`.
+3. Owner of the compressed cache: r > 1: `csa.wkv_c` + `csa.wgate_c` (n hd, k h, module `attention_kv_down`) →
+   `kv_pool` (read `2·T·hd`, write `T/r·hd`) → rmsnorm and rope over `T/r` entries; r = 1: `csa.wkv_c` → rmsnorm.
+4. The selection: indexer ops (qIn = rq, keys from the hd-wide latent, `p = r`), or nothing for `reuse`.
+5. One `AttentionOp`: `kvHeads 1`, `qk = v = hd`, `kvSelection {window, W}`, `kvRead = kvWrite = {kvCache, hd}`
+   (K = V, so one vector), and `secondaryKv {r, topk(topK entries), kvRead {compressedKvCache, hd},
+   kvWrite {compressedKvCache, owner ? hd/r : 0}}` (§3 "Attention").
+6. Inverse rope over `T·Hl·dr` → `csa.wo_a` grouped (batch Gl, m T, n R_o, k H·hd/G) → `csa.wo_b` (n h, k Gl·R_o)
+   → all_reduce(tp).
+
+Sequence state: `min(ctx, W)·hd·bpe(kv)` + owner `ceil(ctx/r)·hd·bpe(compressedKv)` + compressor tail `2·r·hd·4`
+(fp32 kv and score state, r > 1) + owned indexer keys `ceil(ctx/r)·hd_I·bpe(key)`.
+
+### KDA
+
+`lower/linearAttention.ts` (variant `'kda'`, GLM-5.3-Flash). `lin.qkv (n 2·qkL·dk + vL·dv + vL, k h)` (q, k, v and
+β) → `lin.f_a (n r, k h, replicated)` → `lin.f_b (n vL·dk, k r)` → `lin.g_a (n r, k h)` → `lin.g_b (n vL·dv, k r)` →
+conv, recurrent (`variant 'kda'`, gates `dk + 1` per token and head: per-channel decay plus β), gated_rmsnorm,
+out_proj, all_reduce. Sharding as for GatedDeltaNet (`vL = vHeads/tp` must divide).
+
+### Hyper-connections
+
+`lower/hyperConnection.ts: lowerHcPre, lowerHcPost`. Replicated on every TP rank, like norms; no sequence state.
+
+- `hc_pre`: norm over `T·N·D` (with γ: read and write, γ `N·D·bpe(hp)`; mHC statistics only: read) → each
+  projection as a GEMM (m T, module `residual_mixer`) → `sinkhorn` (`T·N²` elements × `4·iters`) if iters > 0 →
+  `hc_collapse` (read `T·N·D`, write `T·D`, `2N` FLOP per output; carries the `vectorParams` weights).
+- `hc_post`: `hc_expand` over `T·N·D` (read `T·N·D + T·D`, write `T·N·D`; `2N + 2` FLOP when mixing, else 2).
+- The PP send carries `T·residualStreams·h` (§5 "PP split").
+
+### n-gram embeddings
+
+`lower/ngram.ts: lowerNgram, ngramResidentWeightBytes, ngramSequenceStateBytes, lookupTableFormat`.
+
+1. `EmbeddingOp` gather of `T·rowsPerToken` rows of `rowDim` (`vocabShard = ceil(rows/tp)`, format
+   `lookupTables ?? embeddings`), then all_reduce(tp) of `T·g·d` when tp > 1.
+2. Each projection as a GEMM (m T, module `ngram`, replicated).
+3. `ngram_gate` over `T·O`: read the projection outputs and the stream, write the stream.
+4. With `conv`: dilated `causal_conv1d` over `T·O`, state `(K−1)·dilation·O·bpe(act)`.
+
+Resident weights have their own formula (a step reads only the gathered rows): `ceil(rows/tp)·rowDim·bpe(lookup)` +
+projections + vectors + conv taps.
+
+### Short convs
+
+`lower/shortConv.ts`, `lower/common.ts: causalConvOp`. `short_conv`: `causal_conv1d` over `T·dim` with the
+residual add fused (`2·K + 1` FLOP per element), taps `dim·K·bpe(hp)`, state `(K−1)·dim·bpe(act)`. GQA
+`kvConvKernel`: `attn.kv_conv` over `T·2·KVl·hd` after `qkv_proj`, with its residual add fused like Inkling's
+`k_sconv` / `v_sconv` (`2·K + 1` FLOP per element), state `(K−1)·2·KVl·hd·bpe(act)`.
+
+### Relative-position bias
+
+`lower/gqa.ts` (Inkling). `attn.rel_proj (m T, n Hl·relDim, k h, module attention)` → `attn.rel_table (m T·Hl,
+n extent, k relDim, weights in highPrecision, replicated)`. The bias gather and add inside the attention kernel
+are vector work, excluded like softmax (§9).
+
+### Module formats
+
+`lower/common.ts: moduleQuant, linearGemm({ module | format })`. Every linear GEMM names its `WeightModule`
+(§2): its weight format, GEMM input dtype (math) and sparsity come from `QuantConfig.modules` with the fallback
+rule. The router (`{ weights: highPrecision }`) and the LM head (`{ weights: lmHead, gemmInput: lmHeadGemmInput }`)
+pass an explicit format and are always dense.
 
 ### Linear-attention sharding
 
@@ -515,8 +731,10 @@ gated_rmsnorm (or rmsnorm) over `T·vL·dv` → `out_proj k = vL·dv` → all_re
 ### PP split
 
 `lower/lower.ts: lowerModel, stageLayerRange`. Stage s holds layers `[floor(s·L/pp), floor((s+1)·L/pp))`;
-stage 0 adds the embedding, the last stage the head. Every stage but the last sends `T·h·bpe(act)` to the next
-(`send_recv`, group pp).
+stage 0 adds the embedding, the last stage the head. Every stage but the last sends `T·N·h·bpe(act)` to the next
+(`send_recv`, group pp; N = `residualStreams`, default 1). A cross-layer source (shared KV cache, reused top-k,
+shared indexer keys) on an earlier stage than its consumer produces a `simulate` warning
+(`engine/simulate.ts: crossStageWarnings`); its transfer is not costed (§9).
 
 ### DP
 
@@ -638,21 +856,25 @@ op times, `lat_s` = Σ collective α terms, `bw_s` = Σ collective β terms, `p2
 
 `src/sim/engine/memory.ts: memoryReport, stageWeightBytes, stageSequenceStateBytesPerSeq,
 stageActivationPeakBytes`; `lower/lower.ts: blockResidentWeightBytes, blockSequenceStateBytes`; the per-block
-helpers `gqaSequenceStateBytes`, `mlaSequenceStateBytes`, `indexerSequenceStateBytes`,
-`linearAttentionSequenceStateBytes`, `moeResidentWeightBytes`, `embeddingResidentWeightBytes`,
-`lmHeadResidentWeightBytes`.
+helpers `gqaSequenceStateBytes`, `mlaSequenceStateBytes`, `csaSequenceStateBytes`, `sparseSelectionStateBytes`,
+`linearAttentionSequenceStateBytes`, `ngramSequenceStateBytes`, `shortConvSequenceStateBytes`,
+`moeResidentWeightBytes`, `ngramResidentWeightBytes`, `embeddingResidentWeightBytes`, `lmHeadResidentWeightBytes`.
 
 Per device of stage s:
 
 - `W_s` = Σ resident block weights (non-MoE blocks: the weight bytes of a one-token lowering, so resident and
-  streamed weights agree by construction; MoE: all local experts) + the embedding shard on stage 0
+  streamed weights agree by construction; MoE: all local experts; n-gram: the table shard `ceil(rows/tp)·d·bpe(lookup)`
+  plus its projections and vectors) + the embedding shard on stage 0
   (`ceil(vocab/tp)·h·bpe(emb)`) + the LM-head shard and final norm on the last stage. A tied head shares the
   embedding allocation only with pp = 1 and an identical stored format (dtype and `extraBitsPerElem`,
   `memory.ts: sameStoredFormat`); a tied head stored differently (e.g. bf16 embeddings, int4 head) is a second
   copy and counted in full.
 - `state_s` per sequence at `ctx = max(promptLen, decodeContextLen)`: GQA `min(ctx, W)·2·KVl·hd·bpe(kv)`
-  (a sliding window keeps W tokens); MLA latent `ctx·(rkv+dr)·bpe(kv)`; indexer keys `ctx·hd_I·bpe(key)`;
-  linear attention `vL·dk·dv·bpe(state) + C·(K−1)·bpe(act)`.
+  (a sliding window keeps W tokens) + K/V conv state `(K−1)·2·KVl·hd·bpe(act)`; MLA latent `ctx·(rkv+dr)·bpe(kv)`
+  (0 with `kvCacheFromLayer`); CSA `min(ctx, W)·hd·bpe(kv)` + owner `ceil(ctx/r)·hd·bpe(ckv) + [r > 1] 2·r·hd·4`;
+  owned indexer keys `ceil(ctx/p)·hd_I·bpe(key)` (0 for `reuse` and `ownsKeys: false`); linear attention
+  `vL·dk·dv·bpe(state) + C·(K−1)·bpe(act)`; short conv `(K−1)·dim·bpe(act)`; n-gram conv
+  `(K−1)·dilation·O·bpe(act)`; hyper-connections 0.
 - `act_s` = the largest activation read + write of any single op of the stage over both phases (the transient
   inputs and outputs of the op running). It scales with `b_mb·promptLen` in prefill.
 - `total_s = W_s + B_r·state_s + act_s`; `fits = total_s ≤ capacity`, capacity =
@@ -685,7 +907,8 @@ Excluded on purpose (only hardware and math limits are modeled):
 Documented approximations (each isolated in one constant or rule):
 
 - Recurrent `c_s` constants (chunked 4; step GDN 7, Mamba2 5, linear 4) and the chunk length `min(64, qLen)`.
-- linear-attention `in_proj` carries `2·vH` gate outputs for every variant.
+- linear-attention `in_proj` carries `2·vH` gate outputs for GatedDeltaNet, Mamba2 and linear (KDA: β only, its
+  decay comes from the low-rank forget gate).
 - MLA form by phase (absorbed for decode and sparse prefill, MHA for dense prefill).
 - The indexer is replicated on every TP rank; its key norm is counted as a LayerNorm.
 - conv1d and recurrent state reads are 0 on the first prefill step (no prior state).
@@ -696,6 +919,27 @@ Documented approximations (each isolated in one constant or rule):
 - Balanced MoE routing on the busiest device (ceilings).
 - Elementwise FLOP-per-element table (§3) and the fp32-accumulate default.
 - The activation peak in the memory fit is the largest single op.
+
+Shortlist-model approximations (sub-percent unless noted):
+
+- DeepSeek-V4.1 prefill runs all layers on all N prompt tokens, as the reference `model.py` does (no "Bounded
+  Replay" of the decoder on the last window only).
+- Attention sinks, partial-RoPE dims (rope is costed over the RoPE dims the IR names: `qkRopeDim`, CSA `ropeDim`;
+  GQA rope over the whole head), `swigluoai` costed as gated silu, the shared-expert sigmoid gate, the Inkling
+  router's E+S rows and shared-expert sink, final-logit softcap, the embedding norm, ssmax / log-scaled q, LeRoPE.
+- Compressed / pooled keys: a query sees `p/r` keys, continuous (`< qLen/2` pairs over `floor(p/r)`); the
+  compressor and its norm run on `T/r` entries per step, also continuous in decode (it pools once every r steps).
+- The indexer key GEMM runs on all T tokens even when its keys come from pooled latents (DeepSeek: 512×128).
+- The CSA compressor weights are read in their stored (module) format; the reference code promotes r > 1
+  compressor weights to fp32 at run time, an implementation detail.
+- The hyper-connection mixing weights the projections produce are consumed on chip (only the streams are read by
+  `hc_collapse`); the embedding broadcast into N streams is ignored (< 0.5%).
+- n-gram tables count toward weight memory and total params, not active params; the last n−1 token ids the hashes
+  need are not counted as state.
+- KDA `A_log` (vH) and `dt_bias` (vH·dk) are not modeled as weight reads; per-channel decay costs like GDN's.
+- The relative-position bias gather and add inside attention are excluded, like softmax.
+- A cross-layer source on another pipeline stage: the consumer's stage is assumed to hold the data; no transfer is
+  costed and the data is not counted twice in memory (a `simulate` warning names each case).
 
 ---
 

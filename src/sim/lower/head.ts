@@ -24,16 +24,17 @@ export function headTokens(ctx: LoweringContext): number {
   return ctx.phase === 'prefill' ? ctx.seqs : stepTokens(ctx);
 }
 
-/** Head ops: final norm over `Tout·h`, then `lm_head` (m = Tout, n = ceil(vocab/tp), k = h). */
+/** Head ops: final norm over `Tout·h` (none when `finalNorm` is 'none'), then `lm_head` (m = Tout, n = ceil(vocab/tp), k = h). */
 export function lowerHead(model: ModelSpec, ctx: LoweringContext): Op[] {
   const Tout = headTokens(ctx);
   // Formula: lm_head: m = Tout, n = ceil(vocab/tp), k = h
   // See docs/simulation-model.md §5 "Embedding and LM head"
   const vocabShard = Math.ceil(model.vocab / ctx.parallel.tp);
-  return [
-    normOp('final_norm', model.finalNorm, Tout, model.hidden, ctx),
-    linearGemm('lm_head', { m: Tout, n: vocabShard, k: model.hidden }, ctx, { weight: lmHeadFormat(ctx) }),
-  ];
+  // GEMM input quantized to `quant.lmHeadGemmInput` (default activations), e.g. NVFP4 W4A4 heads.
+  const format = { weights: lmHeadFormat(ctx), gemmInput: ctx.quant.lmHeadGemmInput ?? ctx.quant.activations };
+  const lmHead = linearGemm('lm_head', { m: Tout, n: vocabShard, k: model.hidden }, ctx, { format });
+  if (model.finalNorm === 'none') return [lmHead];
+  return [normOp('final_norm', model.finalNorm, Tout, model.hidden, ctx), lmHead];
 }
 
 /**
@@ -41,8 +42,8 @@ export function lowerHead(model: ModelSpec, ctx: LoweringContext): Op[] {
  * shares the embedding table; the caller decides whether to count it once (same device) or twice. Unit: bytes.
  */
 export function lmHeadResidentWeightBytes(model: ModelSpec, ctx: LoweringContext): number {
-  const normVectors = model.finalNorm === 'layernorm' ? 2 : 1;
-  // Formula: W_head = ceil(vocab/tp)·h·bpe(head) + (layernorm ? 2 : 1)·h·bpe(hp)
+  const normVectors = model.finalNorm === 'none' ? 0 : model.finalNorm === 'layernorm' ? 2 : 1;
+  // Formula: W_head = ceil(vocab/tp)·h·bpe(head) + (none ? 0 : layernorm ? 2 : 1)·h·bpe(hp)
   // See docs/simulation-model.md §8 "Memory fit"
   const head = Math.ceil(model.vocab / ctx.parallel.tp) * model.hidden * bytesPerElement(lmHeadFormat(ctx));
   return head + normVectors * model.hidden * hpBpe(ctx);

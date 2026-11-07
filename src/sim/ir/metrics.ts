@@ -105,29 +105,38 @@ export function gemmWeightBytes(
 /**
  * (query, key) pairs attended per sequence per head in one step, the causal triangle counted exactly.
  * `qLen` new queries, `kvLen` keys visible to the last query (tokens), `causal` masking, `sel` the key cap
- * (window / top-k). Unit: pairs (count). See docs §3 "Attended pairs".
+ * (window / top-k), `tokensPerEntry` r when each key stands for r tokens (compressed or pooled keys; a query at
+ * absolute position p sees p/r keys, continuous: overcounts by < qLen/2 pairs against floor(p/r)). r = 1 is the
+ * plain token formula. Unit: pairs (count). See docs §3 "Attended pairs".
  */
-export function attendedPairs(qLen: number, kvLen: number, causal: boolean, sel: KvSelection): number {
+export function attendedPairs(
+  qLen: number,
+  kvLen: number,
+  causal: boolean,
+  sel: KvSelection,
+  tokensPerEntry = 1,
+): number {
   const cap = selectionCap(sel);
+  const r = tokensPerEntry;
   if (!causal) {
-    // Formula: pairs = qLen·min(cap, kvLen)
+    // Formula: pairs = qLen·min(cap, ceil(kvLen/r))
     // See docs/simulation-model.md §3 "Attended pairs"
-    return qLen * Math.min(cap, kvLen);
+    return qLen * Math.min(cap, Math.ceil(kvLen / r));
   }
   const past = kvLen - qLen;
   if (cap === Infinity) {
-    // Formula: pairs = qLen·past + qLen(qLen+1)/2      (query j sees past + j keys, j = 1..qLen)
+    // Formula: pairs = (qLen·past + qLen(qLen+1)/2)/r      (query j sees (past + j)/r keys, j = 1..qLen)
     // See docs/simulation-model.md §3 "Attended pairs"
-    return qLen * past + (qLen * (qLen + 1)) / 2;
+    return (qLen * past + (qLen * (qLen + 1)) / 2) / r;
   }
-  // Query j (1-based) sees min(cap, past + j) keys. The first j0 queries are below the cap.
-  // Formula: j0 = clamp(cap − past, 0, qLen); pairs = j0·past + j0(j0+1)/2 + (qLen − j0)·cap
+  // Query j (1-based) sees min(cap, (past + j)/r) keys. The first j0 queries are below the cap.
+  // Formula: j0 = clamp(cap·r − past, 0, qLen); pairs = (j0·past + j0(j0+1)/2)/r + (qLen − j0)·cap
   // See docs/simulation-model.md §3 "Attended pairs"
-  const j0 = Math.min(Math.max(cap - past, 0), qLen);
-  return j0 * past + (j0 * (j0 + 1)) / 2 + (qLen - j0) * cap;
+  const j0 = Math.min(Math.max(cap * r - past, 0), qLen);
+  return (j0 * past + (j0 * (j0 + 1)) / 2) / r + (qLen - j0) * cap;
 }
 
-/** Keys a query may see at most under a selection: window size, top-k, or Infinity for full. Unit: tokens. */
+/** Keys a query may see at most under a selection: window size, top-k, or Infinity for full. Unit: keys. */
 function selectionCap(sel: KvSelection): number {
   switch (sel.kind) {
     case 'full':
@@ -144,27 +153,55 @@ function selectionCap(sel: KvSelection): number {
 }
 
 /**
- * Distinct key tokens touched per sequence in one step (the union over its queries): full `kvLen`;
- * window `min(kvLen, W + qLen − 1)`; top-k `min(kvLen, topK · qLen)`. Unit: tokens. See docs §3.
+ * Distinct keys touched per sequence in one step (the union over its queries), with r tokens per key:
+ * full `ceil(kvLen/r)`; window `min(ceil(kvLen/r), W + qLen − 1)`; top-k `min(ceil(kvLen/r), topK · qLen)`.
+ * Unit: keys (tokens when r = 1). See docs §3.
  */
-export function kvTokensRead(qLen: number, kvLen: number, sel: KvSelection): number {
+export function kvTokensRead(qLen: number, kvLen: number, sel: KvSelection, tokensPerEntry = 1): number {
+  const visible = Math.ceil(kvLen / tokensPerEntry);
   switch (sel.kind) {
     case 'full':
-      // Formula: tokens = kvLen
-      return kvLen;
+      // Formula: keys = ceil(kvLen/r)
+      return visible;
     case 'window':
-      // Formula: tokens = min(kvLen, W + qLen − 1)   (the windows of consecutive queries overlap)
+      // Formula: keys = min(ceil(kvLen/r), W + qLen − 1)   (the windows of consecutive queries overlap)
       // See docs/simulation-model.md §3 "Attention"
-      return Math.min(kvLen, sel.windowTokens + qLen - 1);
+      return Math.min(visible, sel.windowTokens + qLen - 1);
     case 'topk':
-      // Formula: tokens = min(kvLen, topK·qLen)       (worst case: disjoint selections)
+      // Formula: keys = min(ceil(kvLen/r), topK·qLen)       (worst case: disjoint selections)
       // See docs/simulation-model.md §3 "Attention"
-      return Math.min(kvLen, sel.topK * qLen);
+      return Math.min(visible, sel.topK * qLen);
     default: {
       const _never: never = sel;
       throw new Error(`unknown kv selection ${JSON.stringify(_never)}`);
     }
   }
+}
+
+/**
+ * (query, key) pairs of an attention op per sequence per head: its primary keys plus its secondary (compressed)
+ * entries, which share the softmax. Unit: pairs. See docs §3 "Attention".
+ */
+export function attentionPairs(op: AttentionOp): number {
+  const primary = attendedPairs(op.qLen, op.kvLen, op.causal, op.kvSelection);
+  const sec = op.secondaryKv;
+  // Formula: pairs = pairs(primary) + pairs(secondary, r)
+  const secondary = sec === undefined ? 0 : attendedPairs(op.qLen, op.kvLen, op.causal, sec.kvSelection, sec.tokensPerEntry);
+  return primary + secondary;
+}
+
+/** The scoring cap of an indexer: every visible key, or at most `maxScoredKeys`. */
+function indexerScoredSelection(op: IndexerOp): KvSelection {
+  return op.maxScoredKeys === undefined ? { kind: 'full' } : { kind: 'topk', topK: op.maxScoredKeys };
+}
+
+/**
+ * (query, key) pairs an indexer scores per sequence (all heads share them): every visible indexer key (each
+ * pooling p tokens), capped at `maxScoredKeys`. Unit: pairs. See docs §3 "Indexer".
+ */
+export function indexerPairs(op: IndexerOp): number {
+  // Formula: pairs_I = attendedPairs(qLen, kvLen, causal, cap = maxScoredKeys ?? ∞, r = p)
+  return attendedPairs(op.qLen, op.kvLen, op.causal, indexerScoredSelection(op), op.keyPoolTokens);
 }
 
 /**
@@ -257,8 +294,8 @@ function gemmBytes(op: GemmOp): ByteBreakdown {
 
 /** FLOP of the fused attention core (Q·Kᵀ and P·V; softmax excluded). Unit: FLOP. */
 function attentionFlops(op: AttentionOp): number {
-  const pairs = attendedPairs(op.qLen, op.kvLen, op.causal, op.kvSelection);
-  // Formula: F = 2·seqs·heads·pairs·(qkHeadDim + vHeadDim)
+  const pairs = attentionPairs(op);
+  // Formula: F = 2·seqs·heads·(pairs + pairs_secondary)·(qkHeadDim + vHeadDim)
   // See docs/simulation-model.md §3 "Attention"
   return 2 * op.seqs * op.heads * pairs * (op.qkHeadDim + op.vHeadDim);
 }
@@ -274,12 +311,23 @@ function attentionBytes(op: AttentionOp): ByteBreakdown {
   const oBytes = op.seqs * op.qLen * op.heads * op.vHeadDim * act;
   const kvReadBytes = op.seqs * tokensRead * op.kvRead.elemsPerToken * bytesPerElement(op.kvRead.format);
   const kvWriteBytes = op.seqs * op.qLen * op.kvWrite.elemsPerToken * bytesPerElement(op.kvWrite.format);
+  // Formula: secondary: kvRead += seqs·kvTokensRead(sel, r)·elemsPerEntry·bpe; kvWrite += seqs·qLen·elemsPerNewToken·bpe
+  const sec = op.secondaryKv;
+  const secReadBytes =
+    sec === undefined
+      ? 0
+      : op.seqs *
+        kvTokensRead(op.qLen, op.kvLen, sec.kvSelection, sec.tokensPerEntry) *
+        sec.kvRead.elemsPerToken *
+        bytesPerElement(sec.kvRead.format);
+  const secWriteBytes =
+    sec === undefined ? 0 : op.seqs * op.qLen * sec.kvWrite.elemsPerToken * bytesPerElement(sec.kvWrite.format);
   return breakdown({
     weightBytes: 0,
     activationReadBytes: qBytes,
     activationWriteBytes: oBytes,
-    kvReadBytes,
-    kvWriteBytes,
+    kvReadBytes: kvReadBytes + secReadBytes,
+    kvWriteBytes: kvWriteBytes + secWriteBytes,
     stateReadBytes: 0,
     stateWriteBytes: 0,
   });
@@ -288,26 +336,30 @@ function attentionBytes(op: AttentionOp): ByteBreakdown {
 // ---------------------------------------------------------------------------------------------------------------
 // Indexer
 
-/** FLOP of the top-k indexer: scores every visible key (full causal pairs). Unit: FLOP. */
+/** FLOP of the top-k indexer: scores every visible (pooled) key, up to `maxScoredKeys`. Unit: FLOP. */
 function indexerFlops(op: IndexerOp): number {
-  const pairsFull = attendedPairs(op.qLen, op.kvLen, op.causal, { kind: 'full' });
-  // Formula: F = 2·seqs·heads·pairs_full·headDim
+  // Formula: F = 2·seqs·heads·pairs_I·headDim
   // See docs/simulation-model.md §3 "Indexer"
-  return 2 * op.seqs * op.heads * pairsFull * op.headDim;
+  return 2 * op.seqs * op.heads * indexerPairs(op) * op.headDim;
 }
 
-/** Memory traffic of the indexer: q and head weights in, whole key cache read, keys appended, indices out. Unit: bytes. */
+/**
+ * Memory traffic of the indexer: q (and head weights) in, the touched keys read, new keys appended, indices out.
+ * Unit: bytes.
+ */
 function indexerBytes(op: IndexerOp): ByteBreakdown {
   const act = bpeOf(op.activationDtype);
   const key = bytesPerElement(op.keyCache);
   const int32Bytes = 4;
-  // Formula: read = seqs·qLen·heads·headDim·bpe(act) + seqs·qLen·heads·bpe(act)
-  // Formula: keyRead = seqs·kvLen·keyElems·bpe(key); keyWrite = seqs·qLen·keyElems·bpe(key); indices = seqs·qLen·topK·4
+  const keysRead = kvTokensRead(op.qLen, op.kvLen, indexerScoredSelection(op), op.keyPoolTokens);
+  // Formula: read = seqs·qLen·heads·headDim·bpe(act) + [headWeights] seqs·qLen·heads·bpe(act)
+  // Formula: keyRead = seqs·min(ceil(kvLen/p), maxScored·qLen)·keyElems·bpe(key); keyWrite = seqs·qLen·keyWriteElems·bpe(key)
+  // Formula: indices = seqs·qLen·topK·4
   // See docs/simulation-model.md §3 "Indexer"
   const qBytes = op.seqs * op.qLen * op.heads * op.headDim * act;
-  const headWeightBytes = op.seqs * op.qLen * op.heads * act;
-  const keyReadBytes = op.seqs * op.kvLen * op.keyCacheElemsPerToken * key;
-  const keyWriteBytes = op.seqs * op.qLen * op.keyCacheElemsPerToken * key;
+  const headWeightBytes = op.headWeights ? op.seqs * op.qLen * op.heads * act : 0;
+  const keyReadBytes = op.seqs * keysRead * op.keyElemsPerKey * key;
+  const keyWriteBytes = op.seqs * op.qLen * op.keyWriteElemsPerToken * key;
   const indexBytes = op.seqs * op.qLen * op.topK * int32Bytes;
   return breakdown({
     weightBytes: 0,
@@ -338,12 +390,12 @@ function recurrentBytes(op: RecurrentOp): ByteBreakdown {
   const act = bpeOf(op.activationDtype);
   const stateBytes = op.seqs * op.heads * op.keyDim * op.valueDim * bpeOf(op.stateDtype);
   const tokens = op.seqs * op.qLen;
-  // Formula: read = 2·T·qkHeads·dk·bpe(act) (q,k) + T·heads·dv·bpe(act) (v) + 2·T·heads·bpe(act) (gates)
+  // Formula: read = 2·T·qkHeads·dk·bpe(act) (q,k) + T·heads·dv·bpe(act) (v) + T·heads·g·bpe(act) (gates; g = 2, KDA dk+1)
   // Formula: write = T·heads·dv·bpe(act); state read = hasPriorState ? seqs·heads·dk·dv·bpe(state) : 0; state write = seqs·heads·dk·dv·bpe(state)
   // See docs/simulation-model.md §3 "Recurrent"
   const qkBytes = 2 * tokens * op.qkHeads * op.keyDim * act;
   const vBytes = tokens * op.heads * op.valueDim * act;
-  const gateBytes = 2 * tokens * op.heads * act;
+  const gateBytes = tokens * op.heads * op.gateElemsPerTokenPerHead * act;
   const oBytes = tokens * op.heads * op.valueDim * act;
   return breakdown({
     weightBytes: 0,

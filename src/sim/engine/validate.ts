@@ -3,12 +3,14 @@
  * into DP replicas, PP fits the layers, every block shards evenly over TP (heads, widths) and EP (MoE modes),
  * the parallelism fits the topology and its links, the effective device (after modifiers, or the base) and the
  * topology pass hardware validation (incl. positive rates), the modifiers are valid, and the engine and memory
- * capacity selections exist.
+ * capacity selections exist, and the model spec is structurally valid (`modelSpecErrors`: cross-layer references,
+ * KDA fields, residual-stream widths).
  * See docs/simulation-model.md §5 (Parallelism) and §4 ("Device variants and modifiers").
  */
 
 import { validateDevice, validateDeviceModifiers, validateLinkModifiers, validateTopology } from '../hw/validate';
 import { applyDeviceModifiers } from '../hw/modifiers';
+import { modelSpecErrors } from '../ir/validateModel';
 import { lowerBlock, type LoweringContext } from '../lower/lower';
 import { checkPlacement } from './placement';
 import type { SimInput } from './types';
@@ -67,6 +69,7 @@ export function validateInput(input: SimInput): string[] {
   }
   const hasMoe = model.layers.some((l) => l.blocks.some((b) => b.kind === 'moe'));
   if (parallel.ep > 1 && !hasMoe) errors.push(`ep (${parallel.ep}) > 1 but the model has no MoE block`);
+  errors.push(...modelSpecErrors(model));
   errors.push(...blockShardingErrors(input));
 
   // Hardware: the EFFECTIVE device (after modifiers, or the base itself) is always validated: physical sanity,

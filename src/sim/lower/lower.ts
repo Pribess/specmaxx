@@ -10,14 +10,18 @@ import { opBytes } from '../ir/metrics';
 import type { CollectiveOp, Op } from '../ir/ops';
 import type { BlockSpec, ModelSpec, ParallelConfig, QuantConfig } from '../ir/model';
 import { actBpe, stepTokens } from './common';
+import { csaSequenceStateBytes, lowerCsa } from './csa';
 import { lowerEmbedding } from './embedding';
 import { gqaSequenceStateBytes, lowerGqa } from './gqa';
 import { lowerHead } from './head';
+import { lowerHcPost, lowerHcPre } from './hyperConnection';
 import { linearAttentionSequenceStateBytes, lowerLinearAttention } from './linearAttention';
 import { lowerMla, mlaSequenceStateBytes } from './mla';
 import { lowerMlp } from './mlp';
 import { lowerMoe, moeResidentWeightBytes } from './moe';
+import { lowerNgram, ngramResidentWeightBytes, ngramSequenceStateBytes } from './ngram';
 import { lowerNorm, lowerResidual } from './norm';
+import { lowerShortConv, shortConvSequenceStateBytes } from './shortConv';
 
 /** One phase step of one microbatch, as seen by the lowering. */
 export interface LoweringContext {
@@ -79,7 +83,7 @@ export function lowerModel(model: ModelSpec, ctx: LoweringContext): LoweredModel
     if (s === pp - 1) {
       layers.push({ name: 'head', layerIndex: null, ops: lowerHead(model, ctx) });
     } else {
-      // Formula: send_recv S = T·h·bpe(act)
+      // Formula: send_recv S = T·(N·h)·bpe(act), N = residualStreams (default 1)
       // See docs/simulation-model.md §5 "PP split"
       stage.sendToNext = {
         kind: 'collective',
@@ -87,7 +91,7 @@ export function lowerModel(model: ModelSpec, ctx: LoweringContext): LoweredModel
         collective: 'send_recv',
         group: 'pp',
         groupSize: 2,
-        messageBytes: stepTokens(ctx) * model.hidden * actBpe(ctx),
+        messageBytes: stepTokens(ctx) * (model.residualStreams ?? 1) * model.hidden * actBpe(ctx),
         dtype: ctx.quant.activations,
       };
     }
@@ -107,12 +111,22 @@ export function lowerBlock(block: BlockSpec, ctx: LoweringContext): Op[] {
       return lowerGqa(block, ctx);
     case 'mla_attention':
       return lowerMla(block, ctx);
+    case 'csa_attention':
+      return lowerCsa(block, ctx);
     case 'linear_attention':
       return lowerLinearAttention(block, ctx);
     case 'mlp':
       return lowerMlp(block, ctx);
     case 'moe':
       return lowerMoe(block, ctx);
+    case 'hc_pre':
+      return lowerHcPre(block, ctx);
+    case 'hc_post':
+      return lowerHcPost(block, ctx);
+    case 'ngram_embedding':
+      return lowerNgram(block, ctx);
+    case 'short_conv':
+      return lowerShortConv(block, ctx);
     default: {
       const _never: never = block;
       throw new Error(`unknown block ${JSON.stringify(_never)}`);
@@ -126,18 +140,25 @@ export function lowerBlock(block: BlockSpec, ctx: LoweringContext): Op[] {
  *
  * Every weight of a non-MoE block is read exactly once per step whatever the token count, so its resident
  * bytes equal the weight bytes of its ops in any step: we lower a one-token decode step and sum them (this keeps
- * resident and streamed weights consistent by construction). A MoE step touches only active experts, so MoE
- * uses its own formula ({@link moeResidentWeightBytes}).
+ * resident and streamed weights consistent by construction). A MoE step touches only active experts, and an
+ * n-gram step only its gathered table rows, so those use their own formulas ({@link moeResidentWeightBytes},
+ * {@link ngramResidentWeightBytes}).
  */
 export function blockResidentWeightBytes(block: BlockSpec, ctx: LoweringContext): number {
   switch (block.kind) {
     case 'moe':
       return moeResidentWeightBytes(block, ctx);
+    case 'ngram_embedding':
+      return ngramResidentWeightBytes(block, ctx);
     case 'norm':
     case 'residual':
     case 'gqa_attention':
     case 'mla_attention':
     case 'linear_attention':
+    case 'csa_attention':
+    case 'hc_pre':
+    case 'hc_post':
+    case 'short_conv':
     case 'mlp': {
       const oneTokenStep: LoweringContext = { ...ctx, phase: 'decode', seqs: 1, qLen: 1, kvLen: 2 };
       // Formula: W_block = Σ_ops weightBytes(op) over a one-token step
@@ -153,7 +174,8 @@ export function blockResidentWeightBytes(block: BlockSpec, ctx: LoweringContext)
 
 /**
  * Per-sequence state bytes of one block on ONE device for a context of `contextTokens`: KV / MLA latent /
- * indexer-key caches × contextTokens, plus the fixed recurrent and conv1d state. Unit: bytes per sequence.
+ * indexer-key caches × contextTokens, plus the fixed recurrent and conv1d state. Hyper-connection steps keep
+ * none. Unit: bytes per sequence.
  */
 export function blockSequenceStateBytes(block: BlockSpec, ctx: LoweringContext, contextTokens: number): number {
   switch (block.kind) {
@@ -161,12 +183,20 @@ export function blockSequenceStateBytes(block: BlockSpec, ctx: LoweringContext, 
       return gqaSequenceStateBytes(block, ctx, contextTokens);
     case 'mla_attention':
       return mlaSequenceStateBytes(block, ctx, contextTokens);
+    case 'csa_attention':
+      return csaSequenceStateBytes(block, ctx, contextTokens);
     case 'linear_attention':
       return linearAttentionSequenceStateBytes(block, ctx);
+    case 'ngram_embedding':
+      return ngramSequenceStateBytes(block, ctx);
+    case 'short_conv':
+      return shortConvSequenceStateBytes(block, ctx);
     case 'norm':
     case 'residual':
     case 'mlp':
     case 'moe':
+    case 'hc_pre':
+    case 'hc_post':
       return 0;
     default: {
       const _never: never = block;

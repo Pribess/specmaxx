@@ -73,8 +73,10 @@ export interface KvStream {
 
 /**
  * Fused attention core, `softmax(Q·Kᵀ)·V`, FlashAttention-style: scores never reach memory, so only Q, K/V and
- * the output move. Covers MHA/GQA/MQA, sliding window, top-k sparse, and MLA (absorbed: kvHeads 1, qk ≠ v dims).
- * FLOP = 2·seqs·heads·pairs·(qkHeadDim + vHeadDim), with the causal triangle counted exactly. See docs §3 "Attention".
+ * the output move. Covers MHA/GQA/MQA, sliding window, top-k sparse, MLA (absorbed: kvHeads 1, qk ≠ v dims), and
+ * a second key set in the same softmax ({@link AttentionKvSource}: DeepSeek-V4.1 window + compressed entries).
+ * FLOP = 2·seqs·heads·(pairs + pairs_secondary)·(qkHeadDim + vHeadDim), the causal triangle counted exactly.
+ * See docs §3 "Attention".
  */
 export interface AttentionOp {
   kind: 'attention';
@@ -109,15 +111,36 @@ export interface AttentionOp {
   math: MathFormat;
   /** Accumulator type of Q·Kᵀ and P·V (selects the peak). */
   accumulate: AccumulateType;
+  /**
+   * A second key/value set attended in the SAME softmax (one Q read, one O write): DeepSeek-V4.1 CSA's compressed
+   * global entries next to its raw window. Absent = none.
+   */
+  secondaryKv?: AttentionKvSource;
   /** Storage dtype of Q (read) and the output O (written). */
   activationDtype: Dtype;
 }
 
 /**
+ * A second key/value source of an {@link AttentionOp}, whose entries each stand for `tokensPerEntry` tokens
+ * (compressed KV). A query at absolute position p sees about p / tokensPerEntry entries.
+ */
+export interface AttentionKvSource {
+  /** Tokens pooled into one entry r (≥ 1). Unit: tokens/entry. */
+  tokensPerEntry: number;
+  /** Which visible entries each query attends (full, or top-k over entries). Caps are in entries. */
+  kvSelection: KvSelection;
+  /** K/V read per touched ENTRY (`elemsPerToken` here means per entry). */
+  kvRead: KvStream;
+  /** Appended per NEW token (the owner of a compressed cache: entryElems / r; a consumer: 0). */
+  kvWrite: KvStream;
+}
+
+/**
  * Top-k key scorer for sparse attention (DeepSeek-V3.2 DSA "lightning indexer"):
  * `score(q, s) = Σ_h w_h · ReLU(q_h · k_s)`; keeps the `topK` best keys per query. It reads its own key cache
- * (one key vector per token, shared by all indexer heads), has no V, and writes int32 indices.
- * It scores EVERY visible key, so its FLOP use full causal pairs. See docs §3 "Indexer".
+ * (one key vector per indexer key, shared by all indexer heads; a key may pool `keyPoolTokens` tokens), has no V,
+ * and writes int32 indices. It scores every visible key (or at most `maxScoredKeys`), with the causal triangle.
+ * See docs §3 "Indexer".
  */
 export interface IndexerOp {
   kind: 'indexer';
@@ -135,12 +158,20 @@ export interface IndexerOp {
   kvLen: number;
   /** True if query i only scores keys at positions ≤ its own. */
   causal: boolean;
-  /** Keys kept per query (and int32 indices written per query). Unit: tokens. */
+  /** Indexer keys kept per query (and int32 indices written per query). Unit: indexer keys. */
   topK: number;
   /** Storage format of the indexer key cache. */
   keyCache: TensorFormat;
-  /** Indexer key-cache elements per token per device per layer (usually `headDim`). Unit: elements/token. */
-  keyCacheElemsPerToken: number;
+  /** Indexer key-cache elements per indexer KEY per device per layer (usually `headDim`). Unit: elements/key. */
+  keyElemsPerKey: number;
+  /** Tokens pooled into one indexer key p (1 = one key per token). Unit: tokens/key. */
+  keyPoolTokens: number;
+  /** Most keys scored per query (a hierarchical candidate pool); absent = every visible key. Unit: indexer keys. */
+  maxScoredKeys?: number;
+  /** Key-cache elements appended per NEW token (owner: keyElemsPerKey / p; reads another layer's keys: 0). Unit: elements/token. */
+  keyWriteElemsPerToken: number;
+  /** True if per-head score weights (`weights_proj` output, one per head and query) are read. */
+  headWeights: boolean;
   /** Matmul input class of the q·k scoring (selects the peak). */
   math: MathFormat;
   /** Accumulator type of the scoring (selects the peak). */
@@ -150,7 +181,7 @@ export interface IndexerOp {
 }
 
 /**
- * Linear-attention / SSM token mixer with a FIXED-size recurrent state per sequence (GatedDeltaNet, Mamba2 SSD,
+ * Linear-attention / SSM token mixer with a FIXED-size recurrent state per sequence (GatedDeltaNet, KDA, Mamba2 SSD,
  * plain linear attention). State per sequence per device = `heads · keyDim · valueDim` elements, independent
  * of context length. See docs §3 "Recurrent".
  */
@@ -159,7 +190,7 @@ export interface RecurrentOp {
   /** Stable dotted name, e.g. `'lin.recurrent'`. */
   name: string;
   /** Which recurrence (sets the step-mode FLOP constant, see `stateFlopsPerElemPerToken`). */
-  variant: 'gated_delta_net' | 'mamba2' | 'linear';
+  variant: 'gated_delta_net' | 'kda' | 'mamba2' | 'linear';
   /** Sequences in this microbatch on this device. Count. */
   seqs: number;
   /** New tokens per sequence in this step. Unit: tokens. */
@@ -181,6 +212,11 @@ export interface RecurrentOp {
    * mamba2 5, linear 4). A documented approximation set by lowering. Unit: FLOP/(element·token).
    */
   stateFlopsPerElemPerToken: number;
+  /**
+   * Gate elements read per token per state head: 2 for GatedDeltaNet / Mamba2 (decay and β, or dt and A); KDA dk + 1
+   * (per-channel decay plus β). Unit: elements/(token·head).
+   */
+  gateElemsPerTokenPerHead: number;
   /** False on the first prefill step of a sequence (no prior state to read); true otherwise. */
   hasPriorState: boolean;
   /** Storage dtype of the recurrent state (read and written once per step). */
@@ -204,7 +240,9 @@ export interface ElementwiseOp {
   name: string;
   /**
    * Function computed; its FLOP-per-element approximation is in the docs §3 table (`ELEMENTWISE_FLOPS_PER_ELEM` in
-   * lower/common.ts). `silu` and `relu_mul` cover the ungated-SiLU and gated-ReLU MLPs.
+   * lower/common.ts). `silu` and `relu_mul` cover the ungated-SiLU and gated-ReLU MLPs. Hyper-connections:
+   * `hc_collapse` (N streams → 1), `hc_expand` (1 → N, with or without stream mixing), `sinkhorn` (per N×N matrix
+   * element); `ngram_gate` (n-gram value gated against the stream); `kv_pool` (softmax-weighted pooling of tokens).
    */
   fn:
     | 'rmsnorm'
@@ -222,7 +260,12 @@ export interface ElementwiseOp {
     | 'gated_rmsnorm'
     | 'causal_conv1d'
     | 'router_topk'
-    | 'moe_combine';
+    | 'moe_combine'
+    | 'hc_collapse'
+    | 'hc_expand'
+    | 'sinkhorn'
+    | 'ngram_gate'
+    | 'kv_pool';
   /** Output elements computed on this device. Unit: elements. */
   elems: number;
   /** Vector FLOP per output element (e.g. rmsnorm 4; causal_conv1d 2·kernelWidth). Unit: FLOP/element. */

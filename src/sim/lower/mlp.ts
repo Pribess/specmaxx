@@ -66,13 +66,15 @@ export function activationOp(
 
 /**
  * gate_up → activation → down for `tokens` rows, the intermediate width sharded over `shards` ranks; no
- * reduction (callers add it). `prefix` names the ops (`'mlp'` → `'mlp.gate_up'`, `'mlp.act'`, `'mlp.down'`).
+ * reduction (callers add it). `prefix` names the ops (`'mlp'` → `'mlp.gate_up'`, `'mlp.act'`, `'mlp.down'`);
+ * `module` picks the weight format (`'dense_mlp'` or `'shared_experts'`).
  */
 export function lowerDenseFfn(
   prefix: string,
   shape: DenseFfnShape,
   tokens: number,
   shards: number,
+  module: 'dense_mlp' | 'shared_experts',
   ctx: LoweringContext,
 ): Op[] {
   const fLocal = shardWidth(shape.intermediate, shards, `${prefix} intermediate`);
@@ -80,9 +82,9 @@ export function lowerDenseFfn(
   // Formula: gate_up: m = T, n = (gated ? 2 : 1)·f/tp, k = h; down: m = T, n = h, k = f/tp
   // See docs/simulation-model.md §5 "TP sharding"
   return [
-    linearGemm(`${prefix}.gate_up`, { m: tokens, n: upWidth, k: shape.hidden }, ctx, { bias: shape.bias }),
+    linearGemm(`${prefix}.gate_up`, { m: tokens, n: upWidth, k: shape.hidden }, ctx, { module, bias: shape.bias }),
     activationOp(`${prefix}.act`, shape, tokens, fLocal, ctx),
-    linearGemm(`${prefix}.down`, { m: tokens, n: shape.hidden, k: fLocal }, ctx, { bias: shape.bias }),
+    linearGemm(`${prefix}.down`, { m: tokens, n: shape.hidden, k: fLocal }, ctx, { module, bias: shape.bias }),
   ];
 }
 
@@ -90,7 +92,7 @@ export function lowerDenseFfn(
 export function lowerMlp(block: MlpBlock, ctx: LoweringContext): Op[] {
   const T = stepTokens(ctx);
   return [
-    ...lowerDenseFfn('mlp', block, T, ctx.parallel.tp, ctx),
+    ...lowerDenseFfn('mlp', block, T, ctx.parallel.tp, 'dense_mlp', ctx),
     ...tpAllReduce('mlp.tp_all_reduce', T, block.hidden, ctx),
   ];
 }

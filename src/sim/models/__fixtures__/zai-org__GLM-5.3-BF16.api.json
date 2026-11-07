@@ -1,0 +1,26 @@
+{
+  "id": "zai-org/GLM-5.3-BF16",
+  "sha": "abf42e6c0e53bc29a875511301e7b7fcd220315b",
+  "gated": false,
+  "private": false,
+  "tags": [
+    "transformers",
+    "safetensors",
+    "glm_moe_dsa",
+    "text-generation",
+    "conversational",
+    "en",
+    "zh",
+    "arxiv:2602.15763",
+    "license:other",
+    "endpoints_compatible",
+    "region:us"
+  ],
+  "safetensors": {
+    "parameters": {
+      "BF16": 753329921024,
+      "F32": 19456
+    },
+    "total": 753329940480
+  }
+}

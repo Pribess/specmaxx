@@ -1,0 +1,26 @@
+{
+  "id": "zai-org/GLM-5.3-Flash-BF16",
+  "sha": "f9fed3bbc82291073373d67452e9f25317ef7577",
+  "gated": false,
+  "private": false,
+  "tags": [
+    "transformers",
+    "safetensors",
+    "glm5_next",
+    "image-text-to-text",
+    "conversational",
+    "en",
+    "zh",
+    "arxiv:2602.15763",
+    "license:mit",
+    "endpoints_compatible",
+    "region:us"
+  ],
+  "safetensors": {
+    "parameters": {
+      "F32": 295518,
+      "BF16": 321322735872
+    },
+    "total": 321323031390
+  }
+}

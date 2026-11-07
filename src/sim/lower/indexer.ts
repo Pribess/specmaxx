@@ -1,78 +1,147 @@
 /**
- * Lowering of the DSA top-k indexer (DeepSeek-V3.2 "lightning indexer"), shared by GQA and MLA blocks with
- * `sparse`. The indexer is REPLICATED on every TP rank: each rank scores all keys for its own query heads'
+ * Lowering of sparse-attention selections: a top-k indexer (DeepSeek-V3.2 DSA "lightning indexer" and its
+ * relatives: GLM k-pool, Qwen QSA, MiniMax MSA, DeepSeek-V4.1 CSA), or a `'reuse'` of an earlier layer's top-k,
+ * which emits no ops. The indexer is REPLICATED on every TP rank: each rank scores all keys for its own query heads'
  * selection (the indexer heads are not sharded). See docs/simulation-model.md §5 "Sparse attention indexer".
+ *
+ * Notation: H_I indexer heads, hd_I indexer head dim, p = keyPoolTokens, T = seqs·qLen.
  */
 
 import { bytesPerElement, resolveAccumulate, resolveGemmMath, type TensorFormat } from '../ir/dtype';
-import type { IndexerSpec } from '../ir/model';
+import type { IndexerSpec, SparseSelection } from '../ir/model';
 import type { IndexerOp, KvSelection, Op } from '../ir/ops';
 import { actBpe, elementwise, hpBpe, linearGemm, stepTokens } from './common';
 import type { LoweringContext } from './lower';
 
-/** Storage format of the indexer key cache: `keyDtype` if given, else the KV-cache format. */
-export function indexerKeyFormat(spec: IndexerSpec, ctx: LoweringContext): TensorFormat {
-  return spec.keyDtype !== undefined ? { dtype: spec.keyDtype } : ctx.quant.kvCache;
+/** Storage format of the indexer key cache: `quant.indexerKeyCache`, else the KV-cache format. */
+export function indexerKeyFormat(ctx: LoweringContext): TensorFormat {
+  return ctx.quant.indexerKeyCache ?? ctx.quant.kvCache;
 }
 
-/** The main attention's selection when an indexer precedes it: the top-k keys. */
-export function indexerSelection(spec: IndexerSpec): KvSelection {
-  return { kind: 'topk', topK: spec.topK };
+/** Keys the main attention reads per query under a sparse selection, in the attention's key units. */
+export function sparseTopK(sel: SparseSelection): number {
+  return sel.kind === 'indexer' ? sel.indexer.topK : sel.topK;
+}
+
+/** The main attention's selection when a sparse selection precedes it: the top-k keys. */
+export function indexerSelection(sel: SparseSelection): KvSelection {
+  return { kind: 'topk', topK: sparseTopK(sel) };
 }
 
 /**
- * Indexer ops for one sparse attention block, in order:
- * 1. `idx.q` (m = T, n = heads_I·hd_I, k = qInputDim; qInputDim = h for GQA, rq for MLA with q compression);
- * 2. `idx.k` (m = T, n = hd_I, k = h); 3. `idx.k_norm` (LayerNorm over T·hd_I);
- * 4. `idx.w` head weights (m = T, n = heads_I, k = h); 5. the `indexer` scoring op.
- * `hidden` is the block's input width.
+ * Indexer ops for one sparse attention block (none for a `'reuse'` selection), in order:
+ * 1. `idx.q` (m = T, n = H_I·hd_I, k = qInputDim; qInputDim = h for GQA, rq for MLA with q compression and CSA);
+ * 2. if the layer owns its keys: `idx.k` (n = hd_I, k = keyInputDim ?? h) and the key LayerNorm over T·hd_I;
+ * 3. with `keyPoolGate`: `idx.pool_gate` (n = hd_I, k = h) and `idx.kv_pool` (T·hd_I → T·hd_I/p);
+ * 4. with `headWeights`: `idx.w` (n = H_I, k = h);
+ * 5. the `indexer` scoring op over the visible keys (each pooling p tokens), capped at `maxScoredKeys`.
+ * `hidden` is the block's input width; `attentionKeyTokens` is how many tokens one key of the MAIN attention
+ * stands for (1 for gqa/mla, r for csa entries), used to turn the attention's `topK` into indexer keys.
+ * Documented approximation: the key GEMM runs on all T tokens even when keys come from pooled latents.
  */
-export function lowerIndexer(spec: IndexerSpec, hidden: number, qInputDim: number, ctx: LoweringContext): Op[] {
+export function lowerSparseSelection(
+  sel: SparseSelection,
+  hidden: number,
+  qInputDim: number,
+  ctx: LoweringContext,
+  attentionKeyTokens = 1,
+): Op[] {
+  if (sel.kind === 'reuse') return [];
+  const spec = sel.indexer;
   const T = stepTokens(ctx);
-  const keyCache = indexerKeyFormat(spec, ctx);
+  const p = spec.keyPoolTokens ?? 1;
+  const hdI = spec.headDim;
+  const ownsKeys = spec.ownsKeys !== false;
+  const act = actBpe(ctx);
+  const ops: Op[] = [];
+
+  // Formula: idx.q: n = H_I·hd_I, k = qIn
+  // See docs/simulation-model.md §5 "Sparse attention indexer"
+  ops.push(linearGemm('idx.q', { m: T, n: spec.heads * hdI, k: qInputDim }, ctx, { module: 'indexer' }));
+  if (ownsKeys) {
+    // Formula: idx.k: n = hd_I, k = kIn; key LayerNorm over T·hd_I
+    ops.push(linearGemm('idx.k', { m: T, n: hdI, k: spec.keyInputDim ?? hidden }, ctx, { module: 'indexer_key' }));
+    const kNormElems = T * hdI;
+    ops.push(
+      elementwise(
+        'idx.k_norm',
+        'layernorm',
+        {
+          elems: kNormElems,
+          activationReadBytes: kNormElems * act,
+          activationWriteBytes: kNormElems * act,
+          weightBytes: 2 * hdI * hpBpe(ctx),
+        },
+        ctx,
+      ),
+    );
+    if (spec.keyPoolGate === true) {
+      // Formula: idx.pool_gate: n = hd_I, k = h; kv_pool over T·hd_I: read 2·T·hd_I (keys, gate logits), write T·hd_I/p,
+      //          APE p·hd_I·bpe(hp)
+      ops.push(linearGemm('idx.pool_gate', { m: T, n: hdI, k: hidden }, ctx, { module: 'indexer_key' }));
+      const poolElems = T * hdI;
+      ops.push(
+        elementwise(
+          'idx.kv_pool',
+          'kv_pool',
+          {
+            elems: poolElems,
+            activationReadBytes: 2 * poolElems * act,
+            activationWriteBytes: (poolElems / p) * act,
+            weightBytes: p * hdI * hpBpe(ctx),
+          },
+          ctx,
+        ),
+      );
+    }
+  }
+  if (spec.headWeights !== false) {
+    // Formula: idx.w: n = H_I, k = h
+    ops.push(linearGemm('idx.w', { m: T, n: spec.heads, k: hidden }, ctx, { module: 'indexer_head_weights' }));
+  }
+
+  const keyCache = indexerKeyFormat(ctx);
   // The scoring math runs in the wider of the key-cache and attention-math formats (same rule as GEMMs).
   const scoreMath = resolveGemmMath(keyCache.dtype, ctx.quant.attentionMath ?? ctx.quant.activations);
-  const kNormElems = T * spec.headDim;
+  // Formula: topK_I = ceil(topK·attentionKeyTokens/p)   (indexer keys kept per query)
   const indexer: IndexerOp = {
     kind: 'indexer',
     name: 'idx.score',
     seqs: ctx.seqs,
     heads: spec.heads,
-    headDim: spec.headDim,
+    headDim: hdI,
     qLen: ctx.qLen,
     kvLen: ctx.kvLen,
     causal: true,
-    topK: spec.topK,
+    topK: Math.ceil((spec.topK * attentionKeyTokens) / p),
     keyCache,
-    keyCacheElemsPerToken: spec.headDim,
+    keyElemsPerKey: hdI,
+    keyPoolTokens: p,
+    ...(spec.maxScoredKeys !== undefined ? { maxScoredKeys: spec.maxScoredKeys } : {}),
+    keyWriteElemsPerToken: ownsKeys ? hdI / p : 0,
+    headWeights: spec.headWeights !== false,
     math: scoreMath,
     accumulate: resolveAccumulate(scoreMath, ctx.quant.accumulate ?? 'fp32'),
     activationDtype: ctx.quant.activations,
   };
-  // Formula: idx.q: n = heads_I·hd_I, k = qIn; idx.k: n = hd_I, k = h; idx.w: n = heads_I, k = h
-  // See docs/simulation-model.md §5 "Sparse attention indexer"
-  return [
-    linearGemm('idx.q', { m: T, n: spec.heads * spec.headDim, k: qInputDim }, ctx),
-    linearGemm('idx.k', { m: T, n: spec.headDim, k: hidden }, ctx),
-    elementwise(
-      'idx.k_norm',
-      'layernorm',
-      {
-        elems: kNormElems,
-        activationReadBytes: kNormElems * actBpe(ctx),
-        activationWriteBytes: kNormElems * actBpe(ctx),
-        weightBytes: 2 * spec.headDim * hpBpe(ctx),
-      },
-      ctx,
-    ),
-    linearGemm('idx.w', { m: T, n: spec.heads, k: hidden }, ctx),
-    indexer,
-  ];
+  ops.push(indexer);
+  return ops;
 }
 
-/** Indexer key-cache bytes per sequence on one device for `contextTokens` tokens (replicated per TP rank). Unit: bytes. */
-export function indexerSequenceStateBytes(spec: IndexerSpec, ctx: LoweringContext, contextTokens: number): number {
-  // Formula: S_idx = ctx·hd_I·bpe(key)
+/**
+ * Indexer key-cache bytes per sequence on one device for `contextTokens` tokens (replicated per TP rank): the keys
+ * this layer owns, `ceil(ctx/p)` of them; 0 for a `'reuse'` selection or an indexer reading another layer's keys.
+ * Unit: bytes.
+ */
+export function sparseSelectionStateBytes(sel: SparseSelection, ctx: LoweringContext, contextTokens: number): number {
+  if (sel.kind === 'reuse') return 0;
+  return indexerKeyStateBytes(sel.indexer, ctx, contextTokens);
+}
+
+/** Owned indexer key-cache bytes per sequence: `ceil(ctx/p)·hd_I·bpe(key)`, 0 if `ownsKeys` is false. Unit: bytes. */
+export function indexerKeyStateBytes(spec: IndexerSpec, ctx: LoweringContext, contextTokens: number): number {
+  if (spec.ownsKeys === false) return 0;
+  // Formula: S_idx = ceil(ctx/p)·hd_I·bpe(key)
   // See docs/simulation-model.md §8 "Memory fit"
-  return contextTokens * spec.headDim * bytesPerElement(indexerKeyFormat(spec, ctx));
+  return Math.ceil(contextTokens / (spec.keyPoolTokens ?? 1)) * spec.headDim * bytesPerElement(indexerKeyFormat(ctx));
 }

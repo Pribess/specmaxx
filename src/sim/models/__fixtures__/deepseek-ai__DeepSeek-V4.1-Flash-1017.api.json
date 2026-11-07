@@ -1,0 +1,29 @@
+{
+  "id": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+  "sha": "1bae0e1088993b9b82de08f59de5be5a34e42170",
+  "gated": false,
+  "private": false,
+  "tags": [
+    "transformers",
+    "safetensors",
+    "deepseek_v41",
+    "text-generation",
+    "image-text-to-text",
+    "license:mit",
+    "eval-results",
+    "endpoints_compatible",
+    "8-bit",
+    "fp8",
+    "deploy:azure",
+    "region:us"
+  ],
+  "safetensors": {
+    "parameters": {
+      "BF16": 1976441856,
+      "F32": 42307282,
+      "F8_E4M3": 204015223296,
+      "I8": 557171343360
+    },
+    "total": 763205315794
+  }
+}

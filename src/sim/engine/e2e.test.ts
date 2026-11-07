@@ -5,7 +5,16 @@ import type { ParallelConfig, QuantConfig } from '../ir/model';
 import type { Op } from '../ir/ops';
 import { countParams } from '../ir/params';
 import { lowerModel } from '../lower/lower';
-import { REF_DENSE_8B, TINY_HYBRID, TINY_MLA_SPARSE } from '../models/reference';
+import {
+  REF_DENSE_8B,
+  TINY_CSA,
+  TINY_HC_NGRAM,
+  TINY_HYBRID,
+  TINY_INKLING,
+  TINY_KDA,
+  TINY_MLA_SHARED,
+  TINY_MLA_SPARSE,
+} from '../models/reference';
 import { singleDevice } from '../hw/presets';
 import { RTX_5090 } from '../hw/presets/nvidia';
 import type { DeviceModifier } from '../hw/modifiers';
@@ -246,5 +255,28 @@ describe('defaults', () => {
   it("overlap 'ideal', fusion 'none', all-reduce 'best'", () => {
     const expected: SimOptions = { overlap: 'ideal', elementwiseFusion: 'none', collectiveAlgorithm: 'best' };
     expect(DEFAULT_SIM_OPTIONS).toEqual(expected);
+  });
+});
+
+describe('shortlist block kinds end to end (TINY fixtures on the synthetic cluster, tp 2, pp 2)', () => {
+  const models = [TINY_CSA, TINY_HC_NGRAM, TINY_KDA, TINY_MLA_SHARED, TINY_INKLING];
+  it.each(models.map((m) => [m.name, m] as const))('%s simulates with positive rates and memory', (_name, model) => {
+    const r = simulate(
+      input({
+        model,
+        parallel: { tp: 2, pp: 2, dp: 1, ep: 1 },
+        workload: { batch: 2, promptLen: 256, decodeContextLen: 512 },
+        hardware: ON_SYNTH_CLUSTER,
+      }),
+    );
+    expect(r.prefill.tokensPerSec).toBeGreaterThan(0);
+    expect(r.decode.tokensPerSec).toBeGreaterThan(0);
+    expect(r.memory.perStage.every((s) => s.sequenceStateBytes > 0)).toBe(true);
+  });
+  it('a cross-stage source warns; an invalid cross-layer reference is rejected', () => {
+    const r = simulate(input({ model: TINY_MLA_SHARED, parallel: { tp: 1, pp: 3, dp: 1, ep: 1 }, hardware: ON_SYNTH_CLUSTER }));
+    expect(r.warnings.filter((w) => w.includes('on another pipeline stage'))).toHaveLength(3);
+    const broken = { ...TINY_MLA_SHARED, layers: [TINY_MLA_SHARED.layers[2], ...TINY_MLA_SHARED.layers.slice(1)] };
+    expect(() => simulate(input({ model: broken }))).toThrow(/kvCacheFromLayer 0 must be an earlier layer index/);
   });
 });
