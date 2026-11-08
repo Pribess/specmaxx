@@ -23,3 +23,60 @@ details.advanced > :not(summary) {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
 }
+/* Deployment sections: Offload / Storage (Hardware) and Speculative decoding (Workload). */
+.deployment-section {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 16px 0 0;
+  padding: 12px 0 0;
+  min-width: 0;
+}
+.deployment-section > legend {
+  padding: 0 6px 0 0;
+  font-size: 14px;
+  font-weight: 550;
+}
+.deployment-section > .field + .field,
+.deployment-section > .field + .fields,
+.deployment-section > .fields + .field,
+.deployment-section > .fields + .fields,
+.deployment-section > * + .drafter-field,
+.deployment-section > .drafter-field + .field,
+.deployment-section > .hint {
+  margin-top: 12px;
+}
+.deployment-section > .hint {
+  display: block;
+}
+.tables-field,
+.drafter-field {
+  display: flex;
+  gap: 8px;
+  align-items: end;
+}
+.tables-field > :first-child,
+.drafter-field > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+/* The one-click hint to move an off-device-by-design table to host RAM. */
+button.chip {
+  flex: none;
+  height: 42px;
+  padding: 0 10px;
+  background: transparent;
+  color: var(--link);
+  border: 1px solid currentColor;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.badge {
+  flex: none;
+  align-self: center;
+  margin-top: 22px;
+  padding: 2px 8px;
+  border: 1px dashed var(--muted);
+  border-radius: var(--control-radius);
+  color: var(--muted);
+  font-size: 12px;
+}

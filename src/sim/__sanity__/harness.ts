@@ -20,17 +20,21 @@
  * run's average rate up to a small convexity error). `pp512` → `promptLen: 512`; `tg128` → `genLen: 128,
  * contextDepth: 0`; `tg128 @ d4096` → `contextDepth: 4096`. Prefill at a depth is not modeled by `simulate`;
  * prefill from an empty cache is faster, so it stays an upper bound for a `pp @ dN` report.
+ *
+ * Deployment-scenario knobs (offload, speculative decoding; docs/simulation-model.md §12–§13) are passed through
+ * `deployment`, off when absent. A report that ran with them on states their parameters (hit ratio, acceptance)
+ * from the report, and the result is the hardware/math bound GIVEN those parameters.
  */
 
 import { simulate } from '../engine/simulate';
-import type { Bound, SimOptions, SimResult } from '../engine/types';
+import type { Bound, DeploymentConfig, OffloadConfig, SimOptions, SimResult, SpecDecodeConfig } from '../engine/types';
 import { applyDeviceModifiers } from '../hw/modifiers';
 import { DEVICE_PRESETS, TOPOLOGY_PRESETS, deviceUnlocks, singleDevice } from '../hw/presets/index';
-import type { DeviceSpec, HardwareStack, TopologySpec } from '../hw/types';
+import type { DeviceSpec, HardwareStack, HostSpec, TopologySpec } from '../hw/types';
 import { resolveUnlocks, type UnlockSelection } from '../hw/unlocks';
 import { decoderLayer, decoderModel, repeatLayers, type FfnParams, type MixerParams } from '../ir/builders';
 import type { Dtype, TensorFormat } from '../ir/dtype';
-import type { ModelSpec, ModuleQuant, ParallelConfig, QuantConfig, WeightModule } from '../ir/model';
+import type { BlockDraftSpec, ModelSpec, ModuleQuant, ParallelConfig, QuantConfig, WeightModule } from '../ir/model';
 import { mapHfModel } from '../models/hf/index';
 import type { HfRepoFiles } from '../models/hf/types';
 
@@ -341,6 +345,12 @@ export interface SanityHardware {
   unlocks?: UnlockSelection;
   /** Memory capacity per device; must be one of the (unlocked) device's options. Default: the largest. Unit: GB (1e9 B). */
   memCapacityGb?: number;
+  /**
+   * The node's host side for offloaded weights: the per-device host link, host RAM and SSD (`HardwareStack.host`).
+   * Absent = the engine's defaults (link from the device's `hostInterface`, `DDR5_6000_2CH`, `NVME_990_PRO_2TB`).
+   * Only read when `deployment.offload` puts something off the device.
+   */
+  host?: HostSpec;
 }
 
 /** The `HardwareStack` of a {@link SanityHardware}. Throws on an unknown device or topology id. */
@@ -364,6 +374,7 @@ export function resolveHardware(h: SanityHardware): HardwareStack {
     ...(unlocks.deviceModifiers.length > 0 ? { deviceModifiers: unlocks.deviceModifiers } : {}),
     ...(unlocks.intraNodeLinkModifiers.length > 0 ? { linkModifiers: { intraNode: unlocks.intraNodeLinkModifiers } } : {}),
     memCapacityBytes,
+    ...(h.host ? { host: h.host } : {}),
   };
 }
 
@@ -398,6 +409,42 @@ export interface SanityInput {
   workload: SanityWorkload;
   /** Simulator assumption switches (default `DEFAULT_SIM_OPTIONS`). */
   options?: Partial<SimOptions>;
+  /** Deployment-scenario knobs the report ran with (offload, speculative decoding); absent = off. */
+  deployment?: SanityDeployment;
+}
+
+/**
+ * The block drafter of a speculative-decoding report: a parsed drafter spec (a separate repo's config.json, or
+ * the labelled hypothetical), or `{ kind: 'checkpoint' }` = the target checkpoint's own block drafter
+ * (`ModelSpec.draft`, e.g. DeepSeek-V4.1-Flash's in-checkpoint DSpark), resolved after the model is mapped.
+ */
+export type SanityDrafter = NonNullable<SpecDecodeConfig['drafter']> | { kind: 'checkpoint' };
+
+/** `DeploymentConfig` with a {@link SanityDrafter} (resolved by {@link resolveDeployment}). */
+export interface SanityDeployment {
+  /** Weight offloading, as `DeploymentConfig.offload`. */
+  offload?: OffloadConfig;
+  /** Speculative decoding, as `DeploymentConfig.speculative` with a {@link SanityDrafter}. */
+  speculative?: Omit<SpecDecodeConfig, 'drafter'> & { drafter?: SanityDrafter };
+}
+
+/**
+ * The engine's `DeploymentConfig` of a {@link SanityDeployment} over `model`: a `{ kind: 'checkpoint' }` drafter
+ * becomes `{ kind: 'repo', repoId: <model name>, spec: model.draft }`. Throws when the model has no block drafter.
+ */
+export function resolveDeployment(d: SanityDeployment, model: ModelSpec): DeploymentConfig {
+  const s = d.speculative;
+  if (s === undefined) return d.offload ? { offload: d.offload } : {};
+  const { drafter, ...rest } = s;
+  let resolved: SpecDecodeConfig['drafter'];
+  if (drafter?.kind === 'checkpoint') {
+    const draft = model.draft;
+    if (draft?.kind !== 'block_drafter') throw new Error(`${model.name}: no in-checkpoint block drafter (model.draft)`);
+    const spec: BlockDraftSpec = draft;
+    resolved = { kind: 'repo', repoId: model.name, spec };
+  } else resolved = drafter;
+  const speculative: SpecDecodeConfig = { ...rest, ...(resolved ? { drafter: resolved } : {}) };
+  return { ...(d.offload ? { offload: d.offload } : {}), speculative };
 }
 
 /** Seconds of op time per bound over one phase (every stage, one microbatch). Unit: seconds. */
@@ -427,14 +474,14 @@ export interface SanityResult {
   sim: SimResult;
 }
 
-/** Op seconds per bound over a phase's stages, and the dominant bound (ties: compute, memory, comm). */
+/** Op seconds per bound over a phase's stages, and the dominant bound (ties: compute, memory, comm, transfer). */
 function boundSummary(phase: SimResult['prefill']): { dominant: Bound; seconds: BoundSeconds } {
-  const seconds: BoundSeconds = { compute: 0, memory: 0, comm: 0 };
+  const seconds: BoundSeconds = { compute: 0, memory: 0, comm: 0, transfer: 0 };
   for (const stage of phase.stages) {
     for (const layer of stage.layers) for (const op of layer.ops) seconds[op.bound] += op.sec;
     if (stage.sendToNext) seconds.comm += stage.sendToNext.sec;
   }
-  const order: Bound[] = ['compute', 'memory', 'comm'];
+  const order: Bound[] = ['compute', 'memory', 'comm', 'transfer'];
   const dominant = order.reduce((best, b) => (seconds[b] > seconds[best] ? b : best), order[0]);
   return { dominant, seconds };
 }
@@ -467,6 +514,7 @@ export function simulateReport(input: SanityInput): SanityResult {
     workload: { batch: w.batch ?? 1, promptLen: w.promptLen, decodeContextLen },
     hardware,
     ...(input.options ? { options: input.options } : {}),
+    ...(input.deployment ? { deployment: resolveDeployment(input.deployment, spec) } : {}),
   });
   return {
     prefillTokensPerSec: sim.prefill.tokensPerSec,

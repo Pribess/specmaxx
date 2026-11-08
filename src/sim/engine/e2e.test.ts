@@ -254,8 +254,13 @@ describe('T19 e2e: memoryBandwidth modifier', () => {
 
 /** Not a plan test: documents the default options so a change to them is a visible diff. */
 describe('defaults', () => {
-  it("overlap 'ideal', fusion 'none', all-reduce 'best'", () => {
-    const expected: SimOptions = { overlap: 'ideal', elementwiseFusion: 'none', collectiveAlgorithm: 'best' };
+  it("overlap 'ideal', fusion 'none', all-reduce 'best', offload overlap 'ideal'", () => {
+    const expected: SimOptions = {
+      overlap: 'ideal',
+      elementwiseFusion: 'none',
+      collectiveAlgorithm: 'best',
+      offloadOverlap: 'ideal',
+    };
     expect(DEFAULT_SIM_OPTIONS).toEqual(expected);
   });
 });

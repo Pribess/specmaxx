@@ -4,16 +4,29 @@
  * the parallelism fits the topology and its links, the effective device (after modifiers, or the base) and the
  * topology pass hardware validation (incl. positive rates), the modifiers are valid, and the engine and memory
  * capacity selections exist, and the model spec is structurally valid (`modelSpecErrors`: cross-layer references,
- * KDA fields, residual-stream widths).
- * See docs/simulation-model.md §5 (Parallelism) and §4 ("Device variants and modifiers").
+ * KDA fields, residual-stream widths), and the deployment knobs (offload placement, speculative decoding) are
+ * consistent with the model and hardware ({@link deploymentErrors}).
+ * See docs/simulation-model.md §5 (Parallelism) and §4 ("Device variants and modifiers"), design doc §2 and §3.
  */
 
-import { validateDevice, validateDeviceModifiers, validateLinkModifiers, validateTopology } from '../hw/validate';
+import {
+  validateDevice,
+  validateDeviceModifiers,
+  validateHost,
+  validateLinkModifiers,
+  validateTopology,
+} from '../hw/validate';
 import { applyDeviceModifiers } from '../hw/modifiers';
 import { modelSpecErrors } from '../ir/validateModel';
 import { lowerBlock, type LoweringContext } from '../lower/lower';
 import { checkPlacement } from './placement';
-import type { SimInput } from './types';
+import type { LayerRange, SimInput } from './types';
+
+/** The exact error for speculative decoding with pipeline parallelism (design doc §3.6). */
+export const SPEC_DEC_PP_ERROR = 'speculative decoding with pp > 1 is not supported yet';
+
+/** Largest draft length k accepted (design doc §3.5). Count. */
+export const MAX_DRAFT_LENGTH = 16;
 
 /** Errors for a field that must be an integer ≥ 1. */
 function positiveIntegerErrors(value: number, label: string): string[] {
@@ -108,7 +121,129 @@ export function validateInput(input: SimInput): string[] {
     else errors.push(...validateLinkModifiers(link, mods).map((e) => `${level}: ${e}`));
   }
 
+  errors.push(...deploymentErrors(input));
   // Placement on the topology (world size, group spans, required links).
   errors.push(...checkPlacement(parallel, topology).errors);
+  return errors;
+}
+
+/** Errors of a `[from, to)` layer range: integers, non-empty, inside `[0, L)`. */
+function layerRangeErrors(range: LayerRange, layerCount: number, label: string): string[] {
+  const { from, to } = range;
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return [`${label} [${from}, ${to}) must be integer layer indices`];
+  if (from < 0 || to > layerCount || from >= to) {
+    return [`${label} [${from}, ${to}) must be a non-empty range inside [0, ${layerCount})`];
+  }
+  return [];
+}
+
+/** True if `x` is a finite number in [lo, hi] (or [lo, hi) when `hiOpen`). */
+function inRange(x: number, lo: number, hi: number, hiOpen = false): boolean {
+  return Number.isFinite(x) && x >= lo && (hiOpen ? x < hi : x <= hi);
+}
+
+/**
+ * Errors of the deployment knobs (design doc §2, §3.6). Absent or `{}` deployment: none, and no other field is read.
+ *
+ * Offload: `mode 'cpu_compute'` is a designed hook, rejected for now (§2.8); `queueDepth` an integer ≥ 1; routed
+ * experts need a MoE model, `residentFraction` in [0, 1], a custom `h` in [0, 1] and `h = 0` when `f = 0` (no expert
+ * is resident); layer ranges non-empty inside `[0, L)`; an off-device lookup-table tier needs n-gram tables, and
+ * `scaleLayout 'pinned_host'` needs the NVMe tier. Any off-device group on a dedicated-memory device needs a host
+ * link: `hardware.host.link` or the device's cited `hostInterface`. `hardware.host`, when given, is validated.
+ *
+ * Speculative decoding: rejected with pp > 1 (§3.6, {@link SPEC_DEC_PP_ERROR}); `draftLength` k an integer in
+ * 1..16; `'mtp'` needs `model.draft.kind === 'mtp'`; a block method needs a `drafter` of the same method with
+ * `k + 1 ≤ blockSize`; acceptance i.i.d. α in [0, 1), per-position α_j in [0, 1] (non-empty).
+ */
+export function deploymentErrors(input: SimInput): string[] {
+  const { model, parallel, hardware } = input;
+  const errors: string[] = [];
+  if (hardware.host !== undefined) errors.push(...validateHost(hardware.host, 'hardware.host'));
+  const offload = input.deployment?.offload;
+  if (offload !== undefined) {
+    const L = model.layers.length;
+    if (offload.mode === 'cpu_compute') {
+      errors.push("deployment.offload.mode 'cpu_compute' is not supported yet (only 'transfer')");
+    }
+    if (offload.queueDepth !== undefined) {
+      errors.push(...positiveIntegerErrors(offload.queueDepth, 'deployment.offload.queueDepth'));
+    }
+    const experts = offload.routedExperts;
+    if (experts !== undefined) {
+      const hasMoe = model.layers.some((l) => l.blocks.some((b) => b.kind === 'moe'));
+      if (!hasMoe) errors.push('deployment.offload.routedExperts: the model has no MoE block');
+      const f = experts.residentFraction;
+      if (!inRange(f, 0, 1)) errors.push(`deployment.offload.routedExperts.residentFraction must be in [0, 1] (got ${f})`);
+      if (experts.hitRatio.kind === 'custom') {
+        const h = experts.hitRatio.h;
+        if (!inRange(h, 0, 1)) errors.push(`deployment.offload.routedExperts.hitRatio.h must be in [0, 1] (got ${h})`);
+        else if (f === 0 && h > 0) {
+          errors.push('deployment.offload.routedExperts.hitRatio: no experts are resident, h must be 0');
+        }
+      }
+      if (experts.layers !== undefined) {
+        errors.push(...layerRangeErrors(experts.layers, L, 'deployment.offload.routedExperts.layers'));
+      }
+    }
+    if (offload.denseLayers !== undefined) {
+      errors.push(...layerRangeErrors(offload.denseLayers.layers, L, 'deployment.offload.denseLayers.layers'));
+    }
+    const tables = offload.lookupTables;
+    if (tables !== undefined && tables.tier !== 'device') {
+      const hasNgram = model.layers.some((l) => l.blocks.some((b) => b.kind === 'ngram_embedding'));
+      if (!hasNgram) errors.push('deployment.offload.lookupTables: the model has no n-gram lookup table');
+      if (tables.scaleLayout === 'pinned_host' && tables.tier !== 'nvme') {
+        errors.push("deployment.offload.lookupTables.scaleLayout 'pinned_host' needs tier 'nvme'");
+      }
+    }
+    const offDevice =
+      experts !== undefined ||
+      offload.denseLayers !== undefined ||
+      (tables !== undefined && tables.tier !== 'device');
+    const device = hardware.device;
+    if (
+      offDevice &&
+      device.memory.kind === 'dedicated' &&
+      hardware.host?.link === undefined &&
+      device.hostInterface === undefined
+    ) {
+      errors.push(`deployment.offload: no host link known for ${device.id}; set hardware.host.link`);
+    }
+  }
+  const spec = input.deployment?.speculative;
+  if (spec !== undefined) {
+    if (parallel.pp > 1) errors.push(SPEC_DEC_PP_ERROR);
+    const k = spec.draftLength;
+    if (!Number.isInteger(k) || k < 1 || k > MAX_DRAFT_LENGTH) {
+      errors.push(`deployment.speculative.draftLength must be an integer in 1..${MAX_DRAFT_LENGTH} (got ${k})`);
+    }
+    if (spec.method === 'mtp') {
+      if (model.draft?.kind !== 'mtp') {
+        errors.push("deployment.speculative.method 'mtp' needs a model with an MTP draft head (model.draft.kind 'mtp')");
+      }
+    } else if (spec.drafter === undefined) {
+      errors.push(`deployment.speculative.method '${spec.method}' needs a drafter`);
+    } else {
+      const drafter = spec.drafter.spec;
+      if (drafter.method !== spec.method) {
+        errors.push(`deployment.speculative.drafter is a ${drafter.method} drafter, not ${spec.method}`);
+      }
+      if (k + 1 > drafter.blockSize) {
+        errors.push(
+          `deployment.speculative.draftLength ${k}: k + 1 must not exceed the drafter's blockSize (${drafter.blockSize})`,
+        );
+      }
+    }
+    const acc = spec.acceptance;
+    if (acc.kind === 'iid') {
+      if (!inRange(acc.alpha, 0, 1, true)) {
+        errors.push(`deployment.speculative.acceptance.alpha must be in [0, 1) (got ${acc.alpha})`);
+      }
+    } else if (acc.alphas.length === 0) {
+      errors.push('deployment.speculative.acceptance.alphas must not be empty');
+    } else if (!acc.alphas.every((a) => inRange(a, 0, 1))) {
+      errors.push(`deployment.speculative.acceptance.alphas must each be in [0, 1] (got ${acc.alphas.join(', ')})`);
+    }
+  }
   return errors;
 }

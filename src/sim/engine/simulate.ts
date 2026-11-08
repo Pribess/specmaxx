@@ -6,25 +6,39 @@
  * 1. {@link validateInput} (throws on any error).
  * 2. Apply the device and link modifiers once (docs §4 "Device variants and modifiers"); everything after sees
  *    plain specs.
- * 3. For each phase: lower the model (`seqs = b_mb`) → per-op times → per-stage times → pipeline + DP.
- * 4. Memory fit.
+ * 3. Resolve the offload placement and the host side, if any (docs §12); `hardware.host` is read only then.
+ * 4. For each phase: lower the model (`seqs = b_mb`) → per-op times (transfer ops on their stage's tier paths) →
+ *    per-stage times → pipeline + DP.
+ * 5. Memory fit (device and the off-device tiers).
  */
 
 import { applyDeviceModifiers, applyLinkModifiers, describeDeviceModifier, describeLinkModifier } from '../hw/modifiers';
 import type { DeviceSpec, HardwareStack, TopologySpec } from '../hw/types';
 import { crossLayerReferences } from '../ir/validateModel';
 import type { ModelSpec } from '../ir/model';
-import { lowerModel, stageLayerRange, type LoweredModel, type LoweringContext } from '../lower/lower';
+import { lowerDraftDecode, lowerDraftPrefill } from '../lower/draft';
+import { lowerModel, stageLayerRange, type LoweredLayer, type LoweredModel, type LoweringContext } from '../lower/lower';
 import type { AllReduceAlgorithm, CollectivePath } from './collectives';
+import { offloadTiers, resolveHost, resolveOffload, transferPath, type ResolvedHost } from './host';
 import { memoryReport } from './memory';
 import { engineMemBandwidthBytesPerSec, opTime, type OpTimeContext } from './opTime';
-import { layerResult, microbatching, phaseResult, stageResult } from './pipeline';
+import { layerResult, microbatching, phaseResult, stageResult, type PhaseShape } from './pipeline';
 import { checkPlacement, collectivePath, groupSpan, ppSendPath } from './placement';
-import type { PhaseResult, SimInput, SimOptions, SimResult } from './types';
+import { resolveSpeculative } from './specdec';
+import { stageNStream, type TransferPath } from './transfer';
+import type { OffloadTier, PhaseResult, SimInput, SimOptions, SimResult } from './types';
 import { validateInput } from './validate';
 
-/** The defaults of {@link SimOptions}: no elementwise fusion, ideal comm/compute overlap, best all-reduce. */
-export const DEFAULT_SIM_OPTIONS: SimOptions = { overlap: 'ideal', elementwiseFusion: 'none', collectiveAlgorithm: 'best' };
+/**
+ * The defaults of {@link SimOptions}: no elementwise fusion, ideal comm/compute overlap, best all-reduce, ideal
+ * offload-transfer overlap (no effect without offloading).
+ */
+export const DEFAULT_SIM_OPTIONS: SimOptions = {
+  overlap: 'ideal',
+  elementwiseFusion: 'none',
+  collectiveAlgorithm: 'best',
+  offloadOverlap: 'ideal',
+};
 
 /** The hardware after modifiers: the device and topology the engine actually simulates, plus info lines. */
 export interface EffectiveHardware {
@@ -75,6 +89,40 @@ export function crossStageWarnings(model: ModelSpec, pp: number): string[] {
     );
 }
 
+/** The resolved host side of an offloading run, for {@link simulatePhase}. */
+interface PhaseOffload {
+  /** Host link, RAM and SSD. */
+  host: ResolvedHost;
+  /** The deployment's queue depth request (capped per tier). Count. */
+  queueDepth: number | undefined;
+}
+
+/**
+ * Transfer paths of stage `s` per tier this phase streams from (design doc §2.3): a tier is shared by the
+ * concurrently streaming stages of the node ({@link stageNStream}), which depends on which stages hold a transfer op
+ * of that tier in this phase, the offload overlap and the microbatches `m`.
+ */
+function stageTransferPaths(
+  lowered: LoweredModel,
+  s: number,
+  offload: PhaseOffload,
+  input: SimInput,
+  topology: TopologySpec,
+  options: SimOptions,
+  microbatches: number,
+): Partial<Record<OffloadTier, TransferPath>> {
+  const paths: Partial<Record<OffloadTier, TransferPath>> = {};
+  for (const tier of ['host_ram', 'nvme'] as const) {
+    const streams = lowered.stages.map((st) =>
+      st.layers.some((l) => l.ops.some((op) => op.kind === 'transfer' && op.source === tier)),
+    );
+    if (!streams[s]) continue;
+    const n = stageNStream(input.parallel, topology.devicesPerNode, streams, s, options.offloadOverlap, microbatches);
+    paths[tier] = transferPath(tier, offload.host, offload.queueDepth, n);
+  }
+  return paths;
+}
+
 /** Lowers and costs one phase (prefill or decode) for one microbatch, then applies the pipeline and DP rules. */
 function simulatePhase(
   lowered: LoweredModel,
@@ -84,6 +132,8 @@ function simulatePhase(
   topology: TopologySpec,
   options: SimOptions,
   shape: { sequencesPerReplica: number; microbatches: number; microbatchSize: number },
+  offload: PhaseOffload | undefined,
+  tokensPerStep?: number,
 ): PhaseResult {
   const stages = lowered.stages.map((stage) => {
     const ppPath: CollectivePath =
@@ -96,11 +146,14 @@ function simulatePhase(
       elementwiseFusion: base.elementwiseFusion,
       warnings: base.warnings,
     };
+    if (offload !== undefined) {
+      ctx.transferPaths = stageTransferPaths(lowered, stage.index, offload, input, topology, options, shape.microbatches);
+    }
     const layers = stage.layers.map((l) => layerResult(l.name, l.layerIndex, l.ops.map((op) => opTime(op, ctx))));
     const send = stage.sendToNext === undefined ? undefined : opTime(stage.sendToNext, ctx);
-    return stageResult(stage.index, layers, send, options.overlap);
+    return stageResult(stage.index, layers, send, options.overlap, options.offloadOverlap);
   });
-  return phaseResult(stages, {
+  const phaseShape: PhaseShape = {
     phase,
     dp: input.parallel.dp,
     sequencesPerReplica: shape.sequencesPerReplica,
@@ -108,13 +161,46 @@ function simulatePhase(
     microbatchSize: shape.microbatchSize,
     promptLen: input.workload.promptLen,
     overlap: options.overlap,
-  });
+  };
+  if (tokensPerStep !== undefined) phaseShape.tokensPerStep = tokensPerStep;
+  return phaseResult(stages, phaseShape);
+}
+
+/**
+ * Appends `draft.*` layers to the last stage of a lowered phase (speculative decoding, design doc §3.3–3.4): the
+ * drafter runs on the last stage after the target's head (pp = 1 is enforced by validation), so the stage sums,
+ * overlap and collectives apply to it unchanged.
+ */
+function withDraftLayers(lowered: LoweredModel, draftLayers: LoweredLayer[]): LoweredModel {
+  const stages = lowered.stages.map((stage, s) =>
+    s === lowered.stages.length - 1 ? { ...stage, layers: [...stage.layers, ...draftLayers] } : stage,
+  );
+  return { stages };
+}
+
+/**
+ * Speculative-decoding summary of a decode phase (design doc §3.5, §4.2): `draftSec` = Σ op times of the `draft.*`
+ * layers, `verifySec` = Σ of every other layer (the verify pass), both without overlap (seconds); E[τ]; and the
+ * speedup over the same input with speculative decoding off (tokens/s ratio, dimensionless).
+ */
+function speculativeSummary(decode: PhaseResult, expectedTokensPerStep: number, offTokensPerSec: number): NonNullable<PhaseResult['speculative']> {
+  let draftSec = 0;
+  let verifySec = 0;
+  for (const stage of decode.stages) {
+    for (const layer of stage.layers) {
+      if (layer.name.startsWith('draft.')) draftSec += layer.sec;
+      else verifySec += layer.sec;
+    }
+  }
+  // Formula: speedup = tokens/s(spec-dec) / tokens/s(off)
+  // See docs/simulation-model.md §13 ("Accepted tokens")
+  return { draftSec, verifySec, expectedTokensPerStep, speedup: decode.tokensPerSec / offTokensPerSec };
 }
 
 /**
  * Simulate one input: validate, apply modifiers, cost prefill (the whole prompt from an empty KV cache) and decode
- * (one new token with `decodeContextLen` tokens already cached), and check the memory fit. Throws
- * `Error(errors.join('\n'))` on an invalid input.
+ * (one new token with `decodeContextLen` tokens already cached; with speculative decoding a `k + 1`-token verify plus
+ * the drafter), and check the memory fit. Throws `Error(errors.join('\n'))` on an invalid input.
  */
 export function simulate(input: SimInput): SimResult {
   const errors = validateInput(input);
@@ -143,7 +229,19 @@ export function simulate(input: SimInput): SimResult {
     epPath: collectivePath(groupSpan(parallel.ep, hw.topology), hw.topology),
   };
 
-  // 3. Phases. Formula: B_r = batch/dp; m = min(pp, B_r); b_mb = ceil(B_r/m)  (docs §7 "Pipeline and DP")
+  // 3. Offload placement and host (docs §12). Nothing off-device ⇒ offload undefined, hardware.host never read.
+  const resolved = resolveOffload(model, input.deployment?.offload, device.memory.kind, parallel.ep);
+  warnings.push(...resolved.warnings);
+  let phaseOffload: PhaseOffload | undefined;
+  if (resolved.offload !== undefined) {
+    const host = resolveHost(input.hardware, device, offloadTiers(resolved.offload));
+    warnings.push(...host.warnings);
+    phaseOffload = { host, queueDepth: input.deployment?.offload?.queueDepth };
+  }
+  // 4. Speculative decoding (docs §13). Absent ⇒ plain decode, no draft layers.
+  const spec = resolveSpeculative(model, input.deployment?.speculative);
+  if (spec !== undefined) warnings.push(...spec.warnings);
+  // 5. Phases. Formula: B_r = batch/dp; m = min(pp, B_r); b_mb = ceil(B_r/m)  (docs §7 "Pipeline and DP")
   const sequencesPerReplica = workload.batch / parallel.dp;
   const mb = microbatching(parallel.pp, sequencesPerReplica);
   const shape = { sequencesPerReplica, ...mb };
@@ -156,26 +254,62 @@ export function simulate(input: SimInput): SimResult {
     quant,
     parallel,
   };
+  if (resolved.offload !== undefined) prefillCtx.offload = resolved.offload;
   // Decode @ N: N tokens are already in the KV cache and one new token is generated, so the new token's query
   // sees its own key too.  Formula: qLen = 1; kvLen = past + qLen = N + 1  (docs §7 "Pipeline and DP").
   const decodePastTokens = workload.decodeContextLen;
-  const decodeCtx: LoweringContext = { ...prefillCtx, phase: 'decode', qLen: 1, kvLen: decodePastTokens + 1 };
-  const prefillLowered = lowerModel(model, prefillCtx);
-  const decodeLowered = lowerModel(model, decodeCtx);
-  const prefill = simulatePhase(prefillLowered, 'prefill', base, input, hw.topology, options, shape);
-  const decode = simulatePhase(decodeLowered, 'decode', base, input, hw.topology, options, shape);
+  const plainDecodeCtx: LoweringContext = { ...prefillCtx, phase: 'decode', qLen: 1, kvLen: decodePastTokens + 1 };
+  // Verify @ N (spec-dec): the k + 1 positions are the bonus token and k drafts.
+  // Formula: qLen = k + 1; kvLen = N + k + 1  (docs §13 "Verify")
+  const decodeCtx: LoweringContext =
+    spec === undefined
+      ? plainDecodeCtx
+      : {
+          ...plainDecodeCtx,
+          qLen: spec.lowering.verifyTokens,
+          kvLen: decodePastTokens + spec.lowering.verifyTokens,
+          speculative: spec.lowering,
+        };
+  let prefillLowered = lowerModel(model, prefillCtx);
+  let decodeLowered = lowerModel(model, decodeCtx);
+  if (spec !== undefined) {
+    const { draft, contextRows, draftLength } = spec.lowering;
+    prefillLowered = withDraftLayers(prefillLowered, lowerDraftPrefill(model, draft, prefillCtx));
+    decodeLowered = withDraftLayers(decodeLowered, lowerDraftDecode(model, draft, decodeCtx, contextRows, draftLength));
+  }
+  const prefill = simulatePhase(prefillLowered, 'prefill', base, input, hw.topology, options, shape, phaseOffload);
+  const decode = simulatePhase(
+    decodeLowered,
+    'decode',
+    base,
+    input,
+    hw.topology,
+    options,
+    shape,
+    phaseOffload,
+    spec?.expectedTokensPerStep,
+  );
+  if (spec !== undefined) {
+    // The same decode with speculative decoding off, for the speedup.
+    const off = simulatePhase(lowerModel(model, plainDecodeCtx), 'decode', base, input, hw.topology, options, shape, phaseOffload);
+    decode.speculative = speculativeSummary(decode, spec.expectedTokensPerStep, off.tokensPerSec);
+  }
 
-  // 4. Memory fit.
+  // 6. Memory fit.
   const capacityBytes = input.hardware.memCapacityBytes ?? device.memory.capacityOptionsBytes[0];
   const memory = memoryReport({
     model,
     ctx: decodeCtx,
     sequencesPerReplica,
-    // The cache must hold the prompt after prefill and N + 1 tokens after the decode step (docs §8).
+    // The cache must hold the prompt after prefill and N + 1 tokens after the decode step (docs §8); with
+    // speculative decoding the verify appends k + 1 rows, so N + k + 1 (docs §13 "Draft memory").
     contextTokens: Math.max(workload.promptLen, decodeCtx.kvLen),
     lowered: [prefillLowered, decodeLowered],
     capacityBytes,
     kind: device.memory.kind,
+    offloadOverlap: options.offloadOverlap,
+    devicesPerNode: hw.topology.devicesPerNode,
+    ...(phaseOffload === undefined ? {} : { host: phaseOffload.host }),
   });
   if (device.memory.kind === 'unified') {
     warnings.push('memory: unified memory — capacity is shared with the CPU/OS; the usable fraction is OS-dependent and not modeled');

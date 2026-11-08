@@ -12,6 +12,7 @@ import type { MixerParams } from '../../../ir/builders';
 import { blockParams } from '../../../ir/params';
 import { modelSpecErrors } from '../../../ir/validateModel';
 import { createReader } from '../reader';
+import { mtpDraft, withDraft } from '../drafter';
 import type { FamilyEntry } from '../types';
 
 /** Family entry for the Inkling language decoder, excluding vision/audio and MTP. */
@@ -74,13 +75,18 @@ export const inklingFamily: FamilyEntry = {
         : { kind: 'moe', experts, topK, expertIntermediate: expertWidth, sharedExperts: shared, sharedIntermediate: expertWidth },
     }));
     // Header-confirmed MTP uses DENSE MLPs in every draft layer, never the backbone's huge routed MoE.
-    const mtpParamsEstimate = repeatLayers(mtpCount, i => decoderLayer({ hidden, mixer: mixer(mtpLocal.includes(i)), shortConv,
+    const mtpModule = (i: number) => decoderLayer({ hidden, mixer: mixer(mtpLocal.includes(i)), shortConv,
       ffn: { kind: 'dense', intermediate: denseWidth },
-    })).reduce((sum, layer) => sum + layer.blocks.reduce((p, b) => p + blockParams(b), 0) + 2 * hidden * hidden + 2 * hidden, 0);
+    });
+    const mtpParamsEstimate = repeatLayers(mtpCount, mtpModule)
+      .reduce((sum, layer) => sum + layer.blocks.reduce((p, b) => p + blockParams(b), 0) + 2 * hidden * hidden + 2 * hidden, 0);
+    // The MTP modules are kept as model.draft: one module per draft position (DeepSeek-V3 style), costed only with
+    // speculative decoding on.
+    const draft = mtpDraft(mtpModule, mtpCount, true);
     const model = decoderModel({ name: files.id, hidden, vocab, tieEmbeddings: false, layers, source: files.id });
     const errors = modelSpecErrors(model);
     if (errors.length) return { kind: 'invalid_config', errors };
-    return { kind: 'ok', model,
+    return { kind: 'ok', model: withDraft(model, draft),
       mtpParamsEstimate, visionParamsEstimate: vision,
       excludedParts: [...(mtpCount ? ['MTP'] : []), ...(v ? ['vision tower'] : []), ...(audio ? ['audio tower'] : [])],
       notes: [

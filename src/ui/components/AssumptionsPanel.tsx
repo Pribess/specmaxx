@@ -35,6 +35,15 @@ const SWITCHES = [
       { value: 'tree', label: 'tree' },
     ],
   },
+  {
+    key: 'offloadOverlap',
+    label: 'Offload overlap',
+    help: "Ideal: the next layer's transfers overlap this layer's compute (prefetch, perfect prediction); in prefill this can hide expert transfers entirely. None: fetched on demand, serialized. Only matters when weights are offloaded.",
+    options: [
+      { value: 'ideal', label: 'ideal' },
+      { value: 'none', label: 'none' },
+    ],
+  },
 ] as const satisfies readonly {
   key: keyof typeof DEFAULT_SIM_OPTIONS;
   label: string;
@@ -47,8 +56,8 @@ export function AssumptionsPanel({ state, dispatch }: Props) {
     <Panel title="Assumptions">
       <div className="field-head panel-help">
         <HelpIcon term="Assumptions">
-          Hardware and math limits only. No scheduler, paging, speculative decoding or
-          engine-specific overhead.
+          Hardware and math limits only. No scheduler, paging or engine-specific overhead.
+          Speculative decoding and offloading are off unless set in Workload and Hardware.
         </HelpIcon>
       </div>
       {SWITCHES.map((s) => (

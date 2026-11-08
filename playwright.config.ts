@@ -3,7 +3,8 @@ import { defineConfig, devices } from '@playwright/test';
 /**
  * Playwright runs against the production build (`vite preview`), Chromium only. Two projects:
  * - `smoke` (`bun run e2e`, part of `bun run check`): the app loads and computes in the real worker; the fabric
- *   test compares a 4 × DGX Spark ring with the switch.
+ *   test compares a 4 × DGX Spark ring with the switch; the deployment test turns on speculative decoding and
+ *   expert offload.
  * - `screenshots` (`bun run screenshots`): writes docs/screenshots/*.png (or to `$SCREENSHOTS_DIR`).
  * The HF Hub is mocked per test (no real network). `@playwright/test` is pinned to 1.64.1, whose
  * chromium-headless-shell revision (1248) is the one installed locally.
@@ -20,7 +21,7 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
   },
   projects: [
-    { name: 'smoke', testMatch: /(smoke|fabric)\.spec\.ts/ },
+    { name: 'smoke', testMatch: /(smoke|fabric|deployment)\.spec\.ts/ },
     { name: 'screenshots', testMatch: /screenshots\.spec\.ts/ },
   ],
 });

@@ -2,13 +2,22 @@
  * The sanity check (docs/sanity-check.md): every community report in `reports.ts` is simulated, and each asserted
  * metric must satisfy `simulated ≥ 0.9 × reported` (the simulator is a theoretical upper bound). Known exceptions
  * must STILL fail (so the list stays honest); excluded metrics are only printed. The ratio report ÷ sim is printed
- * for every metric, with a summary of its distribution.
+ * for every metric, with a summary of its distribution. Reports that ran with speculative decoding or offloading are
+ * simulated with the same knobs on (`input.deployment`), so their decode is asserted against the spec-dec / offload
+ * bound (docs/simulation-model.md §12–§13).
  */
 
 import { describe, expect, it } from 'vitest';
-import { sanityRepoFiles } from './configs.testutil';
-import { simulateReport, type SanityModel, type SanityResult } from './harness';
-import { REPORTS, UPPER_BOUND_OPTIONS, type BenchmarkReport, type ReportModel, type ReportedRate } from './reports';
+import { sanityDrafterSpec, sanityRepoFiles } from './configs.testutil';
+import { simulateReport, type SanityDeployment, type SanityModel, type SanityResult } from './harness';
+import {
+  REPORTS,
+  UPPER_BOUND_OPTIONS,
+  type BenchmarkReport,
+  type ReportDeployment,
+  type ReportModel,
+  type ReportedRate,
+} from './reports';
 
 /** Required margin: the simulated rate must be at least this fraction of the reported one. Dimensionless. */
 const MARGIN = 0.9;
@@ -18,9 +27,23 @@ function toSanityModel(m: ReportModel): SanityModel {
   return m.kind === 'spec' ? m : { kind: 'hf', files: sanityRepoFiles(m.repoId, m.dir ? { dir: m.dir } : {}) };
 }
 
+/** The harness deployment of a report's: a drafter repo id becomes the parsed drafter fixture. */
+function toSanityDeployment(d: ReportDeployment): SanityDeployment {
+  const s = d.speculative;
+  if (s?.drafter?.kind !== 'repo') return d as SanityDeployment;
+  const { repoId } = s.drafter;
+  return { ...d, speculative: { ...s, drafter: { kind: 'repo', repoId, spec: sanityDrafterSpec(repoId) } } };
+}
+
 /** Simulates one report with the shared upper-bound options. */
 function simulate(r: BenchmarkReport): SanityResult {
-  return simulateReport({ ...r.input, model: toSanityModel(r.input.model), options: { ...UPPER_BOUND_OPTIONS, ...r.input.options } });
+  const { deployment, ...input } = r.input;
+  return simulateReport({
+    ...input,
+    model: toSanityModel(r.input.model),
+    options: { ...UPPER_BOUND_OPTIONS, ...r.input.options },
+    ...(deployment ? { deployment: toSanityDeployment(deployment) } : {}),
+  });
 }
 
 /** The simulated rate matching a reported one (same phase, same per-sequence / aggregate kind). Unit: tokens/s. */
@@ -112,11 +135,32 @@ describe('community reports vs simulated theoretical maxima', () => {
     // The recorded depth and the simulated one agree, and decode runs at depth + ceil(genLen / 2).
     expect(r.input.workload.contextDepth ?? 0).toBe(r.contextDepth);
     expect(SIMS.get(r.id)!.decodeContextLen).toBe(Math.max(1, r.contextDepth + Math.ceil(r.genLen / 2)));
-    // Only llama-bench's tg test starts from an empty cache; everywhere else generation follows the prompt.
-    if (!r.engine.includes('llama-bench')) expect(r.contextDepth, `${r.id}: decode should follow the prompt`).toBeGreaterThanOrEqual(r.promptLen);
+    // Only llama-bench's tg test (and llama-sweep-bench's, at each N_KV) starts from an empty cache; everywhere else
+    // generation follows the prompt.
+    const emptyCacheTg = r.engine.includes('llama-bench') || r.engine.includes('llama-sweep-bench');
+    if (!emptyCacheTg) expect(r.contextDepth, `${r.id}: decode should follow the prompt`).toBeGreaterThanOrEqual(r.promptLen);
   });
 
   it('web-26 (mlx_lm.benchmark -p 2048 -g 128) decodes after its 2048-token prompt: context 2048 + 64', () => {
     expect(SIMS.get('web-26')!.decodeContextLen).toBe(2112);
+  });
+
+  it('spec-dec rows run with the knobs on: lm-09 MTP k 8, lm-36 DSpark k 5 at the reported E[τ] 2.85, lm-39 DFlash 2 k 7', () => {
+    const spec = (id: string) => SIMS.get(id)!.sim.decode.speculative;
+    expect(spec('lm-09')).toBeDefined();
+    // Formula: E[τ] = (1 − α^(k+1)) / (1 − α) at α 0.75, k 8 = 3.6997
+    expect(spec('lm-09')!.expectedTokensPerStep).toBeCloseTo((1 - 0.75 ** 9) / 0.25, 9);
+    expect(spec('lm-36')!.expectedTokensPerStep).toBeCloseTo(2.85, 9);
+    // Formula: E[τ] at α 0.79, k 7 = (1 − 0.79^8) / 0.21 = 4.0395
+    expect(spec('lm-39')!.expectedTokensPerStep).toBeCloseTo((1 - 0.79 ** 8) / 0.21, 9);
+    for (const id of ['lm-09', 'lm-36', 'lm-39']) expect(spec(id)!.speedup, id).toBeGreaterThan(1);
+  });
+
+  it('offload rows stream experts: web-52 and web-53 have decode transfers', () => {
+    for (const id of ['web-52', 'web-53']) {
+      const t = SIMS.get(id)!.sim.decode.transfer;
+      expect(t, id).toBeDefined();
+      expect(t!.bytes, id).toBeGreaterThan(0);
+    }
   });
 });

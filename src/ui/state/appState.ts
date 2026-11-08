@@ -15,6 +15,15 @@ import { DEFAULT_SIM_OPTIONS } from '../../sim/engine/simulate';
 import type { CablingId } from '../../sim/hw/presets/catalog';
 import { DEFAULT_MODEL_ID } from './modelShortlist';
 import { devicesPerNodeForLocalLink, nearestCount, normalizeCabling, normalizeLocalLink, setupOptionsOf } from './hardware';
+import {
+  normalizeDeployment,
+  normalizeHost,
+  offloadsAnything,
+  type DeploymentChoice,
+  type HostChoice,
+  type OffloadChoice,
+  type SpecDecChoice,
+} from './deployment';
 
 /** Which model to simulate: a Hugging Face repo (the default one is bundled, so it needs no network). */
 export type ModelChoice = {
@@ -72,6 +81,11 @@ export interface HardwareChoice {
   intraEdits: SpecEdits;
   /** Edits on the inter-node link. */
   interEdits: SpecEdits;
+  /**
+   * The node's host (RAM and SSD presets, host-link override) that offloaded weights stream from; absent = the
+   * defaults. Used only while the deployment offloads something (`DeploymentChoice.offload`).
+   */
+  host?: HostChoice;
 }
 
 /** Everything the user chose; the URL encodes exactly this. */
@@ -88,6 +102,8 @@ export interface AppState {
   workload: Workload;
   /** Assumption switches that differ from `DEFAULT_SIM_OPTIONS` (a default value is never stored). */
   options: Partial<SimOptions>;
+  /** Deployment-scenario knobs (offload, speculative decoding); `{}` = all off (normalized, `normalizeDeployment`). */
+  deployment: DeploymentChoice;
 }
 
 /** Device of the default state. */
@@ -123,6 +139,7 @@ export const DEFAULT_STATE: AppState = {
   parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
   workload: { batch: 1, promptLen: 8192, decodeContextLen: 8192 },
   options: {},
+  deployment: {},
 };
 
 /** Which spec an edit targets: the device, the intra-node link or the inter-node link. */
@@ -132,7 +149,10 @@ export type EditTarget = 'device' | 'intra' | 'inter';
 export type AppAction =
   /** Replace the whole state (URL restore, popstate). */
   | { type: 'replace'; state: AppState }
-  /** Pick a model; clears the quant overrides (they refer to the previous model's defaults). */
+  /**
+   * Pick a model; clears the quant overrides (they refer to the previous model's defaults) and the spec-dec drafter
+   * repo (it belongs to the previous target).
+   */
   | { type: 'setModel'; model: ModelChoice }
   /** Set (dtype) or clear (undefined) one quant override. */
   | { type: 'setQuant'; field: 'weights' | 'activations' | 'kvCache'; dtype: Dtype | 'exl3' | undefined }
@@ -174,7 +194,17 @@ export type AppAction =
   /** Change some workload fields. */
   | { type: 'setWorkload'; workload: Partial<Workload> }
   /** Change assumption switches; a value equal to the default (or undefined) is removed. */
-  | { type: 'setOptions'; options: Partial<SimOptions> };
+  | { type: 'setOptions'; options: Partial<SimOptions> }
+  /**
+   * Replace the offload choice (normalized). With `tablesOffDeviceByDesign` (the model ships an n-gram table meant
+   * to live off-device), turning offload on from fully off also places the tables on host RAM, unless the new
+   * choice sets them itself (the design doc §2.10 prefill).
+   */
+  | { type: 'setOffload'; offload: OffloadChoice; tablesOffDeviceByDesign?: boolean }
+  /** Turn speculative decoding on with these choices (normalized), or off (undefined). */
+  | { type: 'setSpecDec'; specDec: SpecDecChoice | undefined }
+  /** Replace the host choice (normalized; `{}` = defaults). */
+  | { type: 'setHost'; host: HostChoice };
 
 /** The `HardwareChoice` field holding the edits of `target`. */
 export function editsKey(target: EditTarget): 'deviceEdits' | 'intraEdits' | 'interEdits' {
@@ -198,6 +228,15 @@ export function normalizeOptions(options: Partial<SimOptions>): Partial<SimOptio
   return out;
 }
 
+/**
+ * `hw` carrying the node's host RAM and SSD choices of `host` (they belong to the machine, not the device), without
+ * its host-link override (that belongs to the previous device's card).
+ */
+function withNodeHost(hw: HardwareChoice, host: HostChoice | undefined): HardwareChoice {
+  const kept = host === undefined ? {} : normalizeHost({ ...host, link: undefined });
+  return Object.keys(kept).length > 0 ? { ...hw, host: kept } : without(hw, 'host');
+}
+
 /** Pure reducer: the next state for `action`. Never mutates `state`. */
 export function reduce(state: AppState, action: AppAction): AppState {
   const hw = state.hw;
@@ -209,7 +248,8 @@ export function reduce(state: AppState, action: AppAction): AppState {
         action.model.kind === 'hf' && (action.model.revision === undefined || action.model.revision === 'main')
           ? { kind: 'hf', id: action.model.id }
           : action.model;
-      return { ...state, model, quant: {} };
+      const specDec = state.deployment.specDec && without(state.deployment.specDec, 'drafter');
+      return { ...state, model, quant: {}, deployment: normalizeDeployment({ ...state.deployment, specDec }) };
     }
     case 'setQuant': {
       let quant: QuantOverrides =
@@ -223,14 +263,14 @@ export function reduce(state: AppState, action: AppAction): AppState {
     case 'resetQuant':
       return { ...state, quant: {} };
     case 'setHardware':
-      return { ...state, hw: action.hw };
+      return { ...state, hw: withNodeHost(action.hw, hw.host) };
     case 'setDevice': {
       const options = setupOptionsOf({ deviceId: action.deviceId });
       const snap = (offered: number[], n: number) => (offered.includes(n) ? n : nearestCount(offered, n));
       return {
         ...state,
         hw: {
-          ...SINGLE_DEVICE_HW,
+          ...withNodeHost(SINGLE_DEVICE_HW, hw.host),
           deviceId: action.deviceId,
           devicesPerNode: snap(options.devicesPerNodeCounts, hw.devicesPerNode),
           nodes: snap(options.nodeCounts, hw.nodes),
@@ -284,6 +324,20 @@ export function reduce(state: AppState, action: AppAction): AppState {
       return { ...state, workload: { ...state.workload, ...action.workload } };
     case 'setOptions':
       return { ...state, options: normalizeOptions({ ...state.options, ...action.options }) };
+    case 'setOffload': {
+      let offload = action.offload;
+      const turningOn = !offloadsAnything(state.deployment.offload) && offloadsAnything(offload);
+      if (turningOn && action.tablesOffDeviceByDesign === true && offload.tables === undefined) {
+        offload = { ...offload, tables: { tier: 'host_ram' } };
+      }
+      return { ...state, deployment: normalizeDeployment({ ...state.deployment, offload }) };
+    }
+    case 'setSpecDec':
+      return { ...state, deployment: normalizeDeployment({ ...state.deployment, specDec: action.specDec }) };
+    case 'setHost': {
+      const host = normalizeHost(action.host);
+      return { ...state, hw: Object.keys(host).length > 0 ? { ...hw, host } : without(hw, 'host') };
+    }
     default: {
       const _never: never = action;
       throw new Error(`unknown action ${JSON.stringify(_never)}`);

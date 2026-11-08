@@ -28,7 +28,8 @@ export const SHAPE_DEPENDENT_FNS: readonly ShapeDependentFn[] = ['causal_conv1d'
  * vector-compute time). Functions whose cost depends on their shape take an explicit `flopsPerElem` from their
  * lowering ({@link SHAPE_DEPENDENT_FNS}): `causal_conv1d` 2·K, `hc_collapse` 2·N, `hc_expand` 2N+2 (mixing) or 2,
  * `sinkhorn` 4·iters per N×N element. `router_topk` is per logit. `ngram_gate` ≈ 8 (two norm statistics, a dot
- * product, a sigmoid and the fused add); `kv_pool` ≈ 4 (softmax weight, multiply, add).
+ * product, a sigmoid and the fused add); `kv_pool` ≈ 4 (softmax weight, multiply, add); `kv_cache_write` 1 (the cast
+ * of each stored K/V element into the cache format); `candidate_score` 2 (one multiply-add per rank element).
  * Unit: FLOP/element. See docs/simulation-model.md §3 "Elementwise".
  */
 export const ELEMENTWISE_FLOPS_PER_ELEM: Record<Exclude<ElementwiseOp['fn'], ShapeDependentFn>, number> = {
@@ -49,6 +50,8 @@ export const ELEMENTWISE_FLOPS_PER_ELEM: Record<Exclude<ElementwiseOp['fn'], Sha
   moe_combine: 2,
   ngram_gate: 8,
   kv_pool: 4,
+  kv_cache_write: 1,
+  candidate_score: 2,
 };
 
 /** Tokens processed per device step: `T = seqs·qLen`. Unit: tokens. */
@@ -237,6 +240,8 @@ export interface ElementwiseFields {
   stateReadBytes?: number;
   /** State bytes written; default 0. Unit: bytes. */
   stateWriteBytes?: number;
+  /** KV-cache bytes written by a write-only cache op (`fn: 'kv_cache_write'`); absent = none (field omitted). Unit: bytes. */
+  kvWriteBytes?: number;
 }
 
 /** True for the functions of {@link SHAPE_DEPENDENT_FNS}. */
@@ -256,7 +261,7 @@ export function elementwise(
     if (isShapeDependent(fn)) throw new Error(`${fn} needs an explicit flopsPerElem (set by its lowering)`);
     flopsPerElem = ELEMENTWISE_FLOPS_PER_ELEM[fn];
   }
-  return {
+  const op: ElementwiseOp = {
     kind: 'elementwise',
     name,
     fn,
@@ -269,6 +274,9 @@ export function elementwise(
     stateReadBytes: f.stateReadBytes ?? 0,
     stateWriteBytes: f.stateWriteBytes ?? 0,
   };
+  // Only a write-only cache op carries the field, so every other op stays exactly as before (identity).
+  if (f.kvWriteBytes !== undefined) op.kvWriteBytes = f.kvWriteBytes;
+  return op;
 }
 
 /**
@@ -305,9 +313,21 @@ export function hasPriorState(ctx: LoweringContext): boolean {
 }
 
 /**
+ * State snapshots a step's recurrent and conv-state ops write per sequence: `k + 1` in a speculative verify
+ * (`ctx.speculative.stateSnapshots`, decode only), so the state can be rolled back to the accepted prefix; 1
+ * otherwise (design doc §3.3). Multiplies the state WRITE bytes only. Count.
+ */
+export function stateSnapshots(ctx: LoweringContext): number {
+  // Formula: snapshots = decode with spec-dec ? k + 1 : 1
+  // See docs/simulation-model.md §13 ("Verify")
+  return ctx.phase === 'decode' ? (ctx.speculative?.stateSnapshots ?? 1) : 1;
+}
+
+/**
  * A depthwise causal conv over `tokens × channels` activations with `kernel` taps (dilated by `dilation`):
  * FLOP 2·K per element (+1 with a fused residual add), taps `channels·K·bpe(hp)`, and a rolling state of
- * `(K−1)·dilation` tokens per sequence, read when a prior state exists and written every step.
+ * `(K−1)·dilation` tokens per sequence, read when a prior state exists and written every step (once per
+ * {@link stateSnapshots} snapshot: `k + 1` times in a speculative verify).
  */
 export function causalConvOp(
   name: string,
@@ -320,7 +340,8 @@ export function causalConvOp(
   const act = actBpe(ctx);
   const stateBytes = ctx.seqs * channels * convStateTokens(conv) * act;
   // Formula: elems = T·C; flopsPerElem = 2·K (+1 residual); taps C·K·bpe(hp); state seqs·C·(K−1)·dil·bpe(act)
-  // See docs/simulation-model.md §5 "Short convs"
+  // Formula: state write = snapshots·state   (snapshots = k + 1 in a speculative verify, else 1)
+  // See docs/simulation-model.md §5 "Short convs", §13 ("Verify")
   return elementwise(
     name,
     'causal_conv1d',
@@ -331,7 +352,7 @@ export function causalConvOp(
       activationWriteBytes: elems * act,
       weightBytes: channels * conv.kernel * hpBpe(ctx),
       stateReadBytes: hasPriorState(ctx) ? stateBytes : 0,
-      stateWriteBytes: stateBytes,
+      stateWriteBytes: stateSnapshots(ctx) * stateBytes,
     },
     ctx,
   );

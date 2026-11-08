@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { getHfToken, setHfToken, clearHfToken } from '../../hf/token';
 import { countParams, activeParamsPerToken } from '../../sim/ir/params';
-import { formatParams, MODEL_SHORTLIST, type LoadedModel } from '../state';
+import { formatParams, lookupTableParams, MODEL_SHORTLIST, type LoadedModel } from '../state';
 import { Panel } from './Panel';
 import { Combobox } from './Combobox';
 import { HelpIcon } from './HelpIcon';
@@ -103,6 +103,11 @@ export function ModelPanel({
             {formatParams(activeParamsPerToken(loaded.model))} active, {loaded.model.layers.length}{' '}
             layers
           </p>
+          {lookupTableParams(loaded.model) > 0 && (
+            <p data-testid="ngram-params">
+              n-gram tables {formatParams(lookupTableParams(loaded.model))}
+            </p>
+          )}
           {loaded.hf?.excluded.parts.length ? (
             <p className="hint">Excluded: {loaded.hf.excluded.parts.join(', ')}</p>
           ) : null}

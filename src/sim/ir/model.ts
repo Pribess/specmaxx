@@ -36,6 +36,83 @@ export interface ModelSpec {
   residualStreams?: number;
   /** Where the dims came from (e.g. a Hugging Face model ID or paper URL). */
   source?: string;
+  /**
+   * The checkpoint's own speculative-decoding draft head(s) (MTP modules, or a DSpark drafter shipped inside the
+   * checkpoint). Costed only when the deployment turns speculative decoding on; it never enters `countParams`, the
+   * memory fit or the op lists otherwise. Absent = the checkpoint has none. Design doc §3.2.
+   */
+  draft?: DraftSpec;
+}
+
+/**
+ * A speculative-decoding drafter: the module that proposes `k` draft tokens per decode step, which the target then
+ * verifies in one `k + 1`-token pass (design doc §3). Dimensions are LOGICAL (unsharded) sizes.
+ */
+export type DraftSpec = MtpDraftSpec | BlockDraftSpec;
+
+/**
+ * Multi-token-prediction module(s) of the checkpoint (DeepSeek-V3 `num_nextn_predict_layers`, GLM, Qwen3.5+): each
+ * module is one target-shaped decoder layer fed `[norm(h_prev); norm(emb(next token))]`. Draft tokens come from
+ * running the module once over the newly committed tokens, then `k − 1` recursive one-token passes (design doc §3.3).
+ */
+export interface MtpDraftSpec {
+  kind: 'mtp';
+  /** The MTP module's decoder layer(s), one target-shaped layer per module, in execution order. */
+  layers: LayerSpec[];
+  /** True if the module projects `[norm(h_prev); norm(emb)]` (2h → h) before its layer (`eh_proj`). */
+  hiddenProj: boolean;
+  /**
+   * Draft positions the head was trained for; `k` beyond it collapses (warning, and a low tail acceptance when the
+   * preset acceptance is kept). Absent = any depth (Qwen3.5+/3.8 multi-step heads). Count.
+   */
+  maxReliableDepth?: number;
+}
+
+/**
+ * A block drafter (DFlash 2, DSpark): a small attention stack that drafts a whole block of `k` tokens in ONE pass,
+ * conditioned on target hidden states of `targetLayerIds`, sharing the target's embedding and LM head.
+ */
+export interface BlockDraftSpec {
+  kind: 'block_drafter';
+  /** Extras to cost: DFlash 2 (dynamic convs + candidate selector) or DSpark (Markov head). */
+  method: 'dflash2' | 'dspark';
+  /** Drafter width h (= the target's, since embedding and LM head are shared). Unit: elements. */
+  hidden: number;
+  /** Shared vocabulary V (selector codebooks and Markov matrices are V × rank). Count. */
+  vocab: number;
+  /** Softmax-attention layers (`num_hidden_layers`; released drafters: 5). Count. */
+  layers: number;
+  /** Query heads of the DRAFTER's attention (not the target's). Count. */
+  heads: number;
+  /** KV heads of the drafter's attention. Count. */
+  kvHeads: number;
+  /** Head dimension of the drafter's attention. Unit: elements. */
+  headDim: number;
+  /** MLP intermediate width of the drafter. Unit: elements. */
+  intermediate: number;
+  /** True for a GLU-style (gate and up) drafter MLP. */
+  gated: boolean;
+  /** Drafter MLP activation function. */
+  activation: 'silu' | 'gelu' | 'relu';
+  /**
+   * Sliding window of the drafter's attention over its context K/V (`sliding_window` when `layer_types` are
+   * sliding); absent = full attention. Unit: tokens.
+   */
+  windowTokens?: number;
+  /** Target layers whose hidden states are concatenated into `fc`'s input (`len · h → h`). Zero-based indices. */
+  targetLayerIds: number[];
+  /** Block positions per draft pass = k + 1 (anchor + k masks); the deployment's k must satisfy k + 1 ≤ blockSize. Count. */
+  blockSize: number;
+  /** DFlash 2 `GroupedDynamicCausalConv` (two per layer): taps K (tokens) and channels per group g (elements). */
+  conv?: { kernel: number; groupSize: number };
+  /** DFlash 2 `CandidateSelector`: candidates per position (count, 16) and codebook rank r (elements, 256). */
+  selector?: { topK: number; rank: number };
+  /** DSpark Markov head rank r (`W1: V×r`, `W2: r×V`). Unit: elements. */
+  markovRank?: number;
+  /** DeepSeek-V4-style MoE drafter layers (used instead of the dense fields above when present). */
+  moeLayers?: LayerSpec[];
+  /** Where the shape came from: a Hugging Face repo id (+ revision), or `'hypothetical'` for the labelled stand-in. */
+  source: string;
 }
 
 /** One decoder layer: blocks in execution order (norms and residual adds are explicit blocks). */
@@ -455,6 +532,12 @@ export interface NgramEmbeddingBlock {
   };
   /** Small vectors outside the table and projections (Qwen 3 norm γ of N·D; DeepSeek q/k weights 2·N·D). Unit: params. */
   vectorParams: number;
+  /**
+   * True if the checkpoint is designed to keep this table off-device (Qwen PLE, DeepSeek Engram; per the model
+   * cards). Drives the UI hint and the Host-RAM prefill of the lookup-table placement only; the simulator keeps the
+   * table on the device unless `deployment.offload.lookupTables` moves it (design doc §2.10).
+   */
+  offDeviceByDesign?: boolean;
 }
 
 /**

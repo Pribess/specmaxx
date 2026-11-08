@@ -14,8 +14,13 @@ import { blockShardingErrors } from '../../sim/engine/validate';
 import type { ModelSpec, ParallelConfig, QuantConfig } from '../../sim/ir/model';
 import type { TopologySpec } from '../../sim/hw/types';
 
-/** A field the UI can mark. `devices` is the device/node count; `general` is anything else. */
-export type IssueField = 'tp' | 'pp' | 'dp' | 'ep' | 'batch' | 'promptLen' | 'decodeContextLen' | 'devices' | 'bpw' | 'headBpw' | 'general';
+/**
+ * A field the UI can mark. `devices` is the device/node count; `offload` and `specDec` are the deployment sections
+ * (offloading, speculative decoding); `general` is anything else.
+ */
+export type IssueField =
+  | 'tp' | 'pp' | 'dp' | 'ep' | 'batch' | 'promptLen' | 'decodeContextLen' | 'devices' | 'bpw' | 'headBpw'
+  | 'offload' | 'specDec' | 'general';
 
 /** One problem with the inputs. Errors stop the simulation; warnings do not. */
 export interface FieldIssue {

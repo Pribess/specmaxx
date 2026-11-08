@@ -13,6 +13,10 @@ const RTX_BLACKWELL_WHITEPAPER_URL =
   'https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf';
 /** GeForce RTX 5090 product page. */
 const RTX_5090_PRODUCT_URL = 'https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5090/';
+/** TechPowerUp GPU Database, RTX 5090 ("Bus Interface PCIe 5.0 x16"). */
+const TPU_RTX_5090_URL = 'https://www.techpowerup.com/gpu-specs/geforce-rtx-5090.c4216';
+/** TechPowerUp GPU Database, RTX 4090 ("Bus Interface PCIe 4.0 x16"). */
+const TPU_RTX_4090_URL = 'https://www.techpowerup.com/gpu-specs/geforce-rtx-4090.c3889';
 /** PTX ISA, warp-level matrix (mma.sync) shapes. */
 const PTX_MMA_SHAPES_URL =
   'https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-instructions-mma';
@@ -132,8 +136,23 @@ export const RTX_5090: DeviceSpec = {
   },
   // 98,304 KB with KB = 1024 B (Table 3) = 100,663,296 B. Recorded only; not used by the v1 model.
   l2Bytes: 98304 * 1024,
+  // PCIe 5.0 x16 edge connector (Table 3 "PCI Express Interface Gen 5"; x16 per TechPowerUp).
+  hostInterface: { generation: 5, lanes: 16 },
   sources: [
     RTX_5090_WHITEPAPER,
+    {
+      url: RTX_BLACKWELL_WHITEPAPER_URL,
+      title: 'NVIDIA RTX Blackwell GPU Architecture (whitepaper), Appendix A, Table 3: GeForce RTX 5090 specs',
+      fields: ['hostInterface.generation'],
+      note: 'Table 3 (p. 48) row "PCI Express Interface": Gen 4 (RTX 3090), Gen 4 (RTX 4090), Gen 5 (RTX 5090).',
+    },
+    {
+      url: TPU_RTX_5090_URL,
+      title: 'TechPowerUp GPU Database: NVIDIA GeForce RTX 5090',
+      kind: 'review',
+      fields: ['hostInterface.lanes'],
+      note: '"Bus Interface PCIe 5.0 x16". The whitepaper names the generation only.',
+    },
     {
       url: RTX_BLACKWELL_WHITEPAPER_URL,
       title: 'NVIDIA RTX Blackwell GPU Architecture (whitepaper), GB202 block diagram note (p. 14)',
@@ -278,6 +297,8 @@ export const RTX_3090: DeviceSpec = {
     bandwidthBytesPerSec: gbPerSec(936),
   },
   l2Bytes: 6144 * 1024,
+  // PCIe 4.0 x16 host interface (GA102 whitepaper p. 9, "PCIe Gen 4").
+  hostInterface: { generation: 4, lanes: 16 },
   sources: [
     {
       url: AMPERE_WHITEPAPER_URL,
@@ -294,6 +315,14 @@ export const RTX_3090: DeviceSpec = {
         'Dense/sparse: FP16-acc 142/284, FP32-acc FP16/BF16 71/142, TF32 35.6/71, ' +
         'INT8 284/568, INT4 568/1136. 24576 MB GDDR6X (marketed 24 GB), ' +
         '384-bit 19.5 Gbps, 936 GB/s; L2 6144 binary KB.',
+    },
+    {
+      url: AMPERE_WHITEPAPER_URL,
+      title: 'NVIDIA Ampere GA102 whitepaper, "PCIe Gen 4" (p. 9)',
+      fields: ['hostInterface'],
+      note:
+        '"GA10x GPUs feature a PCI Express 4.0 host interface ... up to 16 Gigatransfers/second bit rate, with a x16 ' +
+        'PCIe 4.0 slot providing up to 64 GB/sec of peak bandwidth" (64 GB/s = both directions, raw).',
     },
     ...AMPERE_TILING_EVIDENCE.sources,
   ],
@@ -350,6 +379,8 @@ export const RTX_4090: DeviceSpec = {
     bandwidthBytesPerSec: gbPerSec(1008),
   },
   l2Bytes: 73728 * 1024,
+  // PCIe 4.0 x16 edge connector (Ada Table 2 "PCI Express Interface Gen 4"; x16 per TechPowerUp).
+  hostInterface: { generation: 4, lanes: 16 },
   sources: [
     {
       url: ADA_WHITEPAPER_URL,
@@ -367,6 +398,19 @@ export const RTX_4090: DeviceSpec = {
         'FP8 FP16-acc 660.6/1321.2, FP8 FP32-acc 330.3/660.6 (v2.02 corrected), ' +
         'INT8 660.6/1321.2, INT4 1321.2/2642.4. 24 GB GDDR6X, 384-bit 21 Gbps, 1008 GB/s; ' +
         'L2 73728 binary KB.',
+    },
+    {
+      url: ADA_WHITEPAPER_URL,
+      title: 'NVIDIA Ada Lovelace whitepaper, Appendix A Table 2 (pp. 29–31)',
+      fields: ['hostInterface.generation'],
+      note: 'Row "PCI Express Interface": Gen 3 (RTX 2080 Ti), Gen 4 (RTX 3090 Ti), Gen 4 (RTX 4090).',
+    },
+    {
+      url: TPU_RTX_4090_URL,
+      title: 'TechPowerUp GPU Database: NVIDIA GeForce RTX 4090',
+      kind: 'review',
+      fields: ['hostInterface.lanes'],
+      note: '"Bus Interface PCIe 4.0 x16". The whitepaper names the generation only.',
     },
     ...ADA_TILING_EVIDENCE.sources,
   ],

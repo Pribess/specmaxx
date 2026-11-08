@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { attendedPairs, attentionPairs, indexerPairs, kvTokensRead, opBytes, opFlops } from './metrics';
-import type { AttentionOp, GemmOp, IndexerOp, RecurrentOp } from './ops';
+import type { AttentionOp, ElementwiseOp, GemmOp, IndexerOp, RecurrentOp, TransferOp } from './ops';
 import { lowerBlock, type LoweringContext } from '../lower/lower';
 import { REF_DENSE_8B } from '../models/reference';
 import type { QuantConfig } from './model';
@@ -278,5 +278,118 @@ describe('T2e recurrent GatedDeltaNet (vH 8, qkH 4, dk = dv = 64, fp32 state)', 
     const b = opBytes(op);
     expect(b.stateReadBytes).toBe(0);
     expect(b.stateWriteBytes).toBe(131_072); // 1·8·4096·4
+  });
+});
+
+describe('deployment fields (design doc §7.1): defaults reproduce today, overrides scale only their term', () => {
+  const attention: AttentionOp = {
+    kind: 'attention',
+    name: 'attn.core',
+    seqs: 1,
+    heads: 32,
+    kvHeads: 8,
+    qkHeadDim: 128,
+    vHeadDim: 128,
+    qLen: 13,
+    kvLen: 2061,
+    causal: false,
+    kvSelection: { kind: 'window', windowTokens: 2048 },
+    kvRead: { format: { dtype: 'bf16' }, elemsPerToken: 2048 },
+    kvWrite: { format: { dtype: 'bf16' }, elemsPerToken: 2048 },
+    math: 'bf16',
+    accumulate: 'fp32',
+    activationDtype: 'bf16',
+  };
+  it('AttentionOp.kvWriteTokens absent = qLen; 5 keeps only the context rows (block drafter m_ctx 5)', () => {
+    expect(opBytes(attention).kvWriteBytes).toBe(53_248); // 13 tokens · 2·8·128 elems · 2 B
+    expect(opBytes({ ...attention, kvWriteTokens: 13 })).toEqual(opBytes(attention));
+    const kept = opBytes({ ...attention, kvWriteTokens: 5 });
+    expect(kept.kvWriteBytes).toBe(20_480); // 5 · 2048 · 2
+    expect(kept.kvReadBytes).toBe(opBytes(attention).kvReadBytes); // reads unchanged
+    expect(opFlops({ ...attention, kvWriteTokens: 5 })).toBe(opFlops(attention));
+  });
+  it('AttentionOp.kvWriteTokens also applies to the secondary (compressed) cache write', () => {
+    const withSecondary: AttentionOp = {
+      ...attention,
+      secondaryKv: {
+        tokensPerEntry: 4,
+        kvSelection: { kind: 'full' },
+        kvRead: { format: { dtype: 'bf16' }, elemsPerToken: 512 },
+        kvWrite: { format: { dtype: 'bf16' }, elemsPerToken: 128 },
+      },
+    };
+    // primary 5·2048·2 = 20,480 + secondary 5·128·2 = 1,280
+    expect(opBytes({ ...withSecondary, kvWriteTokens: 5 }).kvWriteBytes).toBe(21_760);
+    expect(opBytes(withSecondary).kvWriteBytes).toBe(53_248 + 3_328); // 13·128·2 = 3,328
+  });
+  it('RecurrentOp.stateSnapshots multiplies the state write only (k = 3 verify: 4 snapshots)', () => {
+    const op: RecurrentOp = {
+      kind: 'recurrent',
+      name: 'gdn',
+      variant: 'gated_delta_net',
+      seqs: 2,
+      qLen: 4,
+      heads: 8,
+      qkHeads: 4,
+      keyDim: 64,
+      valueDim: 64,
+      mode: 'step',
+      chunkLen: 1,
+      stateFlopsPerElemPerToken: 7,
+      gateElemsPerTokenPerHead: 2,
+      hasPriorState: true,
+      stateDtype: 'fp32',
+      activationDtype: 'bf16',
+      math: 'bf16',
+      accumulate: 'fp32',
+    };
+    expect(opBytes({ ...op, stateSnapshots: 1 })).toEqual(opBytes(op));
+    const b = opBytes({ ...op, stateSnapshots: 4 });
+    expect(b.stateReadBytes).toBe(262_144); // read once: 2·8·4096·4
+    expect(b.stateWriteBytes).toBe(1_048_576); // 4 · 262,144
+    expect(b.totalBytes - opBytes(op).totalBytes).toBe(3 * 262_144);
+  });
+  it('ElementwiseOp.kvWriteBytes maps to ByteBreakdown.kvWriteBytes (absent = 0)', () => {
+    // The U-15 kv_cache_write shape: elems 2048·2·8·128 = 4,194,304, bf16 act read and kv write 8,388,608 B.
+    const op: ElementwiseOp = {
+      kind: 'elementwise',
+      name: 'draft.kv_cache_write',
+      fn: 'residual_add',
+      elems: 4_194_304,
+      flopsPerElem: 1,
+      dtype: 'bf16',
+      activationReadBytes: 8_388_608,
+      activationWriteBytes: 0,
+      weightBytes: 0,
+      stateReadBytes: 0,
+      stateWriteBytes: 0,
+    };
+    expect(opBytes(op).kvWriteBytes).toBe(0);
+    expect(opBytes(op).totalBytes).toBe(8_388_608);
+    const b = opBytes({ ...op, kvWriteBytes: 8_388_608 });
+    expect(b.kvWriteBytes).toBe(8_388_608);
+    expect(b.totalBytes).toBe(16_777_216);
+    expect(opFlops(op)).toBe(4_194_304);
+  });
+  it('TransferOp has no FLOP and no device-memory bytes (costed by the tier/link model)', () => {
+    const op: TransferOp = {
+      kind: 'transfer',
+      name: 'moe.expert_fetch',
+      group: 'routed_experts',
+      source: 'host_ram',
+      reads: [{ count: 8, bytesEach: 2_654_208 }],
+      usefulBytes: 21_233_664,
+    };
+    expect(opFlops(op)).toBe(0);
+    expect(opBytes(op)).toEqual({
+      weightBytes: 0,
+      activationReadBytes: 0,
+      activationWriteBytes: 0,
+      kvReadBytes: 0,
+      kvWriteBytes: 0,
+      stateReadBytes: 0,
+      stateWriteBytes: 0,
+      totalBytes: 0,
+    });
   });
 });

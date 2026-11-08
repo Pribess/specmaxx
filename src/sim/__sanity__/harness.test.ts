@@ -105,4 +105,28 @@ describe('sanity harness smoke', () => {
     expect(resolveQuant('q4_k_m').lmHead).toEqual(bpwFormat((210 * 8) / 256));
     expect(() => resolveQuant('native')).toThrow();
   });
+
+  it('deployment: absent and {} give identical results; streamed layers make decode transfer-bound; a checkpoint drafter resolves', () => {
+    const base: SanityInput = { model: { kind: 'spec', spec: REF_DENSE_8B }, quant: 'q4_k_m', hardware: { deviceId: 'rtx-4090' }, workload: PP512_TG128 };
+    const off = simulateReport(base);
+    const empty = simulateReport({ ...base, deployment: {} });
+    expect(empty.decodePerSequenceTokensPerSec).toBe(off.decodePerSequenceTokensPerSec);
+    expect(empty.prefillPerSequenceTokensPerSec).toBe(off.prefillPerSequenceTokensPerSec);
+    // A dense model streamed whole from host RAM over the 4090's PCIe 4.0 x16: decode becomes transfer-bound.
+    const streamed = simulateReport({ ...base, deployment: { offload: { denseLayers: { tier: 'host_ram', layers: { from: 0, to: 36 } } } } });
+    expect(streamed.decodeBound.dominant).toBe('transfer');
+    expect(streamed.decodePerSequenceTokensPerSec).toBeLessThan(off.decodePerSequenceTokensPerSec);
+    // DeepSeek-V4.1-Flash ships its DSpark drafter in the checkpoint; REF_DENSE_8B has none.
+    const flash = simulateReport({
+      model: { kind: 'hf', files: sanityRepoFiles('deepseek-ai/DeepSeek-V4.1-Flash') },
+      quant: 'native',
+      hardware: { deviceId: 'b200' },
+      workload: PP512_TG128,
+      deployment: { speculative: { method: 'dspark', drafter: { kind: 'checkpoint' }, draftLength: 5, acceptance: { kind: 'iid', alpha: 0.7 } } },
+    });
+    expect(flash.sim.decode.speculative?.expectedTokensPerStep).toBeCloseTo((1 - 0.7 ** 6) / 0.3, 12);
+    expect(() =>
+      simulateReport({ ...base, deployment: { speculative: { method: 'dspark', drafter: { kind: 'checkpoint' }, draftLength: 5, acceptance: { kind: 'iid', alpha: 0.7 } } } }),
+    ).toThrow(/no in-checkpoint block drafter/);
+  });
 });

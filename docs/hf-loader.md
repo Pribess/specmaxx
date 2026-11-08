@@ -77,8 +77,10 @@ mHC hyper-connections, MTP estimates).
   twins, later revisions, fine-tunes) map too. Per-layer roles come from config lists (`layer_types`,
   `mlp_layer_types`, `indexer_types`, `compress_ratios`, `kv_source_layer_ids`, `kv_source_layers`,
   `no_rope_layers`, …), with the fallbacks transformers uses when a list is absent.
-- MTP / next-n / draft layers and vision or audio towers are excluded from the IR; their parameters are estimated
-  (`mtpParamsEstimate`, `visionParamsEstimate`, `excludedParts`) only for the param check.
+- Vision or audio towers are excluded from the IR. MTP / next-n / draft modules are kept as `model.draft`
+  (§7 "Drafters") but are not part of the model either: `countParams`, the memory fit and every op list ignore them
+  unless speculative decoding is on. For the param check both are estimated (`mtpParamsEstimate`,
+  `visionParamsEstimate`, `excludedParts`).
 - n-gram / Engram lookup tables are in the IR: they count toward total parameters and weight memory, not toward
   active parameters (a token reads only its own rows).
 - Sub-percent extras that the IR does not express (attention sinks, router biases, logit softcap, …) are listed in
@@ -182,7 +184,7 @@ way.
 | Relative-position bias, short convs | – | – | – | – | – | – | ✓ | – |
 | MoE experts / top-k / shared | 512 / 10 / 1 | dense | 384 / 6 / 1 | 288 / 8 / 1 | 256 / 8 / 1 | 128 / 4 / 1 | 256 / 6 / 2 | 128 / 4 / 1 |
 | Dense first layers | – | all | – | 3 | 3 | 1 | 2 | 3 |
-| MTP (excluded) | 1 | 1 | 3 (DSpark) | 1 | 1 | 3-layer draft in `params.json` | 8 | config only, no weights |
+| MTP / draft (`model.draft`, §7) | 1, multi-step | 1, multi-step | DSpark block drafter, 3 MoE layers | 1, single-step | 1, single-step | none (3-layer DSpark in `params.json`, deferred) | 8, single-step | none (config only, no weights) |
 | Vision / audio (excluded) | ✓ | ✓ | ✓ | ✓ | – | ✓ | vision + audio | ✓ |
 
 **DeepSeek-V4.1 prefill.** The reference `inference/model.py` runs all 40 layers on all N prompt tokens, and so does
@@ -195,3 +197,50 @@ active parameters, per-layer counts, layer roles, sibling checkpoints); `quant/*
 every fixture repo; `shortlist.e2e.test.ts` runs every shortlist fixture through `mapHfModel` and `simulate`
 (prefill and decode, 1 and 8 RTX 5090s) and checks the per-token KV growth against hand derivations (Qwen3.8-27B
 65,536 B, DeepSeek-V4.1-Flash 890 B as its README states, GLM-5.3 78 latents + 21 indexer keys).
+
+## 7. Drafters
+
+Speculative decoding (docs/simulation-model.md §13) needs a drafter. Two sources, both mapped to the IR's
+`DraftSpec` (`src/sim/ir/model.ts`) and never part of the target model's counts.
+
+**The checkpoint's own MTP module** (`src/sim/models/hf/drafter.ts: mtpDraft, withDraft`). A family that already
+builds the MTP decoder layer for its param estimate keeps it as `model.draft = { kind: 'mtp', layers, hiddenProj:
+true }`, one layer per module named `mtp.<j>` (modules run as a chain: pass p uses module min(p, L)).
+`maxReliableDepth` is set for single-step heads (DeepSeek-V3-style `num_nextn_predict_layers` modules, one draft
+position each) and absent for heads trained for several positions (Qwen3.5+/3.8 `mtp_num_hidden_layers`).
+
+| Family | Config field | Draft | Reliable depth |
+|---|---|---|---|
+| `qwen` | `mtp_num_hidden_layers` | MTP, the target's full-attention layer shape | any (multi-step) |
+| `glm_moe_dsa`, `glm5_next` | `num_nextn_predict_layers` | MTP | module count |
+| `inkling` | `mtp_config.num_nextn_predict_layers` (dense MLPs; `local_layer_ids` windowed) | MTP | module count |
+| `deepseek_v41` | `num_nextn_predict_layers` + `dspark_*` | DSpark block drafter (below), the `mtp.*` stages as `moeLayers` | — |
+| `mistral_large4` | `params.json` `mtp` | none: deferred (`params.json` lacks the drafter's head counts and dims; its head type is `rnn`) | — |
+| `minimax` | MTP config fields | none: the released checkpoint has no MTP tensors | — |
+
+**Block drafters** (DFlash 2, DSpark; `drafter.ts: parseDrafterConfig`; fetched by `src/hf/loadDrafter.ts`). A
+separate repo's `config.json` → `BlockDraftSpec`:
+
+| `BlockDraftSpec` | config.json | Note |
+|---|---|---|
+| `method` | `architectures[0]`: `DFlash2DraftModel` → `dflash2`, `Qwen3DSparkModel` → `dspark` | anything else is `invalid_config` |
+| `hidden`, `vocab`, `layers`, `heads`, `kvHeads`, `headDim`, `intermediate`, `activation` | `hidden_size`, `vocab_size`, `num_hidden_layers`, `num_attention_heads`, `num_key_value_heads`, `head_dim` (default hidden/heads), `intermediate_size`, `hidden_act` | gated MLP |
+| `windowTokens` | `sliding_window` when every `layer_types` entry is `sliding_attention` | mixed layer types are rejected |
+| `targetLayerIds` | `dflash_config.target_layer_ids`, else top-level, else DFlash's `build_target_layer_ids(L, n)` = `round(1 + i·(L − 4)/(n − 1))` (half-to-even) | zero-based target layers |
+| `blockSize` | DFlash: `block_size` (default 16); DSpark: `block_size + 1` | DFlash's block counts the anchor (k ≤ block_size − 1); DeepSpec's counts draft positions (k ≤ block_size). Qwen3-8B DSpark: blockSize 8, k 7 |
+| `conv`, `selector` | DFlash 2 `conv_kernel_size`, `conv_group_size`, `selector_top_k`, `selector_rank` | |
+| `markovRank` | DSpark `markov_rank` | |
+
+DeepSeek-V4.1-Flash's in-checkpoint DSpark (`deepseekV41.ts: dsparkDraft`) maps the same way from `dspark_block_size`
+(blockSize = it + 1: 6, default k 5), `dspark_target_layer_ids`, `dspark_markov_rank` and the CSA `sliding_window`,
+with the `mtp.*` stages as `moeLayers`. `KNOWN_DRAFTERS` lists the released target → drafter repos the UI offers
+(`Qwen/Qwen3.8-27B` → `incoai/Qwen3.8-27B-DFlash2`, `Qwen/Qwen3-8B` → `deepseek-ai/dspark_qwen3_8b_block7`);
+`hypotheticalDrafter` is the labelled stand-in for any other target (5 layers, 32 / 8 heads, hd 128, window 2048,
+the target's h, V and FFN width). Fixtures: `src/sim/models/hf/__fixtures__/`.
+
+**Layer indexing of the n-gram tables** (checked against the modelling code; design doc §2.10). Qwen
+`ple_layer_ids` is **one-based** (`configuration_qwen4_exp.py`: "One-indexed decoder layer ids";
+`modeling_qwen4_exp.py` `config.ple_layer_ids.index(layer_idx + 1)`): config `[2]` is layer index 1, the only layer
+with `layers.1.ple.*` tensors (`qwen.ts` tests `pleLayers.includes(i + 1)`). DeepSeek `engram_layer_ids` `[1, 14]` is
+**zero-based** (`inference/model.py`; SGLang `deepseek_v4.py`): tensors `layers.1.engram.*` and `layers.14.engram.*`
+(`deepseekV41.ts` uses the ids as indices).

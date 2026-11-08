@@ -217,7 +217,7 @@ export function indexerPairs(op: IndexerOp): number {
 
 /**
  * Dense-equivalent FLOP of one op on one device (2:4 sparsity does not halve it; the sparse peak is
- * quoted in dense-equivalent FLOP/s too). Collectives and embeddings: 0. Unit: FLOP.
+ * quoted in dense-equivalent FLOP/s too). Collectives, embeddings and off-device transfers: 0. Unit: FLOP.
  */
 export function opFlops(op: Op): number {
   switch (op.kind) {
@@ -237,6 +237,8 @@ export function opFlops(op: Op): number {
       return 0;
     case 'collective':
       return 0;
+    case 'transfer':
+      return 0;
     default: {
       const _never: never = op;
       throw new Error(`unknown op ${JSON.stringify(_never)}`);
@@ -246,7 +248,9 @@ export function opFlops(op: Op): number {
 
 /**
  * Per-device memory traffic of one op (see {@link ByteBreakdown}). Collectives return all zeros: their wire
- * bytes are `CollectiveOp.messageBytes`, costed by the alpha-beta model, not as memory traffic.
+ * bytes are `CollectiveOp.messageBytes`, costed by the alpha-beta model, not as memory traffic. Off-device
+ * transfers return all zeros too: their bytes are costed by the tier/link model (`TransferOp.reads`), and the DMA
+ * write into device memory is not counted (design doc §2.3).
  */
 export function opBytes(op: Op): ByteBreakdown {
   switch (op.kind) {
@@ -263,6 +267,8 @@ export function opBytes(op: Op): ByteBreakdown {
     case 'embedding':
       return embeddingBytes(op);
     case 'collective':
+      return NO_BYTES;
+    case 'transfer':
       return NO_BYTES;
     default: {
       const _never: never = op;
@@ -311,18 +317,24 @@ function attentionFlops(op: AttentionOp): number {
   return 2 * op.seqs * op.heads * pairs * (op.qkHeadDim + op.vHeadDim);
 }
 
-/** Memory traffic of the fused attention core: Q in, O out, K/V read for touched tokens, K/V appended. Unit: bytes. */
+/**
+ * Memory traffic of the fused attention core: Q in, O out, K/V read for touched tokens, K/V appended for
+ * `kvWriteTokens ?? qLen` new tokens. Unit: bytes.
+ */
 function attentionBytes(op: AttentionOp): ByteBreakdown {
   const act = bpeOf(op.activationDtype);
   const tokensRead = kvTokensRead(op.qLen, op.kvLen, op.kvSelection);
+  // Tokens whose K/V are appended: every query token unless the op keeps fewer (block drafter: m_ctx).
+  const writeTokens = op.kvWriteTokens ?? op.qLen;
   // Formula: readQ = seqs·qLen·heads·qk·bpe(act); writeO = seqs·qLen·heads·v·bpe(act)
-  // Formula: kvRead = seqs·kvTokensRead·kvRead.elemsPerToken·bpe(kvRead); kvWrite = seqs·qLen·kvWrite.elemsPerToken·bpe(kvWrite)
+  // Formula: kvRead = seqs·kvTokensRead·kvRead.elemsPerToken·bpe(kvRead); kvWrite = seqs·writeTokens·kvWrite.elemsPerToken·bpe(kvWrite)
+  // Formula: writeTokens = kvWriteTokens ?? qLen
   // See docs/simulation-model.md §3 "Attention"
   const qBytes = op.seqs * op.qLen * op.heads * op.qkHeadDim * act;
   const oBytes = op.seqs * op.qLen * op.heads * op.vHeadDim * act;
   const kvReadBytes = op.seqs * tokensRead * op.kvRead.elemsPerToken * bytesPerElement(op.kvRead.format);
-  const kvWriteBytes = op.seqs * op.qLen * op.kvWrite.elemsPerToken * bytesPerElement(op.kvWrite.format);
-  // Formula: secondary: kvRead += seqs·kvTokensRead(sel, r)·elemsPerEntry·bpe; kvWrite += seqs·qLen·elemsPerNewToken·bpe
+  const kvWriteBytes = op.seqs * writeTokens * op.kvWrite.elemsPerToken * bytesPerElement(op.kvWrite.format);
+  // Formula: secondary: kvRead += seqs·kvTokensRead(sel, r)·elemsPerEntry·bpe; kvWrite += seqs·writeTokens·elemsPerNewToken·bpe
   const sec = op.secondaryKv;
   const secReadBytes =
     sec === undefined
@@ -332,7 +344,7 @@ function attentionBytes(op: AttentionOp): ByteBreakdown {
         sec.kvRead.elemsPerToken *
         bytesPerElement(sec.kvRead.format);
   const secWriteBytes =
-    sec === undefined ? 0 : op.seqs * op.qLen * sec.kvWrite.elemsPerToken * bytesPerElement(sec.kvWrite.format);
+    sec === undefined ? 0 : op.seqs * writeTokens * sec.kvWrite.elemsPerToken * bytesPerElement(sec.kvWrite.format);
   return breakdown({
     weightBytes: 0,
     activationReadBytes: qBytes,
@@ -396,13 +408,17 @@ function recurrentFlops(op: RecurrentOp): number {
   return op.seqs * op.qLen * op.heads * (op.stateFlopsPerElemPerToken * stateElemsPerHead + intraChunkPerToken);
 }
 
-/** Memory traffic of a recurrent mixer step: q/k/v/gates in, o out, state read (if any) and written once. Unit: bytes. */
+/**
+ * Memory traffic of a recurrent mixer step: q/k/v/gates in, o out, state read (if any) once and written once per
+ * snapshot (`stateSnapshots ?? 1`; a speculative verify keeps one per position). Unit: bytes.
+ */
 function recurrentBytes(op: RecurrentOp): ByteBreakdown {
   const act = bpeOf(op.activationDtype);
   const stateBytes = op.seqs * op.heads * op.keyDim * op.valueDim * bpeOf(op.stateDtype);
   const tokens = op.seqs * op.qLen;
   // Formula: read = 2·T·qkHeads·dk·bpe(act) (q,k) + T·heads·dv·bpe(act) (v) + T·heads·g·bpe(act) (gates; g = 2, KDA dk+1)
-  // Formula: write = T·heads·dv·bpe(act); state read = hasPriorState ? seqs·heads·dk·dv·bpe(state) : 0; state write = seqs·heads·dk·dv·bpe(state)
+  // Formula: write = T·heads·dv·bpe(act); state read = hasPriorState ? seqs·heads·dk·dv·bpe(state) : 0
+  // Formula: state write = snapshots·seqs·heads·dk·dv·bpe(state),  snapshots = stateSnapshots ?? 1
   // See docs/simulation-model.md §3 "Recurrent"
   const qkBytes = 2 * tokens * op.qkHeads * op.keyDim * act;
   const vBytes = tokens * op.heads * op.valueDim * act;
@@ -415,23 +431,26 @@ function recurrentBytes(op: RecurrentOp): ByteBreakdown {
     kvReadBytes: 0,
     kvWriteBytes: 0,
     stateReadBytes: op.hasPriorState ? stateBytes : 0,
-    stateWriteBytes: stateBytes,
+    stateWriteBytes: (op.stateSnapshots ?? 1) * stateBytes,
   });
 }
 
 // ---------------------------------------------------------------------------------------------------------------
 // Elementwise, embedding
 
-/** Memory traffic of an elementwise op: the explicit byte fields lowering computed. Unit: bytes. */
+/**
+ * Memory traffic of an elementwise op: the explicit byte fields lowering computed (a write-only cache op adds its
+ * `kvWriteBytes`, default 0). Unit: bytes.
+ */
 function elementwiseBytes(op: ElementwiseOp): ByteBreakdown {
-  // Formula: bytes = actRead + actWrite + weight + stateRead + stateWrite   (fields of the op)
+  // Formula: bytes = actRead + actWrite + weight + stateRead + stateWrite + kvWrite   (fields of the op; kvWrite default 0)
   // See docs/simulation-model.md §3 "Elementwise"
   return breakdown({
     weightBytes: op.weightBytes,
     activationReadBytes: op.activationReadBytes,
     activationWriteBytes: op.activationWriteBytes,
     kvReadBytes: 0,
-    kvWriteBytes: 0,
+    kvWriteBytes: op.kvWriteBytes ?? 0,
     stateReadBytes: op.stateReadBytes,
     stateWriteBytes: op.stateWriteBytes,
   });

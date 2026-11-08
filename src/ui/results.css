@@ -77,12 +77,12 @@ svg [data-chart-point].is-active {
   font-size: 12px;
   color: var(--muted);
 }
-.answer p {
+.answer .answer-line {
   flex-wrap: wrap;
   column-gap: 10px;
   row-gap: 0;
 }
-.answer p > span {
+.answer .answer-line > span {
   font-size: 16px;
 }
 .toggles {
@@ -178,4 +178,110 @@ svg [data-chart-point].is-active {
   .roofline svg text {
     font-size: 19px;
   }
+}
+
+/* Bounds beyond the three regimes: comm splits into latency (hatched link colour) and bandwidth (solid link
+   colour); off-device transfers take a darkened link colour, since they cross a link too. */
+.transfer-text {
+  color: color-mix(in srgb, var(--link) 55%, var(--graphite));
+  fill: color-mix(in srgb, var(--link) 55%, var(--graphite));
+}
+.comm-latency-text,
+.comm-bandwidth-text {
+  color: var(--link);
+  fill: var(--link);
+}
+.bound-bar .comm-latency,
+.bound-legend .comm-latency-text span {
+  background: repeating-linear-gradient(135deg, var(--link) 0 2px, transparent 2px 4px);
+}
+.bound-bar .comm-bandwidth {
+  background: var(--link);
+}
+.bound-bar .transfer {
+  background: color-mix(in srgb, var(--link) 55%, var(--graphite));
+}
+.bound-legend {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.bound-cell > span {
+  width: auto;
+  min-width: 64px;
+  white-space: nowrap;
+}
+.breakdown-section th,
+.breakdown-section td {
+  font-weight: 650;
+  padding-top: 14px;
+}
+
+/* Memory: the n-gram table is a weight, hatched against the solid weights; the deployment extras stay neutral. */
+.allocation-table {
+  background: repeating-linear-gradient(45deg, var(--graphite) 0 1.5px, var(--silicon) 1.5px 5px);
+}
+.allocation-staging {
+  background: color-mix(in srgb, var(--graphite) 45%, var(--silicon));
+}
+.allocation-draft {
+  background: color-mix(in srgb, var(--graphite) 70%, var(--silicon));
+}
+.allocation-snapshots {
+  background:
+    linear-gradient(90deg, var(--graphite) 1px, transparent 1px) 0 0 / 4px 100%,
+    var(--silicon);
+}
+.allocation-offloaded {
+  background: color-mix(in srgb, var(--graphite) 60%, var(--silicon));
+}
+.memory-tier {
+  margin-top: 16px;
+}
+.memory-tier > div:first-child {
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+.memory-legend button.quiet {
+  margin-left: 8px;
+}
+.memory-unified-host {
+  font-size: 14px;
+}
+
+/* Result annotations: spec-dec speedup next to the decode rate, offload chips under the rates. */
+.answer .answer-line > span.spec-dec {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--muted);
+}
+.result-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  list-style: none;
+  padding: 0;
+  margin: 18px 0 0;
+}
+.result-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--control-radius);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+/* A chip and, on the last one, the "?": kept on one line together. */
+.result-chip-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+/* The legend's one-click action (place the n-gram table off the device): legend-sized, not a full button. */
+.memory-legend button.legend-action {
+  padding: 1px 8px;
+  font-size: 13px;
+  line-height: 1.6;
 }

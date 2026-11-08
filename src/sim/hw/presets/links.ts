@@ -28,11 +28,25 @@ const MLX_MULTI_CABLE_PR_URL = 'https://github.com/ml-explore/mlx/pull/3900';
  */
 export const LEGACY_LINK_IDS: Record<string, string> = {};
 
+/** Per-lane signalling rate by PCIe generation (PCI-SIG: Gen3 8, Gen4 16, Gen5 32 GT/s). Unit: GT/s. */
+const PCIE_GT_PER_LANE: Record<3 | 4 | 5, number> = { 3: 8, 4: 16, 5: 32 };
+
+/**
+ * PCIe line-rate ceiling per direction after 128b/130b encoding (Gen3, Gen4 and Gen5 all use it), before TLP/DLLP
+ * packet overhead. Unit: B/s per direction.
+ *
+ * Formula: B = GT/s per lane × 1e9 × lanes × 128/130 / 8 bits per byte.
+ * E.g. Gen5 x16 = 32e9 × 16 × 128/130 / 8 = 63.015e9 B/s; Gen4 x16 = 31.508e9; Gen3 x16 = 15.754e9.
+ */
+export function pcieBandwidthPerDirectionBytesPerSec(generation: 3 | 4 | 5, lanes: 4 | 8 | 16): number {
+  const transfersPerSec = PCIE_GT_PER_LANE[generation] * 1e9;
+  return transfersPerSec * lanes * (128 / 130) / 8;
+}
+
 /** PCIe line-rate ceiling after 128b/130b encoding, before packet overhead. Gen4/5 rate is GT/s per lane. */
 function pcieLink(generation: 4 | 5, lanes: 8 | 16, direct: boolean): LinkSpec {
-  const transfersPerSec = (generation === 5 ? 32 : 16) * 1e9;
   // B = transfers/s × lanes × coding efficiency / bits per byte.
-  const bandwidthPerDirectionBytesPerSec = transfersPerSec * lanes * (128 / 130) / 8;
+  const bandwidthPerDirectionBytesPerSec = pcieBandwidthPerDirectionBytesPerSec(generation, lanes);
   const sources: SourceRef[] = [
     {
       url: PCIE_SIG_URL,
@@ -110,6 +124,58 @@ export const PCIE_5_X8_DIRECT: LinkSpec = {
     }
   ],
 };
+
+/** nvbandwidth issue: achieved host↔device copy-engine rates (not presets; the `linkBandwidth` modifier can derate). */
+const NVBANDWIDTH_ACHIEVED_URL = 'https://github.com/NVIDIA/nvbandwidth/issues/53';
+
+/**
+ * A device's PCIe link to host memory (`HostSpec.link`): the path offloaded weights take from host RAM (or from an
+ * NVMe SSD staged through host RAM) into device memory. Per device, per direction; `p2p: 'direct'` because the
+ * device DMAs to and from host memory itself (no staging hop of its own). Used by the engine when
+ * `HardwareStack.host.link` is absent and the device has a cited `DeviceSpec.hostInterface`.
+ *
+ * Bandwidth: {@link pcieBandwidthPerDirectionBytesPerSec} (theoretical line rate; Gen5 x16 = 63.015e9 B/s, the same
+ * number as `PCIE_5_X16`). Latency α = 1 µs, estimated (the same DMA proxy as the device-to-device PCIe links).
+ * See docs/simulation-model.md §4 ("Host and storage tiers").
+ */
+export function hostPcieLink(generation: 3 | 4 | 5, lanes: 4 | 8 | 16): LinkSpec {
+  const bandwidthPerDirectionBytesPerSec = pcieBandwidthPerDirectionBytesPerSec(generation, lanes);
+  return {
+    kind: 'pcie',
+    name: `PCIe ${generation}.0 x${lanes} (host link)`,
+    bandwidthPerDirectionBytesPerSec,
+    latencySec: 1e-6,
+    p2p: 'direct',
+    sources: [
+      {
+        url: PCIE_SIG_URL,
+        title: 'PCI-SIG PCI Express 5.0 FAQ',
+        fields: [BANDWIDTH_FIELD],
+        note:
+          'Gen5 32 GT/s per lane (x32 raw 128 GB/s each direction); Gen4 16 GT/s and Gen3 8 GT/s are each half the next ' +
+          'generation, all three with 128b/130b encoding. Derived ceiling = GT/s × lanes × 128/130 ÷ 8, excluding ' +
+          `TLP/DLLP overhead. Achieved host copies are lower (nvbandwidth memcpy_ce ≈ 24.8 GB/s H2D on Gen4 x16, ${NVBANDWIDTH_ACHIEVED_URL}); ` +
+          'they are not hardware ceilings and are not fitted here.',
+      },
+    ],
+    estimated: [
+      {
+        field: 'latencySec',
+        reason:
+          'Rounded 1 µs PCIe DMA proxy from 0.5 µs Gen5 P2P writes (the device-to-device PCIe links use the same value); ' +
+          'extrapolated to every generation and width. Not a measured host-memory read latency.',
+      },
+    ],
+  };
+}
+
+/**
+ * Every host link {@link hostPcieLink} builds, for a "Host link" picker: Gen3 / Gen4 / Gen5 × x4 / x8 / x16, newest
+ * and widest first.
+ */
+export const HOST_PCIE_LINKS: LinkSpec[] = ([5, 4, 3] as const).flatMap((g) =>
+  ([16, 8, 4] as const).map((lanes) => hostPcieLink(g, lanes)),
+);
 
 /** RTX 3090 two-card NVLink bridge: 112.5 GB/s bidirectional = 56.25 GB/s per direction. */
 export const RTX_3090_NVLINK: LinkSpec = {

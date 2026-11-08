@@ -280,11 +280,13 @@ export const ARC_PRO_B70: DeviceSpec = {
   },
   // 24 MiB (PCGH "Level-2-Cache (MiB) 24", confirmed by Intel per PCGH). Recorded only; not used by the v1 model.
   l2Bytes: 24 * 1024 * 1024,
+  // ark "PCI Express 5.0 x16"; datasheet "PCIe Support Gen 5 x16 Native".
+  hostInterface: { generation: 5, lanes: 16 },
   sources: [
     {
       url: B70_ARK_URL,
       title: 'Intel ark: Intel Arc Pro B70 Graphics specifications',
-      fields: ['engines.0.computeUnits', `engines.0.matmulPeaks.${PEAK_INDEX.int8}`, 'engines.0.vectorFlopsPerSec.fp32', 'memory'],
+      fields: ['engines.0.computeUnits', `engines.0.matmulPeaks.${PEAK_INDEX.int8}`, 'engines.0.vectorFlopsPerSec.fp32', 'memory', 'hostInterface'],
       note:
         'Xe-cores 32; XMX Engines 256; Graphics Max Dynamic Clock 2800 MHz (Graphics Clock 2280 MHz); ' +
         'GPU Peak TOPS (Int8) 367; GPU TFLOPS (FP32) 22.94; 32 GB GDDR6, 256 bit, 608 GB/s, ECC; PCI Express 5.0 x16.',
@@ -334,11 +336,13 @@ export const ARC_PRO_B65: DeviceSpec = {
   },
   // 18 MiB (PCGH B65 column). Recorded only.
   l2Bytes: 18 * 1024 * 1024,
+  // ark "PCI Express 5.0 x16".
+  hostInterface: { generation: 5, lanes: 16 },
   sources: [
     {
       url: B65_ARK_URL,
       title: 'Intel ark: Intel Arc Pro B65 Graphics specifications',
-      fields: ['engines.0.computeUnits', `engines.0.matmulPeaks.${PEAK_INDEX.int8}`, 'engines.0.vectorFlopsPerSec.fp32', 'memory'],
+      fields: ['engines.0.computeUnits', `engines.0.matmulPeaks.${PEAK_INDEX.int8}`, 'engines.0.vectorFlopsPerSec.fp32', 'memory', 'hostInterface'],
       note: 'Xe-cores 20; XMX Engines 160; 2400 MHz; GPU Peak TOPS (Int8) 197; FP32 12.28 TFLOPS; 32 GB GDDR6, 256 bit, 608 GB/s; PCI Express 5.0 x16; TBP 200 W.',
     },
     pcghSource(['l2Bytes'], 'B65 column: BMG-G31 WKSTN (cut down), 2560 FP32 ALUs, 160 matrix units; Level-2-Cache (MiB) 18; boost 2400 MHz.'),
@@ -377,11 +381,13 @@ export const ARC_PRO_B60: DeviceSpec = {
   },
   // 18 MiB (PCGH B60 column; same G21 die as the B580, for which Intel's guide lists 18 MB). Recorded only.
   l2Bytes: 18 * 1024 * 1024,
+  // x16 connector, x8 ELECTRICAL: datasheet "Gen 5.0 x16 (x8 Electrical)", ark "PCI Express 5.0 x8".
+  hostInterface: { generation: 5, lanes: 8 },
   sources: [
     {
       url: B60_DATASHEET_URL,
       title: 'Intel Arc Pro B60 datasheet (2026-03)',
-      fields: ['engines.0.computeUnits', `engines.0.matmulPeaks.${PEAK_INDEX.int8}`, 'engines.0.vectorFlopsPerSec.fp32', 'memory'],
+      fields: ['engines.0.computeUnits', `engines.0.matmulPeaks.${PEAK_INDEX.int8}`, 'engines.0.vectorFlopsPerSec.fp32', 'memory', 'hostInterface'],
       note:
         '20 Xe2-HPG cores, 160 XMX engines; "197 AI TOPS Int 8 Dense" (footnote: "INT8 datatype and dense models"); ' +
         '"Up to 12.28 TFLOPS (Single Precision)" (footnote: "As defined by maximum clock frequency"); 24GB GDDR6; ' +
@@ -390,7 +396,7 @@ export const ARC_PRO_B60: DeviceSpec = {
     {
       url: B60_ARK_URL,
       title: 'Intel ark: Intel Arc Pro B60 Graphics specifications',
-      fields: ['engines.0.computeUnits', 'memory'],
+      fields: ['engines.0.computeUnits', 'memory', 'hostInterface'],
       note: 'Xe-cores 20; Graphics Clock 2400 MHz (LP 2000 MHz); 24 GB GDDR6, 192 bit, 19 Gbps, 456 GB/s; PCI Express 5.0 x8.',
     },
     pcghSource(['l2Bytes'], 'B60 column: BMG-G21 WKSTN, 272 mm²; Level-2-Cache (MiB) 18; boost 2400 MHz; FP32 12.3 TFLOPS.'),
@@ -436,11 +442,13 @@ export const ARC_B580: DeviceSpec = {
   // Intel: "L3 cache size 18 MB" (Intel's name for the GPU-wide last-level cache, which is the L2). Taken as
   // binary MB (18 MiB), matching PCGH's 18 MiB for the same G21 die. Recorded only.
   l2Bytes: 18 * 1024 * 1024,
+  // ark "PCI Express 4.0 x8".
+  hostInterface: { generation: 4, lanes: 8 },
   sources: [
     {
       url: B580_ARK_URL,
       title: 'Intel ark: Intel Arc B580 Graphics specifications',
-      fields: ['engines.0.computeUnits', `engines.0.matmulPeaks.${PEAK_INDEX.int8}`, 'memory'],
+      fields: ['engines.0.computeUnits', `engines.0.matmulPeaks.${PEAK_INDEX.int8}`, 'memory', 'hostInterface'],
       note: 'Xe-cores 20; XMX 160; Graphics Clock 2670 MHz; GPU Peak TOPS (Int8) 233; 12 GB GDDR6, 192 bit, 19 Gbps, 456 GB/s; PCI Express 4.0 x8; TBP 190 W.',
     },
     {

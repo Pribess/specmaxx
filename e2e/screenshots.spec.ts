@@ -20,6 +20,91 @@ async function open(page: Page, size: 'desktop' | 'phone', colorScheme: 'light' 
 
 for (const size of ['desktop', 'phone'] as const) {
   for (const colorScheme of ['light', 'dark'] as const) {
+    test(`deployment knobs ${size} ${colorScheme}`, async ({ page }) => {
+      await open(page, size, colorScheme);
+      const name = (s: string) => `${DIR}/deployment-${s}-${size}-${colorScheme}.png`;
+      const panel = (title: string) =>
+        page.locator('details.panel', { has: page.locator('> summary', { hasText: title }) });
+      /** Loads a query, opens the given panels (collapsed on phones), and waits for numbers. */
+      const load = async (query: string, panels: string[] = []) => {
+        await page.goto(`/${query}`);
+        await expect(page.getByTestId('decode-tps')).toHaveText(/[1-9]/);
+        for (const title of panels) {
+          const p = panel(title);
+          if ((await p.getAttribute('open')) === null) await p.locator('> summary').click();
+        }
+        // The sticky duplicate rates would overlay the element crops.
+        await page.addStyleTag({ content: '.compact-results { visibility: hidden !important }' });
+        await page.evaluate(() => document.fonts.ready);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+          true,
+        );
+      };
+      /**
+       * Screenshots an element of the input band, which scrolls on its own on desktop: the viewport grows to fit the
+       * element, the element is scrolled into view, and the page is clipped to its box.
+       */
+      const shoot = async (locator: ReturnType<typeof page.locator>, path: string) => {
+        const before = page.viewportSize()!;
+        const height = (await locator.boundingBox())!.height;
+        await page.setViewportSize({
+          width: before.width,
+          height: Math.max(before.height, Math.ceil(height) + 120),
+        });
+        await locator.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+        await page.waitForTimeout(50);
+        const box = (await locator.boundingBox())!;
+        await page.screenshot({
+          path,
+          clip: { x: box.x - 4, y: box.y - 4, width: box.width + 8, height: box.height + 8 },
+        });
+        await page.setViewportSize(before);
+      };
+
+      // Speculative decoding: MTP k = 3 on the default model (an MTP head with any depth), FP8 weights on
+      // 2 × RTX 5090 with TP 2, so the model fits.
+      await load('?w=fp8_e4m3&n=2&tp=2&sd=mtp&sdk=3', ['Workload']);
+      await expect(page.getByTestId('memory-verdict').first()).toHaveClass(/memory-fits/);
+      await expect(page.getByTestId('spec-dec')).toBeVisible();
+      await shoot(panel('Workload'), name('specdec-panel'));
+      await page.evaluate(() => scrollTo(0, 0));
+      await page.getByRole('button', { name: 'About Speculative decoding speedup' }).focus();
+      await expect(page.getByRole('tooltip').filter({ hasText: 'E[τ]' })).toBeVisible();
+      await page.screenshot({ path: name('specdec-rate-help') });
+      await page.keyboard.press('Escape');
+      const breakdown = page.locator('section.breakdown');
+      await breakdown.getByRole('button', { name: 'Layer', exact: true }).click();
+      await expect(breakdown.getByTestId('breakdown-section').first()).toBeVisible();
+      await breakdown.screenshot({ path: name('breakdown-draft-verify') });
+
+      // The hypothetical drafter (no released DSpark drafter for this model).
+      await load('?w=fp8_e4m3&n=2&tp=2&sd=dspark', ['Workload']);
+      await expect(page.getByTestId('hypothetical-badge')).toBeVisible();
+      await shoot(page.getByTestId('specdec-section'), name('specdec-hypothetical'));
+
+      // Offload on dedicated memory: 2 × RTX 5090 (TP 2, so collectives exist), FP8 weights, 5% of the experts
+      // resident and the rest in 12-channel DDR5 host RAM, the PLE table in host RAM.
+      const offload =
+        '?m=Qwen/Qwen3.8-Flash-Next&w=fp8_e4m3&n=2&hr=ddr5-6000-12ch&tp=2&ox=ram&oxf=0.05&oxh=fine&olt=ram';
+      await load(offload, ['Hardware']);
+      const section = page.getByTestId('offload-section');
+      await section.locator('details.advanced > summary').click();
+      await shoot(section, name('offload-panel'));
+      await page.evaluate(() => scrollTo(0, 0));
+      await expect(page.getByTestId('memory-tier').first()).toBeVisible();
+      await page.locator('section.hero').screenshot({ path: name('offload-hero') });
+      await breakdown.getByRole('button', { name: 'Kind', exact: true }).click();
+      await breakdown.screenshot({ path: name('breakdown-comm-transfer') });
+
+      // Unified memory: DGX Spark, experts on its SSD ("Storage").
+      await load('?d=dgx-spark&m=Qwen/Qwen3.8-Flash-Next&ox=ssd', ['Hardware']);
+      const storage = page.getByTestId('offload-section');
+      await expect(storage.locator('legend')).toHaveText('Storage');
+      await storage.locator('details.advanced > summary').click();
+      await shoot(storage, name('storage-panel'));
+      await page.evaluate(() => scrollTo(0, 0));
+      await page.locator('section.hero').screenshot({ path: name('storage-hero') });
+    });
     test(`hardware setups ${size} ${colorScheme}`, async ({ page }) => {
       await open(page, size, colorScheme);
       const name = (s: string) => `${DIR}/hardware-${s}-${size}-${colorScheme}.png`;
@@ -143,7 +228,8 @@ for (const size of ['desktop', 'phone'] as const) {
       await page.keyboard.press('Escape');
 
       // The opened Weights picker with the EXL3 group.
-      if (size === 'phone') await page.locator('details.panel > summary', { hasText: 'Quantization' }).click();
+      if (size === 'phone')
+        await page.locator('details.panel > summary', { hasText: 'Quantization' }).click();
       await page.getByRole('combobox', { name: 'Weights' }).click();
       await page.getByRole('option', { name: 'EXL3 custom…' }).scrollIntoViewIfNeeded();
       await expect(page.getByRole('option', { name: 'EXL3 custom…' })).toBeVisible();

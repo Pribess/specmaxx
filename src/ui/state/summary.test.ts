@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import type { OpResult, SimInput } from '../../sim/engine/types';
+import type { BlockDraftSpec } from '../../sim/ir/model';
 import { simulate } from '../../sim/engine/simulate';
 import { mapHfModel } from '../../sim/models/hf/index';
 import { fixtureRepoFiles } from '../../sim/models/__fixtures__/fixtures.testutil';
@@ -47,7 +49,7 @@ function expectConsistent(b: Breakdown): void {
     const secSum = rows.reduce((s, r) => s + r.sec, 0);
     expect(secSum / b.totalSec).toBeCloseTo(1, 12);
     for (const r of rows) {
-      const bound = r.boundSec.compute + r.boundSec.memory + r.boundSec.comm;
+      const bound = Object.values(r.boundSec).reduce((a, b) => a + b, 0);
       expect(Math.abs(bound - r.sec)).toBeLessThanOrEqual(1e-12 * Math.max(1, r.sec));
     }
   }
@@ -131,7 +133,9 @@ describe('summarize', () => {
     expect(s.decode.tokensPerSec).toBe(result.decode.tokensPerSec);
     expect(s.devicesUsed).toBe(2);
     expect(
-      s.breakdown.decode.byKind.some((r) => r.key === 'collective' && r.boundSec.comm > 0),
+      s.breakdown.decode.byKind.some(
+        (r) => r.key === 'collective' && r.boundSec.commLatency > 0 && r.boundSec.commBandwidth > 0,
+      ),
     ).toBe(true);
     expect(s.breakdown.decode.byOp[0].sec).toBeGreaterThanOrEqual(s.breakdown.decode.byOp[1].sec);
     expect(s.breakdown.decode.byLayer[0].key).toBe('embed');
@@ -146,7 +150,159 @@ describe('summarize', () => {
     expect(s.roofline.prefill.attainedFlopsPerSec).toBeLessThanOrEqual(s.roofline.peakFlopsPerSec);
     expect(s.warnings).toContain('loader note');
   });
+
+  it("today's result: comm split, no transfer, no sections, no annotations", () => {
+    const built = buildSimInput(multiDeviceState(), qwen());
+    if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));
+    const result = simulate(built.input);
+    const s = summarize(result, built.input);
+    const collective = s.breakdown.decode.byKind.find((r) => r.key === 'collective')!;
+    // Every collective op: sec = commLatencySec + commBandwidthSec, so the split sums to the row.
+    const ops = result.decode.stages.flatMap((st) => st.layers.flatMap((l) => l.ops));
+    const coll = ops.filter((o) => o.op.kind === 'collective');
+    expect(collective.boundSec.commLatency).toBeCloseTo(
+      coll.reduce((a, o) => a + o.commLatencySec, 0),
+      15,
+    );
+    expect(collective.boundSec.commBandwidth).toBeCloseTo(
+      coll.reduce((a, o) => a + o.commBandwidthSec, 0),
+      15,
+    );
+    expect(s.breakdown.decode.byKind.every((r) => r.boundSec.transfer === 0)).toBe(true);
+    expect(s.breakdown.decode.sections).toBeUndefined();
+    expect(s.breakdown.decode.byLayer.every((r) => r.section === undefined)).toBe(true);
+    expect(s.decode.comm).toEqual(result.decode.comm);
+    expect(s.decode.transfer).toBeUndefined();
+    expect(s.decode.speculative).toBeUndefined();
+    expect(s.memory.tiers).toEqual([]);
+    expect(s.offload).toEqual([]);
+    expect(s.speculative).toBeUndefined();
+  });
+
+  it('a hand-built offload result: transfer rows, tiers, chips, roofline without transfer ops', () => {
+    const built = buildSimInput(DEFAULT_STATE, BUNDLED_DEFAULT_MODEL);
+    if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));
+    const base = simulate(built.input);
+    const before = summarize(base, built.input);
+    // One expert fetch of 2 ms (0.5 ms latency + 1.5 ms service) in front of layer 0's ops, per decode step.
+    const result = structuredClone(base);
+    result.decode.stages[0].layers[1].ops.unshift(transferOp(0.5e-3, 1.5e-3));
+    result.decode.transfer = { sec: 2e-3, exposedSec: 1e-3, bytes: 300e6, requests: 40 };
+    result.memory.tiers = [{ tier: 'host_ram', bytes: 16.3e9, capacityBytes: 96e9, fits: true }];
+    const input: SimInput = {
+      ...built.input,
+      deployment: {
+        offload: {
+          routedExperts: {
+            tier: 'host_ram',
+            residentFraction: 0.25,
+            hitRatio: { kind: 'custom', h: 0.5 },
+          },
+          lookupTables: { tier: 'nvme' },
+        },
+      },
+    };
+    const s = summarize(result, input);
+    const transferRow = s.breakdown.decode.byKind.find((r) => r.key === 'transfer')!;
+    expect(transferRow.sec).toBeCloseTo(2e-3, 15);
+    expect(transferRow.boundSec.transfer).toBeCloseTo(2e-3, 15);
+    expect(s.breakdown.decode.byOp.find((r) => r.key === 'moe.expert_fetch')?.count).toBe(1);
+    expectConsistent(s.breakdown.decode);
+    // Formula: total' = total + 2 ms
+    expect(s.breakdown.decode.totalSec).toBeCloseTo(before.breakdown.decode.totalSec + 2e-3, 12);
+    expect(s.decode.transfer).toEqual(result.decode.transfer);
+    expect(s.memory.tiers).toEqual(result.memory.tiers);
+    expect(s.offload).toEqual([
+      { group: 'routed_experts', tier: 'host_ram', hitRatio: 0.5 },
+      { group: 'lookup_tables', tier: 'nvme' },
+    ]);
+    // The transfer op has no FLOP and no HBM bytes; it only adds time: same intensity, lower attained rate.
+    expect(s.roofline.decode.intensityFlopPerByte).toBe(
+      before.roofline.decode.intensityFlopPerByte,
+    );
+    expect(s.roofline.decode.attainedFlopsPerSec).toBeCloseTo(
+      before.roofline.decode.flops / (before.breakdown.decode.totalSec + 2e-3),
+      0,
+    );
+  });
+
+  it('a hand-built spec-dec decode: draft and verify sections, speedup, drafter badge', () => {
+    const built = buildSimInput(DEFAULT_STATE, BUNDLED_DEFAULT_MODEL);
+    if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));
+    const result = structuredClone(simulate(built.input));
+    const stage = result.decode.stages[0];
+    // A one-layer drafter: a copy of layer 0 named draft.layer.0, after the head.
+    stage.layers.push({
+      ...structuredClone(stage.layers[1]),
+      name: 'draft.layer.0',
+      layerIndex: null,
+    });
+    result.decode.speculative = {
+      draftSec: stage.layers.at(-1)!.sec,
+      verifySec: 10e-3,
+      expectedTokensPerStep: 2.31,
+      speedup: 1.67,
+    };
+    const input: SimInput = {
+      ...built.input,
+      deployment: {
+        speculative: {
+          method: 'dflash2',
+          draftLength: 3,
+          acceptance: { kind: 'iid', alpha: 0.6 },
+          drafter: { kind: 'hypothetical', spec: {} as BlockDraftSpec },
+        },
+      },
+    };
+    const s = summarize(result, input);
+    const b = s.breakdown.decode;
+    expectConsistent(b);
+    expect(b.sections?.map((r) => r.key)).toEqual(['verify', 'draft']);
+    const [verify, draft] = b.sections!;
+    expect(draft.sec).toBeCloseTo(stage.layers.at(-1)!.sec, 15);
+    expect(verify.sec + draft.sec).toBeCloseTo(b.totalSec, 15);
+    expect(b.byLayer.at(-1)).toMatchObject({ key: 'draft.layer.0', section: 'draft' });
+    expect(b.byLayer[0]).toMatchObject({ key: 'embed', section: 'verify' });
+    expect(s.decode.speculative).toEqual(result.decode.speculative);
+    expect(s.speculative).toEqual({ method: 'dflash2', draftLength: 3, hypothetical: true });
+    // Prefill has no speculative block: no sections.
+    expect(s.breakdown.prefill.sections).toBeUndefined();
+  });
 });
+
+/** A routed-expert fetch over the host link: `latencySec` + `bandwidthSec` seconds, no FLOP, no HBM bytes. */
+function transferOp(latencySec: number, bandwidthSec: number): OpResult {
+  const zero = {
+    weightBytes: 0,
+    activationReadBytes: 0,
+    activationWriteBytes: 0,
+    kvReadBytes: 0,
+    kvWriteBytes: 0,
+    stateReadBytes: 0,
+    stateWriteBytes: 0,
+    totalBytes: 0,
+  };
+  return {
+    op: {
+      kind: 'transfer',
+      name: 'moe.expert_fetch',
+      group: 'routed_experts',
+      source: 'host_ram',
+      reads: [{ count: 40, bytesEach: 7.5e6 }],
+      usefulBytes: 300e6,
+    },
+    flops: 0,
+    bytes: zero,
+    computeSec: 0,
+    memorySec: 0,
+    commLatencySec: 0,
+    commBandwidthSec: 0,
+    transferLatencySec: latencySec,
+    transferBandwidthSec: bandwidthSec,
+    sec: latencySec + bandwidthSec,
+    bound: 'transfer',
+  };
+}
 
 describe('batchSweep', () => {
   it('sweeps batch = dp · 2^k and loses fit at large batch', () => {

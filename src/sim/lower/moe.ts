@@ -10,11 +10,15 @@
  *
  * Routing is balanced: the busiest device gets the ceiling of its average share (`A` assignments), spread over
  * `a = min(Eloc, A)` active experts with `mE = ceil(A/a)` tokens each.
+ *
+ * Offloaded experts (deployment `offload.routedExperts`, design doc §2.4–2.5): a `TransferOp` of the expected missed
+ * experts goes in front of the block; the grouped GEMMs keep their `a` active experts (device-memory bytes unchanged).
  */
 
 import { gemmWeightBytes } from '../ir/metrics';
+import { expertHitsMisses, uniqueExperts, uniqueLocalExperts } from '../engine/transfer';
 import type { MoeBlock, ParallelConfig } from '../ir/model';
-import type { CollectiveOp, Op } from '../ir/ops';
+import type { CollectiveOp, Op, TransferOp } from '../ir/ops';
 import {
   actBpe,
   elementwise,
@@ -29,7 +33,8 @@ import {
   tpAllReduce,
 } from './common';
 import { activationOp, lowerDenseFfn, type DenseFfnShape } from './mlp';
-import type { LoweringContext } from './lower';
+import type { LoweringContext, OffloadLowering } from './lower';
+import { expertPlacementAt } from './offload';
 
 /** The expert-parallel layout of one MoE block under a parallel config. */
 export interface MoeLayout {
@@ -115,11 +120,65 @@ function epAllToAll(name: string, messageBytes: number, dtype: CollectiveOp['dty
 }
 
 /**
+ * Stored bytes of ONE routed expert on one device: its (gated ? 3 : 2) matrices of `h × fe/etp` in the routed-expert
+ * format (`gemmWeightBytes`, incl. 2:4 metadata and side vectors). Unit: bytes.
+ */
+export function expertWeightBytes(block: MoeBlock, ctx: LoweringContext): number {
+  const layout = moeLayout(block, ctx.parallel);
+  const routedFmt = moduleQuant(ctx, 'routed_experts');
+  const feLocal = block.expertIntermediate / layout.expertTp;
+  // Formula: W_expert = gemmWeightBytes(gated ? 3 : 2, h, fe/etp, w_routed)
+  // See docs/simulation-model.md §12 ("Expert hit ratio")
+  return gemmWeightBytes(block.gated ? 3 : 2, block.hidden, feLocal, routedFmt.weights, routedFmt.sparsity);
+}
+
+/**
+ * Expected needed experts of one MoE layer on one device in a step: at ep = 1 the exact
+ * `U = E·(1 − (1 − k/E)^T)` over the T routed tokens; at ep > 1 the per-device form
+ * `U_dev = E_loc·(1 − (1 − 1/E_loc)^A)` over its A assignments (design doc §2.9). Unit: experts (real).
+ */
+export function neededExperts(block: MoeBlock, layout: MoeLayout, routing: MoeRouting, routedTokens: number, ep: number): number {
+  return ep === 1
+    ? uniqueExperts(block.experts, block.topK, routedTokens)
+    : uniqueLocalExperts(layout.localExperts, routing.assignments);
+}
+
+/**
+ * The expert fetch of an offloaded MoE layer (design doc §2.5): `reads [{ M, W_expert }]`, `usefulBytes = M·W_expert`,
+ * with `M` the expected misses of {@link expertHitsMisses} over the `E_loc` local experts. Undefined when `M = 0`
+ * (every needed expert resident): no op, no latency, no staging.
+ */
+export function expertFetchOp(
+  block: MoeBlock,
+  layout: MoeLayout,
+  routing: MoeRouting,
+  routedTokens: number,
+  ctx: LoweringContext,
+  placement: NonNullable<OffloadLowering['routedExperts']>,
+): TransferOp | undefined {
+  const U = neededExperts(block, layout, routing, routedTokens, ctx.parallel.ep);
+  const { misses } = expertHitsMisses(U, placement.hitRatio, placement.residentFraction, layout.localExperts);
+  if (!(misses > 0)) return undefined;
+  const W_expert = expertWeightBytes(block, ctx);
+  // Formula: reads = [{ M, W_expert }];  usefulBytes = M·W_expert
+  // See docs/simulation-model.md §12 ("Placement")
+  return {
+    kind: 'transfer',
+    name: 'moe.expert_fetch',
+    group: 'routed_experts',
+    source: placement.tier,
+    reads: [{ count: misses, bytesEach: W_expert }],
+    usefulBytes: misses * W_expert,
+  };
+}
+
+/**
  * MoE ops. Mode A: router → topk → gate_up → act → down → combine → [shared MLP /tp] → TP all-reduce.
  * Mode B: router (Ts) → topk → a2a dispatch → gate_up → act → down → a2a combine → combine → [shared MLP, full]
- * → TP all-gather.
+ * → TP all-gather. With the layer's experts offloaded (`layerIndex` in the placement's range), the expert fetch
+ * comes first.
  */
-export function lowerMoe(block: MoeBlock, ctx: LoweringContext): Op[] {
+export function lowerMoe(block: MoeBlock, ctx: LoweringContext, layerIndex?: number): Op[] {
   const { tp, ep } = ctx.parallel;
   const layout = moeLayout(block, ctx.parallel);
   const T = stepTokens(ctx);
@@ -133,6 +192,11 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext): Op[] {
   const mE = routing.tokensPerExpert;
   const feLocal = shardWidth(block.expertIntermediate, layout.expertTp, `${block.name} expertIntermediate`);
   const ops: Op[] = [];
+  const placement = expertPlacementAt(ctx, layerIndex);
+  if (placement !== undefined) {
+    const fetch = expertFetchOp(block, layout, routing, routedTokens, ctx, placement);
+    if (fetch !== undefined) ops.push(fetch);
+  }
 
   // Router: m = Ts, n = E, k = h in high precision, replicated; then top-k over Ts·E logits
   // (reads the logits, writes k int32 indices + k weights per token).
@@ -210,9 +274,10 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext): Op[] {
 
 /**
  * Resident MoE weights on one device: ALL local experts (not only the active ones), the router and the shared
- * experts. Unit: bytes.
+ * experts. With the layer's experts offloaded (`layerIndex` in the placement's range), only the `C = f·E_loc` resident
+ * experts count (the full set lives on the tier, design doc §2.7). Unit: bytes.
  */
-export function moeResidentWeightBytes(block: MoeBlock, ctx: LoweringContext): number {
+export function moeResidentWeightBytes(block: MoeBlock, ctx: LoweringContext, layerIndex?: number): number {
   const layout = moeLayout(block, ctx.parallel);
   const h = block.hidden;
   const routedFmt = moduleQuant(ctx, 'routed_experts');
@@ -223,9 +288,26 @@ export function moeResidentWeightBytes(block: MoeBlock, ctx: LoweringContext): n
   const sharedLocal = (block.sharedExperts * block.sharedIntermediate) / sharedShards;
   // Formula: W = Eloc·(gated ? 3 : 2)·h·fe/etp·bpe(w_routed) + E·h·bpe(hp)
   //            + (gated ? 3 : 2)·h·S·fs/(mode A ? tp : 1)·bpe(w_shared)
-  // See docs/simulation-model.md §8 "Memory fit"
-  const experts = gemmWeightBytes(layout.localExperts * matrices, h, feLocal, routedFmt.weights, routedFmt.sparsity);
+  // Formula (offloaded layer, f < 1): the routed part becomes C·W_expert, C = f·Eloc
+  // See docs/simulation-model.md §8 "Memory fit", §12 ("Memory tiers")
+  const placement = expertPlacementAt(ctx, layerIndex);
+  const experts =
+    placement === undefined || placement.residentFraction >= 1
+      ? gemmWeightBytes(layout.localExperts * matrices, h, feLocal, routedFmt.weights, routedFmt.sparsity)
+      : placement.residentFraction * layout.localExperts * expertWeightBytes(block, ctx);
   const router = block.experts * h * hpBpe(ctx);
   const shared = gemmWeightBytes(matrices, h, sharedLocal, sharedFmt.weights, sharedFmt.sparsity);
   return experts + router + shared;
+}
+
+/**
+ * Bytes of a MoE block's FULL local expert set on one device (all `E_loc` experts): what an offloaded layer places on
+ * its tier per device (design doc §2.7). Unit: bytes.
+ */
+export function moeLocalExpertBytes(block: MoeBlock, ctx: LoweringContext): number {
+  const layout = moeLayout(block, ctx.parallel);
+  const routedFmt = moduleQuant(ctx, 'routed_experts');
+  const feLocal = block.expertIntermediate / layout.expertTp;
+  // Formula: W_experts = Eloc·(gated ? 3 : 2)·h·fe/etp·bpe(w_routed)
+  return gemmWeightBytes(layout.localExperts * (block.gated ? 3 : 2), block.hidden, feLocal, routedFmt.weights, routedFmt.sparsity);
 }

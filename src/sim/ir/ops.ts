@@ -12,7 +12,15 @@
 import type { AccumulateType, Dtype, MathFormat, TensorFormat } from './dtype';
 
 /** Any op one device executes. Dispatch with `switch (op.kind)`. */
-export type Op = GemmOp | AttentionOp | IndexerOp | RecurrentOp | ElementwiseOp | EmbeddingOp | CollectiveOp;
+export type Op =
+  | GemmOp
+  | AttentionOp
+  | IndexerOp
+  | RecurrentOp
+  | ElementwiseOp
+  | EmbeddingOp
+  | CollectiveOp
+  | TransferOp;
 
 /**
  * A (possibly batched/grouped) matrix multiply against weights:
@@ -118,8 +126,14 @@ export interface AttentionOp {
    * (MLA prefill, MHA form).
    */
   kvRead: KvStream;
-  /** Appended to the KV cache per NEW token (qLen tokens per sequence); `elemsPerToken` 0 = no cache write. */
+  /** Appended to the KV cache per NEW token (`kvWriteTokens ?? qLen` tokens per sequence); `elemsPerToken` 0 = no cache write. */
   kvWrite: KvStream;
+  /**
+   * Tokens per sequence whose K/V are appended to the cache this step; absent = `qLen` (every query token). A block
+   * drafter attends over `m_ctx + k + 1` new rows but keeps only the `m_ctx` context rows (design doc §3.3).
+   * Applies to the primary `kvWrite` and to `secondaryKv.kvWrite`. Unit: tokens.
+   */
+  kvWriteTokens?: number;
   /** Matmul input class of Q·Kᵀ and P·V (selects the peak). */
   math: MathFormat;
   /** Accumulator type of Q·Kᵀ and P·V (selects the peak). */
@@ -232,6 +246,12 @@ export interface RecurrentOp {
   gateElemsPerTokenPerHead: number;
   /** False on the first prefill step of a sequence (no prior state to read); true otherwise. */
   hasPriorState: boolean;
+  /**
+   * State snapshots written this step; absent = 1. A `k + 1`-token speculative verify keeps one snapshot per
+   * position so the state can be rolled back to the accepted prefix (design doc §3.3): `k + 1`. Multiplies the state
+   * WRITE bytes only (the prior state is still read once). Count.
+   */
+  stateSnapshots?: number;
   /** Storage dtype of the recurrent state (read and written once per step). */
   stateDtype: Dtype;
   /** Storage dtype of q, k, v, gates (read) and the output (written). */
@@ -256,6 +276,9 @@ export interface ElementwiseOp {
    * lower/common.ts). `silu` and `relu_mul` cover the ungated-SiLU and gated-ReLU MLPs. Hyper-connections:
    * `hc_collapse` (N streams → 1), `hc_expand` (1 → N, with or without stream mixing), `sinkhorn` (per N×N matrix
    * element); `ngram_gate` (n-gram value gated against the stream); `kv_pool` (softmax-weighted pooling of tokens).
+   * Speculative decoding (design doc §3.3–3.4): `kv_cache_write` (a write-only cache op: a block drafter's context
+   * K/V cast into the KV format and stored, its bytes in `kvWriteBytes`); `candidate_score` (the DFlash 2 selector's
+   * rank-r dot products, one multiply-add per element).
    */
   fn:
     | 'rmsnorm'
@@ -278,7 +301,9 @@ export interface ElementwiseOp {
     | 'hc_expand'
     | 'sinkhorn'
     | 'ngram_gate'
-    | 'kv_pool';
+    | 'kv_pool'
+    | 'kv_cache_write'
+    | 'candidate_score';
   /** Output elements computed on this device. Unit: elements. */
   elems: number;
   /** Vector FLOP per output element (e.g. rmsnorm 4; causal_conv1d 2·kernelWidth). Unit: FLOP/element. */
@@ -295,6 +320,11 @@ export interface ElementwiseOp {
   stateReadBytes: number;
   /** Per-sequence state bytes written (causal_conv1d rolling state); 0 otherwise. Unit: bytes. */
   stateWriteBytes: number;
+  /**
+   * KV-cache bytes written by a write-only cache op (a block drafter's context K/V in prefill, design doc §3.4);
+   * absent = 0. Counted as `ByteBreakdown.kvWriteBytes`. Unit: bytes.
+   */
+  kvWriteBytes?: number;
 }
 
 /**
@@ -342,4 +372,37 @@ export interface CollectiveOp {
   messageBytes: number;
   /** Element dtype on the wire (informational; the size is already in `messageBytes`). */
   dtype: Dtype;
+}
+
+/**
+ * A read of off-device weight bytes (host RAM or NVMe) into this device's memory, issued in front of the op that
+ * needs them (deployment knob `offload`, design doc §2). Its time comes from the tier and host-link model
+ * (engine/transfer.ts, design doc §2.3), not from the roofline: it has no FLOP, and moves no HBM bytes in this
+ * model (the DMA write into device memory, at most `B_link / memBW` of the step, is a documented approximation).
+ *
+ * Per device, per microbatch step. Every quantity is an EXPECTED value (a real number: no rounding of expected
+ * misses to whole requests). Lowering emits one only when it has bytes to move.
+ */
+export interface TransferOp {
+  kind: 'transfer';
+  /** Stable dotted name, e.g. `'moe.expert_fetch'`, `'layer.fetch'`, `'ngram.row_fetch'`. */
+  name: string;
+  /** What is streamed: missed routed experts, a whole decoder layer, or gathered n-gram table rows. */
+  group: 'routed_experts' | 'dense_layer' | 'lookup_table';
+  /** Storage tier the bytes come from (`'host_ram'` on a unified-memory device is never emitted: it is device memory). */
+  source: 'host_ram' | 'nvme';
+  /**
+   * Physical read classes issued this step: `count` reads of `bytesEach` bytes each (before rounding to the tier's
+   * read granularity). Experts: `[{ count: M, bytesEach: W_expert }]`; a dense layer: `[{ count: 1, bytesEach:
+   * W_layer }]`; table rows per the scale layout of design doc §2.10, e.g. separate value and scale reads
+   * `[{ count: T·g, bytesEach: 256 }, { count: T·g, bytesEach: 8 }]`. `Σ count` pays the per-request (IOPS,
+   * Little's-law) terms; each class is rounded up to the tier granularity for the tier-bandwidth term.
+   * Unit: `count` requests (expected, real), `bytesEach` bytes.
+   */
+  reads: { count: number; bytesEach: number }[];
+  /**
+   * Useful payload that crosses the host link, independent of the read layout (e.g. 264 B per Engram row, whatever
+   * the granularity rounding). Unit: bytes.
+   */
+  usefulBytes: number;
 }

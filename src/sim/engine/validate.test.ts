@@ -1,12 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { SYNTH_CLUSTER, SYNTH_GPU, SYNTH_PCIE_HOSTBOUNCE, SYNTH_PCIE_HOSTBOUNCE_LINK } from '../__fixtures__/synthetic';
+import {
+  SYNTH_CLUSTER,
+  SYNTH_GPU,
+  SYNTH_NVLINK,
+  SYNTH_PCIE_HOSTBOUNCE,
+  SYNTH_PCIE_HOSTBOUNCE_LINK,
+} from '../__fixtures__/synthetic';
 import { decoderLayer, decoderModel } from '../ir/builders';
-import type { ParallelConfig, QuantConfig } from '../ir/model';
-import { REF_DENSE_8B, TINY_HYBRID } from '../models/reference';
+import type { BlockDraftSpec, ModelSpec, ParallelConfig, QuantConfig } from '../ir/model';
+import { REF_DENSE_8B, TINY_HC_NGRAM, TINY_HYBRID } from '../models/reference';
 import { singleDevice } from '../hw/presets';
 import type { TopologySpec } from '../hw/types';
-import type { SimInput } from './types';
-import { blockShardingErrors, validateInput } from './validate';
+import type { DeploymentConfig, OffloadConfig, SimInput, SpecDecodeConfig } from './types';
+import { blockShardingErrors, deploymentErrors, SPEC_DEC_PP_ERROR, validateInput } from './validate';
+import { simulate } from './simulate';
+import { countParams } from '../ir/params';
+import { modelSpecErrors } from '../ir/validateModel';
 
 const BF16: QuantConfig = { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } };
 
@@ -125,5 +134,188 @@ describe('blockShardingErrors', () => {
     const sharding = blockShardingErrors({ model: REF_DENSE_8B, quant: BF16, parallel: { tp: 3, pp: 1, dp: 1, ep: 1 } });
     const all = validateInput(input({ tp: 3 }));
     for (const e of sharding) expect(all).toContain(e);
+  });
+});
+
+describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
+  /** A DFlash-2-shaped block drafter (blockSize 8: k ≤ 7). */
+  const DRAFTER: BlockDraftSpec = {
+    kind: 'block_drafter',
+    method: 'dflash2',
+    hidden: 4096,
+    vocab: 151_936,
+    layers: 5,
+    heads: 32,
+    kvHeads: 8,
+    headDim: 128,
+    intermediate: 12_288,
+    gated: true,
+    activation: 'silu',
+    windowTokens: 2048,
+    targetLayerIds: [1, 9, 17, 25, 33],
+    blockSize: 8,
+    source: 'hypothetical',
+  };
+  const WITH_MTP: ModelSpec = { ...REF_DENSE_8B, draft: { kind: 'mtp', layers: [REF_DENSE_8B.layers[0]], hiddenProj: true } };
+  const spec = (over: Partial<SpecDecodeConfig> = {}): SpecDecodeConfig => ({
+    method: 'dflash2',
+    drafter: { kind: 'hypothetical', spec: DRAFTER },
+    draftLength: 7,
+    acceptance: { kind: 'iid', alpha: 0.79 },
+    ...over,
+  });
+  /** TINY_HYBRID (MoE) on a dedicated device with an explicit host link. */
+  const withHost = { device: SYNTH_GPU, topology: SYNTH_CLUSTER, host: { link: SYNTH_NVLINK } };
+  const offload = (o: OffloadConfig, model: ModelSpec = TINY_HYBRID): SimInput =>
+    input({}, { model, hardware: withHost, deployment: { offload: o } });
+  const experts = (
+    over: Partial<NonNullable<OffloadConfig['routedExperts']>> = {},
+  ): NonNullable<OffloadConfig['routedExperts']> => ({
+    tier: 'host_ram',
+    residentFraction: 0.5,
+    hitRatio: { kind: 'uniform' },
+    ...over,
+  });
+  const errorsOf = (i: SimInput) => deploymentErrors(i);
+
+  it('absent or {} deployment: no errors, and validateInput is unchanged', () => {
+    for (const deployment of [undefined, {}, { offload: {} }, { offload: { lookupTables: { tier: 'device' } } }] as (
+      | DeploymentConfig
+      | undefined
+    )[]) {
+      expect(validateInput(input({}, { deployment }))).toEqual([]);
+    }
+  });
+
+  it('U-13: spec-dec with pp 2 is rejected with the exact §3.6 message', () => {
+    expect(SPEC_DEC_PP_ERROR).toBe('speculative decoding with pp > 1 is not supported yet');
+    const errors = validateInput(input({ pp: 2 }, { deployment: { speculative: spec() } }));
+    expect(errors).toContain('speculative decoding with pp > 1 is not supported yet');
+    expect(errorsOf(input({}, { deployment: { speculative: spec() } }))).toEqual([]);
+  });
+
+  it("U-13: offload mode 'cpu_compute' is rejected (designed hook, §2.8)", () => {
+    expect(errorsOf(offload({ mode: 'cpu_compute', routedExperts: experts() }))).toEqual([
+      "deployment.offload.mode 'cpu_compute' is not supported yet (only 'transfer')",
+    ]);
+    expect(errorsOf(offload({ mode: 'transfer', routedExperts: experts() }))).toEqual([]);
+  });
+
+  it('U-13: k + 1 > blockSize is rejected (blockSize 8: k 7 ok, k 8 not)', () => {
+    expect(errorsOf(input({}, { deployment: { speculative: spec({ draftLength: 7 }) } }))).toEqual([]);
+    expect(errorsOf(input({}, { deployment: { speculative: spec({ draftLength: 8 }) } }))).toEqual([
+      "deployment.speculative.draftLength 8: k + 1 must not exceed the drafter's blockSize (8)",
+    ]);
+  });
+
+  it('draftLength is an integer in 1..16', () => {
+    const mtp = (draftLength: number) =>
+      errorsOf(input({}, { model: WITH_MTP, deployment: { speculative: spec({ method: 'mtp', draftLength }) } }));
+    expect(mtp(1)).toEqual([]);
+    expect(mtp(16)).toEqual([]);
+    for (const k of [0, 17, 1.5]) expect(mtp(k)).toEqual([`deployment.speculative.draftLength must be an integer in 1..16 (got ${k})`]);
+  });
+
+  it("'mtp' needs the model's MTP head; block methods need a drafter of their own method", () => {
+    expect(errorsOf(input({}, { deployment: { speculative: spec({ method: 'mtp', draftLength: 1 }) } }))).toEqual([
+      "deployment.speculative.method 'mtp' needs a model with an MTP draft head (model.draft.kind 'mtp')",
+    ]);
+    expect(errorsOf(input({}, { deployment: { speculative: spec({ drafter: undefined }) } }))).toEqual([
+      "deployment.speculative.method 'dflash2' needs a drafter",
+    ]);
+    expect(errorsOf(input({}, { deployment: { speculative: spec({ method: 'dspark' }) } }))).toEqual([
+      'deployment.speculative.drafter is a dflash2 drafter, not dspark',
+    ]);
+  });
+
+  it('acceptance ranges: i.i.d. α in [0, 1); per-position α_j in [0, 1], non-empty', () => {
+    const acc = (acceptance: SpecDecodeConfig['acceptance']) =>
+      errorsOf(input({}, { deployment: { speculative: spec({ acceptance }) } }));
+    expect(acc({ kind: 'iid', alpha: 0 })).toEqual([]);
+    expect(acc({ kind: 'iid', alpha: 0.999 })).toEqual([]);
+    expect(acc({ kind: 'iid', alpha: 1 })).toEqual(['deployment.speculative.acceptance.alpha must be in [0, 1) (got 1)']);
+    expect(acc({ kind: 'iid', alpha: -0.1 })).toHaveLength(1);
+    expect(acc({ kind: 'iid', alpha: Number.NaN })).toHaveLength(1);
+    expect(acc({ kind: 'per_position', alphas: [1] })).toEqual([]); // E[τ] = k + 1 is legal
+    expect(acc({ kind: 'per_position', alphas: [0.854, 0.803, 0] })).toEqual([]);
+    expect(acc({ kind: 'per_position', alphas: [0.9, 1.1] })).toHaveLength(1);
+    expect(acc({ kind: 'per_position', alphas: [] })).toEqual(['deployment.speculative.acceptance.alphas must not be empty']);
+  });
+
+  it('U-3: residentFraction in [0, 1]; custom h in [0, 1] and h > 0 with f = 0 rejected; f = 1 accepts any h', () => {
+    expect(errorsOf(offload({ routedExperts: experts({ residentFraction: 1.2 }) }))).toEqual([
+      'deployment.offload.routedExperts.residentFraction must be in [0, 1] (got 1.2)',
+    ]);
+    expect(errorsOf(offload({ routedExperts: experts({ residentFraction: 0, hitRatio: { kind: 'custom', h: 0.2 } }) }))).toEqual([
+      'deployment.offload.routedExperts.hitRatio: no experts are resident, h must be 0',
+    ]);
+    expect(errorsOf(offload({ routedExperts: experts({ residentFraction: 0, hitRatio: { kind: 'custom', h: 0 } }) }))).toEqual([]);
+    expect(errorsOf(offload({ routedExperts: experts({ residentFraction: 0 }) }))).toEqual([]); // uniform: h(0) = 0
+    expect(errorsOf(offload({ routedExperts: experts({ residentFraction: 1, hitRatio: { kind: 'custom', h: 0.3 } }) }))).toEqual([]);
+    expect(errorsOf(offload({ routedExperts: experts({ hitRatio: { kind: 'custom', h: 1.5 } }) }))).toEqual([
+      'deployment.offload.routedExperts.hitRatio.h must be in [0, 1] (got 1.5)',
+    ]);
+  });
+
+  it('layer ranges are non-empty, integer and inside [0, L); queueDepth is an integer ≥ 1', () => {
+    const L = TINY_HYBRID.layers.length;
+    expect(errorsOf(offload({ routedExperts: experts({ layers: { from: 0, to: L } }) }))).toEqual([]);
+    expect(errorsOf(offload({ denseLayers: { tier: 'nvme', layers: { from: 1, to: 2 } } }))).toEqual([]);
+    for (const layers of [
+      { from: 0, to: 0 },
+      { from: -1, to: 2 },
+      { from: 0, to: L + 1 },
+      { from: 2, to: 1 },
+      { from: 0.5, to: 2 },
+    ]) {
+      expect(errorsOf(offload({ denseLayers: { tier: 'host_ram', layers } }))).toHaveLength(1);
+      expect(errorsOf(offload({ routedExperts: experts({ layers }) }))).toHaveLength(1);
+    }
+    expect(errorsOf(offload({ queueDepth: 1, routedExperts: experts() }))).toEqual([]);
+    for (const queueDepth of [0, 1.5]) {
+      expect(errorsOf(offload({ queueDepth, routedExperts: experts() }))).toEqual([
+        `deployment.offload.queueDepth must be an integer ≥ 1 (got ${queueDepth})`,
+      ]);
+    }
+  });
+
+  it('routed experts need a MoE model; off-device lookup tables need n-gram tables', () => {
+    expect(errorsOf(offload({ routedExperts: experts() }, REF_DENSE_8B))).toEqual([
+      'deployment.offload.routedExperts: the model has no MoE block',
+    ]);
+    expect(errorsOf(offload({ lookupTables: { tier: 'host_ram' } }, REF_DENSE_8B))).toEqual([
+      'deployment.offload.lookupTables: the model has no n-gram lookup table',
+    ]);
+    expect(errorsOf(offload({ lookupTables: { tier: 'device' } }, REF_DENSE_8B))).toEqual([]);
+    expect(errorsOf(offload({ lookupTables: { tier: 'host_ram' } }, TINY_HC_NGRAM))).toEqual([]);
+    expect(errorsOf(offload({ lookupTables: { tier: 'nvme', scaleLayout: 'pinned_host' } }, TINY_HC_NGRAM))).toEqual([]);
+    expect(errorsOf(offload({ lookupTables: { tier: 'host_ram', scaleLayout: 'pinned_host' } }, TINY_HC_NGRAM))).toEqual([
+      "deployment.offload.lookupTables.scaleLayout 'pinned_host' needs tier 'nvme'",
+    ]);
+  });
+
+  it('an off-device group on a dedicated device without a host link (no host.link, no hostInterface) is rejected', () => {
+    const noHost = input({}, { model: TINY_HYBRID, deployment: { offload: { routedExperts: experts() } } });
+    expect(SYNTH_GPU.hostInterface).toBeUndefined();
+    expect(errorsOf(noHost)).toEqual(['deployment.offload: no host link known for synth-gpu; set hardware.host.link']);
+    // Nothing off-device: no link needed.
+    expect(errorsOf(input({}, { deployment: { offload: { lookupTables: { tier: 'device' } } } }))).toEqual([]);
+    // A cited edge connector is enough.
+    const withInterface = { ...SYNTH_GPU, hostInterface: { generation: 5, lanes: 16 } as const };
+    expect(errorsOf({ ...noHost, hardware: { device: withInterface, topology: SYNTH_CLUSTER } })).toEqual([]);
+  });
+
+  it("the model's own draft head stays out of countParams, modelSpecErrors and the result while spec-dec is off", () => {
+    expect(countParams(WITH_MTP)).toBe(countParams(REF_DENSE_8B));
+    expect(modelSpecErrors(WITH_MTP)).toEqual(modelSpecErrors(REF_DENSE_8B));
+    const plain = simulate(input());
+    const withDraft = simulate(input({}, { model: WITH_MTP }));
+    expect(withDraft).toEqual(plain);
+  });
+
+  it('an invalid hardware.host is reported with its path (validateHost)', () => {
+    const badLink = { ...SYNTH_NVLINK, bandwidthPerDirectionBytesPerSec: 0 };
+    const errors = errorsOf(input({}, { hardware: { device: SYNTH_GPU, topology: SYNTH_CLUSTER, host: { link: badLink } } }));
+    expect(errors.some((e) => e.startsWith('hardware.host.link'))).toBe(true);
   });
 });

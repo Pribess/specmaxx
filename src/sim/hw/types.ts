@@ -131,12 +131,31 @@ export interface DeviceSpec {
   memory: MemorySpec;
   /** Last-level cache size. Recorded for display; NOT used by the v1 model. Unit: bytes. */
   l2Bytes?: number;
+  /**
+   * The card's PCIe edge connector to the host (generation and ELECTRICAL lane count, e.g. Arc Pro B60: x16
+   * connector, x8 electrical ⇒ `lanes: 8`). Cited preset data, used to build `HostSpec.link` with
+   * `hostPcieLink(generation, lanes)` when the stack gives none. Absent on SXM/OAM modules and SoCs, whose host
+   * attachment no datasheet states as a slot (the engine then rejects off-device placement unless
+   * `HardwareStack.host.link` is set). See docs/simulation-model.md §4 ("Host and storage tiers").
+   */
+  hostInterface?: HostInterfaceSpec;
   /** Citations covering the numeric fields. */
   sources: SourceRef[];
   /** Numbers no vendor publishes, with reasons. */
   estimated: EstimatedField[];
   /** Set by `applyDeviceModifiers`: the modifiers this spec was derived with (provenance). Absent on base presets. */
   appliedModifiers?: DeviceModifier[];
+}
+
+/**
+ * A PCIe host interface: generation (Gen3 8 GT/s, Gen4 16 GT/s, Gen5 32 GT/s per lane) and electrical lane count.
+ * Integers, no unit; the bandwidth they imply is `hostPcieLink(generation, lanes).bandwidthPerDirectionBytesPerSec`.
+ */
+export interface HostInterfaceSpec {
+  /** PCIe generation (3, 4 or 5). */
+  generation: 3 | 4 | 5;
+  /** Electrical lanes (4, 8 or 16). Count. */
+  lanes: 4 | 8 | 16;
 }
 
 /**
@@ -270,6 +289,118 @@ export interface TopologySpec {
   sources: SourceRef[];
 }
 
+/**
+ * Host DRAM as a storage tier for offloaded weights (docs/simulation-model.md §4 "Host and storage tiers").
+ * ONE per node, shared by every device of the node. On a unified-memory device host RAM IS the device pool, so this
+ * tier is only used on dedicated-memory devices.
+ */
+export interface HostMemorySpec {
+  /** Discriminant of {@link StorageTierSpec}. */
+  kind: 'host_ram';
+  /** Stable id, e.g. `'ddr5-6000-2ch'`. */
+  id: string;
+  /** Display name. */
+  name: string;
+  /** Installed capacity of the node. Unit: bytes. */
+  capacityBytes: number;
+  /**
+   * Theoretical peak of the whole node, read + write combined: MT/s × 8 B per channel transfer × channels.
+   * Unit: B/s.
+   */
+  bandwidthBytesPerSec: number;
+  /** Unloaded load-to-use latency of one random read (the α of a host-RAM read). Unit: seconds. */
+  latencySec: number;
+  /** Memory channels (informational; already folded into `bandwidthBytesPerSec`). Count. */
+  channels: number;
+  /** Smallest unit a random read moves (one cache line, 64). Unit: bytes. */
+  readGranularityBytes: number;
+  /** Random reads the host keeps in flight (memory-level parallelism; the queue-depth cap of Little's law). Count. */
+  maxOutstanding: number;
+  /** Citations covering the numeric fields. */
+  sources: SourceRef[];
+  /** Numbers no vendor publishes, with reasons. */
+  estimated: EstimatedField[];
+}
+
+/**
+ * An NVMe SSD as a storage tier for offloaded weights (docs/simulation-model.md §4 "Host and storage tiers").
+ * ONE per node, shared by every device of the node. Datasheet ceilings, not achieved fractions.
+ */
+export interface NvmeSpec {
+  /** Discriminant of {@link StorageTierSpec}. */
+  kind: 'nvme';
+  /** Stable id, e.g. `'nvme-990-pro-2tb'`. */
+  id: string;
+  /** Display name. */
+  name: string;
+  /** Usable capacity. Unit: bytes. */
+  capacityBytes: number;
+  /** Datasheet sequential read (large blocks, deep queue). Unit: B/s. */
+  seqReadBandwidthBytesPerSec: number;
+  /** Random 4 KiB read latency at QD1 (1 / QD1 IOPS when only the IOPS is published). Unit: seconds. */
+  randomReadLatencySec: number;
+  /**
+   * Datasheet maximum random 4 KiB read rate and its measurement condition. OPTIONAL: when absent the IOPS term is
+   * dropped and the request rate is bounded by Little's law alone (`maxOutstanding / randomReadLatencySec`).
+   */
+  randomRead?: {
+    /** Random 4 KiB reads per second at the rated condition. Unit: requests/s. */
+    iops: number;
+    /** Queue depth per thread of the rated condition. Count. */
+    queueDepth: number;
+    /** Threads (submission queues) of the rated condition. Count. */
+    threads: number;
+  };
+  /**
+   * Read requests the drive keeps in flight (queueDepth × threads of the rated condition, or an explicit estimate in
+   * `estimated[]`): the queue-depth cap of Little's law. Count.
+   */
+  maxOutstanding: number;
+  /** Smallest unit a read moves (the LBA / NAND page, 4096): a 320 B row read costs this much. Unit: bytes. */
+  readGranularityBytes: number;
+  /**
+   * The slot's own ceiling when it binds below the datasheet rate (e.g. PCIe 4.0 x4 = 7.88e9). Absent = the
+   * datasheet rate is the bound. Per direction. Unit: B/s.
+   */
+  linkBandwidthBytesPerSec?: number;
+  /** Citations covering the numeric fields. */
+  sources: SourceRef[];
+  /** Numbers no vendor publishes, with reasons. */
+  estimated: EstimatedField[];
+}
+
+/** A storage tier an offloaded weight group can be placed on: host DRAM or an NVMe SSD. */
+export type StorageTierSpec = HostMemorySpec | NvmeSpec;
+
+/**
+ * The host side of a node. `link` is PER DEVICE (each device's own PCIe connection, per direction); `ram` and `ssd`
+ * are ONE per node, shared by the node's devices. Every field is optional: the engine fills an absent one with a
+ * default (link from `DeviceSpec.hostInterface`, `DDR5_6000_2CH`, `NVME_990_PRO_2TB`) and warns.
+ */
+export interface HostSpec {
+  /** The device's link to host memory (PCIe), per device, per direction. Ignored on unified memory. */
+  link?: LinkSpec;
+  /** Host DRAM of the node. On unified memory it is the device pool itself and not a separate tier. */
+  ram?: HostMemorySpec;
+  /** The node's NVMe SSD. */
+  ssd?: NvmeSpec;
+}
+
+/**
+ * Host CPU compute, for the CPU-compute offload mode (llama.cpp `-ot exps=CPU`). A designed HOOK: validated, never
+ * costed in the first implementation (`OffloadConfig.mode: 'cpu_compute'` is rejected by validation). Per node.
+ */
+export interface HostComputeSpec {
+  /** Matmul peaks of the host CPU (AVX-512 / AMX / SME), per node. Unit: FLOP/s (OP/s for integer inputs). */
+  matmulPeaks: MatmulPeak[];
+  /** Non-matrix vector peaks by dtype, per node. Unit: FLOP/s. */
+  vectorFlopsPerSec: Partial<Record<'fp32' | 'bf16', number>>;
+  /** Citations covering the numeric fields. */
+  sources: SourceRef[];
+  /** Numbers no vendor publishes, with reasons. */
+  estimated: EstimatedField[];
+}
+
 /** The hardware a simulation runs on: a device type replicated over a topology, plus variant modifiers. */
 export interface HardwareStack {
   /** Base device spec (before `deviceModifiers`). */
@@ -284,4 +415,9 @@ export interface HardwareStack {
   engineId?: string;
   /** Memory capacity per device; must be one of the modified `memory.capacityOptionsBytes`; default `[0]`. Unit: bytes. */
   memCapacityBytes?: number;
+  /**
+   * The node's host: the per-device host link and the shared host RAM / SSD tiers that offloaded weights stream
+   * from. Only read when the deployment offloads something; absent = defaults (see {@link HostSpec}).
+   */
+  host?: HostSpec;
 }

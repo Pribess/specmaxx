@@ -7,13 +7,15 @@
  * (`modular_glm_moe_dsa.py:199-257`); GLM-5.3: 21 full, 57 shared, derived from `index_topk_freq` 4 and
  * `index_skip_topk_offset` 3 when `indexer_types` is absent.
  *
- * Excluded: the `num_nextn_predict_layers` MTP layer (estimated for the param check as one full-indexer MoE
- * layer + `eh_proj` + 3 norms). Approximations: the router bias (E params per MoE layer) is not counted.
+ * The `num_nextn_predict_layers` MTP layer (one full-indexer MoE layer + `eh_proj` + 3 norms) is kept as
+ * `model.draft` (single-step MTP, costed only with speculative decoding on) and estimated for the param check.
+ * Approximations: the router bias (E params per MoE layer) is not counted.
  */
 
 import { decoderLayer, decoderModel, repeatLayers } from '../../../ir/builders';
 import type { FamilyEntry, FamilyBuildResult, JsonObject } from '../types';
 import { createReader } from '../reader';
+import { mtpDraft, withDraft } from '../drafter';
 import {
   dsaSelection,
   mtpParamsEstimate,
@@ -67,7 +69,7 @@ export function buildGlmMoeDsa(text: JsonObject, top: JsonObject, repoId: string
   if (mtpLayers > 0) notes.push(`${mtpLayers} MTP layer(s) excluded from the IR`);
   return {
     kind: 'ok',
-    model,
+    model: withDraft(model, mtpDraft(() => mtpLayer, mtpLayers, true)),
     notes,
     mtpParamsEstimate: mtpParamsEstimate(mtpLayer, hidden, mtpLayers),
     visionParamsEstimate: 0,

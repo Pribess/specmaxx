@@ -1,15 +1,42 @@
 import {
   formatTokensPerSec,
   formatContextTokens,
+  formatSeconds,
   type ResultSummary,
   type AppState,
   type LoadedModel,
   type BuildResult,
+  type OffloadPlacement,
   cablingName,
 } from '../state';
 import { RooflineChart } from './RooflineChart';
 import { MemoryFit } from './MemoryFit';
 import { HeroMemoryWarning } from './MemoryWarning';
+import { HelpIcon } from './HelpIcon';
+
+/** Display name of an off-device tier. */
+export function tierName(tier: 'host_ram' | 'nvme'): string {
+  return tier === 'host_ram' ? 'host RAM' : 'SSD';
+}
+
+/** A layer range `[from, to)` as the inclusive span users read, e.g. `24–35`. */
+function layerSpan(layers: { from: number; to: number }): string {
+  return layers.to - layers.from === 1 ? `${layers.from}` : `${layers.from}–${layers.to - 1}`;
+}
+
+/** The chip text of one off-device placement, e.g. `experts: host RAM, h 0.50`. */
+export function offloadChipText(p: OffloadPlacement): string {
+  switch (p.group) {
+    case 'routed_experts':
+      return `experts${p.layers ? ` ${layerSpan(p.layers)}` : ''}: ${tierName(p.tier)}, h ${(p.hitRatio ?? 0).toFixed(2)}`;
+    case 'dense_layers':
+      return `layers${p.layers ? ` ${layerSpan(p.layers)}` : ''}: ${tierName(p.tier)}`;
+    case 'lookup_tables':
+      return `n-gram tables: ${tierName(p.tier)}`;
+  }
+}
+
+const METHOD_NAMES = { mtp: 'MTP', dflash2: 'DFlash 2', dspark: 'DSpark' } as const;
 
 export function ResultHero({
   result,
@@ -17,12 +44,15 @@ export function ResultHero({
   loaded,
   built,
   pending,
+  onPlaceTablesOnHost,
 }: {
   result?: ResultSummary;
   state: AppState;
   loaded: LoadedModel | null;
   built: BuildResult;
   pending: boolean;
+  /** Moves an on-device n-gram lookup table to host RAM; shown as a button in the memory card when given. */
+  onPlaceTablesOnHost?: () => void;
 }) {
   const link = built.hardware?.links.intra?.link;
   const intraName = link
@@ -36,6 +66,8 @@ export function ResultHero({
     ? `${built.hardware?.network?.shortName ?? inter.name}${cabling !== undefined && cabling !== 'switched' ? ` (${cablingName(cabling, state.hw.nodes).toLowerCase()})` : ''}`
     : undefined;
   const linkName = [intraName, interName].filter((n) => n !== undefined).join(' and ');
+  const offload = result?.offload ?? [];
+  const spec = result?.decode.speculative;
   return (
     <section className={`hero ${pending ? 'pending' : ''}`} aria-busy={pending}>
       <p className="rig">
@@ -52,13 +84,29 @@ export function ResultHero({
               {(['prefill', 'decode'] as const).map((phase) => (
                 <div className="answer" key={phase}>
                   <h1>{phase === 'prefill' ? 'Prefill' : 'Decode'}</h1>
-                  <p>
+                  <div className="answer-line">
                     <strong data-testid={`${phase}-tps`}>
                       {formatTokensPerSec(result[phase].tokensPerSec)}
                     </strong>
                     <HeroMemoryWarning stages={result.memory.stages} />
                     <span>tok/s @ {formatContextTokens(result[phase].contextTokens)}</span>
-                  </p>
+                    {phase === 'decode' && spec && (
+                      <span className="spec-dec" data-testid="spec-dec">
+                        (spec-dec ×{spec.speedup.toFixed(2)}){' '}
+                        <HelpIcon term="Speculative decoding speedup">
+                          {result.speculative ? `${METHOD_NAMES[result.speculative.method]}, ` : ''}
+                          {result.speculative ? `k = ${result.speculative.draftLength}, ` : ''}
+                          E[τ] = {spec.expectedTokensPerStep.toFixed(2)} tokens accepted per step
+                          (incl. the bonus token). Step: draft {formatSeconds(spec.draftSec)} +
+                          verify {formatSeconds(spec.verifySec)}. Speedup over decode without
+                          speculative decoding @ {formatContextTokens(result.decode.contextTokens)}.
+                        </HelpIcon>
+                        {result.speculative?.hypothetical && (
+                          <span className="result-chip">hypothetical drafter</span>
+                        )}
+                      </span>
+                    )}
+                  </div>
                   <small
                     aria-hidden={state.workload.batch === 1}
                     style={{
@@ -74,6 +122,23 @@ export function ResultHero({
                   </small>
                 </div>
               ))}
+              {offload.length > 0 && (
+                <ul className="result-chips" aria-label="Offloaded weights">
+                  {offload.map((p, i) => (
+                    // The "?" shares the last chip's item, so it never wraps onto a line of its own.
+                    <li className="result-chip-item" key={p.group}>
+                      <span className="result-chip">{offloadChipText(p)}</span>
+                      {i === offload.length - 1 && (
+                        <HelpIcon term="Offloaded weights">
+                          Weight groups kept in host RAM or on an SSD and read over the host link
+                          each step. h: probability that a needed expert is already in device
+                          memory, per unique expert per layer per step at batch 1.
+                        </HelpIcon>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
             <RooflineChart
               roof={result.roofline}
@@ -86,7 +151,7 @@ export function ResultHero({
           <p className="theory">
             This is a theoretical maximum. <a href="./about.html">Read how the estimate works</a>
           </p>
-          <MemoryFit result={result} />
+          <MemoryFit result={result} onPlaceTablesOnHost={onPlaceTablesOnHost} />
         </>
       ) : (
         <div className="empty-result">

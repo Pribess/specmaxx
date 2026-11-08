@@ -6,7 +6,8 @@
  * - num_experts / *_intermediate_size → routed and shared SwiGLU experts.
  * - hc_count / hc_lowrank → parallel residual streams and low-rank mixers.
  * - ple_layer_ids (ONE-indexed), ngram_* / ple_* → hashed lookup and projections.
- * Vision and MTP are excluded; their estimates are used only for checkpoint comparison.
+ * Vision is excluded and estimated for checkpoint comparison only. The MTP module (`mtp_num_hidden_layers`, trained
+ * for several draft positions) is kept as `model.draft`, costed only with speculative decoding on, and estimated.
  */
 import type { Dtype } from '../../../ir/dtype';
 import { decoderLayer, decoderModel, hyperCollapse, repeatLayers } from '../../../ir/builders';
@@ -15,6 +16,7 @@ import { blockParams } from '../../../ir/params';
 import { modelSpecErrors } from '../../../ir/validateModel';
 import { createReader } from '../reader';
 import type { ConfigReader } from '../reader';
+import { mtpDraft, withDraft } from '../drafter';
 import type { FamilyEntry } from '../types';
 
 /** Approximate Qwen ViT + patch merger parameters from its config; unit: logical parameters. */
@@ -102,6 +104,9 @@ export const qwenFamily: FamilyEntry = {
         tableRows: rows, rowDim: embedDim / rowsPerToken, rowsPerToken,
         projections: [{ name: 'key', inputDim: embedDim, outputDim: width }, { name: 'value', inputDim: embedDim, outputDim: hidden }],
         outputDim: width, conv: { kernel: convKernel, dilation: ngramSize }, vectorParams: 3 * width,
+        // The model card keeps the PLE table in host RAM; this drives the UI hint only (the simulator's default
+        // placement stays the device, design doc §2.10).
+        offDeviceByDesign: true,
       } } : {}),
     }));
     // MTP has an attention layer plus a 2h→h fusion and two input norms; no duplicate embedding/head.
@@ -114,7 +119,7 @@ export const qwenFamily: FamilyEntry = {
     const errors = modelSpecErrors(model);
     if (errors.length) return { kind: 'invalid_config', errors };
     return {
-      kind: 'ok', model, mtpParamsEstimate, visionParamsEstimate: vision,
+      kind: 'ok', model: withDraft(model, mtpDraft(() => mtpLayer, mtpLayers, false)), mtpParamsEstimate, visionParamsEstimate: vision,
       excludedParts: [...(mtpLayers ? ['MTP'] : []), ...(vision ? ['vision tower'] : [])],
       notes: [
         'Language decoder only: MTP and vision tower excluded; their parameters are estimated from config.',

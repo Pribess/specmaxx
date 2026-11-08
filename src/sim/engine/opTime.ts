@@ -1,8 +1,9 @@
 /**
  * Per-op time on one device: the roofline `max(compute, memory)` for compute ops, the vector peak for
- * elementwise ops and recurrent steps, memory only for embedding gathers, and the alpha-beta model for
- * collectives. One exhaustive `switch (op.kind)`.
- * See docs/simulation-model.md §7 ("Per-op time").
+ * elementwise ops and recurrent steps, memory only for embedding gathers, the alpha-beta model for
+ * collectives, and the tier/link read rule for off-device transfers (`TransferOp`, design doc §2.3). One
+ * exhaustive `switch (op.kind)`.
+ * See docs/simulation-model.md §7 ("Per-op time") and §12 ("Transfer path").
  *
  * Inputs are plain specs: device and link modifiers were already applied by `simulate` (docs §4 "Device
  * variants and modifiers"), so nothing here knows about variants.
@@ -17,13 +18,15 @@ import type {
   IndexerOp,
   Op,
   RecurrentOp,
+  TransferOp,
 } from '../ir/ops';
 import type { AccumulateType, MathFormat } from '../ir/dtype';
 import { gemmComputeSec, type GemmShape } from '../hw/efficiency';
 import { matmulPeakFlopsPerSec, vectorPeakFlopsPerSec } from '../hw/peaks';
 import type { ComputeEngine } from '../hw/types';
 import { collectiveTime, type AllReduceAlgorithm, type CollectivePath } from './collectives';
-import type { Bound, OpResult, SimOptions } from './types';
+import { transferTime, type TransferPath } from './transfer';
+import type { Bound, OffloadTier, OpResult, SimOptions } from './types';
 
 /** Everything the per-op cost needs besides the op itself. Plain data, built once per stage by `simulate`. */
 export interface OpTimeContext {
@@ -40,6 +43,11 @@ export interface OpTimeContext {
   collectiveAlgorithm: AllReduceAlgorithm;
   /** Elementwise fusion assumption (SimOptions.elementwiseFusion). */
   elementwiseFusion: SimOptions['elementwiseFusion'];
+  /**
+   * Transfer paths of this stage's devices per source tier (offloading on; design doc §2.3): tier, host link, queue
+   * depth and n_stream. Absent when nothing is offloaded.
+   */
+  transferPaths?: Partial<Record<OffloadTier, TransferPath>>;
   /** Peak-fallback warnings are appended here (human-readable lines; `simulate` de-duplicates them). */
   warnings: string[];
 }
@@ -80,6 +88,8 @@ export function opTime(op: Op, ctx: OpTimeContext): OpResult {
       return memoryOnlyOpTime(op, ctx);
     case 'collective':
       return collectiveOpTime(op, ctx);
+    case 'transfer':
+      return transferOpTime(op, ctx);
     default: {
       const _never: never = op;
       throw new Error(`unknown op ${JSON.stringify(_never)}`);
@@ -156,6 +166,8 @@ function tensorOpTime(
     memorySec,
     commLatencySec: 0,
     commBandwidthSec: 0,
+    transferLatencySec: 0,
+    transferBandwidthSec: 0,
     sec,
     bound,
     efficiency,
@@ -199,7 +211,20 @@ function vectorOpTime(op: ElementwiseOp | RecurrentOp, dtype: ElementwiseOp['dty
   const computeSec = flops / peakFlopsPerSec;
   const memorySec = bytes.totalBytes / ctx.memBandwidthBytesPerSec;
   const { sec, bound } = roofline(computeSec, memorySec);
-  return { op, flops, bytes, computeSec, memorySec, commLatencySec: 0, commBandwidthSec: 0, sec, bound, peakFlopsPerSec };
+  return {
+    op,
+    flops,
+    bytes,
+    computeSec,
+    memorySec,
+    commLatencySec: 0,
+    commBandwidthSec: 0,
+    transferLatencySec: 0,
+    transferBandwidthSec: 0,
+    sec,
+    bound,
+    peakFlopsPerSec,
+  };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -211,7 +236,19 @@ function memoryOnlyOpTime(op: Op, ctx: OpTimeContext): OpResult {
   // Formula: t = bytes / memBW
   // See docs/simulation-model.md §7 ("Per-op time")
   const memorySec = bytes.totalBytes / ctx.memBandwidthBytesPerSec;
-  return { op, flops: 0, bytes, computeSec: 0, memorySec, commLatencySec: 0, commBandwidthSec: 0, sec: memorySec, bound: 'memory' };
+  return {
+    op,
+    flops: 0,
+    bytes,
+    computeSec: 0,
+    memorySec,
+    commLatencySec: 0,
+    commBandwidthSec: 0,
+    transferLatencySec: 0,
+    transferBandwidthSec: 0,
+    sec: memorySec,
+    bound: 'memory',
+  };
 }
 
 /** The link level a collective path uses (absent for a group of one). */
@@ -242,10 +279,37 @@ function collectiveOpTime(op: CollectiveOp, ctx: OpTimeContext): OpResult {
     memorySec: 0,
     commLatencySec: t.latencySec,
     commBandwidthSec: t.bandwidthSec,
+    transferLatencySec: 0,
+    transferBandwidthSec: 0,
     sec: t.totalSec,
     bound: 'comm',
   };
   const linkLevel = linkLevelOf(path);
   if (linkLevel !== undefined) result.linkLevel = linkLevel;
   return result;
+}
+
+/**
+ * An off-device read: `t = α_path + service` of {@link transferTime} on the stage's path for the op's source tier
+ * (design doc §2.3). No FLOP, no device-memory bytes (the DMA write into device memory is not charged).
+ */
+function transferOpTime(op: TransferOp, ctx: OpTimeContext): OpResult {
+  const path = ctx.transferPaths?.[op.source];
+  if (path === undefined) throw new Error(`transfer op '${op.name}': no transfer path for tier '${op.source}'`);
+  // Formula: t = α_tier + α_link + max(Little, IOPS/n, tier/n, link, host staging)
+  // See docs/simulation-model.md §12 ("Transfer path")
+  const t = transferTime(op.reads, op.usefulBytes, path);
+  return {
+    op,
+    flops: 0,
+    bytes: opBytes(op),
+    computeSec: 0,
+    memorySec: 0,
+    commLatencySec: 0,
+    commBandwidthSec: 0,
+    transferLatencySec: t.latencySec,
+    transferBandwidthSec: t.serviceSec,
+    sec: t.sec,
+    bound: 'transfer',
+  };
 }

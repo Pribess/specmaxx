@@ -94,7 +94,8 @@ it('scales bound bars by relative row share and uses a labels-only resource lege
   expect([...legend.querySelectorAll('li')].map((li) => li.textContent)).toEqual([
     'compute',
     'memory',
-    'comm',
+    'comm latency',
+    'comm bandwidth',
   ]);
   expect(container.querySelector('p.hint')).toBeNull();
   const bars = [...container.querySelectorAll<HTMLElement>('.bound-bar')];
@@ -219,4 +220,183 @@ it('warns about an oversized workload while still showing theoretical rates', as
   expect(screen.getAllByRole('link', { name: 'Warning: does not fit' })).toHaveLength(2);
   expect(screen.getByTestId('decode-tps').textContent).toMatch(/\d/);
   expect(container.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("keeps today's result unannotated, with the comm split in the bound legend", async () => {
+  const { built, summary } = await defaultResult();
+  const { container } = render(
+    <ResultHero
+      state={DEFAULT_STATE}
+      loaded={BUNDLED_DEFAULT_MODEL}
+      built={built}
+      result={summary}
+      pending={false}
+    />,
+  );
+  expect(screen.queryByTestId('spec-dec')).toBeNull();
+  expect(container.querySelector('.result-chips')).toBeNull();
+  expect(screen.queryAllByTestId('memory-tier')).toHaveLength(0);
+  expect(container.querySelector('.allocation-table')).toBeNull();
+});
+
+it('annotates a spec-dec decode: speedup with E[τ] help, verify and draft layer groups', async () => {
+  const { built, summary } = await defaultResult();
+  const draftRow = { ...summary.breakdown.decode.byLayer[1], key: 'draft.layer.0' };
+  const decode = summary.breakdown.decode;
+  const verifyRows = decode.byLayer.map((r) => ({ ...r, section: 'verify' as const }));
+  const sum = (rows: typeof decode.byLayer, key: string) => ({
+    ...rows[0],
+    key,
+    sec: rows.reduce((s, r) => s + r.sec, 0),
+    share: rows.reduce((s, r) => s + r.share, 0),
+  });
+  const spec = {
+    ...summary,
+    decode: {
+      ...summary.decode,
+      speculative: {
+        draftSec: 1.2e-3,
+        verifySec: 9.8e-3,
+        expectedTokensPerStep: 2.31,
+        speedup: 1.67,
+      },
+    },
+    speculative: { method: 'dflash2' as const, draftLength: 3, hypothetical: true },
+    breakdown: {
+      ...summary.breakdown,
+      decode: {
+        ...decode,
+        byLayer: [...verifyRows, { ...draftRow, section: 'draft' as const }],
+        sections: [sum(verifyRows, 'verify'), sum([draftRow], 'draft')],
+      },
+    },
+  };
+  render(
+    <ResultHero
+      state={DEFAULT_STATE}
+      loaded={BUNDLED_DEFAULT_MODEL}
+      built={built}
+      result={spec}
+      pending={false}
+    />,
+  );
+  const line = screen.getByTestId('decode-tps').parentElement!;
+  expect(line.textContent).toMatch(/tok\/s @ 8k\(spec-dec ×1\.67\)/);
+  const help = screen.getByRole('button', { name: 'About Speculative decoding speedup' });
+  fireEvent.focus(help);
+  expect(screen.getByRole('tooltip').textContent).toMatch(
+    /DFlash 2, k = 3, E\[τ\] = 2\.31 tokens .*draft 1\.20ms \+ verify 9\.80ms.* @ 8k/,
+  );
+  expect(screen.getByText('hypothetical drafter')).toBeTruthy();
+  cleanup();
+  render(<BreakdownTable result={spec} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Layer' }));
+  // Each section is cut on its own: the draft row shows under the long verify section without "Show all".
+  expect(screen.getAllByRole('row').length).toBe(1 + 2 + 12 + 1);
+  const sections = screen.getAllByTestId('breakdown-section');
+  expect(sections.map((s) => s.querySelector('th')?.textContent)).toEqual(['verify', 'draft']);
+  const draftBody = sections[1].parentElement!;
+  expect(within(draftBody).getByText('draft.layer.0')).toBeTruthy();
+});
+
+it('annotates an offload result: chips, offload transfer bound, one memory bar per tier', async () => {
+  const { built, summary } = await defaultResult();
+  const transferRow = {
+    key: 'moe.expert_fetch',
+    sec: 2e-3,
+    share: 0.5,
+    boundSec: { compute: 0, memory: 0, commLatency: 0, commBandwidth: 0, transfer: 2e-3 },
+    flops: 0,
+    bytes: 0,
+    count: 1,
+  };
+  const offload = {
+    ...summary,
+    offload: [
+      { group: 'routed_experts' as const, tier: 'host_ram' as const, hitRatio: 0.5 },
+      { group: 'dense_layers' as const, tier: 'nvme' as const, layers: { from: 24, to: 36 } },
+    ],
+    breakdown: {
+      ...summary.breakdown,
+      decode: {
+        ...summary.breakdown.decode,
+        byOp: [transferRow, ...summary.breakdown.decode.byOp],
+        byKind: [{ ...transferRow, key: 'transfer' }, ...summary.breakdown.decode.byKind],
+      },
+    },
+    memory: {
+      ...summary.memory,
+      tiers: [
+        { tier: 'host_ram' as const, bytes: 16.3e9, capacityBytes: 96e9, fits: true },
+        { tier: 'nvme' as const, bytes: 2.2e12, capacityBytes: 2e12, fits: false },
+      ],
+    },
+  };
+  render(
+    <ResultHero
+      state={DEFAULT_STATE}
+      loaded={BUNDLED_DEFAULT_MODEL}
+      built={built}
+      result={offload}
+      pending={false}
+    />,
+  );
+  const chips = screen.getByRole('list', { name: 'Offloaded weights' });
+  expect([...chips.querySelectorAll('.result-chip')].map((c) => c.textContent)).toEqual([
+    'experts: host RAM, h 0.50',
+    'layers 24–35: SSD',
+  ]);
+  const tiers = screen.getAllByTestId('memory-tier');
+  expect(tiers.map((t) => t.firstElementChild?.textContent)).toEqual([
+    'Host RAM 16.3GB / 96.0GB',
+    'SSD 2.2TB / 2.0TB: does not fit',
+  ]);
+  expect(tiers[1].firstElementChild?.className).toBe('memory-danger');
+  fireEvent.focus(tiers[0].querySelector('[data-chart-point]')!);
+  expect(screen.getByRole('tooltip').textContent).toBe(
+    'Host RAM · Offloaded weights · 16.3GB @ 8k',
+  );
+  cleanup();
+  const { container } = render(<BreakdownTable result={offload} />);
+  const legend = screen.getByRole('list', { name: 'Limiting resource' });
+  expect([...legend.querySelectorAll('li')].map((li) => li.textContent)).toEqual([
+    'compute',
+    'memory',
+    'comm latency',
+    'comm bandwidth',
+    'offload transfer',
+  ]);
+  const first = container.querySelector('tbody tr')!;
+  expect(first.querySelector('th')?.textContent).toBe('moe.expert_fetch');
+  expect(first.querySelector('.transfer-text')?.textContent).toBe('offload transfer');
+  expect((first.querySelector('.bound-bar .transfer') as HTMLElement).style.width).toBe('100%');
+});
+
+it('hatches an on-device n-gram table, offers to move it (to the SSD on unified memory), and lists unified host-RAM groups', async () => {
+  const { summary } = await defaultResult();
+  const stage = summary.memory.stages[0];
+  let placed = 0;
+  const table = {
+    ...summary,
+    memory: {
+      ...summary.memory,
+      kind: 'unified' as const,
+      stages: [{ ...stage, lookupTableBytes: 0.4 * stage.weightBytes }],
+      tiers: [{ tier: 'host_ram' as const, bytes: 16.3e9, capacityBytes: 128e9, fits: true }],
+    },
+  };
+  const { container } = render(
+    <MemoryFit result={table} onPlaceTablesOnHost={() => (placed += 1)} />,
+  );
+  const legend = screen.getByTestId('memory-legend');
+  expect(
+    [...legend.querySelectorAll('li')].map((li) => li.firstChild?.nextSibling?.textContent),
+  ).toEqual(['Weights', 'n-gram table', 'KV + state', 'Activations']);
+  expect(container.querySelector('.capacity-bar .allocation-table')).toBeTruthy();
+  // On unified memory host RAM is the device pool, so the table moves to the SSD.
+  fireEvent.click(screen.getByRole('button', { name: 'Place on SSD' }));
+  expect(placed).toBe(1);
+  // Unified memory: host RAM is the device pool, so a line instead of a tier bar.
+  expect(screen.queryAllByTestId('memory-tier')).toHaveLength(0);
+  expect(screen.getByTestId('memory-unified-host').textContent).toMatch(/^Host RAM groups 16\.3GB/);
 });

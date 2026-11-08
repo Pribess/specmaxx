@@ -9,7 +9,18 @@ import type { MathFormat } from '../ir/dtype';
 import { applyDeviceModifiers, applyLinkModifiers, deviceModifierErrors, linkModifierErrors } from './modifiers';
 import { fabricShapeErrors } from './fabric';
 import type { DeviceModifier, LinkModifier } from './modifiers';
-import type { ComputeEngine, DeviceSpec, EstimatedField, GemmTiling, LinkSpec, SourceRef, TopologySpec } from './types';
+import type {
+  ComputeEngine,
+  DeviceSpec,
+  EstimatedField,
+  GemmTiling,
+  HostInterfaceSpec,
+  HostSpec,
+  LinkSpec,
+  SourceRef,
+  StorageTierSpec,
+  TopologySpec,
+} from './types';
 
 /** One numeric leaf of a spec object. */
 export interface NumericLeaf {
@@ -141,7 +152,8 @@ function engineErrors(e: ComputeEngine, label: string): string[] {
  * source or an estimate; ≥ 1 engine with unique ids; per engine: sparse ≥ dense for the same key, every float
  * input has an fp32-accumulate entry, tiles are multiples of the MMA shape; `capacityOptionsBytes` non-empty
  * and positive; memory bandwidth > 0; every rate used as a divisor (matmul and vector peaks, an engine's memory
- * cap) > 0, and a vector fp32 peak present (the end of the peak fallback chain).
+ * cap) > 0, and a vector fp32 peak present (the end of the peak fallback chain); a `hostInterface`, when present,
+ * names a PCIe generation 3/4/5 and 4/8/16 lanes.
  */
 export function validateDevice(d: DeviceSpec): string[] {
   const label = `device ${d.id}`;
@@ -156,6 +168,102 @@ export function validateDevice(d: DeviceSpec): string[] {
   if (d.memory.capacityOptionsBytes.length === 0) errors.push(`${label}: memory.capacityOptionsBytes is empty`);
   if (d.memory.capacityOptionsBytes.some((c) => c <= 0)) errors.push(`${label}: memory.capacityOptionsBytes must be > 0`);
   if (!(d.memory.bandwidthBytesPerSec > 0)) errors.push(`${label}: memory.bandwidthBytesPerSec must be > 0`);
+  if (d.hostInterface !== undefined) errors.push(...hostInterfaceErrors(d.hostInterface, `${label}.hostInterface`));
+  return errors;
+}
+
+/** Errors of a PCIe host interface: generation one of 3 / 4 / 5, lanes one of 4 / 8 / 16 (values the type allows). */
+function hostInterfaceErrors(h: HostInterfaceSpec, label: string): string[] {
+  const errors: string[] = [];
+  if (![3, 4, 5].includes(h.generation)) errors.push(`${label}: generation must be 3, 4 or 5 (got ${h.generation})`);
+  if (![4, 8, 16].includes(h.lanes)) errors.push(`${label}: lanes must be 4, 8 or 16 (got ${h.lanes})`);
+  return errors;
+}
+
+/** Errors for a number that must be finite and > 0 (a rate, size or latency the engine divides by or adds). */
+function positiveErrors(entries: [string, number | undefined][], label: string): string[] {
+  return entries
+    .filter(([, v]) => v !== undefined && !(Number.isFinite(v) && v > 0))
+    .map(([name, v]) => `${label}: ${name} must be finite and > 0 (got ${v})`);
+}
+
+/** Errors for a number that must be an integer ≥ 1 (a count). */
+function countErrors(entries: [string, number | undefined][], label: string): string[] {
+  return entries
+    .filter(([, v]) => v !== undefined && !(Number.isInteger(v) && v >= 1))
+    .map(([name, v]) => `${label}: ${name} must be an integer ≥ 1 (got ${v})`);
+}
+
+/**
+ * Errors of a storage tier (host RAM or NVMe SSD); empty = valid. Checks: every numeric leaf covered by a source or
+ * an estimate and the provenance records well formed; every size, rate and latency finite and > 0 (the transfer
+ * model divides by the bandwidths and IOPS and adds the latencies); `maxOutstanding`, `readGranularityBytes`,
+ * `channels` and the rated `randomRead.queueDepth` / `threads` integers ≥ 1. See docs/simulation-model.md §4
+ * ("Host and storage tiers").
+ */
+export function validateStorageTier(t: StorageTierSpec, label = `${t.kind} ${t.id}`): string[] {
+  const errors = [...leafErrors(t, t.sources, t.estimated, label), ...provenanceRecordErrors(t.sources, t.estimated, label)];
+  if (t.kind === 'host_ram') {
+    errors.push(
+      ...positiveErrors(
+        [
+          ['capacityBytes', t.capacityBytes],
+          ['bandwidthBytesPerSec', t.bandwidthBytesPerSec],
+          ['latencySec', t.latencySec],
+        ],
+        label,
+      ),
+      ...countErrors(
+        [
+          ['channels', t.channels],
+          ['readGranularityBytes', t.readGranularityBytes],
+          ['maxOutstanding', t.maxOutstanding],
+        ],
+        label,
+      ),
+    );
+  } else {
+    errors.push(
+      ...positiveErrors(
+        [
+          ['capacityBytes', t.capacityBytes],
+          ['seqReadBandwidthBytesPerSec', t.seqReadBandwidthBytesPerSec],
+          ['randomReadLatencySec', t.randomReadLatencySec],
+          ['randomRead.iops', t.randomRead?.iops],
+          ['linkBandwidthBytesPerSec', t.linkBandwidthBytesPerSec],
+        ],
+        label,
+      ),
+      ...countErrors(
+        [
+          ['readGranularityBytes', t.readGranularityBytes],
+          ['maxOutstanding', t.maxOutstanding],
+          ['randomRead.queueDepth', t.randomRead?.queueDepth],
+          ['randomRead.threads', t.randomRead?.threads],
+        ],
+        label,
+      ),
+    );
+  }
+  return errors;
+}
+
+/**
+ * Errors of a node's host spec; empty = valid. The link must pass {@link validateLink} and each present tier
+ * {@link validateStorageTier}; `ram` must be a host-RAM tier and `ssd` an NVMe tier. Whether a host is REQUIRED
+ * (something placed off-device) is the engine's check.
+ */
+export function validateHost(h: HostSpec, label = 'host'): string[] {
+  const errors: string[] = [];
+  if (h.link !== undefined) errors.push(...validateLink(h.link, `${label}.link`));
+  if (h.ram !== undefined) {
+    if (h.ram.kind !== 'host_ram') errors.push(`${label}.ram: must be a 'host_ram' tier (got '${(h.ram as StorageTierSpec).kind}')`);
+    errors.push(...validateStorageTier(h.ram, `${label}.ram`));
+  }
+  if (h.ssd !== undefined) {
+    if (h.ssd.kind !== 'nvme') errors.push(`${label}.ssd: must be an 'nvme' tier (got '${(h.ssd as StorageTierSpec).kind}')`);
+    errors.push(...validateStorageTier(h.ssd, `${label}.ssd`));
+  }
   return errors;
 }
 

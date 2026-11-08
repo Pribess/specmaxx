@@ -76,6 +76,32 @@ async function getJson(
   return parseJson(r.value, `${id}/${file}`);
 }
 
+/**
+ * Fetch and parse one JSON file of a Hub repo (e.g. a drafter's `config.json`), with the same cache, token and
+ * error mapping as {@link fetchHfRepoFiles}. A 404 is a `not_found` error.
+ * @param id repo id `owner/name`.
+ * @param file path inside the repo.
+ * @param options revision, token, injectable fetch/storage (see {@link HfFetchOptions}).
+ * @returns the parsed JSON value, or an {@link HfError} (use `isHfError`).
+ */
+export async function fetchHfJsonFile(id: string, file: string, options: HfFetchOptions = {}): Promise<{ value: unknown } | HfError> {
+  if (!isValidModelId(id)) {
+    return { kind: 'invalid_id', message: `"${id}" is not a Hugging Face model id. Use the form owner/name.` };
+  }
+  const revision = options.revision?.trim() || DEFAULT_REVISION;
+  const f = options.fetchImpl ?? globalThis.fetch?.bind(globalThis);
+  if (!f) return { kind: 'network', message: 'fetch is not available in this environment.' };
+  const ctx: Ctx = {
+    fetchImpl: f,
+    token: options.token === undefined ? getHfToken(options.tokenStorage) : options.token || null,
+    cache: options.cache ?? (options.storage === undefined ? createCache() : createCache(options.storage)),
+    revision,
+  };
+  const r = await getJson(ctx, id, file, resolveUrl(id, file, revision), false);
+  if (r.tag === 'ok') return { value: r.value };
+  return r.tag === 'error' ? r.error : { kind: 'not_found', status: 404, message: `${id} has no ${file}.` };
+}
+
 function baseModelOf(api: HfApiModelInfo): string | undefined {
   const b = api.cardData?.base_model;
   const first = Array.isArray(b) ? b[0] : b;

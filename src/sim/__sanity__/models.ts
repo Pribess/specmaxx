@@ -60,6 +60,21 @@ export const QWEN3_30B_A3B = simpleDecoder({
 });
 
 /**
+ * Qwen3-235B-A22B (`qwen3_moe`): h 4096, 94 layers, 64 heads, 4 KV heads, head dim 128, q/k-norm, MoE 128 experts
+ * top-8 of width 1536 in every layer (`mlp_only_layers` empty), no shared expert, vocab 151936, untied.
+ */
+export const QWEN3_235B_A22B = simpleDecoder({
+  name: 'Qwen3-235B-A22B',
+  source: 'https://huggingface.co/Qwen/Qwen3-235B-A22B/blob/main/config.json',
+  hidden: 4096,
+  vocab: 151936,
+  tieEmbeddings: false,
+  layers: 94,
+  mixer: { kind: 'gqa', heads: 64, kvHeads: 4, headDim: 128, qkNorm: true },
+  ffn: { kind: 'moe', experts: 128, topK: 8, expertIntermediate: 1536 },
+});
+
+/**
  * GLM-4.5-Air (`glm4_moe`): h 4096, 46 layers, 96 heads, 8 KV heads, head dim 128, q/k/v biases, layer 0 a dense
  * MLP of width 10944, layers 1–45 MoE 128 experts top-8 of width 1408 plus one shared expert of width 1408, vocab
  * 151552. Approximations: partial RoPE (factor 0.5) costed as full RoPE (elementwise, negligible); the MTP layer

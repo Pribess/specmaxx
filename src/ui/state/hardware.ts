@@ -11,13 +11,23 @@
  * `validateDevice` / `validateLink` and is honestly marked.
  */
 
-import type { DeviceSpec, EstimatedField, HardwareStack, LinkSpec, TopologySpec } from '../../sim/hw/types';
+import type { DeviceSpec, EstimatedField, HardwareStack, HostMemorySpec, HostSpec, LinkSpec, NvmeSpec, TopologySpec } from '../../sim/hw/types';
 import type { LinkModifier } from '../../sim/hw/modifiers';
 import { applyDeviceModifiers, applyLinkModifiers, describeDeviceModifier, describeLinkModifier } from '../../sim/hw/modifiers';
 import { resolveUnlocks } from '../../sim/hw/unlocks';
 import { numericLeafPaths } from '../../sim/hw/validate';
 import { DEVICE_PRESETS, deviceUnlocks } from '../../sim/hw/presets/index';
-import { LEGACY_LINK_IDS, LINK_PRESETS } from '../../sim/hw/presets/links';
+import { LEGACY_LINK_IDS, LINK_PRESETS, hostPcieLink } from '../../sim/hw/presets/links';
+import {
+  APPLE_SSD_M3_M4_MAX_1TB,
+  APPLE_SSD_M5_PRO_MAX,
+  DEFAULT_HOST_RAM,
+  DEFAULT_SSD,
+  DGX_SPARK_SSD_4TB,
+  HOST_RAM_PRESETS,
+  NVME_GEN4_X4_GENERIC,
+  SSD_PRESETS,
+} from '../../sim/hw/presets/storage';
 import { linkPresetId, nodeTopology } from '../../sim/hw/presets/topologies';
 import {
   POPULAR_SETUPS,
@@ -431,12 +441,88 @@ export interface ResolvedHardware {
   notes: string[];
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// The node's host: host RAM, SSD and the host link (offloading, design doc §2.2, §6.2)
+
+/** The host-RAM preset with this id, or undefined. */
+export function findHostRam(id: string): HostMemorySpec | undefined {
+  return HOST_RAM_PRESETS.find((r) => r.id === id);
+}
+
+/** The SSD preset with this id, or undefined. */
+export function findSsd(id: string): NvmeSpec | undefined {
+  return SSD_PRESETS.find((s) => s.id === id);
+}
+
+/**
+ * The SSD a device starts with: its own internal drive on unified-memory machines (Apple M5 → the M5 Pro/Max SSD,
+ * other Apple chips → the M3/M4 Max SSD, DGX Spark → its 4 TB drive, Strix Halo → a generic PCIe 4.0 x4 drive),
+ * else the engine's default, the Samsung 990 PRO 2 TB.
+ */
+export function defaultSsdFor(device: Pick<DeviceSpec, 'id' | 'memory'>): NvmeSpec {
+  if (device.memory.kind === 'unified') {
+    if (device.id.startsWith('apple-m5')) return APPLE_SSD_M5_PRO_MAX;
+    if (device.id.startsWith('apple-')) return APPLE_SSD_M3_M4_MAX_1TB;
+    if (device.id === 'dgx-spark') return DGX_SPARK_SSD_4TB;
+    if (device.id === 'ryzen-ai-max-plus-395') return NVME_GEN4_X4_GENERIC;
+  }
+  return DEFAULT_SSD;
+}
+
+/** The resolved host of a choice: what the engine gets as `HardwareStack.host`, and where each part came from. */
+export interface ResolvedHost {
+  /** The host-RAM preset in use (capacity overridden when `ramCapacityBytes` is set). */
+  ram: HostMemorySpec;
+  /** The SSD preset in use. */
+  ssd: NvmeSpec;
+  /**
+   * The device's PCIe link to the host: the override, else the device's `hostInterface`; undefined when neither
+   * exists (SXM/OAM modules, SoCs), which the engine rejects while something is offloaded on dedicated memory.
+   */
+  link?: LinkSpec;
+  /** True when `link` is the user's override, not the device's `hostInterface`. */
+  linkOverridden: boolean;
+}
+
+/** Resolves the host of a choice for `device` (see {@link ResolvedHost}). Unknown preset ids fall back to the default. */
+export function resolveHost(hw: Pick<HardwareChoice, 'host'>, device: DeviceSpec): ResolvedHost {
+  const host = hw.host ?? {};
+  const preset = (host.ramId !== undefined ? findHostRam(host.ramId) : undefined) ?? DEFAULT_HOST_RAM;
+  const ram =
+    host.ramCapacityBytes !== undefined && host.ramCapacityBytes !== preset.capacityBytes
+      ? {
+          ...preset,
+          capacityBytes: host.ramCapacityBytes,
+          estimated: [...preset.estimated.filter((e) => e.field !== 'capacityBytes'), { field: 'capacityBytes', reason: EDITED_REASON }],
+        }
+      : preset;
+  const ssd = (host.ssdId !== undefined ? findSsd(host.ssdId) : undefined) ?? defaultSsdFor(device);
+  const iface = host.link ?? device.hostInterface;
+  return {
+    ram,
+    ssd,
+    ...(iface !== undefined ? { link: hostPcieLink(iface.generation, iface.lanes) } : {}),
+    linkOverridden: host.link !== undefined,
+  };
+}
+
+/**
+ * The engine's `HardwareStack.host` for a resolved host: on dedicated memory the link (when known), host RAM and
+ * the SSD; on unified memory only the SSD (host RAM is the device pool there and the link does not exist).
+ */
+export function hostSpecOf(host: ResolvedHost, device: DeviceSpec): HostSpec {
+  if (device.memory.kind === 'unified') return { ssd: host.ssd };
+  return { ...(host.link !== undefined ? { link: host.link } : {}), ram: host.ram, ssd: host.ssd };
+}
+
 /**
  * Resolves a hardware choice to the engine's `HardwareStack`. The device and links are passed already
  * resolved (unlocks and edits applied), with `deviceModifiers` and `linkModifiers` empty, so the engine
  * validates exactly the numbers the user sees. Throws on unknown device / unlock ids (see {@link resolveDevice}).
+ * `stack.host` is set only when `offDevice` is true (the deployment places something off the device), so a
+ * stack without offloading is exactly the one from before host tiers.
  */
-export function resolveHardware(hw: HardwareChoice): ResolvedHardware {
+export function resolveHardware(hw: HardwareChoice, offDevice = false): ResolvedHardware {
   const device = resolveDevice(hw);
   const links = resolveLinks(hw, device);
   const cabling = effectiveCabling(hw);
@@ -458,6 +544,7 @@ export function resolveHardware(hw: HardwareChoice): ResolvedHardware {
     topology,
     memCapacityBytes,
     ...(hw.engineId !== undefined ? { engineId: hw.engineId } : {}),
+    ...(offDevice ? { host: hostSpecOf(resolveHost(hw, device.device), device.device) } : {}),
   };
   return {
     device,
@@ -523,6 +610,13 @@ export interface EditableField {
 }
 
 /**
+ * True if a device leaf path may be edited (spec editor, URL `x`): every numeric leaf except `hostInterface.*`, whose
+ * generation and lanes are enumerations set through the Host link picker, not free numbers.
+ */
+export function isEditableDevicePath(path: string): boolean {
+  return !path.startsWith('hostInterface.');
+}
+/**
  * The editable numbers of a device: every `numericLeafPaths` leaf, grouped into memory, matmul peaks, vector
  * peaks and tiling (advanced), with human labels and display units. Engine-specific labels carry the engine
  * name when the device has more than one engine.
@@ -531,6 +625,7 @@ export function editableFields(device: DeviceSpec): EditableField[] {
   const multiEngine = device.engines.length > 1;
   const fields: EditableField[] = [];
   for (const { path, value } of numericLeafPaths(device)) {
+    if (!isEditableDevicePath(path)) continue;
     const parts = path.split('.');
     const field = (label: string, group: FieldGroup, unit: DisplayUnit) => fields.push({ path, label, group, unit, value });
     if (path === 'memory.bandwidthBytesPerSec') field('Memory bandwidth', 'memory', UNITS.gbps);

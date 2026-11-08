@@ -20,6 +20,7 @@ import {
   normOp,
   shardHeads,
   shardKvHeads,
+  stateSnapshots,
   stepTokens,
   tpAllReduce,
 } from './common';
@@ -82,7 +83,8 @@ function linearShard(block: LinearAttentionBlock, tp: number): LinearShard {
  * Linear-attention ops, in order: input projections → [causal_conv1d] → recurrent → gated_rmsnorm (or rmsnorm) →
  * out_proj → [TP all-reduce of T·h]. Input projections: `lin.in_proj` (one fused GEMM), or for KDA `lin.qkv`
  * (q, k, v and β) plus the low-rank gates `lin.f_a → lin.f_b` (forget) and `lin.g_a → lin.g_b` (output); the
- * rank-r down-projections are replicated on every TP rank.
+ * rank-r down-projections are replicated on every TP rank. In a speculative verify the conv and recurrent states
+ * are written once per position (`stateSnapshots = k + 1`, design doc §3.3); otherwise once.
  */
 export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringContext): Op[] {
   const T = stepTokens(ctx);
@@ -94,6 +96,8 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
   const act = actBpe(ctx);
   // A prior state exists unless this step starts the sequence (first prefill chunk).
   const hasPriorState = ctx.kvLen > ctx.qLen;
+  // State snapshots written per sequence: k + 1 in a speculative verify, else 1.
+  const snapshots = stateSnapshots(ctx);
   const ops: Op[] = [];
 
   if (block.variant === 'kda') {
@@ -118,8 +122,8 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
   if (K > 0) {
     const elems = T * C;
     const convStateBytes = ctx.seqs * C * (K - 1) * act;
-    // Formula: conv1d over T·C: flopsPerElem = 2·K; rolling state seqs·C·(K−1)·bpe(act) read (if prior) and written;
-    //          taps C·K·bpe(hp)
+    // Formula: conv1d over T·C: flopsPerElem = 2·K; rolling state seqs·C·(K−1)·bpe(act) read (if prior) and written
+    //          snapshots times; taps C·K·bpe(hp)
     // See docs/simulation-model.md §5 "Linear-attention sharding"
     ops.push(
       elementwise(
@@ -132,7 +136,7 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
           activationWriteBytes: elems * act,
           weightBytes: C * K * hpBpe(ctx),
           stateReadBytes: hasPriorState ? convStateBytes : 0,
-          stateWriteBytes: convStateBytes,
+          stateWriteBytes: snapshots * convStateBytes,
         },
         ctx,
       ),
@@ -160,6 +164,9 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
     activationDtype: ctx.quant.activations,
     ...attentionMath(ctx),
   };
+  // Formula: state write = stateSnapshots · seqs·heads·dk·dv·bpe(state)   (the field is set only in a verify)
+  // See docs/simulation-model.md §13 ("Verify")
+  if (snapshots > 1) recurrent.stateSnapshots = snapshots;
   ops.push(recurrent);
 
   const outElems = T * vL * dv;

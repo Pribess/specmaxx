@@ -12,14 +12,16 @@
  * pre-norm after `hc_pre` (`input_layernorm`, `post_attention_layernorm`); the streams are averaged (`hc_head`,
  * no params; `modular_glm5_next.py:1281`) before the final RMSNorm.
  *
- * Excluded: the MTP layer (`num_nextn_predict_layers`; a full-indexer MLA + MoE layer without mHC params, plus
- * `eh_proj` and 3 norms) and the vision tower (generic estimate from `vision_config`).
+ * The MTP layer (`num_nextn_predict_layers`; a full-indexer MLA + MoE layer without mHC params, plus `eh_proj` and
+ * 3 norms) is kept as `model.draft` (single-step MTP, costed only with speculative decoding on) and estimated for the
+ * param check. Excluded: the vision tower (generic estimate from `vision_config`).
  */
 
 import type { MixerParams, ResidualParams } from '../../../ir/builders';
 import { decoderLayer, decoderModel, repeatLayers } from '../../../ir/builders';
 import { estimateVisionParams } from '../paramCheck';
 import { createReader, isJsonObject } from '../reader';
+import { mtpDraft, withDraft } from '../drafter';
 import type { FamilyBuildResult, FamilyEntry, JsonObject } from '../types';
 import {
   dsaSelection,
@@ -122,7 +124,7 @@ export function buildGlm5Next(text: JsonObject, top: JsonObject, repoId: string)
   if (visionParams > 0) excludedParts.push('vision tower');
   return {
     kind: 'ok',
-    model,
+    model: withDraft(model, mtpDraft(() => mtpLayer, mtpLayers, true)),
     notes,
     mtpParamsEstimate: mtpParamsEstimate(mtpLayer, hidden, mtpLayers),
     visionParamsEstimate: visionParams,

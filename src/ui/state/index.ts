@@ -5,6 +5,8 @@
  */
 
 export * from './appState';
+export * from './deployment';
+export * from './deploymentInput';
 export * from './url';
 export * from './quant';
 export * from './hardware';

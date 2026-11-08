@@ -31,6 +31,26 @@ export const REF_DENSE_8B: ModelSpec = decoderModel({
   ),
 });
 
+/**
+ * Qwen3-30B-A3B shape: h 2048, 48 layers, 32/4 GQA heads of 128 elements, 128 routed experts,
+ * top-8, expert width 768, no shared experts, untied vocab 151936. 30,532,122,624 parameters.
+ * Source: https://huggingface.co/Qwen/Qwen3-30B-A3B/blob/main/config.json (dims copied by hand).
+ */
+export const REF_MOE_30B_A3B: ModelSpec = decoderModel({
+  name: 'REF_MOE_30B_A3B (Qwen3-30B-A3B shape)',
+  hidden: 2048,
+  vocab: 151936,
+  tieEmbeddings: false,
+  source: 'https://huggingface.co/Qwen/Qwen3-30B-A3B/blob/main/config.json (dims copied by hand)',
+  layers: repeatLayers(48, (i) =>
+    decoderLayer({
+      name: `layer.${i}`,
+      hidden: 2048,
+      mixer: { kind: 'gqa', heads: 32, kvHeads: 4, headDim: 128, qkNorm: true },
+      ffn: { kind: 'moe', experts: 128, topK: 8, expertIntermediate: 768 },
+    }),
+  ),
+});
 /** Tiny dense GQA model (made-up dims): h 256, 2 layers, 4 heads, 2 KV heads, head dim 64, ffn 512, vocab 1000. */
 export const TINY_DENSE: ModelSpec = decoderModel({
   name: 'TINY_DENSE',
@@ -61,7 +81,14 @@ const TINY_GDN: MixerParams = {
 };
 
 /** Gated full attention of the tiny hybrid: 4 heads, 1 KV head, head dim 64, q/k-norm, output gate. */
-const TINY_GATED_GQA: MixerParams = { kind: 'gqa', heads: 4, kvHeads: 1, headDim: 64, qkNorm: true, outputGate: true };
+const TINY_GATED_GQA: MixerParams = {
+  kind: 'gqa',
+  heads: 4,
+  kvHeads: 1,
+  headDim: 64,
+  qkNorm: true,
+  outputGate: true,
+};
 
 /** MoE of the tiny hybrid: 8 experts, top-2, expert width 128, one shared expert of width 256. */
 const TINY_MOE: FfnParams = {
@@ -159,8 +186,14 @@ export const TINY_CSA: ModelSpec = decoderModel({
     const owner = { heads: 2, headDim: 16, topK: 8, keyPoolTokens: 2, keyInputDim: 32 };
     const mixers: MixerParams[] = [
       TINY_CSA_BASE,
-      { ...TINY_CSA_BASE, global: { compressRatio: 2, selection: { kind: 'indexer', indexer: owner } } },
-      { ...TINY_CSA_BASE, global: { compressRatio: 2, kvCacheFromLayer: 1, selection: { kind: 'reuse', topK: 8 } } },
+      {
+        ...TINY_CSA_BASE,
+        global: { compressRatio: 2, selection: { kind: 'indexer', indexer: owner } },
+      },
+      {
+        ...TINY_CSA_BASE,
+        global: { compressRatio: 2, kvCacheFromLayer: 1, selection: { kind: 'reuse', topK: 8 } },
+      },
       {
         ...TINY_CSA_BASE,
         global: {
@@ -170,7 +203,12 @@ export const TINY_CSA: ModelSpec = decoderModel({
         },
       },
     ];
-    return decoderLayer({ name: `layer.${i}`, hidden: 128, mixer: mixers[i], ffn: { kind: 'dense', intermediate: 256 } });
+    return decoderLayer({
+      name: `layer.${i}`,
+      hidden: 128,
+      mixer: mixers[i],
+      ffn: { kind: 'dense', intermediate: 256 },
+    });
   }),
 });
 
@@ -217,7 +255,13 @@ export const TINY_HC_NGRAM: ModelSpec = (() => {
           : {}),
       }),
     ),
-    beforeHead: [hyperCollapse({ streams: 2, dim: 64, pre: { ...pre, projections: [], sinkhornIters: 0, vectorParams: 0 } })],
+    beforeHead: [
+      hyperCollapse({
+        streams: 2,
+        dim: 64,
+        pre: { ...pre, projections: [], sinkhornIters: 0, vectorParams: 0 },
+      }),
+    ],
   });
 })();
 
@@ -236,7 +280,17 @@ export const TINY_KDA: ModelSpec = decoderModel({
     decoderLayer({
       name: 'layer.0',
       hidden: 128,
-      mixer: { kind: 'linear', variant: 'kda', qkHeads: 2, vHeads: 2, keyDim: 32, valueDim: 32, convKernel: 4, outputGate: true, gateRank: 16 },
+      mixer: {
+        kind: 'linear',
+        variant: 'kda',
+        qkHeads: 2,
+        vHeads: 2,
+        keyDim: 32,
+        valueDim: 32,
+        convKernel: 4,
+        outputGate: true,
+        gateRank: 16,
+      },
       ffn: { kind: 'dense', intermediate: 256 },
     }),
     decoderLayer({
@@ -250,7 +304,10 @@ export const TINY_KDA: ModelSpec = decoderModel({
         qkNopeDim: 16,
         qkRopeDim: 0,
         vHeadDim: 16,
-        sparse: { kind: 'indexer', indexer: { heads: 2, headDim: 16, topK: 16, keyPoolTokens: 4, keyPoolGate: true } },
+        sparse: {
+          kind: 'indexer',
+          indexer: { heads: 2, headDim: 16, topK: 16, keyPoolTokens: 4, keyPoolGate: true },
+        },
       },
       ffn: { kind: 'dense', intermediate: 256 },
     }),
@@ -281,11 +338,19 @@ export const TINY_MLA_SHARED: ModelSpec = decoderModel({
   source: 'made-up test fixture (Mistral Large 4 / GLM-5.3 style)',
   layers: repeatLayers(3, (i) => {
     const mixers: MixerParams[] = [
-      { ...TINY_SHARED_MLA, sparse: { kind: 'indexer', indexer: { heads: 2, headDim: 16, topK: 16 } } },
+      {
+        ...TINY_SHARED_MLA,
+        sparse: { kind: 'indexer', indexer: { heads: 2, headDim: 16, topK: 16 } },
+      },
       { ...TINY_SHARED_MLA, sparse: { kind: 'reuse', topK: 16 } },
       { ...TINY_SHARED_MLA, kvCacheFromLayer: 0, sparse: { kind: 'reuse', topK: 16 } },
     ];
-    return decoderLayer({ name: `layer.${i}`, hidden: 128, mixer: mixers[i], ffn: { kind: 'dense', intermediate: 256 } });
+    return decoderLayer({
+      name: `layer.${i}`,
+      hidden: 128,
+      mixer: mixers[i],
+      ffn: { kind: 'dense', intermediate: 256 },
+    });
   }),
 });
 

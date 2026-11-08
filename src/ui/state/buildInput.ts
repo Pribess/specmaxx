@@ -12,6 +12,14 @@ import type { AppState, ModelChoice } from './appState';
 import { resolveHardware, type ResolvedHardware } from './hardware';
 import { fieldIssues, hasErrors, type FieldIssue } from './parallelism';
 import { REFERENCE_QUANT_DEFAULTS, applyQuantOverride } from './quant';
+import { deploymentConfig, type DrafterStatus } from './deploymentInput';
+
+/** The panel an engine validation message belongs to, by its wording (speculative decoding, offloading, else general). */
+function engineIssueField(message: string): FieldIssue['field'] {
+  if (/speculative|draft/i.test(message)) return 'specDec';
+  if (/offload|host link|host_ram|nvme|queue depth|resident|hit ratio|lookup|cpu_compute/i.test(message)) return 'offload';
+  return 'general';
+}
 
 /** A successful `mapHfModel` result. */
 export type HfMapOk = Extract<HfMapResult, { kind: 'ok' }>;
@@ -73,23 +81,26 @@ export type BuildResult =
     };
 
 /**
- * State + loaded model → engine input, or the issues that stop it. `loaded` must be the model of
- * `state.model` (same {@link modelKey}); otherwise (not loaded yet, or stale) the result is a general issue.
- * Steps: resolve the hardware; apply the quant overrides; `fieldIssues` (errors stop here); then the engine's
- * `validateInput`, whose remaining errors are general issues.
+ * State + loaded model (+ the fetch state of a block drafter's config, when spec-dec needs one) → engine input, or
+ * the issues that stop it. `loaded` must be the model of `state.model` (same {@link modelKey}); otherwise (not loaded
+ * yet, or stale) the result is a general issue. Steps: the deployment config (`deploymentConfig`); resolve the
+ * hardware (with `host` only while something is offloaded); apply the quant overrides; `fieldIssues` and the
+ * deployment issues (errors stop here); then the engine's `validateInput`, whose remaining errors go to the
+ * spec-dec / offload field by their wording, else general. `deployment` is in the input only when a knob is on.
  */
-export function buildSimInput(state: AppState, loaded: LoadedModel | null): BuildResult {
+export function buildSimInput(state: AppState, loaded: LoadedModel | null, drafter?: DrafterStatus): BuildResult {
   if (loaded === null || loaded.key !== modelKey(state.model)) {
     return { kind: 'issues', issues: [{ field: 'general', level: 'error', message: 'The model is not loaded yet.' }] };
   }
+  const deployment = deploymentConfig(state, loaded.model, drafter);
   let hardware: ResolvedHardware;
   try {
-    hardware = resolveHardware(state.hw);
+    hardware = resolveHardware(state.hw, deployment.config?.offload !== undefined);
   } catch (e) {
     return { kind: 'issues', issues: [{ field: 'general', level: 'error', message: (e as Error).message }] };
   }
   const quant = applyQuantOverride(loaded.quant.quant, state.quant, loaded.quant.exl3);
-  const issues = fieldIssues(loaded.model, quant, state.parallel, state.workload, hardware.topology);
+  const issues = [...fieldIssues(loaded.model, quant, state.parallel, state.workload, hardware.topology), ...deployment.issues];
   if (hasErrors(issues)) return { kind: 'issues', issues, hardware };
   const input: SimInput = {
     model: loaded.model,
@@ -99,11 +110,14 @@ export function buildSimInput(state: AppState, loaded: LoadedModel | null): Buil
     workload: state.workload,
     hardware: hardware.stack,
     ...(Object.keys(state.options).length > 0 ? { options: state.options } : {}),
+    // Only when a knob is on: with every knob off the input is exactly the one from before deployment knobs.
+    ...(deployment.config !== undefined ? { deployment: deployment.config } : {}),
   };
   const engineErrors = validateInput(input);
   if (engineErrors.length > 0) {
-    const general = engineErrors.map((message): FieldIssue => ({ field: 'general', level: 'error', message }));
+    const general = engineErrors.map((message): FieldIssue => ({ field: engineIssueField(message), level: 'error', message }));
     return { kind: 'issues', issues: [...issues, ...general], hardware };
   }
-  return { kind: 'ok', input, hardware, issues, notes: [...hardware.notes, ...loaded.notes] };
+  const drafterNotes = input.deployment?.speculative !== undefined && drafter?.kind === 'ok' ? drafter.notes : [];
+  return { kind: 'ok', input, hardware, issues, notes: [...hardware.notes, ...loaded.notes, ...drafterNotes] };
 }

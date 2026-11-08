@@ -24,9 +24,11 @@
  *   the stated link widths, the lower end of a bits-per-weight range, the largest memory option).
  */
 
-import type { SimOptions } from '../engine/types';
+import { ACCEPTANCE_PRESETS, expectedTokens } from '../engine/specdec';
+import type { OffloadConfig, SimOptions, SpecDecodeConfig } from '../engine/types';
 import { ARC_PRO_B65 } from '../hw/presets/intel';
-import { PCIE_4_X16, PCIE_4_X16_DIRECT, PCIE_4_X8, PCIE_5_X16_DIRECT, SPARK_CONNECTX_7 } from '../hw/presets/links';
+import { PCIE_4_X16, PCIE_4_X16_DIRECT, PCIE_4_X8, PCIE_5_X16_DIRECT, SPARK_CONNECTX_7, hostPcieLink } from '../hw/presets/links';
+import { DDR5_6000_2CH, DDR5_6400_2CH } from '../hw/presets/storage';
 import { RADEON_AI_PRO_R9700 } from '../hw/presets/amd';
 import { DGX_SPARK } from '../hw/presets/nvidia-datacenter';
 import { RTX_3090, RTX_4090 } from '../hw/presets/nvidia';
@@ -34,7 +36,16 @@ import { RTX_5090_PCIE_2, pcieBox, socCluster } from '../hw/presets/topologies';
 import type { ModelSpec } from '../ir/model';
 import { REF_DENSE_8B } from '../models/reference';
 import { bpwFormat, type QuantPreset, type SanityInput, type SanityNumerics } from './harness';
-import { GLM_4_5_AIR, GPT_OSS_120B, GPT_OSS_20B, LLAMA3_70B, QWEN3_30B_A3B, QWEN3_NEXT_80B_A3B, QWQ_32B } from './models';
+import {
+  GLM_4_5_AIR,
+  GPT_OSS_120B,
+  GPT_OSS_20B,
+  LLAMA3_70B,
+  QWEN3_235B_A22B,
+  QWEN3_30B_A3B,
+  QWEN3_NEXT_80B_A3B,
+  QWQ_32B,
+} from './models';
 
 // ---------------------------------------------------------------------------------------------------------------
 // Types
@@ -45,6 +56,24 @@ export type ReportModel =
   | { kind: 'spec'; spec: ModelSpec }
   /** A Hugging Face fixture, loaded by the test with `sanityRepoFiles(repoId, { dir })` (`dir: 'quant'` for quantized repos). */
   | { kind: 'hf'; repoId: string; dir?: 'quant' };
+
+/**
+ * The block drafter of a speculative-decoding report: a separate drafter repo whose saved config.json the test
+ * parses (`sanityDrafterSpec(repoId)`, `models/hf/__fixtures__/`), or the target checkpoint's own block drafter.
+ */
+export type ReportDrafter = { kind: 'repo'; repoId: string } | { kind: 'checkpoint' };
+
+/**
+ * The deployment-scenario knobs a report ran with (docs/simulation-model.md §12 offload, §13 speculative
+ * decoding), as `DeploymentConfig` with a {@link ReportDrafter}. Their parameters (acceptance, hit ratio, resident
+ * fraction) come from the report wherever it states them; the result is the bound given those parameters.
+ */
+export interface ReportDeployment {
+  /** Weight offloading, as `DeploymentConfig.offload`. */
+  offload?: OffloadConfig;
+  /** Speculative decoding, as `DeploymentConfig.speculative` with a {@link ReportDrafter}. */
+  speculative?: Omit<SpecDecodeConfig, 'drafter'> & { drafter?: ReportDrafter };
+}
 
 /** What a reported rate measures. */
 export type RateKind =
@@ -58,8 +87,8 @@ export type RateKind =
  * - `assert`: `simulated ≥ 0.9 × reported` must hold.
  * - `exception`: a KNOWN failure (`simulated < 0.9 × reported`) with its `reason`; the test asserts that it still fails,
  *   so a fix or a changed report shows up and the list stays honest.
- * - `excluded`: not compared (e.g. speculative decoding, whose decode can legitimately beat the autoregressive bound);
- *   the ratio is still printed.
+ * - `excluded`: not compared (a report whose setup the simulator cannot express); the ratio is still printed.
+ *   Speculative-decoding and offload reports are simulated with the same knobs on (`input.deployment`) and asserted.
  */
 export type CheckMode = { mode: 'assert' } | { mode: 'exception'; reason: string } | { mode: 'excluded'; reason: string };
 
@@ -118,8 +147,11 @@ export interface BenchmarkReport {
   weightFileBytes?: number;
   /** Caveats of the report (data quality, engine limits, what was assumed to map it). */
   caveats: string;
-  /** The harness input that matches the report (its `model` is a {@link ReportModel}). */
-  input: Omit<SanityInput, 'model'> & { model: ReportModel };
+  /**
+   * The harness input that matches the report (its `model` is a {@link ReportModel}, its `deployment` a
+   * {@link ReportDeployment}).
+   */
+  input: Omit<SanityInput, 'model' | 'deployment'> & { model: ReportModel; deployment?: ReportDeployment };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -168,6 +200,37 @@ const GPT_OSS_GGUF: QuantPreset = {
 
 /** GiB → bytes (×2³⁰). */
 const GIB = 2 ** 30;
+
+/**
+ * ubergarm Qwen3-235B-A22B mix-IQ3_K (ik_llama.cpp): attention IQ6_K (6.625 bpw), routed experts gate/up IQ3_K
+ * (3.4375 bpw) and down IQ4_K (4.5 bpw), averaged over the three matrices to (2·3.4375 + 4.5)/3 = 3.7917 bpw;
+ * token_embd and output Q8_0 (8.5). Cross-check: 227.0 G expert params × 3.7917/8 + 6.70 G attention × 6.625/8 +
+ * 1.245 G embedding/head × 8.5/8 = 114.5 GB vs the 106.830 GiB = 114.7 GB file.
+ */
+const UBERGARM_MIX_IQ3_K: QuantPreset = {
+  weights: bpwFormat(6.625),
+  modules: { routed_experts: bpwFormat((2 * 3.4375 + 4.5) / 3) },
+  embeddings: bpwFormat(8.5),
+  note: 'mix-IQ3_K: IQ6_K attention, IQ3_K/IQ4_K experts (3.79 bpw average), Q8_0 embedding and head',
+};
+
+/**
+ * The constant per-position acceptance α that reproduces a reported mean accepted length `tau` (E[τ], bonus token
+ * included) at draft length `k` under the i.i.d. formula E[τ] = (1 − α^(k+1)) / (1 − α) (design doc §5
+ * conventions: α_iid is always derived). Bisection on [0, 1); E[τ] grows monotonically in α. Needs 1 ≤ tau < k + 1.
+ * Dimensionless.
+ */
+export function iidAlphaForExpectedTokens(tau: number, k: number): number {
+  if (!(tau >= 1 && tau < k + 1)) throw new Error(`mean accepted length ${tau} outside [1, ${k + 1}) at k ${k}`);
+  let lo = 0;
+  let hi = 1 - 1e-12;
+  for (let i = 0; i < 100; i++) {
+    const mid = (lo + hi) / 2;
+    if (expectedTokens({ kind: 'iid', alpha: mid }, k) < tau) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
 
 /** KV cache in GGUF q4_0 (4.5 bpw) and q8_0 (8.5 bpw). */
 const KV_Q4_0 = bpwFormat(4.5);
@@ -382,18 +445,19 @@ export const REPORTS: BenchmarkReport[] = [
     genLen: 512,
     contextDepth: 345,
     prefill: { tokensPerSec: 7747.6, kind: 'perSequence' },
-    decode: {
-      tokensPerSec: 274.9,
-      kind: 'perSequence',
-      check: { mode: 'excluded', reason: 'MTP speculative decoding (8 draft tokens) is on' },
-    },
-    caveats: 'Spec decode inflates decode; prefill is the usable number.',
+    decode: { tokensPerSec: 274.9, kind: 'perSequence' },
+    caveats:
+      'MTP speculative decoding (8 draft tokens) is on and simulated (k 8). The record gives no acceptance; the ' +
+      'multi-step MTP prose preset (α 0.75, Qwen3.8-27B card k=7 MT-Bench) is used (the canonical prompt is assumed chat prose).',
     input: {
       model: { kind: 'hf', repoId: 'Qwen/Qwen3.8-27B-FP8', dir: 'quant' },
       quant: 'native',
       numerics: VLLM,
       hardware: { deviceId: 'h200-sxm' },
       workload: { promptLen: 345, genLen: 512, contextDepth: 345 },
+      deployment: {
+        speculative: { method: 'mtp', draftLength: 8, acceptance: { kind: 'iid', alpha: ACCEPTANCE_PRESETS.mtp_multi_step.prose.alpha } },
+      },
     },
   },
   {
@@ -800,12 +864,10 @@ export const REPORTS: BenchmarkReport[] = [
     genLen: 1024,
     contextDepth: 274,
     prefill: { tokensPerSec: 887.6, kind: 'perSequence' },
-    decode: {
-      tokensPerSec: 76,
-      kind: 'perSequence',
-      check: { mode: 'excluded', reason: 'DSPARK speculative decoding always on (mean accepted length 2.85)' },
-    },
-    caveats: 'Verified. The only DeepSeek-V4.1-Flash data; every record has spec decoding on.',
+    decode: { tokensPerSec: 76, kind: 'perSequence' },
+    caveats:
+      'Verified. The only DeepSeek-V4.1-Flash data; every record has spec decoding on. DSpark (the in-checkpoint ' +
+      'drafter, k 5 = its block 6 − 1) is simulated at the reported mean accepted length 2.85 (E[τ], bonus token included).',
     input: {
       model: { kind: 'hf', repoId: 'deepseek-ai/DeepSeek-V4.1-Flash' },
       quant: 'native',
@@ -813,6 +875,14 @@ export const REPORTS: BenchmarkReport[] = [
       hardware: { deviceId: 'dgx-spark', topology: socCluster(DGX_SPARK, 4, SPARK_CONNECTX_7) },
       parallel: { tp: 4 },
       workload: { promptLen: 274, genLen: 1024, contextDepth: 274 },
+      deployment: {
+        speculative: {
+          method: 'dspark',
+          drafter: { kind: 'checkpoint' },
+          draftLength: 5,
+          acceptance: { kind: 'iid', alpha: iidAlphaForExpectedTokens(2.85, 5) },
+        },
+      },
     },
   },
   {
@@ -858,12 +928,11 @@ export const REPORTS: BenchmarkReport[] = [
     genLen: 1024,
     contextDepth: 512,
     prefill: { tokensPerSec: 17562.7, kind: 'perSequence' },
-    decode: {
-      tokensPerSec: 227.3,
-      kind: 'perSequence',
-      check: { mode: 'excluded', reason: 'DFlash2 speculative decoding is on' },
-    },
-    caveats: 'Prefill may include the draft path. Fixture LM head is nvfp4, the report says BF16 (prefill hardly changes).',
+    decode: { tokensPerSec: 227.3, kind: 'perSequence' },
+    caveats:
+      'Prefill may include the draft path. Fixture LM head is nvfp4, the report says BF16 (prefill hardly changes). ' +
+      'DFlash2 speculative decoding is on and simulated with incoai/Qwen3.8-27B-DFlash2 (k 7, block 8); the record ' +
+      'gives no acceptance, so the DFlash 2 prose preset (α 0.79) is used.',
     input: {
       model: { kind: 'hf', repoId: 'nvidia/Qwen3.8-27B-NVFP4', dir: 'quant' },
       quant: 'native',
@@ -871,6 +940,14 @@ export const REPORTS: BenchmarkReport[] = [
       hardware: { deviceId: 'rtx-5090', topology: RTX_5090_PCIE_2, unlocks: { 'pcie-p2p': 'direct' } },
       parallel: { tp: 2 },
       workload: { promptLen: 512, genLen: 1024, contextDepth: 512 },
+      deployment: {
+        speculative: {
+          method: 'dflash2',
+          drafter: { kind: 'repo', repoId: 'incoai/Qwen3.8-27B-DFlash2' },
+          draftLength: 7,
+          acceptance: { kind: 'iid', alpha: ACCEPTANCE_PRESETS.dflash2.prose.alpha },
+        },
+      },
     },
   },
   {
@@ -1347,6 +1424,89 @@ export const REPORTS: BenchmarkReport[] = [
       numerics: LLAMACPP_MMQ,
       hardware: { deviceId: 'instinct-mi300x' },
       workload: { promptLen: 512, genLen: 128 },
+    },
+  },
+  // ------------------------------------------------------------------------------- offload (design doc §8.2 S-1)
+  {
+    id: 'web-52',
+    sourceUrl: 'https://github.com/ggml-org/llama.cpp/pull/29887',
+    date: '2026-10-03',
+    model: 'Qwen3.8-Flash-Next GGUF Q4_0 (93.7 GiB, 65.4 GiB of routed experts)',
+    simulatedModel: 'Qwen/Qwen3.8-Flash-Next (fixture) at the q4_0 preset',
+    quant: 'Q4_0',
+    hardware: '1× RTX 5090 32 GB on PCIe 4.0 x16, EPYC 7742 host (16 cores on the GPU\'s NUMA node)',
+    engine: 'llama.cpp PR 29887 llama-server -fa on -cmoe --moe-cache-mib 19000 (GPU LRU cache of host experts), no MTP',
+    parallelism: 'single GPU',
+    batch: 1,
+    promptLen: 1,
+    genLen: 512,
+    contextDepth: 1,
+    decode: { tokensPerSec: 67.8, kind: 'perSequence' },
+    caveats:
+      'Every routed expert lives in host RAM (-cmoe); a 19000 MiB GPU cache holds f = 19000 MiB / 65.4 GiB = 0.284 of ' +
+      'them, at a measured 89% hit rate (custom h 0.89). Misses cross PCIe 4.0 x16 (31.5 GB/s, the platform link, ' +
+      'not the card\'s Gen5). The EPYC 7742 host RAM (8× DDR4-3200) has no preset; DDR5-6000 2ch (96 GB/s) stands in, ' +
+      'which gives the same result since the link binds, and its 96 GB capacity makes the host tier not fit (not ' +
+      'checked here). The n-gram (PLE) table sits in host RAM as llama.cpp keeps it. SPEED-Bench qualitative prompts ' +
+      '(--osl 512, temp 0) have no stated length: decode is simulated from an empty cache, the favourable end.',
+    input: {
+      model: FLASH_NEXT,
+      quant: 'q4_0',
+      numerics: LLAMACPP_MMQ,
+      hardware: { deviceId: 'rtx-5090', host: { link: hostPcieLink(4, 16), ram: DDR5_6000_2CH } },
+      workload: { promptLen: 1, genLen: 512, contextDepth: 1 },
+      deployment: {
+        offload: {
+          routedExperts: { tier: 'host_ram', residentFraction: 19000 / (65.4 * 1024), hitRatio: { kind: 'custom', h: 0.89 } },
+          lookupTables: { tier: 'host_ram' },
+        },
+      },
+    },
+  },
+  {
+    id: 'web-53',
+    sourceUrl: 'https://huggingface.co/ubergarm/Qwen3-235B-A22B-GGUF',
+    date: '2025-05',
+    model: 'ubergarm/Qwen3-235B-A22B-GGUF mix-IQ3_K (106.830 GiB, 3.903 bpw)',
+    simulatedModel: 'QWEN3_235B_A22B (hand-written spec)',
+    quant: 'mix-IQ3_K: attention IQ6_K, routed gate/up IQ3_K, down IQ4_K, token_embd / output Q8_0',
+    hardware: '1× RTX 3090 Ti FE 24 GB, Ryzen 9 9950X, 96 GB DDR5-6400 (2×48 GB)',
+    engine: 'ik_llama.cpp llama-sweep-bench -c 32768 -b 4096 -ub 4096 -rtr, -ot ffn of layers 10–93 = CPU',
+    parallelism: 'single GPU + CPU experts',
+    batch: 1,
+    promptLen: 4096,
+    genLen: 1024,
+    contextDepth: 0,
+    prefill: { tokensPerSec: 140, kind: 'perSequence' },
+    decode: {
+      tokensPerSec: 10,
+      kind: 'perSequence',
+      check: {
+        mode: 'exception',
+        reason:
+          'CPU-compute offload: ik_llama.cpp runs the experts of layers 10–93 on the CPU, reading them from DDR5 at ' +
+          '102.4 GB/s; the simulator\'s transfer mode streams the missed experts over the PCIe 4.0 x16 link (31.5 GB/s) ' +
+          'instead (cpu_compute is a hook validation rejects, design doc §2.8), so this decode is not bounded by it',
+      },
+    },
+    caveats:
+      'The page quotes "up to 140 tok/sec PP and 10 tok/sec TG" (sweep-bench at N_KV 0, -ub 4096: pp 4096, tg 1024 ' +
+      'tokens). Simulated on the RTX 3090 preset (no 3090 Ti preset; 936 vs 1008 GB/s, prefill is link-bound anyway). ' +
+      'Experts of layers 10–93 in host RAM with none resident (f 0); prefill streams them once per 4096-token ubatch, ' +
+      'which bounds both a GPU-offloaded and a CPU-computed prefill from above here. The host tier (96 GB) is ' +
+      'smaller than the offloaded experts (the run mmaps the file; not checked). IQ_K bits per weight: IQ3_K 3.4375, ' +
+      'IQ4_K 4.5, IQ6_K 6.625 (ik_llama.cpp block sizes).',
+    input: {
+      model: { kind: 'spec', spec: QWEN3_235B_A22B },
+      quant: { kind: 'preset', preset: UBERGARM_MIX_IQ3_K },
+      numerics: LLAMACPP_MMQ,
+      hardware: { deviceId: 'rtx-3090', host: { link: hostPcieLink(4, 16), ram: DDR5_6400_2CH } },
+      workload: { promptLen: 4096, genLen: 1024, contextDepth: 0 },
+      deployment: {
+        offload: {
+          routedExperts: { tier: 'host_ram', layers: { from: 10, to: 94 }, residentFraction: 0, hitRatio: { kind: 'uniform' } },
+        },
+      },
     },
   },
 ];

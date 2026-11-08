@@ -1,16 +1,22 @@
 import { Panel } from './Panel';
 import { NumberField } from './NumberField';
-import { formatContextTokens } from '../state';
-import type { PanelProps as Props } from './types';
+import { SpecDecodeSection } from './SpecDecodeSection';
+import { formatContextTokens, type DrafterStatus } from '../state';
+import type { PanelProps } from './types';
 
 const K_NOTE = '1k = 1024 tokens, so 8k = 8192.';
 
-export function WorkloadPanel({ state, dispatch, built }: Props) {
+/** Method names in the panel summary. */
+const METHOD_NAMES = { mtp: 'MTP', dflash2: 'DFlash 2', dspark: 'DSpark' } as const;
+
+export function WorkloadPanel(props: PanelProps & { drafter?: DrafterStatus }) {
+  const { state, dispatch, built } = props;
   const { batch, promptLen, decodeContextLen } = state.workload;
+  const spec = state.deployment.specDec;
   return (
     <Panel
       title="Workload"
-      value={`Batch ${batch}, prefill ${formatContextTokens(promptLen)}, decode @ ${formatContextTokens(decodeContextLen)}`}
+      value={`Batch ${batch}, prefill ${formatContextTokens(promptLen)}, decode @ ${formatContextTokens(decodeContextLen)}${spec ? `, ${METHOD_NAMES[spec.method]}` : ''}`}
       open
     >
       <div className="fields">
@@ -36,6 +42,7 @@ export function WorkloadPanel({ state, dispatch, built }: Props) {
           help={`Decode tok/s @ N = the rate of generating new tokens when N tokens are already in the KV cache, per sequence and aggregated over the batch. ${K_NOTE}`}
         />
       </div>
+      <SpecDecodeSection {...props} />
     </Panel>
   );
 }

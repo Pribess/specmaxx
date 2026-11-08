@@ -7,8 +7,8 @@
  */
 
 import { opBytes } from '../ir/metrics';
-import type { CollectiveOp, Op } from '../ir/ops';
-import type { BlockSpec, ModelSpec, ParallelConfig, QuantConfig } from '../ir/model';
+import type { CollectiveOp, Op, TransferOp } from '../ir/ops';
+import type { BlockSpec, DraftSpec, LayerSpec, ModelSpec, ParallelConfig, QuantConfig } from '../ir/model';
 import { actBpe, stepTokens } from './common';
 import { csaSequenceStateBytes, lowerCsa } from './csa';
 import { lowerEmbedding } from './embedding';
@@ -21,6 +21,7 @@ import { lowerMlp } from './mlp';
 import { lowerMoe, moeResidentWeightBytes } from './moe';
 import { lowerNgram, ngramResidentWeightBytes, ngramSequenceStateBytes } from './ngram';
 import { lowerNorm, lowerResidual } from './norm';
+import { denseLayerPlacementAt } from './offload';
 import { lowerShortConv, shortConvSequenceStateBytes } from './shortConv';
 
 /** One phase step of one microbatch, as seen by the lowering. */
@@ -37,6 +38,65 @@ export interface LoweringContext {
   quant: QuantConfig;
   /** Parallelism degrees. */
   parallel: ParallelConfig;
+  /**
+   * Resolved off-device placement (deployment `offload`, design doc §2.1); absent = everything on the device, and
+   * lowering emits no `TransferOp` (identity).
+   */
+  offload?: OffloadLowering;
+  /**
+   * Resolved speculative-decoding step (deployment `speculative`, design doc §3.3); absent = plain decode (`qLen 1`,
+   * no `draft.*` layers, no snapshot overrides).
+   */
+  speculative?: SpeculativeLowering;
+}
+
+/**
+ * The off-device placement lowering applies, resolved from `OffloadConfig` with every default filled in (built once
+ * per run by `simulate`). Each present group adds one `TransferOp` in front of the block that consumes it, only
+ * when it has bytes to move. Layer ranges are `[from, to)` over `ModelSpec.layers` (zero-based indices).
+ */
+export interface OffloadLowering {
+  /** Routed experts of the MoE layers in `layers` live on `tier`; a resident cache keeps a fraction of them. */
+  routedExperts?: {
+    /** Tier holding each offloaded layer's full expert set. */
+    tier: 'host_ram' | 'nvme';
+    /** Offloaded layer range `[from, to)` (all MoE layers when the user gave none); non-MoE layers are skipped. */
+    layers: { from: number; to: number };
+    /** Fraction f of each offloaded layer's experts resident on the device, in [0, 1]. Dimensionless. */
+    residentFraction: number;
+    /**
+     * h(f): probability that a unique needed expert is resident, already evaluated by the hit-ratio model
+     * (design doc §2.4), before the physical clamp of the hit count. Dimensionless, in [0, 1].
+     */
+    hitRatio: number;
+    /** Also offload the drafter's own MoE experts (DSpark MoE drafters). */
+    includeDraft: boolean;
+  };
+  /** Whole decoder layers `[from, to)` streamed from `tier` every step. */
+  denseLayers?: { tier: 'host_ram' | 'nvme'; layers: { from: number; to: number } };
+  /** n-gram lookup tables read row by row from `tier` (absent = on the device), with their scale layout (design doc §2.10). */
+  lookupTables?: { tier: 'host_ram' | 'nvme'; scaleLayout: 'separate' | 'pinned_host' | 'interleaved' };
+}
+
+/**
+ * One speculative-decoding step as lowering sees it, resolved from `SpecDecodeConfig` (design doc §3.3, §3.5).
+ * The verify pass is the target lowered with `qLen = verifyTokens`; the drafter's ops are appended to the last stage
+ * as `draft.*` layers.
+ */
+export interface SpeculativeLowering {
+  /** The drafter to lower: the checkpoint's MTP module(s) or the block drafter. */
+  draft: DraftSpec;
+  /** Draft tokens per step k. Count. */
+  draftLength: number;
+  /** Target tokens verified per sequence per step, k + 1. Unit: tokens. */
+  verifyTokens: number;
+  /**
+   * Newly committed tokens of the previous step that the drafter ingests, `m_ctx = ceil(E[τ])` (design doc §3.3).
+   * Unit: tokens.
+   */
+  contextRows: number;
+  /** Recurrent/conv state snapshots written by the verify's state ops, k + 1 (`RecurrentOp.stateSnapshots`). Count. */
+  stateSnapshots: number;
 }
 
 /** The ops of one lowered layer on one device of its stage, in execution order. */
@@ -76,7 +136,9 @@ export function lowerModel(model: ModelSpec, ctx: LoweringContext): LoweredModel
     if (s === 0) layers.push({ name: 'embed', layerIndex: null, ops: lowerEmbedding(model, ctx) });
     const [start, end] = stageLayerRange(L, pp, s);
     for (let i = start; i < end; i++) {
-      const ops = model.layers[i].blocks.flatMap((block) => lowerBlock(block, ctx));
+      const fetch = denseLayerFetchOp(model.layers[i], i, ctx);
+      const blockOps = model.layers[i].blocks.flatMap((block) => lowerBlock(block, ctx, i));
+      const ops = fetch === undefined ? blockOps : [fetch, ...blockOps];
       layers.push({ name: `layer.${i}`, layerIndex: i, ops });
     }
     const stage: LoweredStage = { index: s, layers };
@@ -100,8 +162,43 @@ export function lowerModel(model: ModelSpec, ctx: LoweringContext): LoweredModel
   return { stages };
 }
 
-/** Lower one block to its per-device ops, in execution order (a `switch` on `block.kind` into `lower/<kind>.ts`). */
-export function lowerBlock(block: BlockSpec, ctx: LoweringContext): Op[] {
+/**
+ * Bytes of ONE decoder layer resident on one device with everything on the device: Σ of its blocks' resident weight
+ * bytes (all local experts, the whole table shard). What a `denseLayers` placement streams for it every step. Unit: bytes.
+ */
+export function layerWeightBytesOnDevice(layer: LayerSpec, ctx: LoweringContext): number {
+  const onDevice: LoweringContext = { ...ctx, offload: undefined };
+  // Formula: W_layer = Σ_blocks W_block   (no offload)
+  return layer.blocks.reduce((sum, block) => sum + blockResidentWeightBytes(block, onDevice), 0);
+}
+
+/**
+ * The whole-layer fetch of a layer in the `denseLayers` range (design doc §2.5): `reads [{ 1, W_layer }]`,
+ * `usefulBytes = W_layer`, every step (no hit ratio). Undefined when the layer is on the device or has no weights.
+ */
+export function denseLayerFetchOp(layer: LayerSpec, layerIndex: number, ctx: LoweringContext): TransferOp | undefined {
+  const placement = denseLayerPlacementAt(ctx, layerIndex);
+  if (placement === undefined) return undefined;
+  const W_layer = layerWeightBytesOnDevice(layer, ctx);
+  if (!(W_layer > 0)) return undefined;
+  // Formula: reads = [{ 1, W_layer }];  usefulBytes = W_layer
+  // See docs/simulation-model.md §12 ("Placement")
+  return {
+    kind: 'transfer',
+    name: 'layer.fetch',
+    group: 'dense_layer',
+    source: placement.tier,
+    reads: [{ count: 1, bytesEach: W_layer }],
+    usefulBytes: W_layer,
+  };
+}
+
+/**
+ * Lower one block to its per-device ops, in execution order (a `switch` on `block.kind` into `lower/<kind>.ts`).
+ * `layerIndex` (index into `ModelSpec.layers`) locates the block for the offload placement; without it (draft layers,
+ * one-token weight probes) no transfer op is emitted.
+ */
+export function lowerBlock(block: BlockSpec, ctx: LoweringContext, layerIndex?: number): Op[] {
   switch (block.kind) {
     case 'norm':
       return lowerNorm(block, ctx);
@@ -118,13 +215,13 @@ export function lowerBlock(block: BlockSpec, ctx: LoweringContext): Op[] {
     case 'mlp':
       return lowerMlp(block, ctx);
     case 'moe':
-      return lowerMoe(block, ctx);
+      return lowerMoe(block, ctx, layerIndex);
     case 'hc_pre':
       return lowerHcPre(block, ctx);
     case 'hc_post':
       return lowerHcPost(block, ctx);
     case 'ngram_embedding':
-      return lowerNgram(block, ctx);
+      return lowerNgram(block, ctx, layerIndex);
     case 'short_conv':
       return lowerShortConv(block, ctx);
     default: {
@@ -142,14 +239,15 @@ export function lowerBlock(block: BlockSpec, ctx: LoweringContext): Op[] {
  * bytes equal the weight bytes of its ops in any step: we lower a one-token decode step and sum them (this keeps
  * resident and streamed weights consistent by construction). A MoE step touches only active experts, and an
  * n-gram step only its gathered table rows, so those use their own formulas ({@link moeResidentWeightBytes},
- * {@link ngramResidentWeightBytes}).
+ * {@link ngramResidentWeightBytes}), which also drop the off-device part of an offloaded layer `layerIndex`. A layer
+ * of a `denseLayers` range is handled by the caller (resident 0).
  */
-export function blockResidentWeightBytes(block: BlockSpec, ctx: LoweringContext): number {
+export function blockResidentWeightBytes(block: BlockSpec, ctx: LoweringContext, layerIndex?: number): number {
   switch (block.kind) {
     case 'moe':
-      return moeResidentWeightBytes(block, ctx);
+      return moeResidentWeightBytes(block, ctx, layerIndex);
     case 'ngram_embedding':
-      return ngramResidentWeightBytes(block, ctx);
+      return ngramResidentWeightBytes(block, ctx, layerIndex);
     case 'norm':
     case 'residual':
     case 'gqa_attention':

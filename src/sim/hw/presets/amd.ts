@@ -273,6 +273,8 @@ export const RADEON_AI_PRO_R9700: DeviceSpec = {
   },
   // Infinity Cache 64 MB (last-level cache); the Navi 48 L2 is 8 MB (Hot Chips 2025).
   l2Bytes: 64 * MIB,
+  // "PCIe® 5.0 x16" host interface (product page).
+  hostInterface: { generation: 5, lanes: 16 },
   sources: [
     {
       url: R9700_URL,
@@ -285,6 +287,12 @@ export const RADEON_AI_PRO_R9700: DeviceSpec = {
         '32 GB GDDR6, 256-bit, 640 GB/s; Infinity Cache 64 MB. No BF16 rate is listed.',
     },
     ...RDNA4_SHARED_SOURCES,
+    {
+      url: R9700_URL,
+      title: 'AMD Radeon AI PRO R9700 product page',
+      fields: ['hostInterface'],
+      note: 'Host interface "PCIe® 5.0 x16".',
+    },
   ],
   estimated: [
     ...peakPaths(R9700_ENGINE.matmulPeaks, ['bf16']).map((field) => ({
@@ -328,6 +336,8 @@ export const RADEON_RX_9070_XT: DeviceSpec = {
   },
   // Infinity Cache 64 MB (last-level cache); L2 8 MB.
   l2Bytes: 64 * MIB,
+  // "PCIe® 5.0 x16" host interface (product page).
+  hostInterface: { generation: 5, lanes: 16 },
   sources: [
     {
       url: RX_9070_XT_URL,
@@ -340,6 +350,12 @@ export const RADEON_RX_9070_XT: DeviceSpec = {
         '"Up to 640 GB/s"; Infinity Cache 64 MB. No BF16 rate is listed.',
     },
     ...RDNA4_SHARED_SOURCES,
+    {
+      url: RX_9070_XT_URL,
+      title: 'AMD Radeon RX 9070 XT product page',
+      fields: ['hostInterface'],
+      note: 'Host interface "PCIe® 5.0 x16".',
+    },
     {
       url: ROCM_FP16_GEMM_URL,
       title: 'ROCm blog: FP16 GEMM on RDNA',

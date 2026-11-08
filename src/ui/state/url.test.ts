@@ -30,7 +30,25 @@ const STATES: [string, AppState][] = [
     }),
   ],
   ['parallel + workload', state({ parallel: { tp: 2, pp: 2, dp: 1, ep: 1 }, workload: { batch: 8, promptLen: 4096, decodeContextLen: 32768 } })],
-  ['every option', state({ options: { overlap: 'none', elementwiseFusion: 'ideal', collectiveAlgorithm: 'ring' } })],
+  ['every option', state({ options: { overlap: 'none', elementwiseFusion: 'ideal', collectiveAlgorithm: 'ring', offloadOverlap: 'none' } })],
+  [
+    'every offload knob and host field',
+    state({
+      hw: { host: { ramId: 'ddr5-6400-8ch', ramCapacityBytes: 512e9, ssdId: 'nvme-t705-2tb', link: { generation: 4, lanes: 8 } } },
+      deployment: {
+        offload: {
+          experts: { tier: 'nvme', fromLayer: 3, residentFraction: 0.25, hitRatio: 'skewed_fine_grained' },
+          dense: { tier: 'nvme', layersOnDevice: 40 },
+          tables: { tier: 'host_ram', scaleLayout: 'interleaved' },
+          queueDepth: 32,
+        },
+      },
+    }),
+  ],
+  ['custom hit ratio, host-RAM dense layers', state({ deployment: { offload: { experts: { tier: 'host_ram', hitRatio: 0.6 }, dense: { tier: 'host_ram', layersOnDevice: 0 } } } })],
+  ['MTP with k and a use case', state({ deployment: { specDec: { method: 'mtp', k: 2, useCase: 'code' } } })],
+  ['DFlash 2 with a drafter repo and custom α', state({ deployment: { specDec: { method: 'dflash2', drafter: 'incoai/Qwen3.8-27B-DFlash2', k: 7, alpha: 0.8 } } })],
+  ['DSpark with the hypothetical drafter', state({ deployment: { specDec: { method: 'dspark', drafter: 'hyp', useCase: 'agentic' } } })],
   ['DGX Spark ×4 ring', state({ hw: { deviceId: 'dgx-spark', nodes: 4, cabling: 'ring' }, parallel: { tp: 4, pp: 1, dp: 1, ep: 1 } })],
   ['Strix Halo ×4 daisy chain', state({ hw: { deviceId: 'ryzen-ai-max-plus-395', nodes: 4, cabling: 'chain' } })],
   ['M5 Ultra ×4 mesh, 2 cables per pair', state({ hw: { deviceId: 'apple-m5-ultra-80c', capacityIndex: 2, nodes: 4, cabling: 'mesh2' } })],
@@ -212,5 +230,38 @@ describe('URL codec', () => {
     const four = decodeState('d=rtx-3090&n=4&il=rtx-3090-nvlink-bridge');
     expect(four.dropped).toEqual(['il=rtx-3090-nvlink-bridge']);
     expect(four.state.hw.intraLinkId).toBeUndefined();
+  });
+
+  it('encodes the deployment and host keys in a readable canonical form', () => {
+    const q = 'hr=ddr5-6400-8ch&hrc=512&ssd=nvme-t705-2tb&hl=4x8&oo=none&ox=ssd&oxl=3&oxf=0.25&oxh=fine&odl=40&odt=ssd&olt=ram&ols=interleaved&oqd=32&sd=dflash2&sdr=hyp&sdk=5&sda=0.8';
+    const { state: s, dropped } = decodeState(q);
+    expect(dropped).toEqual([]);
+    expect(encodeState(s)).toBe(q);
+    expect(s.deployment.specDec).toEqual({ method: 'dflash2', drafter: 'hyp', k: 5, alpha: 0.8 });
+  });
+
+  it('omits default deployment values', () => {
+    const s = state({
+      options: { offloadOverlap: 'ideal' },
+      deployment: { offload: { experts: { tier: 'host_ram', fromLayer: 0, residentFraction: 0, hitRatio: 'uniform' }, tables: { tier: 'nvme', scaleLayout: 'pinned_host' } }, specDec: { method: 'mtp', useCase: 'prose' } },
+    });
+    expect(encodeState(s)).toBe('ox=ram&olt=ssd&sd=mtp');
+  });
+
+  it('drops invalid deployment values and dependent keys without their parent', () => {
+    const d = decodeState('ox=gpu&oxf=0.5&olt=ram&ols=zig&oqd=0&sd=eagle&sdk=3&hr=ddr9&hrc=-1&ssd=floppy&hl=6x16&oo=maybe');
+    expect(d.dropped).toEqual(['oo=maybe', 'hr=ddr9', 'hrc=-1', 'ssd=floppy', 'hl=6x16', 'ox=gpu', 'oxf=0.5', 'ols=zig', 'oqd=0', 'sd=eagle', 'sdk=3']);
+    expect(d.state.deployment).toEqual({ offload: { tables: { tier: 'host_ram' } } });
+    expect(d.state.hw.host).toBeUndefined();
+    const range = decodeState('sd=mtp&sdk=17&sda=0.995&sdr=a/b&sdu=poetry&oxh=fine&odt=ssd');
+    expect(range.dropped).toEqual(['oxh=fine', 'odt=ssd', 'sdr=a/b', 'sdk=17', 'sdu=poetry', 'sda=0.995']);
+    expect(range.state.deployment).toEqual({ specDec: { method: 'mtp' } });
+    expect(decodeState('ox=ram&oxf=1.5&oxh=1.2').dropped).toEqual(['oxf=1.5', 'oxh=1.2']);
+  });
+
+  it('drops hostInterface edits from x (set through the host link instead)', () => {
+    const d = decodeState('x=hostInterface.lanes:8,memory.bandwidthBytesPerSec:2e12');
+    expect(d.dropped).toEqual(['x=hostInterface.lanes:8']);
+    expect(d.state.hw.deviceEdits).toEqual({ 'memory.bandwidthBytesPerSec': 2e12 });
   });
 });

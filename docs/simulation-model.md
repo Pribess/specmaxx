@@ -17,6 +17,8 @@ Contents:
 9. [Deliberately excluded, and approximations](#9-deliberately-excluded-and-approximations)
 10. [Worked example: REF_DENSE_8B on one RTX 5090](#10-worked-example-ref_dense_8b-on-one-rtx-5090)
 11. [Extending](#11-extending)
+12. [Offloading](#12-offloading)
+13. [Speculative decoding](#13-speculative-decoding)
 
 ---
 
@@ -33,6 +35,10 @@ what the hardware and the math allow, not what a particular inference engine ach
 - Communication uses the alpha-beta model (§6). Under the default overlap assumption, bandwidth terms hide
   behind compute and latency terms do not (§7 "Stage time and overlap").
 - No inference-engine knobs (§9).
+- Speculative decoding and weight / expert / lookup-table offloading are **opt-in deployment-scenario knobs, off by
+  default** (`SimInput.deployment`; [§12](#12-offloading), [§13](#13-speculative-decoding)). Off, the results are
+  bit-identical to the model without them (`engine/identity.test.ts`). On, a result is still the hardware/math upper
+  bound given the knob's stated parameters (hit ratio, acceptance, placement, queue depth, overlap).
 
 **Units: SI decimal.** 1 GB = 1e9 B, 1 TB/s = 1e12 B/s, 1 TFLOP/s = 1e12 FLOP/s (`src/sim/hw/units.ts`:
 `tflops`, `gbPerSec`, `tbPerSec`, `gb`, `mb`, `usec`). Times are seconds, rates tokens/s, sizes bytes or
@@ -309,7 +315,9 @@ compressed global entries next to its raw window) shares the same softmax: Q is 
 - `pairs = attendedPairs(primary) + attendedPairs(secondary, r)` (`attentionPairs`, also used by the shape model)
 - `F = 2·seqs·heads·pairs·(qkHeadDim + vHeadDim)` (softmax not counted, §9)
 - read Q `seqs·qLen·heads·qk·bpe(act)`, write O `seqs·qLen·heads·v·bpe(act)`
-- kvRead `seqs·kvTokensRead·kvRead.elemsPerToken·bpe(kvRead)`; kvWrite `seqs·qLen·kvWrite.elemsPerToken·bpe(kvWrite)`
+- kvRead `seqs·kvTokensRead·kvRead.elemsPerToken·bpe(kvRead)`; kvWrite `seqs·w·kvWrite.elemsPerToken·bpe(kvWrite)` with
+  `w = kvWriteTokens ?? qLen` (`attentionBytes`; a block drafter attends over its new rows but keeps only the m_ctx
+  context rows, §13 "Draft ops")
 - secondary: kvRead `seqs·kvTokensRead(sel, r)·elemsPerEntry·bpe`; kvWrite `seqs·qLen·elemsPerNewToken·bpe` (the
   owner of a compressed cache writes `entryElems/r` per token, a consumer 0). Lowering it as two attention ops
   would add a second Q read, an O round trip and a merge, which in batched decode cost as much as the compressed
@@ -338,7 +346,8 @@ State per sequence = `heads·dk·dv` elements.
 - `c_s` (documented approximations): chunked 4 for all variants (inter-chunk output 2 + state update 2);
   step: GatedDeltaNet and KDA 7 (Sᵀk 2 + delta outer product 2 + decay 1 + output 2; KDA's per-channel decay is
   still 1 FLOP per state element), Mamba2 5, linear 4.
-- state read `hasPriorState ? seqs·heads·dk·dv·bpe(state) : 0`, state write `seqs·heads·dk·dv·bpe(state)`;
+- state read `hasPriorState ? seqs·heads·dk·dv·bpe(state) : 0`, state write
+  `(stateSnapshots ?? 1)·seqs·heads·dk·dv·bpe(state)` (a speculative verify writes k + 1 snapshots, §13 "Verify");
   chunked mode keeps intermediate chunk states on chip.
 - read q, k `2·T·qkHeads·dk·bpe(act)`, v `T·heads·dv·bpe(act)`, gates `T·heads·g·bpe(act)` with
   `g = gateElemsPerTokenPerHead` (2 for GatedDeltaNet / Mamba2; KDA `dk + 1`: per-channel decay plus β); write o
@@ -348,7 +357,8 @@ State per sequence = `heads·dk·dv` elements.
 
 `metrics.ts: opFlops (elementwise), elementwiseBytes`; `lower/common.ts: ELEMENTWISE_FLOPS_PER_ELEM`,
 `SHAPE_DEPENDENT_FNS` (set by their lowering).
-`F = elems·flopsPerElem`; bytes are the op's explicit fields (activation read/write, weights, state).
+`F = elems·flopsPerElem`; bytes are the op's explicit fields (activation read/write, weights, state, and
+`kvWriteBytes` for a write-only cache op, counted as KV writes).
 
 | fn | FLOP / elem | fn | FLOP / elem |
 |---|---|---|---|
@@ -363,6 +373,10 @@ State per sequence = `heads·dk·dv` elements.
 | hc_collapse | 2·N per output elem | hc_expand | 2N + 2 (mixing), else 2 |
 | sinkhorn | 4·iters per T·N² elem | ngram_gate | 8 (two norm statistics, dot, sigmoid, fused add) |
 | kv_pool | 4 (softmax weight, multiply, add) | causal_conv1d (+ residual) | 2·K + 1 |
+| kv_cache_write | 1 (cast to the KV format; §13 "Draft-cache prefill") | candidate_score | 2 (DFlash 2 selector multiply-add) |
+
+The DFlash 2 dynamic convs (§13 "Draft ops") are `causal_conv1d` ops with an explicit `flopsPerElem = 4·K` (base
+and dynamic taps, applied in both the prepare and the finish step).
 
 These only feed the vector time; elementwise ops are memory-bound in practice.
 
@@ -375,6 +389,13 @@ These only feed the vector time; elementwise ops are memory-bound in practice.
 
 No FLOP, no memory traffic (`opBytes` returns zeros); its time is `messageBytes` through the alpha-beta model
 (§6).
+
+### Transfer
+
+`ir/ops.ts: TransferOp` (deployment knob `offload`, §12). A read of off-device weight bytes in front of the op
+that needs them: physical read classes `reads [{ count, bytesEach }]` (expected counts, real) and the `usefulBytes`
+that cross the host link. No FLOP and no device-memory traffic (`opBytes` returns zeros; the DMA write into device
+memory is a documented approximation); its time is the tier/link model of §12 "Transfer path".
 
 ---
 
@@ -664,6 +685,39 @@ costed in §6
   hop; absent = 0). Like every number, both are sourced or `estimated`. `TopologySpec.interNodeFabric` absent means
   a non-blocking switch, the convention of every topology before fabric shapes; shapes other than `'switched'` need
   one device per node (`validateTopology`).
+
+### Host and storage tiers
+
+`src/sim/hw/types.ts: HostMemorySpec, NvmeSpec, StorageTierSpec, HostSpec, HostInterfaceSpec, HostComputeSpec`;
+`src/sim/hw/presets/storage.ts: HOST_RAM_PRESETS, SSD_PRESETS`; `src/sim/hw/presets/links.ts: hostPcieLink,
+pcieBandwidthPerDirectionBytesPerSec`; `src/sim/hw/validate.ts: validateStorageTier, validateHost`. Read only when a
+deployment offloads weights off the device (design: `docs/design/offload-specdec-latency.md` §2.2); with nothing
+offloaded no result depends on them.
+
+- **One host per node** (`HardwareStack.host?: { link?, ram?, ssd? }`): `ram` (host DRAM, `kind: 'host_ram'`) and
+  `ssd` (NVMe, `kind: 'nvme'`) are shared by every device of the node; `link` is per device, per direction (a
+  `LinkSpec`, `p2p: 'direct'`: the device DMAs host memory itself). On unified memory host RAM is the device pool
+  (no separate tier, no link); only the SSD is a tier.
+- **Host RAM**: `bandwidthBytesPerSec` = MT/s × 8 B × channels, the theoretical read + write peak of the node
+  (`ddr5BandwidthBytesPerSec`; DDR5-6000 × 2 = 96 GB/s, the same host the host-bounce PCIe links assume);
+  `latencySec` the unloaded load-to-use latency (Chips and Cheese measurements, else estimated);
+  `readGranularityBytes` one 64 B cache line; `maxOutstanding` the memory-level parallelism of random reads (64,
+  estimated). Capacities are configuration choices, always `estimated`.
+- **NVMe**: `seqReadBandwidthBytesPerSec` the datasheet sequential read; `randomReadLatencySec` the QD1 4 KiB
+  latency (1 / QD1 IOPS when only that is published); `randomRead?: { iops, queueDepth, threads }` the datasheet
+  maximum and its condition (optional: absent drops the IOPS term); `maxOutstanding` = queueDepth × threads of
+  that condition (or an estimate); `readGranularityBytes` 4096 (one logical block); `linkBandwidthBytesPerSec?`
+  the slot ceiling when it binds below the drive (Gen4 x4 = 7.88 GB/s). Datasheet ceilings, not achieved rates.
+  Apple SSDs have no datasheet: their numbers rest on crowd measurements (`kind: 'community'`).
+- **Host link**: `hostPcieLink(generation, lanes)` = GT/s × lanes × 128/130 ÷ 8 per direction (Gen3 8, Gen4 16,
+  Gen5 32 GT/s per lane), the same formula as the device-to-device PCIe links (Gen5 x16 = 63.015 GB/s), α = 1 µs
+  estimated. `DeviceSpec.hostInterface?: { generation, lanes }` is the card's cited edge connector (electrical lanes:
+  Arc Pro B60 is x16 mechanical, x8 electrical); the engine builds the default host link from it. SXM / OAM modules
+  and SoCs carry none.
+- **Defaults**: `DDR5_6000_2CH` (host RAM) and `NVME_990_PRO_2TB` (SSD), used with a warning when the stack names
+  no tier.
+- **CPU compute** (`HostComputeSpec`): a hook for a future CPU-compute offload mode, not costed; the mode is
+  rejected by input validation.
 
 ---
 
@@ -1037,6 +1091,7 @@ One exhaustive switch on `op.kind`. `memBW = min(memory.bandwidthBytesPerSec, en
 | recurrent (step), elementwise | `F / vectorPeak(dtype)` (state dtype for the step) | `bytes/memBW` |
 | embedding | 0 | `bytes/memBW` |
 | collective | §6 on the group's path (TP group, EP group, or this stage's PP boundary) | — |
+| transfer (off-device read, deployment `offload`) | — | the tier/link model of §12 (latency `transferLatencySec` + service `transferBandwidthSec`); `bound = 'transfer'`. No FLOP, no device-memory bytes |
 
 `t = max(compute, memory)`; the larger term is the op's `bound` (a tie counts as compute). A tensor op whose
 lookup falls back to the vector peak keeps the efficiency term (conservative).
@@ -1048,14 +1103,42 @@ keeping weight and state bytes. The default is the conservative one; for REF_DEN
 
 ### Stage time and overlap
 
-`src/sim/engine/pipeline.ts: stageResult, layerResult`. Per stage and microbatch: `compute_s` = Σ non-collective
-op times, `lat_s` = Σ collective α terms, `bw_s` = Σ collective β terms, `p2p_s` = the send to the next stage.
+`src/sim/engine/pipeline.ts: stageResult, layerResult`. Per stage and microbatch: `compute_s` = Σ op times of every
+op that is neither a collective nor an off-device transfer, `lat_s` = Σ collective α terms, `bw_s` = Σ collective β
+terms, `p2p_s` = the send to the next stage, `xfer_s` = Σ transfer op times (0 unless something is offloaded).
 
-- `overlap = 'none'`: `t_s = compute_s + lat_s + bw_s + p2p_s`
-- `overlap = 'ideal'` (**default**): `t_s = lat_s + max(compute_s, bw_s)`. β can hide behind independent work
+First the core time `t_core,s`:
+
+- `overlap = 'none'`: `t_core,s = compute_s + lat_s + bw_s + p2p_s`
+- `overlap = 'ideal'` (**default**): `t_core,s = lat_s + max(compute_s, bw_s)`. β can hide behind independent work
   (other token or column chunks); α is on the dependency chain. The PP send is not in `t_s`; it lengthens the
   latency path and, as a link resource, bounds the cycle (below).
-- `exposedCommSec = t_s − compute_s`.
+- `exposedCommSec = t_core,s − compute_s`.
+
+Then the off-device transfers (`SimOptions.offloadOverlap`, design doc §2.6), with `core_s = max(compute_s, bw_s)`
+under `overlap 'ideal'` and `compute_s + bw_s + p2p_s` under `'none'`:
+
+- `offloadOverlap = 'ideal'` (**default**): `t_s = lat_s + max(core_s, xfer_s)` (the next layer's transfers are
+  prefetched while this layer computes; prediction accuracy is not modelled).
+- `offloadOverlap = 'none'`: `t_s = t_core,s + xfer_s` (demand fetch, serialized).
+- `exposedTransferSec = t_s − t_core,s`. With `xfer_s = 0` both give `t_s = t_core,s` exactly (the code keeps
+  today's expression for that case, so the results are bit-identical).
+
+### Comm latency vs bandwidth split
+
+`src/sim/engine/pipeline.ts: phaseComm, phaseTransfer` → `PhaseResult.comm`, `PhaseResult.transfer`. Display only:
+sums of numbers the engine already computes, so no rate depends on them (design doc §4.2).
+
+- `comm.latencySec = Σ_s lat_s + Σ α_p2p` (every collective α on the critical path, PP sends included).
+- `comm.bandwidthSec = Σ_s bw_s + Σ β_p2p`.
+- `comm.exposedSec = Σ_s exposedComm_s + Σ p2p` under `overlap 'ideal'` (the sends are on the latency path, not
+  in `t_s`); under `'none'` each send is already inside `t_s`, hence inside `exposedComm_s`, and is not added again.
+- `transfer = { sec: Σ_s xfer_s, exposedSec: Σ_s exposedTransfer_s, bytes: Σ usefulBytes, requests: Σ reads.count }`
+  for one microbatch through every stage; absent when no stage has a transfer op.
+- Example (`pipeline.test.ts`, design doc §8.3): REF_DENSE_8B on `SYNTH_CLUSTER`, decode @ 1024. tp 4: 73 tree
+  all-reduces of `2·⌈log2 4⌉·1 µs` give `latencySec = 292 µs`, `bandwidthSec = 11.96 µs`. tp 2 pp 2 (b 2):
+  `146 µs` in the stages + the send's `α = 1 µs` = `147 µs`; the send's `β = 0.08192 µs` goes into
+  `bandwidthSec`.
 
 ### Pipeline and DP
 
@@ -1117,10 +1200,11 @@ Per device of stage s:
   `(K−1)·dilation·O·bpe(act)`; hyper-connections 0.
 - `act_s` = the largest activation read + write of any single op of the stage over both phases (the transient
   inputs and outputs of the op running). It scales with `b_mb·promptLen` in prefill.
-- `total_s = W_s + B_r·state_s + act_s`; `fits = total_s ≤ capacity`, capacity =
-  `memCapacityBytes ?? capacityOptionsBytes[0]` of the modified device.
-- `maxSequencesPerReplica = floor(min_s (capacity − W_s − act_s)/state_s)` (Infinity when no stage keeps
-  per-sequence state). The activation peak is the one at the evaluated batch, so this is an estimate.
+- `total_s = W_s + B_r·state_s + act_s (+ staging_s)`; `fits = total_s ≤ capacity`, capacity =
+  `memCapacityBytes ?? capacityOptionsBytes[0]` of the modified device. With weights offloaded, `W_s` keeps only the
+  resident part, `staging_s` is the streaming buffer, and the off-device tiers are checked too (§12 "Memory tiers").
+- `maxSequencesPerReplica = floor(min_s (capacity − W_s − act_s − staging_s)/state_s)` (Infinity when no stage
+  keeps per-sequence state). The activation peak is the one at the evaluated batch, so this is an estimate.
 
 ### Unified memory
 
@@ -1134,17 +1218,21 @@ not modeled, and `simulate` adds a warning saying so.
 Excluded on purpose (only hardware and math limits are modeled):
 
 - **Inference-engine knobs**: paged attention, continuous batching, chunked prefill, scheduler overhead,
-  kernel launch overhead of a specific engine, CUDA graphs. Speculative decoding and weight/expert/lookup-table
-  offloading are opt-in deployment-scenario knobs (off by default, identical results when off); their design is
-  `docs/design/offload-specdec-latency.md`.
+  kernel launch overhead of a specific engine, CUDA graphs. The exception: speculative decoding and weight / expert /
+  lookup-table offloading are **opt-in deployment-scenario knobs, off by default** ([§12](#12-offloading),
+  [§13](#13-speculative-decoding); design `docs/design/offload-specdec-latency.md`). Off, results are bit-identical;
+  on, they are the hardware/math bound given the stated acceptance, hit ratio and placement. Draft trees, the DSpark
+  confidence scheduler, predictor accuracy and the CPU-compute offload mode (a hook validation rejects) are not
+  modelled.
 - Softmax / SFU throughput (it can bind for head_dim ≤ 64).
 - Dequantization compute of weight-only quantized GEMMs (they run at the wider format's peak, §2).
 - Split-K / stream-K; L2 / cache reuse beyond compulsory traffic.
 - Clock throttling beyond an explicit `clockScale` modifier.
 - NVLS / SHARP in-switch reduction; PCIe switch / shared-uplink contention; the memory traffic of collectives
   and comm/compute contention for memory.
-- Sequence parallelism; logits gather; attention sinks; expected-value MoE routing
-  (`E·(1−(1−k/E)^T)` active experts is a documented future option); the OS memory reservation.
+- Sequence parallelism; logits gather; attention sinks; expected-value MoE routing for the grouped expert GEMMs
+  (`E·(1−(1−k/E)^T)` distinct experts is used only for the offload transfers, §12 "Expert hit ratio"; the GEMMs
+  keep balanced routing); the OS memory reservation.
 
 Documented approximations (each isolated in one constant or rule):
 
@@ -1168,6 +1256,13 @@ Documented approximations (each isolated in one constant or rule):
   links; mesh striping over k cables is ideal; every shape but switched needs one device per node; intra-node links
   stay switched (`XGMI_MI300X_8_GPU` encodes its full mesh as aggregate injection under the switched formulas, which
   equals the mesh's direct β but keeps the ring's 2(n−1)α; re-modelling it is a follow-up).
+- Offload (§12): the DMA write of streamed bytes into device memory is not charged to its bandwidth; expected
+  misses and requests are real numbers (no rounding; the staging buffer rounds up); under `offloadOverlap 'ideal'`
+  prefetch is perfect; the host link takes no link modifiers.
+- Speculative decoding (§13): `m_ctx = ⌈E[τ]⌉` context rows; every MTP pass reads `N + k + 1` keys; rejected KV
+  rows and tentative MTP rows are overwritten, not charged back; the selector's and Markov head's sequential walks
+  are not costed; the DeepSeek-V4.1 MoE drafter adds its context rows to the compressed-KV GEMM and runs its
+  attention non-causally, without the context rows' kv norm / RoPE.
 
 Shortlist-model approximations (sub-percent unless noted):
 
@@ -1265,3 +1360,218 @@ These checklists are binding for later tasks. TypeScript's exhaustive `never` ch
 3. Spot values and vendor ratios in the vendor's `<vendor>.test.ts`; `hw/presets.test.ts` covers validation,
    every unlock selection and a `simulate()` smoke run automatically.
 4. This document, §4 "Preset library" (and "Unlock axes" for new axes).
+
+## 12. Offloading
+
+Deployment knob `SimInput.deployment.offload` (design: `docs/design/offload-specdec-latency.md` §2). Off by
+default: absent, `{}` or `lookupTables: { tier: 'device' }` emit no transfer op, add no memory, never read
+`hardware.host`, and give bit-identical results (`engine/identity.test.ts`). With it on, the result is still the
+hardware/math bound given the stated hit ratio, queue depth and overlap: only bytes crossing the host link and
+requests paying a latency are added. Worked examples W1, W3, W4 are tests in `engine/e2e-offload.test.ts`.
+
+### Placement
+
+`src/sim/engine/host.ts: resolveOffload`; `lower/offload.ts: expertPlacementAt, denseLayerPlacementAt,
+tablePlacementAt`; `lower/moe.ts: expertFetchOp`; `lower/lower.ts: denseLayerFetchOp, layerWeightBytesOnDevice`;
+`lower/ngram.ts: tableFetchOp`. Three weight groups, each lowered to one `TransferOp` (§3 op catalogue: `kind
+'transfer'`) in front of the block that consumes it, **only when it has bytes to move**:
+
+| group | selector | stays on device | `reads` / `usefulBytes` per step |
+|---|---|---|---|
+| `routed_experts` (`moe.expert_fetch`) | MoE layers in `layers` (default all) | `C = f·E_loc` experts, router, shared experts | `[{ M, W_expert }]` / `M·W_expert` |
+| `dense_layer` (`layer.fetch`) | layers `[from, to)` | nothing of the layer | `[{ 1, W_layer }]` / `W_layer` |
+| `lookup_table` (`<block>.row_fetch`) | every n-gram table | projections, gate vectors, conv taps | per scale layout, below / `R·rowBytes` |
+
+- `W_expert = gemmWeightBytes(gated ? 3 : 2, h, fe/etp, w_routed)` (`moe.ts: expertWeightBytes`); the grouped
+  expert GEMMs keep their `a` active experts, so the device-memory bytes of the step are unchanged.
+- `W_layer` = Σ of the layer's resident block weights with everything on the device (all experts, the whole table
+  shard). A layer in the `denseLayers` range gets no expert or table transfer on top (it is streamed whole).
+- On unified memory host RAM is the device pool: a `'host_ram'` placement is dropped with a note (no op, the
+  weights stay counted on the device); only `'nvme'` is a tier there.
+- Draft layers (spec-dec) are lowered without a layer index and get no transfer op.
+
+### Storage tiers
+
+`src/sim/engine/host.ts: resolveHost, defaultSsdFor, transferPath`. The tiers and the host link of §4 "Host and
+storage tiers", resolved only when something is off-device; each default warns:
+
+- dedicated memory: `host.link ?? hostPcieLink(device.hostInterface)` (validation rejects a device with neither);
+  `host.ram ?? DDR5_6000_2CH` (a tier, and the staging hop of NVMe reads);
+- `host.ssd ??` the device's own drive on unified systems (Apple M5 → `apple-ssd-m5-pro-max`, other Apple →
+  `apple-ssd-m3-m4-max-1tb`, DGX Spark → `dgx-spark-ssd-4tb`, Ryzen AI Max → `nvme-gen4-x4-generic`), else
+  `NVME_990_PRO_2TB`. An SSD without `randomRead` warns (no IOPS term).
+
+### Transfer path
+
+`src/sim/engine/transfer.ts: transferTime, tierLatencySec, tierBandwidthBytesPerSec, resolveQueueDepth`;
+`engine/opTime.ts` (`case 'transfer'`). One rule for every group, per device and step:
+
+```
+R          = Σ_i count_i                                      read requests (expected, real)
+bytes_tier = Σ_i count_i·ceil(bytes_i / gran)·gran            every read rounded up to the tier's granularity
+α_path     = α_tier + α_link                                  latencies add (α_link = 0 on unified memory)
+service    = max( (R − 1)·α_tier / QD,                        Little's law, QD outstanding requests
+                  R / (IOPS / n_stream),                      SSD request rate (rated SSDs only)
+                  bytes_tier / (B_tier / n_stream),           tier bandwidth
+                  usefulBytes / B_link,                       this device's link (not shared)
+                  [NVMe, dedicated] bytes_tier / (B_ram / (2·n_stream)) )   host RAM staging: written and read once
+t_path     = α_path + service
+```
+
+`α_tier` = host RAM `latencySec` or the SSD's `randomReadLatencySec`; `B_tier` = host RAM `bandwidthBytesPerSec`
+or `min(seqRead, linkBandwidth)`; `QD = min(queueDepth ?? maxOutstanding, maxOutstanding)`. Hops are pipelined
+across requests and chunks, so the throughput terms take the max. The op's `transferLatencySec = α_path`,
+`transferBandwidthSec = service`, `sec = t_path`, `bound = 'transfer'`. Documented approximation: the DMA write
+into device memory is not charged to the device's memory bandwidth (≤ `B_link/memBW`, ≈ 3.5% on an RTX 5090).
+
+**Sharing** (`stageNStream, nStream, streamSlots, stageDevicesOnNode`): a tier is shared by its concurrent
+consumers on the node. `consumers(s)` = devices of stage s on the node (rank layout of §5) if stage s has a
+transfer op from the tier in this phase, else 0; `slots = offloadOverlap 'ideal' ? |S| : min(m, |S|)` over the
+streaming stages S; `n_stream = max(consumers(this stage), Σ of the slots smallest consumers)` (the optimistic
+schedule). A stage spanning several nodes takes the largest of its nodes' values.
+
+### Expert hit ratio
+
+`src/sim/engine/transfer.ts: uniqueExperts, uniqueLocalExperts, hitRatio, expertHitsMisses`;
+`lower/moe.ts: neededExperts`.
+
+```
+U     = E·(1 − (1 − k/E)^T)                    ep = 1: expected distinct experts of T routed tokens
+U_dev = E_loc·(1 − (1 − 1/E_loc)^A)           ep > 1: per device, A assignments (with replacement; warning)
+C     = f·E_loc
+hits  = clamp(U·h, max(0, U + C − E_loc), min(U, C))
+M     = U − hits                               expected missed experts (no rounding)
+```
+
+`h = hitRatio(model, f)`: `uniform` f (default), `skewed_classic` f^0.55, `skewed_fine_grained` f^0.2, `custom`
+h. f = 1 ⇒ M = 0 exactly (no op); f = 0 ⇒ M = U. Decode `T = b_mb`, prefill `T = b_mb·P` (so prefill streams
+every non-resident expert once per step). Skewed models with `0 < C < k` warn (an LRU cache thrashes there).
+
+### Offload overlap
+
+`SimOptions.offloadOverlap` (default `'ideal'`): the stage formula of §7 "Stage time and overlap" with
+`xfer_s = Σ transfer op sec` (`pipeline.ts: stageResult`): `'ideal'` `t_s = lat_s + max(core_s, xfer_s)`,
+`'none'` `t_s = t_core,s + xfer_s`. `PhaseResult.transfer` sums the stages (`pipeline.ts: phaseTransfer`).
+Under `'ideal'` a prefill's transfers usually hide behind its compute (the upper bound assumes perfect prefetch).
+
+### Memory tiers
+
+`src/sim/engine/memory.ts: stageWeightBytes, stageStagingBytes, stageTierBytes, tierMemory, stageLookupTableBytes`;
+`lower/moe.ts: moeResidentWeightBytes, moeLocalExpertBytes`; `lower/ngram.ts: ngramResidentWeightBytes,
+ngramTableShardBytes`.
+
+```
+W_s        = resident weights: offloaded MoE layer C·W_expert (+ router, shared); dense-layer range 0;
+             off-device table: the non-table part
+staging_s  = (offloadOverlap 'ideal' ? 2 : 1)·max_{phase, transfer op} buffer,
+             buffer = experts / layers: Σ ceil(count)·bytes;  tables: usefulBytes
+total_s    = W_s + B_r·state_s + act_s + staging_s ≤ capacity
+tier bytes = max over nodes of Σ_{devices of the node} (full groups: E_loc·W_expert per offloaded layer, W_layer,
+             table shards; NVMe tables with scaleLayout 'pinned_host' put ceil(rows/tp)·scaleBytes on host RAM)
+fits       = ∀ s total_s ≤ capacity  ∧  ∀ tiers bytes ≤ capacityBytes
+```
+
+`MemoryReport.tiers` lists each tier with bytes; `DeviceMemory.lookupTableBytes` reports the on-device table
+shards (included in `weightBytes`). DP replicas on one node are counted once each (no shared host copy).
+
+### n-gram tables off-device
+
+`lower/ngram.ts: tableFetchOp, tableRowBytes`. A row of `d` elements: `valueBytes = d·(elementBits +
+extraBits)/8`, `scaleBytes = d·blockScaleBits/8`, `rowBytes = d·bpe = valueBytes + scaleBytes` (Engram mxfp8
+256 + 8 = 264 B; PLE bf16 320 + 0). Rows per device `R = T·g/tp` (the table is row-parallel). Reads by
+`scaleLayout` (default `'separate'` on host RAM, `'pinned_host'` on NVMe): `interleaved` `[{ R, rowBytes }]`;
+`separate` `[{ R, valueBytes }, { R, scaleBytes }]`; `pinned_host` `[{ R, valueBytes }]` (the scales live in host
+RAM, counted in its capacity; their read is not costed). A table without scales reads `[{ R, rowBytes }]` in any
+layout. `usefulBytes = R·rowBytes` whatever the layout. The existing gather op stays (device-memory side).
+
+## 13. Speculative decoding
+
+Deployment knob `SimInput.deployment.speculative` (design: `docs/design/offload-specdec-latency.md` §3). Off by
+default: absent or `{}` lowers the plain decode (`qLen 1`), appends no `draft.*` layer and gives bit-identical
+results. With it on, the result is the hardware/math bound given the stated acceptance: the engine adds the GEMM,
+attention and state work the draft and verify passes physically need, nothing else (no scheduler, tree, or
+confidence policy). Rejected with pp > 1 (`validate.ts: SPEC_DEC_PP_ERROR`). Worked example W2 and U-8, U-14,
+U-18 are tests in `engine/e2e-specdec.test.ts`.
+
+### Draft spec
+
+`src/sim/ir/model.ts: DraftSpec, MtpDraftSpec, BlockDraftSpec`; `models/hf/drafter.ts` (a drafter repo's
+`config.json` → `BlockDraftSpec`); the HF family mappers keep their MTP module as `model.draft` (never counted in
+`countParams` or the fit unless spec-dec is on). `method 'mtp'` uses `model.draft`; `'dflash2'` / `'dspark'` use
+`SpecDecodeConfig.drafter.spec` (a repo's config or the labelled hypothetical). `engine/specdec.ts:
+resolveSpeculative` builds the `SpeculativeLowering` (`verifyTokens = k + 1`, `contextRows = m_ctx`,
+`stateSnapshots = k + 1`) and warns when a single-step MTP head (`maxReliableDepth`) is drafted past its depth.
+
+### Verify
+
+`src/sim/engine/simulate.ts` (the verify context); `lower/common.ts: stateSnapshots`; `lower/linearAttention.ts`.
+The decode step is the target lowered with `qLen = k + 1`, `kvLen = N + k + 1` (every GEMM `m = b·(k+1)`, the
+head over every position, attention causal over `past = N`, k + 1 KV rows written; rejected rows are overwritten
+next step and not charged back). MoE routing and the offload path use `T = b·(k+1)` with no new rule. Recurrent and
+conv state ops in `'step'` mode write `k + 1` per-position snapshots (`RecurrentOp.stateSnapshots`,
+`stateWriteBytes·(k+1)`; the prior state is read once) so the state can roll back to the accepted prefix.
+
+### Draft ops
+
+`src/sim/lower/draft.ts: lowerDraftDecode`; appended to the LAST stage after the head as layers `draft.<i>`
+(`simulate.ts: withDraftLayers`), so stage sums, overlap and collectives apply unchanged. `m_ctx = ⌈E[τ]⌉`
+(`specdec.ts: draftContextRows`) newly committed tokens per sequence feed the drafter.
+
+- **MTP**: a catch-up pass of `qLen = m_ctx` (shared `embed`, `enorm`, `hnorm`, `eh_proj` (m b·m_ctx, n h, k 2h),
+  the module's layer at `kvLen N + k + 1`, `final_norm` and the shared `lm_head` over the last position, m b), then
+  `k − 1` one-row passes. The shared embedding and head are read per pass.
+- **Block drafter** (DFlash 2, DSpark): one parallel pass: `fc` + `hidden_norm` over the m_ctx context features,
+  the block embedding, per layer the attention over `min(N, W) + m_ctx + B` keys keeping only the m_ctx context rows
+  (`AttentionOp.kvWriteTokens`), K/V projections as one GEMM over context + block rows, the MLP, DFlash 2's two
+  dynamic convs; then the shared head over the k draft positions and DFlash 2's candidate selector or DSpark's
+  Markov head. Sequential walks (selector, Markov sampling) are latency, not costed.
+
+### Draft-cache prefill
+
+`src/sim/lower/draft.ts: lowerDraftPrefill`, appended to the prefill's last stage. MTP: the module's ordinary
+forward over the prompt (writing its KV) and one head row per sequence. Block drafter: per layer only the context
+K/V projections over `b·P` rows, their q/k-norm and RoPE, and a write-only cache op (`ElementwiseOp fn
+'kv_cache_write'`, `kvWriteBytes = b·min(P, W)·2·KV·hd·bpe(kv)`); plus `fc` and `hidden_norm` once. No attention,
+MLP, head or selector in prefill.
+
+### Accepted tokens
+
+`src/sim/engine/specdec.ts: expectedTokens, presetAcceptance, ACCEPTANCE_PRESETS`; `engine/pipeline.ts:
+phaseResult` (`PhaseShape.tokensPerStep`); `simulate.ts: speculativeSummary`.
+
+```
+i.i.d.         E[τ] = (1 − α^(k+1)) / (1 − α)                α ∈ [0, 1)
+per-position   E[τ] = 1 + Σ_{i=1..k} Π_{j=1..i} α_j            α_j ∈ [0, 1]; a short vector repeats its last value
+cycle          = the decode cycle rule of §7 over the verify stages with draft.* appended
+tokens/s       = dp · B_r · E[τ] / cycle  @ N;   per sequence E[τ] / cycle;   latency (per token) = cycle / E[τ]
+speedup        = tokens/s / tokens/s of the same input with speculative decoding off
+```
+
+`PhaseResult.speculative = { draftSec, verifySec, expectedTokensPerStep, speedup }`: `draftSec` / `verifySec` are
+the Σ op times of the `draft.*` layers and of every other layer (without overlap). With `tokensPerStep` absent the
+rate expressions are today's, bit for bit.
+
+### Draft memory
+
+`src/sim/lower/draft.ts: draftResidentWeightBytes, draftSequenceStateBytes`; `engine/memory.ts: memoryReport,
+stageSnapshotStateBytesPerSeq`.
+
+```
+context            = max(P, N + k + 1)                         the verify appends k + 1 rows
+draft_s            = [last stage] W_draft + B_r · S_draft(context)
+                     W_draft: module layers / drafter layers, eh_proj or fc, norms, conv kernels, selector codebooks,
+                     Markov W1/W2; the shared embedding and LM head are not counted again (pp = 1)
+                     S_draft: MTP the module's layer state over the full context; block drafter L·min(ctx, W)·2·KV·hd·bpe(kv)
+specTransient_s    = B_r · (k + 1) · snap_s                    snap_s = recurrent + conv state of the stage's
+                                                               linear-attention, short-conv, n-gram and GQA-conv blocks
+total_s            = W_s + B_r·state_s + act_s + staging_s + draft_s + specTransient_s
+maxSequences       = floor(min_s (capacity − W_s − act_s − staging_s − W_draft) / (state_s + S_draft + (k+1)·snap_s))
+```
+
+### Spec-dec × offload
+
+The verify's `T = b·(k+1)` gives `U(b·(k+1))` needed experts per offloaded layer (E 128, k_moe 8: `U(2) = 15.5`
+at k = 1, 1.94× W1's decode misses at f = .5). The drafter's own MoE layers follow the routed-expert placement only
+with `includeDraft: true`: they are lowered with the placement's range widened to every drafter layer (`draft.ts:
+draftContext`), get `draft.moe.expert_fetch` ops on the last stage, keep `C = f·E_loc` experts resident in
+`draft_s`, and add their full expert set to the tier (`memory.ts: stageTierBytes`).

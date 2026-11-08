@@ -7,8 +7,16 @@
  * comm/compute overlap, so they can exceed the stage time.
  */
 
-import type { Bound, OpResult, PhaseResult, SimInput, SimResult } from '../../sim/engine/types';
+import type {
+  OffloadTier,
+  OpResult,
+  PhaseResult,
+  SimInput,
+  SimResult,
+  TierMemory,
+} from '../../sim/engine/types';
 import { engineMemBandwidthBytesPerSec } from '../../sim/engine/opTime';
+import { hitRatio } from '../../sim/engine/transfer';
 import type { Op } from '../../sim/ir/ops';
 
 /** Headline numbers of one phase. */
@@ -29,6 +37,27 @@ export interface PhaseSummary {
   microbatchSize: number;
   /** Stage time per microbatch, per stage. Unit: seconds. */
   stageSec: number[];
+  /**
+   * Communication on the critical path (`PhaseResult.comm`): Σ latency (α) terms, Σ bandwidth (β) terms, and the
+   * part not hidden behind compute. Display only. Unit: seconds.
+   */
+  comm: { latencySec: number; bandwidthSec: number; exposedSec: number };
+  /**
+   * Off-device transfers (`PhaseResult.transfer`); absent when nothing is offloaded. `sec`, `exposedSec`: seconds;
+   * `bytes`: useful bytes over the host link (bytes); `requests`: expected read requests (count, real).
+   */
+  transfer?: { sec: number; exposedSec: number; bytes: number; requests: number };
+  /**
+   * Decode with speculative decoding (`PhaseResult.speculative`); absent otherwise. `draftSec` / `verifySec`: shares
+   * of one step (seconds); `expectedTokensPerStep`: E[τ] (tokens per sequence per step, incl. the bonus token);
+   * `speedup`: tokens/s over tokens/s with spec-dec off (dimensionless).
+   */
+  speculative?: {
+    draftSec: number;
+    verifySec: number;
+    expectedTokensPerStep: number;
+    speedup: number;
+  };
 }
 
 /** Memory of one device of one stage. Unit: bytes. */
@@ -41,12 +70,20 @@ export interface StageMemory {
   sequenceStateBytes: number;
   /** Peak transient activations. Unit: bytes. */
   activationPeakBytes: number;
-  /** Sum of the three above. Unit: bytes. */
+  /** Weights + state + activations (+ staging, draft and spec-dec transients). Unit: bytes. */
   totalBytes: number;
   /** Device capacity. Unit: bytes. */
   capacityBytes: number;
   /** totalBytes ≤ capacityBytes. */
   fits: boolean;
+  /** n-gram lookup-table bytes resident on the device, part of `weightBytes`; absent = 0. Unit: bytes. */
+  lookupTableBytes?: number;
+  /** Staging buffers for streamed weight groups; absent = 0. Unit: bytes. */
+  stagingBytes?: number;
+  /** Draft weights and draft KV/state (spec-dec); absent = 0. Unit: bytes. */
+  draftBytes?: number;
+  /** Per-position state snapshots of a speculative verify; absent = 0. Unit: bytes. */
+  speculativeTransientBytes?: number;
 }
 
 /** The memory-fit report. */
@@ -59,7 +96,24 @@ export interface MemorySummary {
   maxSequencesPerReplica: number;
   /** One entry per pipeline stage. */
   stages: StageMemory[];
+  /** Off-device tiers holding offloaded groups, per node (empty when nothing is offloaded); absent = none. */
+  tiers?: TierMemory[];
 }
+
+/**
+ * What a breakdown row's time is split by: the op bound, with collectives split into their latency (α) and
+ * bandwidth (β) terms, and off-device transfers (`bound: 'transfer'`) on their own.
+ */
+export type BreakdownBound = 'compute' | 'memory' | 'commLatency' | 'commBandwidth' | 'transfer';
+
+/** Display labels of the breakdown bounds, in legend order. */
+export const BREAKDOWN_BOUND_LABELS: Record<BreakdownBound, string> = {
+  compute: 'compute',
+  memory: 'memory',
+  commLatency: 'comm latency',
+  commBandwidth: 'comm bandwidth',
+  transfer: 'offload transfer',
+};
 
 /** One row of a time breakdown. */
 export interface BreakdownRow {
@@ -69,8 +123,13 @@ export interface BreakdownRow {
   sec: number;
   /** sec / Σ op sec of the phase (all stages, before overlap). Dimensionless, in [0, 1]. */
   share: number;
-  /** The group's time split by what bounds each op; sums to `sec`. Unit: seconds. */
-  boundSec: Record<Bound, number>;
+  /**
+   * The group's time split by what bounds each op; sums to `sec`. A collective adds its `commLatencySec` and
+   * `commBandwidthSec` (which sum to its `sec`); a transfer op adds its `sec` to `transfer`. Unit: seconds.
+   */
+  boundSec: Record<BreakdownBound, number>;
+  /** Layer rows of a speculative decode: `'draft'` for `draft.*` layers, else `'verify'`; absent otherwise. */
+  section?: 'verify' | 'draft';
   /** Σ FLOP. Unit: FLOP. */
   flops: number;
   /** Σ memory traffic. Unit: bytes. */
@@ -85,21 +144,51 @@ export interface Breakdown {
   byOp: BreakdownRow[];
   /** By op kind (`gemm`, `attention`, `collective`, ...). */
   byKind: BreakdownRow[];
-  /** By layer (`embed`, `layer.<i>`, `head`, and `pp.send` for stage-to-stage sends), in model order. */
+  /**
+   * By layer (`embed`, `layer.<i>`, `head`, `pp.send` for stage-to-stage sends, `draft.*` for drafter layers), in
+   * model order; in a speculative decode the `'verify'` rows come first, then the `'draft'` rows.
+   */
   byLayer: BreakdownRow[];
+  /** A speculative decode only: the `byLayer` rows summed per section, keys `'verify'` and `'draft'`. */
+  sections?: BreakdownRow[];
   /** Σ op sec over all stages (the share denominator). Unit: seconds. */
   totalSec: number;
 }
 
+/** A weight group the deployment keeps off-device, for the result chips. */
+export interface OffloadPlacement {
+  /** Which group: routed experts, whole decoder layers, or the n-gram lookup tables. */
+  group: 'routed_experts' | 'dense_layers' | 'lookup_tables';
+  /** Tier holding the group. */
+  tier: OffloadTier;
+  /**
+   * Routed experts only: the configured hit ratio h(f) of the resident cache (the hit-ratio model at the resident
+   * fraction, before the engine's physical clamp). Dimensionless, in [0, 1].
+   */
+  hitRatio?: number;
+  /** Dense layers (and an explicit expert range): the layer range `[from, to)`, zero-based. */
+  layers?: { from: number; to: number };
+}
+
+/** Speculative-decoding settings of the run, for the result annotations. */
+export interface SpeculativeSummary {
+  /** Draft method. */
+  method: 'mtp' | 'dflash2' | 'dspark';
+  /** Draft tokens per step k. Count. */
+  draftLength: number;
+  /** True when the drafter is the labelled hypothetical stand-in, not a released model. */
+  hypothetical: boolean;
+}
+
 /** One phase's point on the roofline. */
 export interface RooflinePoint {
-  /** Σ FLOP of the phase's non-collective ops. Unit: FLOP. */
+  /** Σ FLOP of the phase's compute ops (neither collectives nor off-device transfers). Unit: FLOP. */
   flops: number;
   /** Σ memory bytes of those ops. Unit: bytes. */
   bytes: number;
   /** Arithmetic intensity = flops / bytes. Unit: FLOP/byte. */
   intensityFlopPerByte: number;
-  /** Attained rate = Σ FLOP / Σ op sec (all ops, communication included). Unit: FLOP/s. */
+  /** Attained rate = Σ FLOP / Σ op sec (all ops, communication and transfers included). Unit: FLOP/s. */
   attainedFlopsPerSec: number;
 }
 
@@ -137,6 +226,10 @@ export interface ResultSummary {
   deviceName: string;
   /** Engine warnings, then the caller's notes, deduplicated. */
   warnings: string[];
+  /** Weight groups placed off-device (empty when nothing is offloaded); absent = none. */
+  offload?: OffloadPlacement[];
+  /** Speculative decoding settings; absent when off. */
+  speculative?: SpeculativeSummary;
 }
 
 function phaseSummary(p: PhaseResult, contextTokens: number): PhaseSummary {
@@ -149,6 +242,9 @@ function phaseSummary(p: PhaseResult, contextTokens: number): PhaseSummary {
     microbatches: p.microbatches,
     microbatchSize: p.microbatchSize,
     stageSec: p.stages.map((s) => s.sec),
+    comm: { ...p.comm },
+    ...(p.transfer && { transfer: { ...p.transfer } }),
+    ...(p.speculative && { speculative: { ...p.speculative } }),
   };
 }
 
@@ -178,7 +274,7 @@ function group(
         key,
         sec: 0,
         share: 0,
-        boundSec: { compute: 0, memory: 0, comm: 0 },
+        boundSec: { compute: 0, memory: 0, commLatency: 0, commBandwidth: 0, transfer: 0 },
         flops: 0,
         bytes: 0,
         count: 0,
@@ -186,7 +282,7 @@ function group(
       rows.set(key, row);
     }
     row.sec += e.op.sec;
-    row.boundSec[e.op.bound] += e.op.sec;
+    addBoundSec(row.boundSec, e.op);
     row.flops += e.op.flops;
     row.bytes += e.op.bytes.totalBytes;
     row.count += 1;
@@ -194,29 +290,67 @@ function group(
   return [...rows.values()].map((r) => ({ ...r, share: totalSec > 0 ? r.sec / totalSec : 0 }));
 }
 
+/**
+ * Adds an op's time to its bound: compute / memory as the op's `bound`; a collective split into its α and β terms
+ * (`sec = commLatencySec + commBandwidthSec`); a transfer op whole into `transfer`. Unit: seconds.
+ */
+function addBoundSec(boundSec: Record<BreakdownBound, number>, op: OpResult): void {
+  switch (op.bound) {
+    case 'compute':
+    case 'memory':
+      boundSec[op.bound] += op.sec;
+      return;
+    case 'comm':
+      boundSec.commLatency += op.commLatencySec;
+      boundSec.commBandwidth += op.commBandwidthSec;
+      return;
+    case 'transfer':
+      boundSec.transfer += op.sec;
+      return;
+  }
+}
+
+/** The section of a layer in a speculative decode step: drafter layers (`draft`, `draft.*`) or the verify pass. */
+function sectionOf(layer: string): 'verify' | 'draft' {
+  return /^draft(\.|$)/.test(layer) ? 'draft' : 'verify';
+}
+
 /** Op name with any `layer.<i>.` prefix removed (op names are per-layer templates). */
 function opName(op: Op): string {
   return op.name.replace(/^layer\.\d+\./, '');
 }
 
-/** The time breakdown of one phase, grouped by op name, op kind and layer. */
+/**
+ * The time breakdown of one phase, grouped by op name, op kind and layer. A speculative decode
+ * (`p.speculative` set) also tags its layer rows `'verify'` / `'draft'` and sums them in `sections`.
+ */
 export function breakdown(p: PhaseResult): Breakdown {
   const ops = phaseOps(p);
   // Formula: share_g = Σ_{op ∈ g} sec_op / Σ_all sec_op
   const totalSec = ops.reduce((s, e) => s + e.op.sec, 0);
   const bySec = (a: BreakdownRow, b: BreakdownRow) => b.sec - a.sec;
-  return {
+  const result: Breakdown = {
     byOp: group(ops, (e) => opName(e.op.op), totalSec).sort(bySec),
     byKind: group(ops, (e) => e.op.op.kind, totalSec).sort(bySec),
     byLayer: group(ops, (e) => e.layer, totalSec),
     totalSec,
   };
+  if (p.speculative !== undefined) {
+    const order = { verify: 0, draft: 1 };
+    result.byLayer = result.byLayer
+      .map((r) => ({ ...r, section: sectionOf(r.key) }))
+      .sort((a, b) => order[a.section] - order[b.section]);
+    result.sections = group(ops, (e) => sectionOf(e.layer), totalSec).sort(
+      (a, b) => order[a.key as 'verify' | 'draft'] - order[b.key as 'verify' | 'draft'],
+    );
+  }
+  return result;
 }
 
 /** The roofline point of one phase (see {@link RooflinePoint}). */
 function rooflinePoint(p: PhaseResult): RooflinePoint {
   const ops = phaseOps(p).map((e) => e.op);
-  const compute = ops.filter((o) => o.op.kind !== 'collective');
+  const compute = ops.filter((o) => o.op.kind !== 'collective' && o.op.kind !== 'transfer');
   const flops = compute.reduce((s, o) => s + o.flops, 0);
   const bytes = compute.reduce((s, o) => s + o.bytes.totalBytes, 0);
   const sec = ops.reduce((s, o) => s + o.sec, 0);
@@ -274,11 +408,48 @@ export function summarize(result: SimResult, input: SimInput, notes: string[] = 
       fits: result.memory.fits,
       maxSequencesPerReplica: result.memory.maxSequencesPerReplica,
       stages: result.memory.perStage.map((s) => ({ ...s })),
+      tiers: result.memory.tiers.map((t) => ({ ...t })),
     },
     breakdown: { prefill: breakdown(result.prefill), decode: breakdown(result.decode) },
     roofline: roofline(result, input),
     devicesUsed: result.devicesUsed,
     deviceName: result.effectiveDevice.name,
     warnings: [...new Set([...result.warnings, ...notes])],
+    offload: offloadPlacements(input),
+    ...(input.deployment?.speculative && {
+      speculative: {
+        method: input.deployment.speculative.method,
+        draftLength: input.deployment.speculative.draftLength,
+        hypothetical: input.deployment.speculative.drafter?.kind === 'hypothetical',
+      },
+    }),
   };
+}
+
+/** The off-device placements of `input.deployment.offload`, in the order experts, dense layers, lookup tables. */
+export function offloadPlacements(input: SimInput): OffloadPlacement[] {
+  const offload = input.deployment?.offload;
+  if (offload === undefined) return [];
+  const out: OffloadPlacement[] = [];
+  const experts = offload.routedExperts;
+  if (experts !== undefined) {
+    out.push({
+      group: 'routed_experts',
+      tier: experts.tier,
+      hitRatio: hitRatio(experts.hitRatio, experts.residentFraction),
+      ...(experts.layers && { layers: { ...experts.layers } }),
+    });
+  }
+  if (offload.denseLayers !== undefined) {
+    out.push({
+      group: 'dense_layers',
+      tier: offload.denseLayers.tier,
+      layers: { ...offload.denseLayers.layers },
+    });
+  }
+  const tables = offload.lookupTables;
+  if (tables !== undefined && tables.tier !== 'device') {
+    out.push({ group: 'lookup_tables', tier: tables.tier });
+  }
+  return out;
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useReducer, useState } from 'react';
 import { loadHfModel } from '../hf/load';
 import { getHfToken } from '../hf/token';
+import { drafterLoadMessage, loadDrafter } from '../hf/loadDrafter';
 import { ModelPanel } from './components/ModelPanel';
 import { ScrollArea } from './components/ScrollArea';
 import {
@@ -12,6 +13,8 @@ import {
   loadedFromHf,
   buildSimInput,
   formatRateAtContext,
+  drafterSource,
+  type DrafterStatus,
   type LoadedModel,
 } from './state';
 import { workerRunner, type SimRunner, type RunResult } from './sim/runner';
@@ -28,11 +31,15 @@ import './panels.css';
 import './app.css';
 
 export type ModelLoader = typeof loadHfModel;
+export type DrafterLoader = typeof loadDrafter;
 export function App({
   loader = loadHfModel,
+  drafterLoader = loadDrafter,
   runner: suppliedRunner,
 }: {
   loader?: ModelLoader;
+  /** Loads a block drafter's config.json (speculative decoding); injectable for tests. */
+  drafterLoader?: DrafterLoader;
   runner?: SimRunner;
 }) {
   const initial = useMemo(() => decodeState(location.search), []);
@@ -62,7 +69,38 @@ export function App({
         : null;
   const loading =
     !isBundled && (modelState.key !== choiceKey || (!modelState.loaded && !modelState.error));
-  const built = useMemo(() => buildSimInput(state, loaded), [state, loaded]);
+  // The drafter repo a block spec-dec method needs (none for MTP, the checkpoint's own or the hypothetical drafter).
+  const source = loaded ? drafterSource(state.deployment.specDec, loaded.model, state.model.id) : undefined;
+  const drafterRepo = source?.kind === 'repo' ? source.repoId : undefined;
+  const [drafterState, setDrafterState] = useState<DrafterStatus | undefined>(undefined);
+  const drafter = useMemo<DrafterStatus | undefined>(
+    () =>
+      drafterRepo === undefined
+        ? undefined
+        : drafterState?.repoId === drafterRepo
+          ? drafterState
+          : { kind: 'loading', repoId: drafterRepo },
+    [drafterRepo, drafterState],
+  );
+  useEffect(() => {
+    if (drafterRepo === undefined) return;
+    let current = true;
+    const fail = (message: string) => {
+      if (current) setDrafterState({ kind: 'error', repoId: drafterRepo, message });
+    };
+    drafterLoader(drafterRepo, { token: getHfToken() })
+      .then((result) => {
+        if (!current) return;
+        if (result.kind === 'ok')
+          setDrafterState({ kind: 'ok', repoId: drafterRepo, spec: result.spec, notes: result.notes });
+        else fail(drafterLoadMessage(result));
+      })
+      .catch(() => fail('Drafter load failed. Check your connection.'));
+    return () => {
+      current = false;
+    };
+  }, [drafterRepo, drafterLoader]);
+  const built = useMemo(() => buildSimInput(state, loaded, drafter), [state, loaded, drafter]);
   const query = encodeState(state);
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -160,6 +198,14 @@ export function App({
   }, [titleModel, titleResult, state.workload.promptLen, state.workload.decodeContextLen]);
   useEffect(() => () => runner.dispose?.(), [runner]);
   const props = { state, dispatch, loaded, built };
+  // The memory card's n-gram table segment: one click places the tables on host RAM (the SSD on unified memory).
+  const placeTablesOnHost = () => {
+    const unified = built.hardware?.device.device.memory.kind === 'unified';
+    dispatch({
+      type: 'setOffload',
+      offload: { ...state.deployment.offload, tables: { tier: unified ? 'nvme' : 'host_ram' } },
+    });
+  };
   const result = built.kind === 'ok' ? simulation.result?.summary : undefined;
   const error = modelState.key === choiceKey ? modelState.error : undefined;
   function load(typed?: string) {
@@ -200,7 +246,7 @@ export function App({
             <QuantPanel {...props} />
             <HardwarePanel {...props} />
             <ParallelPanel {...props} />
-            <WorkloadPanel {...props} />
+            <WorkloadPanel {...props} drafter={drafter} />
             <AssumptionsPanel {...props} />
           </ScrollArea>
         </div>
@@ -238,6 +284,7 @@ export function App({
             built={built}
             result={result}
             pending={dim && simulation.key !== query}
+            onPlaceTablesOnHost={placeTablesOnHost}
           />
           {result && (
             <>
@@ -246,6 +293,7 @@ export function App({
                 {' · '}
                 <span>
                   Decode {formatRateAtContext(result.decode.tokensPerSec, state.workload.decodeContextLen)}
+                  {result.decode.speculative && ` (spec-dec ×${result.decode.speculative.speedup.toFixed(2)})`}
                 </span>
               </div>
               <div className="detail-results">

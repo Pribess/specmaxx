@@ -16,7 +16,18 @@
  * | `x`, `xi`, `xe` | spec edits on device / intra link / inter link, `path:value` comma list, SI units | `x=memory.bandwidthBytesPerSec:2e12` |
  * | `tp`, `pp` | parallel degrees (old `dp` / `ep` are ignored: both fixed at 1) | `tp=2` |
  * | `b`, `p`, `c` | batch, prefill length (default 8192), decode context (default 8192) | `b=8` |
- * | `ov`, `fu`, `ar` | overlap, elementwise fusion, all-reduce algorithm | `ov=none` |
+ * | `ov`, `fu`, `ar`, `oo` | overlap, elementwise fusion, all-reduce algorithm, offload overlap (`ideal` default, `none`) | `ov=none` |
+ * | `hr`, `hrc` | host-RAM preset id (default `ddr5-6000-2ch`), its capacity in GB (1e9 B) | `hr=ddr5-6400-8ch&hrc=512` |
+ * | `ssd` | SSD preset id (default: the device's own SSD on unified memory, else `nvme-990-pro-2tb`) | `ssd=nvme-t705-2tb` |
+ * | `hl` | host-link override, `<PCIe gen>x<lanes>` (default: the device's host interface) | `hl=4x16` |
+ * | `ox` | routed experts tier: `ram`, `ssd` (absent: on the device) | `ox=ram` |
+ * | `oxl`, `oxf`, `oxh` | (with `ox`) first offloaded layer (default 0), resident fraction 0–1 (default 0), hit-ratio model `classic`, `fine` or a custom h 0–1 (default uniform) | `oxf=0.25&oxh=fine` |
+ * | `odl`, `odt` | dense layers kept on the device (the rest stream; absent: none stream), their tier `ram` (default) or `ssd` | `odl=40` |
+ * | `olt`, `ols` | lookup-tables tier `ram`, `ssd` (absent: on the device); (with `olt`) scale layout `separate`, `pinned`, `interleaved` (default: the tier's) | `olt=ram` |
+ * | `oqd` | (with offload) queue depth, integer ≥ 1 (default: the tier's rated maximum) | `oqd=32` |
+ * | `sd` | speculative decoding method: `mtp`, `dflash2`, `dspark` (absent: off) | `sd=mtp` |
+ * | `sdr` | (block methods) drafter repo id, or `hyp` for the hypothetical drafter (default: the known one for the model) | `sdr=hyp` |
+ * | `sdk`, `sdu`, `sda` | draft length k 1–16 (default per method), use case `code`, `math`, `reasoning`, `agentic` (default `prose`), acceptance α 0–0.99 (custom; overrides the use case) | `sdk=3&sda=0.8` |
  */
 
 import type { SimOptions } from '../../sim/engine/types';
@@ -26,7 +37,21 @@ import { numericLeafPaths } from '../../sim/hw/validate';
 import { deviceUnlocks } from '../../sim/hw/presets/index';
 import { isValidModelId } from '../../hf/urls';
 import { DEFAULT_HW, DEFAULT_STATE, normalizeOptions, type AppState, type HardwareChoice, type ModelChoice, type QuantOverrides, type SpecEdits } from './appState';
-import { currentLinkId, findDevice, findLink, cablingOptions, normalizeCabling, normalizeLocalLink, resolveDevice, resolveLinks } from './hardware';
+import {
+  SPEC_DEC_USE_CASES,
+  HYPOTHETICAL_DRAFTER,
+  normalizeDeployment,
+  normalizeHost,
+  type DeploymentChoice,
+  type HitRatioChoice,
+  type HostChoice,
+  type OffloadChoice,
+  type ScaleLayoutChoice,
+  type SpecDecChoice,
+  type SpecDecMethod,
+  type TierChoice,
+} from './deployment';
+import { currentLinkId, findDevice, findHostRam, findLink, findSsd, cablingOptions, isEditableDevicePath, normalizeCabling, normalizeLocalLink, resolveDevice, resolveLinks } from './hardware';
 import { CABLING_IDS } from '../../sim/hw/presets/catalog';
 import { isQuantDtype, isValidBpw, isValidHeadBpw, isWeightFormat } from './quant';
 
@@ -41,13 +66,49 @@ const OPTION_KEYS: [string, keyof SimOptions, readonly string[]][] = [
   ['ov', 'overlap', ['ideal', 'none']],
   ['fu', 'elementwiseFusion', ['none', 'ideal']],
   ['ar', 'collectiveAlgorithm', ['best', 'ring', 'tree']],
+  ['oo', 'offloadOverlap', ['ideal', 'none']],
 ];
 
 /** Every key the codec knows, in encoding order. */
 export const URL_KEYS = [
   'm', 'rev', 'w', 'bpw', 'hbpw', 'a', 'kv', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'fab', 'x', 'xi', 'xe',
-  'tp', 'pp', 'dp', 'ep', 'b', 'p', 'c', 'ov', 'fu', 'ar',
+  'hr', 'hrc', 'ssd', 'hl', 'tp', 'pp', 'dp', 'ep', 'b', 'p', 'c', 'ov', 'fu', 'ar', 'oo',
+  'ox', 'oxl', 'oxf', 'oxh', 'odl', 'odt', 'olt', 'ols', 'oqd', 'sd', 'sdr', 'sdk', 'sdu', 'sda',
 ] as const;
+
+/** URL value of a tier. */
+const TIER_KEYS: Record<TierChoice, string> = { host_ram: 'ram', nvme: 'ssd' };
+
+/** URL value of a named hit-ratio model. */
+const HIT_RATIO_KEYS: Record<Exclude<HitRatioChoice, number>, string> = {
+  uniform: 'uniform',
+  skewed_classic: 'classic',
+  skewed_fine_grained: 'fine',
+};
+
+/** URL value of a scale layout. */
+const SCALE_LAYOUT_KEYS: Record<ScaleLayoutChoice, string> = { separate: 'separate', pinned_host: 'pinned', interleaved: 'interleaved' };
+
+/** Every spec-dec method, as stored and in the URL. */
+const SPEC_DEC_METHODS: readonly SpecDecMethod[] = ['mtp', 'dflash2', 'dspark'];
+
+/** Largest draft length k. Count. */
+export const MAX_DRAFT_LENGTH = 16;
+
+/** Largest acceptance α the UI accepts (the i.i.d. closed form divides by 1 − α). Dimensionless. */
+export const MAX_ACCEPTANCE = 0.99;
+
+/** The key of `value` in `table`, or undefined. */
+function keyOf<K extends string>(table: Record<K, string>, value: string): K | undefined {
+  return (Object.keys(table) as K[]).find((k) => table[k] === value);
+}
+
+/** Parses a finite number in [min, max], or undefined. */
+function parseNumberIn(raw: string, min: number, max: number): number | undefined {
+  if (raw.trim() === '') return undefined;
+  const v = Number(raw);
+  return Number.isFinite(v) && v >= min && v <= max ? v : undefined;
+}
 
 /** Percent-encodes a value but keeps `/ : ,` readable (`.` is never escaped). */
 function encodeValue(v: string): string {
@@ -107,6 +168,11 @@ export function encodeState(s: AppState): string {
   if (Object.keys(hw.deviceEdits).length > 0) put('x', encodeEdits(hw.deviceEdits));
   if (Object.keys(hw.intraEdits).length > 0) put('xi', encodeEdits(hw.intraEdits));
   if (Object.keys(hw.interEdits).length > 0) put('xe', encodeEdits(hw.interEdits));
+  const host = normalizeHost(hw.host ?? {});
+  put('hr', host.ramId);
+  if (host.ramCapacityBytes !== undefined) put('hrc', host.ramCapacityBytes / 1e9);
+  put('ssd', host.ssdId);
+  if (host.link !== undefined) put('hl', `${host.link.generation}x${host.link.lanes}`);
   for (const key of ['tp', 'pp'] as const) if (s.parallel[key] !== 1) put(key, s.parallel[key]);
   const w = s.workload;
   const dw = DEFAULT_STATE.workload;
@@ -115,6 +181,32 @@ export function encodeState(s: AppState): string {
   if (w.decodeContextLen !== dw.decodeContextLen) put('c', w.decodeContextLen);
   const options = normalizeOptions(s.options);
   for (const [key, field] of OPTION_KEYS) put(key, options[field]);
+  const deployment = normalizeDeployment(s.deployment);
+  const o = deployment.offload ?? {};
+  if (o.experts !== undefined) {
+    put('ox', TIER_KEYS[o.experts.tier]);
+    put('oxl', o.experts.fromLayer);
+    put('oxf', o.experts.residentFraction);
+    const h = o.experts.hitRatio;
+    put('oxh', typeof h === 'number' ? h : h === undefined ? undefined : HIT_RATIO_KEYS[h]);
+  }
+  if (o.dense !== undefined) {
+    put('odl', o.dense.layersOnDevice);
+    if (o.dense.tier !== 'host_ram') put('odt', TIER_KEYS[o.dense.tier]);
+  }
+  if (o.tables !== undefined) {
+    put('olt', TIER_KEYS[o.tables.tier]);
+    if (o.tables.scaleLayout !== undefined) put('ols', SCALE_LAYOUT_KEYS[o.tables.scaleLayout]);
+  }
+  put('oqd', o.queueDepth);
+  const sd = deployment.specDec;
+  if (sd !== undefined) {
+    put('sd', sd.method);
+    put('sdr', sd.drafter);
+    put('sdk', sd.k);
+    put('sdu', sd.useCase);
+    put('sda', sd.alpha);
+  }
   return out.map(([k, v]) => `${k}=${encodeValue(v)}`).join('&');
 }
 
@@ -133,9 +225,12 @@ function parseInteger(raw: string, min: number, max: number): number | undefined
   return Number.isSafeInteger(v) && v >= min && v <= max ? v : undefined;
 }
 
-/** Parses a `path:value` edit list against the numeric leaves of `spec`; invalid entries go to `bad`. */
-function parseEdits(raw: string, spec: object, bad: string[]): SpecEdits {
-  const leaves = new Set(numericLeafPaths(spec).map((l) => l.path));
+/**
+ * Parses a `path:value` edit list against the numeric leaves of `spec` that `editable` allows; invalid entries go
+ * to `bad`.
+ */
+function parseEdits(raw: string, spec: object, bad: string[], editable: (path: string) => boolean = () => true): SpecEdits {
+  const leaves = new Set(numericLeafPaths(spec).map((l) => l.path).filter(editable));
   const edits: SpecEdits = {};
   for (const entry of raw.split(',')) {
     const i = entry.lastIndexOf(':');
@@ -145,6 +240,73 @@ function parseEdits(raw: string, spec: object, bad: string[]): SpecEdits {
     else bad.push(entry);
   }
   return edits;
+}
+
+/** The host choice of the `hr`, `hrc`, `ssd`, `hl` parameters (see the module table). */
+function decodeHost(get: (key: string) => string | undefined, drop: (key: string, value: string) => void): HostChoice {
+  const host: HostChoice = {};
+  const hr = get('hr');
+  if (hr !== undefined) {
+    if (findHostRam(hr) !== undefined) host.ramId = hr;
+    else drop('hr', hr);
+  }
+  const hrc = get('hrc');
+  if (hrc !== undefined) {
+    const gb = parseNumberIn(hrc, Number.MIN_VALUE, 1e6);
+    if (gb !== undefined) host.ramCapacityBytes = Math.round(gb * 1e9);
+    else drop('hrc', hrc);
+  }
+  const ssd = get('ssd');
+  if (ssd !== undefined) {
+    if (findSsd(ssd) !== undefined) host.ssdId = ssd;
+    else drop('ssd', ssd);
+  }
+  const hl = get('hl');
+  if (hl !== undefined) {
+    const match = /^([345])x(4|8|16)$/.exec(hl);
+    if (match !== null) host.link = { generation: Number(match[1]) as 3 | 4 | 5, lanes: Number(match[2]) as 4 | 8 | 16 };
+    else drop('hl', hl);
+  }
+  return host;
+}
+
+/**
+ * The deployment choice of the offload (`ox`…`oqd`) and spec-dec (`sd`…`sda`) parameters. A dependent key without
+ * its parent (`oxf` without `ox`, `ols` without `olt`, `sdk` without `sd`, `oqd` with nothing offloaded) is dropped.
+ */
+function decodeDeployment(get: (key: string) => string | undefined, drop: (key: string, value: string) => void): DeploymentChoice {
+  /** Reads `key` with `parse`; drops it when invalid or when its parent is missing (`allowed` false). */
+  const read = <T>(key: string, allowed: boolean, parse: (raw: string) => T | undefined): T | undefined => {
+    const raw = get(key);
+    if (raw === undefined) return undefined;
+    const v = allowed ? parse(raw) : undefined;
+    if (v === undefined) drop(key, raw);
+    return v;
+  };
+  const tier = (raw: string) => keyOf(TIER_KEYS, raw);
+  const offload: OffloadChoice = {};
+  const expertsTier = read('ox', true, tier);
+  const fromLayer = read('oxl', expertsTier !== undefined, (r) => parseInteger(r, 0, MAX_VALUE));
+  const residentFraction = read('oxf', expertsTier !== undefined, (r) => parseNumberIn(r, 0, 1));
+  const hitRatio = read<HitRatioChoice>('oxh', expertsTier !== undefined, (r) => keyOf(HIT_RATIO_KEYS, r) ?? parseNumberIn(r, 0, 1));
+  if (expertsTier !== undefined) offload.experts = { tier: expertsTier, fromLayer, residentFraction, hitRatio };
+  const layersOnDevice = read('odl', true, (r) => parseInteger(r, 0, MAX_VALUE));
+  const denseTier = read('odt', layersOnDevice !== undefined, tier);
+  if (layersOnDevice !== undefined) offload.dense = { tier: denseTier ?? 'host_ram', layersOnDevice };
+  const tablesTier = read('olt', true, tier);
+  const scaleLayout = read('ols', tablesTier !== undefined, (r) => keyOf(SCALE_LAYOUT_KEYS, r));
+  if (tablesTier !== undefined) offload.tables = { tier: tablesTier, scaleLayout };
+  const any = offload.experts !== undefined || offload.dense !== undefined || offload.tables !== undefined;
+  offload.queueDepth = read('oqd', any, (r) => parseInteger(r, 1, MAX_VALUE));
+
+  const method = read('sd', true, (r) => SPEC_DEC_METHODS.find((m) => m === r));
+  const on = method !== undefined;
+  const drafter = read('sdr', on && method !== 'mtp', (r) => (r === HYPOTHETICAL_DRAFTER || isValidModelId(r) ? r : undefined));
+  const k = read('sdk', on, (r) => parseInteger(r, 1, MAX_DRAFT_LENGTH));
+  const useCase = read('sdu', on, (r) => SPEC_DEC_USE_CASES.find((u) => u === r));
+  const alpha = read('sda', on, (r) => parseNumberIn(r, 0, MAX_ACCEPTANCE));
+  const specDec: SpecDecChoice | undefined = method !== undefined ? { method, drafter, k, useCase, alpha } : undefined;
+  return normalizeDeployment({ offload, specDec });
 }
 
 /**
@@ -224,7 +386,7 @@ export function decodeState(search: string): DecodedState {
   const x = get('x');
   if (x !== undefined) {
     const bad: string[] = [];
-    hw.deviceEdits = parseEdits(x, unlocked, bad);
+    hw.deviceEdits = parseEdits(x, unlocked, bad, isEditableDevicePath);
     if (bad.length > 0) drop('x', bad.join(','));
   }
 
@@ -300,5 +462,9 @@ export function decodeState(search: string): DecodedState {
     else drop(key, v);
   }
 
-  return { state: { model, quant, hw, parallel, workload, options: normalizeOptions(options) }, dropped };
+  const host = normalizeHost(decodeHost(get, drop));
+  if (Object.keys(host).length > 0) hw.host = host;
+  const deployment = decodeDeployment(get, drop);
+
+  return { state: { model, quant, hw, parallel, workload, options: normalizeOptions(options), deployment }, dropped };
 }

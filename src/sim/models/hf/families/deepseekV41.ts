@@ -29,9 +29,10 @@
 
 import type { FfnParams, MixerParams } from '../../../ir/builders';
 import { decoderLayer, decoderModel, repeatLayers } from '../../../ir/builders';
-import type { CsaGlobalSpec, IndexerSpec, LayerSpec } from '../../../ir/model';
+import type { BlockDraftSpec, CsaGlobalSpec, IndexerSpec, LayerSpec } from '../../../ir/model';
 import type { ConfigReader } from '../reader';
 import { createReader, isJsonObject } from '../reader';
+import { withDraft } from '../drafter';
 import type { FamilyBuildResult, FamilyEntry, JsonObject } from '../types';
 import { layerParams, mhcCollapse, mhcResidual, readActivation, readMoeFfn, structuralErrors } from './mlaCommon';
 
@@ -119,6 +120,9 @@ function deepseekLayer(c: DeepseekConfig, i: number, ratio: number, global: CsaG
             outputDim: N * D,
             // Formula: q_weight, k_weight: 2·N·D
             vectorParams: 2 * N * D,
+            // Engram tables are designed to live off-device (model card); UI hint only, the simulator's default
+            // placement stays the device (design doc §2.10).
+            offDeviceByDesign: true,
           },
         }
       : {}),
@@ -162,24 +166,27 @@ function readDeepseekConfig(r: ConfigReader): DeepseekConfig {
 }
 
 /**
- * Params of the DSpark MTP stages (`mtp.*`), for the param check: `num_nextn_predict_layers` decoder layers
- * (CSA with ratio `compress_ratios[n + j]`, MoE with `dspark_n_routed_experts` / `dspark_num_experts_per_tok`
- * when given, mHC) + the first stage's `main_proj` (targets·h → h) and `main_norm` + the last stage's `norm`,
- * Markov head (embed and head, vocab × `dspark_markov_rank`) and confidence projection (h + rank → 1).
- * Embedding and head are shared with the main model. Unit: params.
+ * The DSpark MTP stages (`mtp.*`): `num_nextn_predict_layers` decoder layers (window-only CSA, MoE with
+ * `dspark_n_routed_experts` / `dspark_num_experts_per_tok` when given, mHC). Empty without stages.
  */
-function dsparkParamsEstimate(r: ConfigReader, c: DeepseekConfig, moe: FfnParams, n: number, vocab: number): number {
+function dsparkStages(r: ConfigReader, c: DeepseekConfig, moe: FfnParams, n: number): LayerSpec[] {
   const stages = r.optInt('num_nextn_predict_layers') ?? 0;
-  if (stages === 0) return 0;
   const experts = r.optInt('dspark_n_routed_experts');
   const topK = r.optInt('dspark_num_experts_per_tok');
   const draftMoe: FfnParams = moe.kind === 'moe' ? { ...moe, ...(experts ? { experts } : {}), ...(topK ? { topK } : {}) } : moe;
-  let total = 0;
-  for (let j = 0; j < stages; j++) {
-    const ratio = c.ratios[n + j] ?? 0;
-    // DSpark attention is window-only (`assert self.compress_ratio == 0`); a non-zero ratio is ignored.
-    total += layerParams(deepseekLayer({ ...c, engramLayers: [] }, n + j, ratio, undefined, draftMoe, `mtp.${j}`));
-  }
+  // DSpark attention is window-only (`assert self.compress_ratio == 0`); a non-zero ratio is ignored.
+  return repeatLayers(stages, (j) => deepseekLayer({ ...c, engramLayers: [] }, n + j, c.ratios[n + j] ?? 0, undefined, draftMoe, `mtp.${j}`));
+}
+
+/**
+ * Params of the DSpark MTP stages (`mtp.*`), for the param check: the {@link dsparkStages} layers + the first
+ * stage's `main_proj` (targets·h → h) and `main_norm` + the last stage's `norm`, Markov head (embed and head,
+ * vocab × `dspark_markov_rank`) and confidence projection (h + rank → 1). Embedding and head are shared with the
+ * main model. Unit: params.
+ */
+function dsparkParamsEstimate(r: ConfigReader, c: DeepseekConfig, stages: LayerSpec[], vocab: number): number {
+  if (stages.length === 0) return 0;
+  const total = stages.reduce((sum, layer) => sum + layerParams(layer), 0);
   const h = c.hidden;
   const targets = (r.optNumArray('dspark_target_layer_ids') ?? []).length;
   const rank = r.optInt('dspark_markov_rank') ?? 0;
@@ -201,6 +208,49 @@ function visionParamsEstimate(vision: JsonObject | undefined, hidden: number): n
   const s = num('downsample_ratio') || 1;
   // Formula: P_vision = depth·(4·d² + 3·d·ffn) + d·s²·h + h·h
   return depth * (4 * d * d + 3 * d * ffn) + d * s * s * hidden + hidden * hidden;
+}
+
+/**
+ * The in-checkpoint DSpark drafter as a block drafter (design doc §3.2) with the {@link dsparkStages} as
+ * `moeLayers`: window = the CSA `sliding_window`, target features of `dspark_target_layer_ids` (`main_proj`), Markov
+ * head of `dspark_markov_rank`, `blockSize = dspark_block_size + 1` (DSpark's block counts draft positions, so the
+ * verify width is one more). The dense head/width fields mirror the stages' CSA and expert shapes for display; the
+ * lowering uses `moeLayers`. Undefined without stages, block size or target layers.
+ */
+function dsparkDraft(
+  r: ConfigReader,
+  c: DeepseekConfig,
+  stages: LayerSpec[],
+  vocab: number,
+  activation: BlockDraftSpec['activation'],
+  repoId: string,
+): BlockDraftSpec | undefined {
+  const block = r.optInt('dspark_block_size');
+  const targets = r.optNumArray('dspark_target_layer_ids');
+  if (stages.length === 0 || block === undefined || targets === undefined || targets.length === 0) return undefined;
+  const moe = stages[0].blocks.find((b) => b.kind === 'moe');
+  const rank = r.optInt('dspark_markov_rank');
+  return {
+    kind: 'block_drafter',
+    method: 'dspark',
+    hidden: c.hidden,
+    vocab,
+    layers: stages.length,
+    heads: c.csa.heads,
+    kvHeads: 1,
+    headDim: c.csa.headDim,
+    intermediate: moe !== undefined && moe.kind === 'moe' ? moe.expertIntermediate : 0,
+    gated: true,
+    activation,
+    windowTokens: c.csa.windowTokens,
+    targetLayerIds: targets,
+    // Formula: blockSize = dspark_block_size + 1 (k ≤ dspark_block_size drafts, verify width k + 1)
+    // See docs/hf-loader.md ("Drafters"), docs/simulation-model.md §13 ("Draft spec")
+    blockSize: block + 1,
+    ...(rank !== undefined ? { markovRank: rank } : {}),
+    moeLayers: stages,
+    source: `${repoId} (mtp.* DSpark stages)`,
+  };
 }
 
 /** Build the DeepSeek-V4.1 IR from its text config. */
@@ -239,7 +289,9 @@ export function buildDeepseekV41(text: JsonObject, top: JsonObject, repoId: stri
 
   const vision = isJsonObject(top.vision_config) ? top.vision_config : isJsonObject(text.vision_config) ? text.vision_config : undefined;
   const visionParams = visionParamsEstimate(vision, c.hidden);
-  const mtp = dsparkParamsEstimate(r, c, moe, n, vocab);
+  const stages = dsparkStages(r, c, moe, n);
+  const mtp = dsparkParamsEstimate(r, c, stages, vocab);
+  const draft = dsparkDraft(r, c, stages, vocab, act, repoId);
   const count = (role: CsaRole) => roles.filter((x) => x === role).length;
   const notes = [
     `CSA layers: ${count('swa')} window-only, ${count('full')} own KV + indexer, ${count('reindex')} own indexer on shared KV, ${count('reuse')} reuse KV and top-k`,
@@ -252,7 +304,7 @@ export function buildDeepseekV41(text: JsonObject, top: JsonObject, repoId: stri
   if (visionParams > 0) excludedParts.push('vision tower + aligner');
   return {
     kind: 'ok',
-    model,
+    model: withDraft(model, draft),
     notes,
     mtpParamsEstimate: mtp,
     visionParamsEstimate: visionParams,
