@@ -1,72 +1,121 @@
+/* About page: the app's masthead, then a single reading column in the serif at a 64ch measure. */
 .about-header {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: baseline;
-  gap: 24px;
-  padding: 24px clamp(20px, 5vw, 72px);
+  gap: var(--space-5);
+  height: var(--masthead-h);
+  padding: 0 var(--space-5);
+  background: var(--masthead);
+  color: var(--on-masthead);
+  font-size: var(--type-label);
+  font-weight: 500;
 }
+.about-header a:hover { color: var(--masthead-muted); }
+.about-header a:focus-visible { outline-color: var(--on-masthead); }
 .about-wordmark {
-  font-size: var(--text-2xl);
-  font-weight: 760;
-  font-stretch: 125%;
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: -0.03em;
   text-decoration: none;
 }
 .about-main {
-  max-width: calc(70ch + 48px);
-  margin: 48px auto 0;
-  padding: 0 24px;
-  font-size: 17px;
-  line-height: 1.6;
+  max-width: calc(64ch + 48px);
+  margin: var(--space-7) auto 0;
+  padding: 0 var(--space-5);
+  font-family: var(--font-serif);
+  font-size: 1.125rem;
+  line-height: 1.65;
 }
-.about-intro { margin-bottom: 64px; }
+.about-intro { margin-bottom: var(--space-8); }
 .about-intro h1 {
   max-width: 20ch;
+  margin: 0 0 var(--space-5);
   font-size: clamp(2.25rem, 5vw, 3rem);
-  line-height: 1.12;
-  font-stretch: 110%;
-  font-weight: 760;
-  margin: 0 0 24px;
+  line-height: 1.08;
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
-.about-intro > p:first-of-type { font-size: var(--text-xl); }
-.about-intro nav { display: flex; flex-wrap: wrap; gap: 12px 28px; margin-top: 28px; }
+.about-intro > p:first-of-type { font-size: 1.375rem; line-height: 1.45; }
+.about-intro nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-6);
+  margin-top: var(--space-6);
+  font-family: var(--font-sans);
+  font-size: var(--type-body);
+  font-weight: 600;
+}
+.about-intro nav a { color: var(--primary); }
 .about-prose { min-width: 0; overflow-wrap: anywhere; }
-.about-prose h1 { font-size: var(--text-2xl); margin: 0 0 24px; font-weight: 650; }
-.about-prose h2 { margin: 48px 0 18px; font-size: var(--text-xl); font-weight: 650; }
-.about-prose h3 { margin: 32px 0 12px; font-size: var(--text-lg); font-weight: 600; }
-.about-prose :is(h1, h2, h3, h4) { scroll-margin-top: 24px; line-height: 1.3; }
-.about-prose p { margin: 0 0 18px; }
-.about-prose li { margin-bottom: 8px; }
-.about-prose :is(ul, ol) { padding-left: 24px; }
-.about-prose hr { border: 0; height: 1px; background: var(--rule); margin: 40px 0; }
-.about-prose code {
-  font-family: var(--font-family);
-  font-size: 0.94em;
-  background: var(--input-band);
-  padding: 1px 4px;
-  border-radius: 3px;
+.about-prose :is(h1, h2, h3, h4) {
+  scroll-margin-top: var(--space-5);
+  line-height: 1.25;
+  letter-spacing: -0.01em;
 }
-.about-prose pre { white-space: pre-wrap; padding: 16px; background: var(--input-band); }
+.about-prose h1 { margin: 0 0 var(--space-5); font-size: 1.75rem; font-weight: 620; }
+.about-prose h2 { margin: var(--space-7) 0 var(--space-4); font-size: 1.375rem; font-weight: 620; }
+.about-prose h3 {
+  margin: var(--space-6) 0 var(--space-3);
+  font-family: var(--font-sans);
+  font-size: var(--type-body);
+  font-weight: 650;
+  letter-spacing: 0;
+}
+.about-prose p { margin: 0 0 var(--space-4); }
+.about-prose li { margin-bottom: var(--space-2); }
+.about-prose :is(ul, ol) { padding-left: var(--space-5); }
+.about-prose li::marker { color: var(--muted); font-variant-numeric: tabular-nums; }
+.about-prose a { text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); }
+.about-prose a:hover { text-decoration-color: currentColor; }
+.about-prose hr { height: 1px; margin: var(--space-7) 0; border: 0; background: var(--rule); }
+.about-prose code {
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--mist);
+  font-family: var(--font-sans);
+  font-size: 0.82em;
+}
+.about-prose pre {
+  padding: var(--space-4);
+  border-radius: var(--control-radius);
+  background: var(--mist);
+  white-space: pre-wrap;
+}
 .about-prose pre code { padding: 0; background: transparent; }
 /* Prose between tables is inserted in wrappers that take no part in layout (AboutPage.tsx). */
 .prose-segment { display: contents; }
 /* Each table scrolls sideways in a themed ScrollArea; its padding keeps the bar clear of the last row. */
-.table-scroll { max-width: 100%; margin: 24px 0; }
-.table-scroll .scroll-area-content { padding-bottom: 12px; }
+.table-scroll { max-width: 100%; margin: var(--space-5) 0; }
+.table-scroll .scroll-area-content { padding-bottom: var(--space-3); }
 .about-prose table {
   width: 100%;
   border-collapse: collapse;
-  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  font-size: var(--type-label);
+  line-height: 20px;
   font-variant-numeric: tabular-nums;
-  line-height: 1.5;
 }
-.about-prose :is(th, td) { padding: 8px 12px 8px 0; text-align: left; vertical-align: top; }
-.about-prose th { font-weight: 650; border-bottom: 1px solid var(--rule); }
-.about-prose blockquote { margin-left: 0; padding-left: 20px; border-left: 3px solid var(--graphite); }
-.about-footer { padding: 48px 0 64px; }
-#sanity-check { margin-top: 72px; }
+.about-prose :is(th, td) { padding: var(--space-2) var(--space-3) var(--space-2) 0; text-align: left; vertical-align: top; }
+.about-prose th { border-bottom: 1px solid var(--ink); color: var(--muted); font-weight: 600; }
+.about-prose td { border-bottom: 1px solid var(--rule); }
+.about-prose blockquote {
+  margin-left: 0;
+  padding-left: var(--space-5);
+  border-left: 3px solid var(--primary);
+  color: var(--muted);
+}
+.about-footer {
+  padding: var(--space-7) 0 var(--space-8);
+  font-family: var(--font-sans);
+  font-size: var(--type-body);
+  font-weight: 600;
+}
+#sanity-check { margin-top: var(--space-8); }
 
 @media (max-width: 700px) {
-  .about-header { padding: 20px; gap: 16px; font-size: var(--text-sm); }
-  .about-main { margin-top: 32px; padding: 0 20px; }
-  .about-intro { margin-bottom: 48px; }
+  .about-header { padding: 0 var(--space-4); }
+  .about-main { margin-top: var(--space-6); padding: 0 var(--space-4); font-size: 1.0625rem; }
+  .about-intro { margin-bottom: var(--space-7); }
 }

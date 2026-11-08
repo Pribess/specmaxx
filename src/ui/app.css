@@ -1,253 +1,408 @@
+/*
+ * Layout, masthead, the inputs pane and the shared controls. Tokens: src/styles/tokens.css; plan and wireframes:
+ * docs/design/redesign/plan.md. Results (hero, charts, memory, table, mini bar) live in results.css.
+ */
+
+/* Masthead: a slim deep-blue band. */
 .app-header {
-  position: sticky;
-  top: 0;
-  background: var(--silicon);
-  height: 80px;
   display: flex;
   align-items: center;
-  gap: 28px;
-  padding: 0 36px;
+  gap: var(--space-4);
+  height: var(--masthead-h);
+  padding: 0 var(--space-5);
+  background: var(--masthead);
+  color: var(--on-masthead);
 }
+.app-header a:focus-visible { outline-color: var(--on-masthead); }
 .app-header > a:last-child {
   margin-left: auto;
-  font-size: 14px;
+  font-size: var(--type-label);
+  font-weight: 500;
 }
+.app-header > a:last-child:hover { color: var(--masthead-muted); }
 .wordmark {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 7px;
   text-decoration: none;
-  font-size: 28px;
-  font-weight: 780;
-  letter-spacing: -1.2px;
-  font-stretch: 110%;
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: -0.03em;
 }
+.wordmark:hover { color: inherit; }
 .roof-mark {
-  width: 25px;
-  height: 15px;
-  border-top: 3px solid currentColor;
+  width: 17px;
+  height: 10px;
+  margin-top: 2px;
+  border-top: 2.5px solid currentColor;
+  border-left: 2.5px solid currentColor;
   transform: skew(-32deg);
-  border-left: 3px solid currentColor;
 }
 .tagline {
-  color: var(--muted);
-  font-size: 14px;
+  color: var(--masthead-muted);
+  font-size: var(--type-label);
+  padding-left: var(--space-4);
+  border-left: 1px solid color-mix(in srgb, var(--masthead-muted) 45%, transparent);
+  line-height: 20px;
 }
-.workspace {
+
+/* Split workspace: output (left) | 1px splitter | inputs (right, a fraction of the width set by the splitter). */
+.workspace[data-layout='split'] {
   display: grid;
-  grid-template-columns: 380px minmax(0, 1fr);
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) 1px minmax(0, calc(var(--inputs-fraction, 0.3333) * 100%));
+  height: calc(100dvh - var(--masthead-h));
 }
-.input-band {
-  background: var(--input-band);
-  position: sticky;
-  top: 80px;
-  height: calc(100dvh - 80px);
-  align-self: start;
+.workspace[data-layout='split'] > .output {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
 }
-/* The sidebar's scroller is a ScrollArea filling it (App.tsx); its content carries the padding. */
-.input-band-scroll {
-  height: 100%;
+.workspace[data-layout='split'] > .input-band {
+  min-width: 0;
+  min-height: 0;
+  background: var(--mist);
 }
-.input-band-scroll > .scroll-area-viewport {
-  overscroll-behavior: contain;
+.pane-scroll { height: 100%; }
+.pane-scroll > .scroll-area-viewport { overscroll-behavior: contain; }
+.output-scroll > .scroll-area-viewport > .scroll-area-content {
+  container: output / inline-size;
+  padding: var(--space-6) var(--pane-pad) var(--space-8);
+}
+.output-scroll > .scroll-area-viewport > .scroll-area-content > * {
+  max-width: 1080px;
 }
 .input-band-scroll > .scroll-area-viewport > .scroll-area-content {
-  padding: 10px 28px 32px;
+  container: inputs / inline-size;
+  padding: var(--space-5) var(--space-5) var(--space-7);
 }
-.panel {
-  padding: 18px 0;
+
+/* The splitter: a 1px rule with a 12px hit area; a 3px blue line while hovered, focused or dragged. */
+.splitter {
+  position: relative;
+  z-index: 4;
+  width: 1px;
+  background: var(--rule);
+  cursor: col-resize;
+  touch-action: none;
 }
-.panel + .panel {
-  border-top: 1px solid var(--rule);
+.splitter::before {
+  content: '';
+  position: absolute;
+  inset: 0 calc((var(--splitter-hit) - 1px) / -2);
 }
+.splitter::after {
+  content: '';
+  position: absolute;
+  inset: 0 -1px;
+  background: var(--primary);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.splitter:hover::after,
+.splitter:focus-visible::after,
+.splitter[data-dragging]::after { opacity: 1; }
+.splitter:focus-visible { outline: none; }
+.workspace:has(.splitter[data-dragging]) { cursor: col-resize; user-select: none; }
+
+/* Stacked workspace (phone): hero and memory, then inputs, then analysis, one document scroll. */
+.workspace[data-layout='stacked'] {
+  display: flex;
+  flex-direction: column;
+}
+.workspace[data-layout='stacked'] > .output {
+  padding: var(--space-5) var(--pane-pad) var(--space-6);
+}
+.workspace[data-layout='stacked'] > .input-band {
+  padding: var(--space-1) var(--pane-pad) var(--space-5);
+  background: var(--mist);
+}
+.workspace[data-layout='stacked'] > .detail-results {
+  padding: var(--space-6) var(--pane-pad) var(--space-7);
+}
+
+/* Input sections (Panel.tsx): a serif head with a chevron; separated by space on the split layout, by a rule
+   between collapsed rows on the stacked one. */
+.panel + .panel { margin-top: var(--gap-group); }
 .panel > summary {
   display: flex;
-  justify-content: space-between;
-  gap: 10px;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 28px;
   cursor: pointer;
-  align-items: baseline;
+  list-style: none;
 }
-.panel > summary::after {
-  content: '+';
-  margin-left: auto;
-}
-.panel[open] > summary::after {
-  content: '−';
-}
+.panel > summary::-webkit-details-marker { display: none; }
 .panel > summary strong {
-  font-weight: 650;
+  font-family: var(--font-serif);
+  font-size: var(--type-group);
+  line-height: 24px;
+  font-weight: 620;
+  letter-spacing: -0.005em;
 }
-.panel > summary > span {
-  display: none;
+.panel > summary::after,
+details.advanced > summary::before,
+.spec-editor summary::before,
+.notes summary::before {
+  content: '';
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 120ms ease;
 }
-.panel-body {
-  padding-top: 14px;
+.panel > summary::after { margin-left: auto; margin-right: 4px; color: var(--muted); }
+.panel:not([open]) > summary::after { transform: rotate(-45deg); }
+.panel-value { display: none; }
+.panel-body { padding-top: var(--space-4); }
+.panel > summary:hover strong { color: var(--primary); }
+
+.workspace[data-layout='stacked'] .panel + .panel { margin-top: 0; border-top: 1px solid var(--rule); }
+.workspace[data-layout='stacked'] .panel > summary { min-height: 52px; }
+.workspace[data-layout='stacked'] .panel[open] { padding-bottom: var(--space-5); }
+.workspace[data-layout='stacked'] .panel-value {
+  display: block;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--type-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
 }
+.workspace[data-layout='stacked'] .panel > summary::after { margin-left: 0; }
+
+/* Fields: label row (20px) → 6px → control. */
 .field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--gap-label-control);
   min-width: 0;
-  font-size: 14px;
 }
-.field + .field {
-  margin-top: 12px;
-}
-input:not([type='checkbox']):not([type='radio']) {
-  width: 100%;
-  min-width: 0;
-  border: 1px solid var(--rule);
-  background: var(--silicon);
-  color: var(--graphite);
-  padding: 9px 10px;
-  border-radius: var(--control-radius);
-  height: 42px;
-  font-size: 14px;
-  font-variant-numeric: tabular-nums;
-}
-input[aria-invalid='true'] {
-  border-color: var(--overflow) !important;
-}
-button {
-  border: 1px solid var(--graphite);
-  border-radius: var(--control-radius);
-  background: var(--graphite);
-  color: var(--silicon);
-  padding: 9px 14px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 550;
-}
-button:hover {
-  filter: brightness(0.9);
-}
-button.quiet {
-  background: transparent;
-  color: var(--graphite);
-  border-color: var(--rule);
-  padding: 6px 10px;
-}
-.model-entry {
-  display: flex;
-  gap: 8px;
-}
-.model-facts {
-  font-size: 14px;
-}
-.model-facts p {
-  margin: 8px 0;
-}
-.hint {
-  font-size: 12px;
-  color: var(--muted);
-  line-height: 1.5;
-}
-p.hint {
-  margin: 10px 0;
-}
-.hint > span {
-  display: block;
-}
-.error {
-  color: var(--overflow);
-}
+.field + .field,
+.field + .fields,
+.fields + .field,
+.fields + .fields { margin-top: var(--gap-field); }
 .fields {
   display: grid;
-  gap: 10px;
+  gap: var(--gap-field) var(--gap-field-inline);
 }
-.fields.two {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.fields.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.fields .field + .field { margin-top: 0; }
+@container inputs (max-width: 340px) {
+  .fields.two { grid-template-columns: minmax(0, 1fr); }
 }
-.fields .field + .field {
-  margin-top: 0;
-}
-.unlock {
-  border: 0;
-  padding: 12px 0;
-  margin: 0;
-}
-.unlock legend {
-  padding: 8px 0 0;
-  font-size: 14px;
-  font-weight: 550;
-}
-.check {
+
+/* Label and its "?" icon on one 20px line; the icon's 24px hit box has negative margins, so it never makes the
+   row taller or pushes the next field. */
+.field-head {
   display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  font-size: 14px;
-  margin: 7px 0;
+  align-items: center;
+  gap: var(--gap-label-icon);
+  min-width: 0;
+  min-height: var(--label-line);
 }
-.check input {
-  accent-color: var(--graphite);
-  margin-top: 5px;
-}
-.tag {
-  display: inline-block;
-  font-size: 11px;
+.field-label,
+.field > span:first-child {
   color: var(--muted);
-  margin-left: 6px;
-}
-.spec-editor {
-  font-size: 14px;
-  margin-top: 16px;
-}
-.spec-editor details {
-  margin: 12px 0 12px 8px;
-}
-.spec-editor summary,
-.notes summary {
-  cursor: pointer;
-}
-.spec-field {
-  margin: 12px 0;
-}
-.spec-field.edited {
-  border-left: 3px solid var(--graphite);
-  padding-left: 8px;
-}
-/* Setup row (SetupRow.tsx): counts as segmented controls, then the links and the cabling. */
-.setup-row {
-  margin-top: 12px;
-}
-.setup-level + .setup-level {
-  margin-top: 14px;
-}
-.setup-level > .field + .field,
-.setup-level > .field + .fields,
-.setup-level > .fields {
-  margin-top: 12px;
+  font-size: var(--type-label);
+  line-height: var(--label-line);
+  font-weight: 600;
 }
 .field-aside {
   margin-left: auto;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--type-meta);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.panel-help { margin-bottom: var(--space-3); }
+
+/* Text and number inputs, picker triggers, static fields: one control size. */
+input:not([type='checkbox']):not([type='radio']),
+.picker-trigger,
+.field-static {
+  width: 100%;
+  min-width: 0;
+  height: var(--control-h);
+  margin: 0;
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  background: var(--field);
+  color: var(--ink);
+  font-size: var(--type-control);
+  font-weight: 450;
+  line-height: 20px;
+}
+input:not([type='checkbox']):not([type='radio']):hover,
+.picker-trigger:hover,
+.picker-trigger[aria-expanded='true'] { border-color: var(--ink); }
+input:not([type='checkbox']):not([type='radio']):focus-visible,
+.picker-trigger:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -1px;
+  border-color: var(--primary);
+}
+input::placeholder { color: var(--muted); opacity: 0.8; }
+input[aria-invalid='true'] { border-color: var(--overflow) !important; }
 .field-static {
   display: flex;
   align-items: center;
-  height: 42px;
-  margin: 0;
-  padding: 0 10px;
-  border: 1px dashed var(--rule);
-  border-radius: var(--control-radius);
-  font-size: 14px;
+  border-style: dashed;
+  border-color: var(--rule);
+  background: transparent;
+  color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.help-line {
-  display: block;
+
+/* Buttons: primary (filled deep blue) and quiet (outlined, smaller). */
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gap-icon-text);
+  height: var(--control-h);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--primary-fill);
+  border-radius: var(--control-radius);
+  background: var(--primary-fill);
+  color: var(--on-primary);
+  font-size: var(--type-control);
+  font-weight: 600;
+  line-height: 20px;
+  cursor: pointer;
 }
-.help-line + .help-line {
-  margin-top: 4px;
+button:hover { background: var(--primary-fill-hover); border-color: var(--primary-fill-hover); }
+button.quiet {
+  height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  border-color: var(--control-border);
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--type-meta);
+  font-weight: 500;
 }
-/* Segmented control (Segmented.tsx): native radios, visually hidden; the labels form one joined control with
-   the pickers' height and radius. */
-.segmented {
+button.quiet:hover { border-color: var(--ink); background: var(--tint); }
+
+.model-entry {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+.model-entry > :first-child { flex: 1; min-width: 0; }
+.model-facts {
+  margin-top: var(--space-3);
+  font-size: var(--type-label);
+  line-height: 20px;
+}
+.model-facts p { margin: 0; }
+.model-facts p:first-child { color: var(--muted); }
+.model-facts p + p { margin-top: 2px; }
+.model-facts p.hint { margin-top: var(--space-2); }
+.panel-body > p,
+.panel-body > form { margin: var(--space-3) 0 0; }
+.panel-body > button.quiet { margin-top: var(--space-3); }
+
+.hint {
+  color: var(--muted);
+  font-size: var(--type-meta);
+  line-height: 18px;
+}
+p.hint { margin: var(--space-2) 0 0; }
+.hint > span { display: block; }
+.hint:empty { display: none; }
+.error { color: var(--overflow); }
+.keep-together { white-space: nowrap; }
+
+/* Disclosures (Advanced, spec editor, notes): chevron, 6px, text; the whole row is the target. */
+details.advanced { margin-top: var(--space-5); }
+details.advanced > summary,
+.spec-editor summary,
+.notes summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 24px;
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--type-label);
+  font-weight: 600;
+}
+details.advanced > summary::-webkit-details-marker,
+.spec-editor summary::-webkit-details-marker,
+.notes summary::-webkit-details-marker { display: none; }
+details.advanced > summary::before,
+.spec-editor summary::before,
+.notes summary::before {
+  margin: 0 3px 0 2px;
+  transform: translateY(-1px) rotate(-45deg);
+}
+details[open] > summary::before { transform: translateY(-3px) rotate(45deg) !important; }
+details.advanced > summary:hover,
+.spec-editor summary:hover,
+.notes summary:hover { color: var(--primary); }
+details.advanced > :not(summary) { margin-top: var(--space-4); }
+
+/* Device unlocks (Advanced): a small heading, then radio or checkbox rows. */
+.unlock {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.unlock legend {
+  padding: 0;
+  margin-bottom: var(--space-2);
+  color: var(--muted);
+  font-size: var(--type-label);
+  font-weight: 600;
+}
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+  font-size: var(--type-label);
+  line-height: 20px;
+}
+.check input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--primary-fill);
+}
+.unlock details.hint summary { font-size: var(--type-meta); font-weight: 500; }
+.tag {
+  margin-left: var(--space-2);
+  color: var(--muted);
+  font-size: var(--type-micro);
+}
+
+/* Custom spec editor. */
+.spec-editor { margin-top: var(--space-5); font-size: var(--type-label); }
+.spec-editor details { margin: var(--space-3) 0 var(--space-3) var(--space-3); }
+.spec-field { margin: var(--space-3) 0; }
+.spec-field.edited {
+  padding-left: var(--space-2);
+  border-left: 3px solid var(--primary);
+}
+
+/* Setup row (SetupRow.tsx): counts as segmented controls, then the links and the cabling. */
+.setup-row { margin-top: var(--gap-field); }
+.setup-level + .setup-level { margin-top: var(--gap-field); }
+.setup-level > .field + .field,
+.setup-level > .field + .fields,
+.setup-level > .fields { margin-top: var(--gap-field); }
+
+/* Segmented control (Segmented.tsx): native radios, visually hidden; the labels form one joined control. */
+.segmented-field .segmented {
   display: flex;
   min-width: 0;
 }
@@ -267,656 +422,113 @@ p.hint {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 42px;
-  border: 1px solid var(--rule);
-  background: var(--silicon);
-  font-size: 14px;
+  height: var(--control-h);
+  border: 1px solid var(--control-border);
+  background: var(--field);
+  font-size: var(--type-control);
   font-variant-numeric: tabular-nums;
 }
-.segment + .segment span {
-  border-left-width: 0;
-}
-.segment:first-child span {
-  border-radius: var(--control-radius) 0 0 var(--control-radius);
-}
-.segment:last-child span {
-  border-radius: 0 var(--control-radius) var(--control-radius) 0;
-}
-.segment:only-child span {
-  border-radius: var(--control-radius);
-}
-.segment:hover span {
-  background: color-mix(in srgb, var(--graphite) 7%, var(--silicon));
-}
+.segment + .segment span { border-left-width: 0; }
+.segment:first-child span { border-radius: var(--control-radius) 0 0 var(--control-radius); }
+.segment:last-child span { border-radius: 0 var(--control-radius) var(--control-radius) 0; }
+.segment:only-child span { border-radius: var(--control-radius); }
+.segment:hover span { background: var(--tint); }
 .segment input:checked + span {
-  background: var(--graphite);
-  border-color: var(--graphite);
-  color: var(--silicon);
-  font-weight: 600;
-}
-.segment input:focus-visible + span {
-  outline: 2px solid var(--graphite);
-  outline-offset: 2px;
   position: relative;
   z-index: 1;
-}
-@media (max-width: 760px) {
-  .setup-network.fields.two {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-.output {
-  padding: 24px 44px 64px;
-  max-width: 1300px;
-  min-width: 0;
-}
-.rig {
-  font-size: 16px;
-  max-width: none;
-  text-wrap: pretty;
-  margin: 0 0 28px;
-}
-.hero-grid {
-  display: grid;
-  grid-template-columns: minmax(250px, 0.9fr) minmax(300px, 1.1fr);
-  align-items: center;
-  gap: 16px;
-}
-.answer + .answer {
-  margin-top: 30px;
-}
-.answer h1 {
-  font-size: 21px;
-  font-weight: 550;
-  margin: 0 0 2px;
-}
-.answer .answer-line {
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-  margin: 0;
-}
-.answer strong {
-  font-size: clamp(44px, 4.7vw, 72px);
-  font-stretch: 125%;
-  line-height: 1.14;
-  letter-spacing: -2px;
-  font-weight: 760;
-  font-variant-numeric: tabular-nums;
-}
-.answer .answer-line > span {
-  font-size: 18px;
-  white-space: nowrap;
-}
-.answer small {
-  font-size: 14px;
-  color: var(--muted);
-}
-.roofline {
-  margin: 0;
-  min-width: 0;
-}
-svg {
-  width: 100%;
-  display: block;
-  overflow: visible;
-}
-svg text {
-  font: 14px var(--font-family);
-  fill: var(--muted);
-}
-.axis {
-  fill: none;
-  stroke: var(--rule);
-  stroke-width: 1.5;
-}
-.grid {
-  stroke: var(--rule);
-  opacity: 0.35;
-}
-.roof-memory {
-  fill: none;
-  stroke: var(--bandwidth);
-  stroke-width: 3;
-}
-.roof-compute {
-  fill: none;
-  stroke: var(--tensor);
-  stroke-width: 3;
-}
-.point {
-  fill: var(--graphite);
-  stroke: var(--silicon);
-  stroke-width: 2;
-}
-.point.decode {
-  fill: var(--silicon);
-  stroke: var(--graphite);
-}
-.compute-text {
-  color: var(--tensor);
-  fill: var(--tensor);
-}
-.memory-text {
-  color: var(--bandwidth);
-  fill: var(--bandwidth);
-}
-.comm-text {
-  color: var(--link);
-  fill: var(--link);
-}
-.theory {
-  font-size: 14px;
-  color: var(--muted);
-  margin: 28px 0;
-  max-width: 75ch;
-}
-h2 {
-  font-size: 21px;
+  margin-left: -1px;
+  border-left-width: 1px;
+  background: var(--primary-fill);
+  border-color: var(--primary-fill);
+  color: var(--on-primary);
   font-weight: 650;
-  line-height: 1.3;
-  margin: 0 0 14px;
 }
-.memory {
-  margin-top: 32px;
-}
-.memory h2 {
-  font-size: 16px;
-  margin-bottom: 12px;
-}
-.memory-stage p {
-  font-size: 14px;
-  margin: 6px 0 10px;
-}
-.capacity-bar {
-  display: flex;
+.segment:first-child input:checked + span { margin-left: 0; }
+.segment input:focus-visible + span {
   position: relative;
-  width: 100%;
-  height: 13px;
-  background: color-mix(in srgb, var(--graphite) 9%, var(--silicon));
-}
-.allocation-weights {
-  background: var(--graphite);
-}
-.allocation-state {
-  background: repeating-linear-gradient(135deg, var(--graphite) 0 2px, var(--silicon) 2px 4px);
-}
-.allocation-activations {
-  background:
-    radial-gradient(var(--graphite) 1px, transparent 1px) 0 0 / 4px 4px,
-    var(--silicon);
-}
-.memory-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 20px;
-  list-style: none;
-  padding: 0;
-  margin: 12px 0;
-  font-size: 12px;
-}
-.memory-legend li {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.memory-legend strong {
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-}
-.memory-swatch {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border: 1px solid var(--graphite);
-  flex-shrink: 0;
-}
-.keep-together {
-  white-space: nowrap;
-}
-.capacity-bar::after {
-  content: '';
-  position: absolute;
-  right: 0;
-  height: 21px;
-  top: -4px;
-  border-right: 2px solid var(--graphite);
-}
-.capacity-bar.overflow::after {
-  right: calc(100% - var(--capacity));
-  border-color: var(--overflow);
-}
-.capacity-bar.overflow {
-  background: repeating-linear-gradient(135deg, transparent 0 3px, var(--overflow) 3px 5px);
-}
-.capacity-bar.overflow::before {
-  content: '';
-  position: absolute;
-  inset: 0 0 0 var(--capacity);
-  background: repeating-linear-gradient(135deg, transparent 0 3px, var(--overflow) 3px 5px);
-}
-.hero.pending {
-  opacity: 0.6;
-}
-.breakdown,
-.sweep {
-  margin-top: 44px;
-}
-.section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-.section-head h2 {
-  margin: 0;
-}
-.toggles {
-  display: flex;
-  gap: 10px;
-}
-.segmented {
-  display: flex;
-  border: 1px solid var(--rule);
-  border-radius: 6px;
-  padding: 2px;
-}
-.segmented button {
-  padding: 4px 8px;
-  border: 0;
-  font-size: 12px;
-  background: transparent;
-  color: var(--muted);
-}
-.segmented button[aria-pressed='true'] {
-  background: var(--graphite);
-  color: var(--silicon);
-  border-radius: 4px;
-}
-table {
-  border-collapse: separate;
-  border-spacing: 0 9px;
-  width: 100%;
-  font-size: 14px;
-  font-variant-numeric: tabular-nums;
-}
-th {
-  text-align: left;
-  font-weight: 500;
-  overflow-wrap: anywhere;
-}
-thead th {
-  color: var(--muted);
-  font-size: 12px;
-}
-td {
-  text-align: right;
-  padding-left: 18px;
-  white-space: nowrap;
-}
-thead th:not(:first-child) {
-  text-align: right;
-}
-thead th:last-child {
-  text-align: left;
-  padding-left: 24px;
-}
-.bound-cell {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding-left: 6px;
-  text-align: left;
-}
-.bound-cell > span {
-  width: 64px;
-}
-.bound-track {
-  width: 80px;
-  flex-shrink: 0;
-}
-.bound-bar {
-  display: flex;
-  height: 7px;
-}
-.bound-bar .compute {
-  background: var(--tensor);
-}
-.bound-bar .memory {
-  background: var(--bandwidth);
-  margin: 0;
-}
-.bound-bar .comm {
-  background: var(--link);
-}
-.sweep {
-  max-width: 760px;
-}
-.sweep-line {
-  fill: none;
-  stroke: var(--graphite);
-  stroke-width: 2;
-}
-.sweep-point {
-  fill: var(--silicon);
-  stroke: var(--graphite);
-  stroke-width: 2;
-}
-.sweep-point.fits {
-  fill: var(--graphite);
-}
-.notes {
-  margin-top: 30px;
-  font-size: 14px;
-  max-width: 75ch;
-}
-.notes li {
-  margin: 12px 0;
-}
-.compact-results {
-  display: none;
-}
-.notice {
-  padding: 12px 16px;
-  background: var(--input-band);
-  font-size: 14px;
-  margin: 0 0 18px;
-}
-.empty-result {
-  padding: 50px 0;
-  max-width: 45ch;
-}
-@media (min-width: 1700px) {
-  .workspace {
-    grid-template-columns: 400px minmax(0, 1fr);
-  }
-  .output {
-    padding-left: 64px;
-  }
-}
-@media (max-width: 1150px) and (min-width: 761px) {
-  .workspace {
-    grid-template-columns: 330px minmax(0, 1fr);
-  }
-  .input-band-scroll > .scroll-area-viewport > .scroll-area-content {
-    padding-inline: 20px;
-  }
-  .output {
-    padding-inline: 28px;
-  }
-  .hero-grid {
-    grid-template-columns: 1fr;
-  }
-  .answers {
-    display: flex;
-    gap: 30px;
-  }
-  .answer + .answer {
-    margin-top: 0;
-  }
-  .roofline {
-    max-width: 500px;
-  }
-}
-@media (max-width: 760px) {
-  .app-header {
-    position: static;
-    padding: 0 18px;
-    height: 66px;
-    gap: 8px;
-  }
-  .wordmark {
-    font-size: 25px;
-  }
-  .roof-mark {
-    width: 20px;
-    height: 12px;
-  }
-  .tagline {
-    display: none;
-  }
-  .workspace {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-  }
-  .output {
-    display: contents;
-  }
-  .hero {
-    order: 0;
-    padding: 18px 18px 22px;
-    width: 100%;
-  }
-  .rig {
-    font-size: 14px;
-    margin-bottom: 22px;
-  }
-  .hero-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 18px;
-    align-items: stretch;
-  }
-  .answer strong {
-    font-size: 48px;
-    letter-spacing: -1.2px;
-  }
-  .answer + .answer {
-    margin-top: 22px;
-  }
-  .answer h1 {
-    font-size: 18px;
-  }
-  .roofline {
-    margin-top: 4px;
-  }
-  .theory {
-    margin: 20px 0;
-    font-size: 12px;
-  }
-  .memory {
-    margin-top: 24px;
-  }
-  .compact-results {
-    display: flex;
-    order: 1;
-    position: sticky;
-    top: 0;
-    width: 100%;
-    justify-content: space-between;
-    padding: 12px 18px;
-    font-size: 12px;
-    background: var(--silicon);
-    border-block: 1px solid var(--rule);
-    z-index: 2;
-  }
-  .input-band {
-    order: 2;
-    position: static;
-    height: auto;
-    width: 100%;
-  }
-  .input-band-scroll > .scroll-area-viewport > .scroll-area-content {
-    padding: 4px 18px 12px;
-  }
-  .panel {
-    padding: 16px 0;
-  }
-  .panel > summary {
-    font-size: 14px;
-  }
-  .panel > summary > span {
-    display: block;
-    color: var(--muted);
-    max-width: 55%;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    overflow: hidden;
-    font-size: 12px;
-  }
-  .detail-results {
-    order: 3;
-    padding: 0 18px 36px;
-    width: 100%;
-  }
-  .section-head {
-    display: block;
-  }
-  .toggles {
-    margin-top: 16px;
-  }
-  table,
-  tbody {
-    display: block;
-  }
-  thead {
-    display: none;
-  }
-  tr {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 6px 10px;
-    margin: 16px 0;
-  }
-  tr > th {
-    grid-column: 1;
-    grid-row: 1;
-  }
-  tr > td:nth-child(2) {
-    grid-column: 2;
-    grid-row: 2;
-    font-size: 12px;
-  }
-  tr > td:nth-child(3) {
-    grid-column: 2;
-    grid-row: 1;
-  }
-  tr > td:nth-child(4) {
-    grid-column: 1;
-    grid-row: 2;
-    padding: 0;
-  }
-  .bound-cell {
-    padding: 0;
-    font-size: 12px;
-  }
-  .bound-track {
-    width: 100px;
-  }
-  .sweep svg {
-    min-height: 145px;
-  }
-  .sweep svg text {
-    font-size: 22px;
-  }
-  .point,
-  .sweep-point {
-    transition:
-      cx 160ms ease,
-      cy 160ms ease;
-  }
-  .notice {
-    order: -1;
-    margin: 8px 18px;
-  }
+  z-index: 2;
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
-/* Field head: the label and its "?" help icon. */
-.field-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-.field-label {
-  font-size: 14px;
-  font-weight: 500;
-}
-.panel-help {
-  margin-bottom: 8px;
-}
-
-/* Hidden elements stay hidden even where a rule above sets display. */
-[hidden] {
-  display: none !important;
-}
-
-/* Help icon and toggletip popup (HelpIcon.tsx). The popup is position: fixed, so no scroller clips it. */
+/* Help icon and toggletip (HelpIcon.tsx). The visible circle is --icon-help; the button is the larger hit box,
+   pulled back with negative margins. The popup is position: fixed, so no scroller clips it. */
 .help {
+  position: relative;
   display: inline-flex;
+  flex: none;
+  width: var(--icon-help);
+  height: var(--icon-help);
+  vertical-align: middle;
+  /* Not a transform: that would make this the containing block of the position: fixed popup. */
+  top: var(--icon-nudge);
 }
-.help-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
+button.help-icon {
+  position: relative;
+  z-index: 0; /* its own stacking context, so the filled circle (z-index -1) stays above the pane */
+  flex: none;
+  font-family: var(--font-sans);
+  width: var(--icon-help-hit);
+  height: var(--icon-help-hit);
+  margin: calc((var(--icon-help) - var(--icon-help-hit)) / 2);
   padding: 0;
-  border: 1px solid var(--muted);
+  border: 0;
   border-radius: 50%;
   background: transparent;
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: calc(var(--icon-help) * 0.68);
+  font-weight: 700;
   line-height: 1;
 }
-.help-icon:hover {
-  filter: none;
-  border-color: var(--graphite);
-  color: var(--graphite);
+button.help-icon::before {
+  content: '';
+  position: absolute;
+  inset: calc((var(--icon-help-hit) - var(--icon-help)) / 2);
+  border: 1.25px solid currentColor;
+  border-radius: 50%;
 }
-.help-icon[aria-expanded='true'] {
-  border-color: var(--graphite);
-  background: var(--graphite);
-  color: var(--silicon);
+button.help-icon:hover { background: transparent; color: var(--primary); }
+button.help-icon:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+button.help-icon[aria-expanded='true'] { color: var(--on-primary); }
+button.help-icon[aria-expanded='true']::before {
+  z-index: -1;
+  border-color: var(--primary-fill);
+  background: var(--primary-fill);
 }
 .help-popup {
   display: block;
+  /* Never inherit a serif heading's face (the popup lives inside the heading that holds its "?"). */
+  font-family: var(--font-sans);
   z-index: 60;
-  box-sizing: border-box;
   width: 260px;
   padding: 0;
-  border-radius: var(--control-radius);
-  background: var(--graphite);
-  color: var(--silicon);
-  font-size: 13px;
+  border: 1px solid var(--rule);
+  border-radius: var(--popover-radius);
+  background: var(--field);
+  color: var(--ink);
+  font-size: var(--type-meta);
   font-weight: 400;
-  line-height: 1.45;
+  line-height: 18px;
+  text-align: left;
+  letter-spacing: 0;
   /* Wrap even inside a nowrap parent (the hero's rate line). */
   white-space: normal;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.2);
+  box-shadow: var(--shadow-float);
 }
-.help-popup .scroll-area-content {
-  padding: 10px 12px;
-}
+.help-popup .scroll-area-content { padding: var(--space-2) var(--space-3); }
+.help-line { display: block; }
+.help-line + .help-line { margin-top: 0.5em; }
 
-/* Custom picker and combobox (Picker.tsx, Combobox.tsx). Trigger matches the text inputs. */
+/* Picker and combobox (Picker.tsx, Combobox.tsx). */
 .picker-trigger {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  height: 42px;
-  min-width: 0;
-  box-sizing: border-box;
-  padding: 9px 10px;
-  border: 1px solid var(--rule);
-  border-radius: var(--control-radius);
-  background: var(--silicon);
-  color: var(--graphite);
-  font-size: 14px;
-  font-weight: 400;
-  font-variant-numeric: tabular-nums;
+  gap: var(--space-2);
   text-align: left;
+  cursor: pointer;
 }
-.picker-trigger:hover,
-.picker-trigger[aria-expanded='true'] {
-  filter: none;
-  border-color: var(--graphite);
-}
+.picker-trigger:hover { background: var(--field); }
 .picker-value {
   min-width: 0;
   overflow: hidden;
@@ -924,36 +536,32 @@ thead th:last-child {
   white-space: nowrap;
 }
 .picker-chevron {
-  flex-shrink: 0;
+  flex: none;
   width: 7px;
   height: 7px;
-  margin-right: 3px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
+  margin-right: 2px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
   transform: translateY(-2px) rotate(45deg);
   transition: transform 120ms ease;
 }
-.picker-trigger[aria-expanded='true'] .picker-chevron {
-  transform: translateY(2px) rotate(225deg);
-}
-.combobox-box {
-  position: relative;
-}
-/* The popup (Radix Popover): one border and radius, as wide as its trigger, never taller than the room
-   the viewport leaves. A fixed search header sits above the ScrollArea, so rows scroll beneath it. */
+.picker-trigger[aria-expanded='true'] .picker-chevron { transform: translateY(2px) rotate(225deg); }
+.combobox-box { position: relative; }
+/* The popup (Radix Popover): as wide as its trigger, never taller than the room the viewport leaves. A fixed
+   search header sits above the ScrollArea, so rows scroll beneath it. */
 .picker-popup {
   z-index: 50;
   display: flex;
   flex-direction: column;
-  box-sizing: border-box;
   width: var(--radix-popover-trigger-width);
+  min-width: 220px;
   max-height: min(360px, var(--radix-popover-content-available-height));
   overflow: hidden;
   border: 1px solid var(--rule);
-  border-radius: var(--control-radius);
-  background: var(--silicon);
-  color: var(--graphite);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 0.2);
+  border-radius: var(--popover-radius);
+  background: var(--field);
+  color: var(--ink);
+  box-shadow: var(--shadow-float);
 }
 .picker-command {
   display: flex;
@@ -962,25 +570,20 @@ thead th:last-child {
   min-height: 0;
 }
 .picker-command:focus,
-.combobox-command:focus {
-  outline: none;
-}
+.combobox-command:focus { outline: none; }
 .picker-search-head {
   flex: none;
   border-bottom: 1px solid var(--rule);
 }
 .picker-search-head input.picker-search {
   display: block;
-  height: 40px;
-  padding: 0 12px;
+  height: var(--control-h);
+  padding: 0 var(--space-3);
   border: 0;
   border-radius: 0;
   background: transparent;
-  font-size: 14px;
 }
-.picker-search-head input.picker-search:focus-visible {
-  outline: none;
-}
+.picker-search-head input.picker-search:focus-visible { outline: none; }
 .picker-scroll {
   display: flex;
   flex: 1 1 auto;
@@ -993,36 +596,35 @@ thead th:last-child {
   min-height: 0;
   overscroll-behavior: contain;
 }
-.picker-scroll .scroll-area-content {
-  padding: 4px;
-}
-.listbox:focus {
-  outline: none;
-}
+.picker-scroll .scroll-area-content { padding: var(--space-1); }
+.listbox:focus { outline: none; }
 .listbox [cmdk-group-heading] {
-  padding: 8px 8px 4px;
+  padding: var(--space-3) var(--space-2) var(--space-1);
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 550;
+  font-size: var(--type-micro);
+  font-weight: 600;
 }
 .listbox-option {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
-  padding: 7px 8px;
-  border-radius: 4px;
-  font-size: 14px;
-  line-height: 1.35;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 6px var(--space-2);
+  border-radius: var(--control-radius);
+  font-size: var(--type-label);
+  line-height: 20px;
   cursor: pointer;
 }
 /* cmdk marks the keyboard- or pointer-active option with data-selected. */
 .listbox-option[data-selected='true'] {
-  background: color-mix(in srgb, var(--graphite) 10%, var(--silicon));
+  background: var(--tint);
+  box-shadow: inset 2px 0 0 var(--primary);
 }
 .listbox-check {
-  flex-shrink: 0;
+  flex: none;
   width: 12px;
-  font-size: 12px;
+  color: var(--primary);
+  font-size: var(--type-micro);
 }
 .listbox-text {
   display: flex;
@@ -1032,18 +634,33 @@ thead th:last-child {
 }
 .listbox-desc {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--type-micro);
+  line-height: 16px;
 }
 .listbox-empty {
   flex: none;
-  padding: 12px;
+  padding: var(--space-3);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--type-meta);
 }
 
-.help-line {
-  display: block;
+/* Notices above the results (ignored URL values, input issues). */
+.notice {
+  margin: 0 0 var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--control-radius);
+  background: var(--mist);
+  font-size: var(--type-label);
+  line-height: 20px;
 }
-.help-line + .help-line {
-  margin-top: 0.5em;
+.notice p { margin: 0; }
+.notice ul { margin: var(--space-2) 0 0; padding-left: var(--space-5); }
+.notice button.quiet { margin-left: var(--space-2); }
+
+@media (max-width: 599px) {
+  .tagline { display: none; }
+  .app-header { padding: 0 var(--pane-pad); }
 }
+
+/* Hidden elements stay hidden even where a rule above sets display. */
+[hidden] { display: none !important; }

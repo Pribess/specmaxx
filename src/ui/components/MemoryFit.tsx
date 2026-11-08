@@ -3,6 +3,7 @@ import { formatBytes, formatContextTokens, type ResultSummary, type StageMemory 
 import type { TierMemory } from '../../sim/engine/types';
 import { ChartTooltip, useChartPoint } from './ChartTooltip';
 import { HelpIcon } from './HelpIcon';
+import { Num } from './Num';
 import {
   HIGH_MEMORY_UTILISATION,
   memoryState,
@@ -171,7 +172,10 @@ export function MemoryFit({
               {segments.map((segment) => (
                 <li key={segment.key}>
                   <span className={`memory-swatch allocation-${segment.key}`} aria-hidden="true" />
-                  {segment.label} <strong>{formatBytes(segment.bytes)}</strong>
+                  {segment.label}{' '}
+                  <strong>
+                    <Num>{formatBytes(segment.bytes)}</Num>
+                  </strong>
                   {segment.key === 'table' && onPlaceTablesOnHost && (
                     <button
                       type="button"

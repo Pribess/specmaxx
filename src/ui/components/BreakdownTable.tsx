@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { HelpIcon } from './HelpIcon';
+import { Num } from './Num';
 import {
   BREAKDOWN_BOUND_LABELS,
   formatSeconds,
@@ -106,8 +107,12 @@ export function BreakdownTable({ result }: { result: ResultSummary }) {
             {body.section && (
               <tr className="breakdown-section" data-testid="breakdown-section">
                 <th scope="rowgroup">{body.section.key}</th>
-                <td>{formatSeconds(body.section.sec)}</td>
-                <td>{formatShare(body.section.share)}</td>
+                <td>
+                  <Num>{formatSeconds(body.section.sec)}</Num>
+                </td>
+                <td>
+                  <Num>{formatShare(body.section.share)}</Num>
+                </td>
                 <td />
               </tr>
             )}
@@ -116,8 +121,12 @@ export function BreakdownTable({ result }: { result: ResultSummary }) {
               return (
                 <tr key={r.key}>
                   <th scope="row">{r.key}</th>
-                  <td>{formatSeconds(r.sec)}</td>
-                  <td>{formatShare(r.share)}</td>
+                  <td>
+                    <Num>{formatSeconds(r.sec)}</Num>
+                  </td>
+                  <td>
+                    <Num>{formatShare(r.share)}</Num>
+                  </td>
                   <td>
                     <div className="bound-cell">
                       <div className="bound-track">

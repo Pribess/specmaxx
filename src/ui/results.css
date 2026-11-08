@@ -1,287 +1,573 @@
-/* Keep result chrome quiet: colour encodes resource bounds, not decoration. */
-.interactive-chart {
-  position: relative;
+/*
+ * Results: the hero (configuration headline and the two figures), the mini result bar, charts, memory fit and the
+ * bottleneck table. Colour encodes resource bounds and memory risk only; the rest is ink, muted and rules.
+ */
+
+/* Section heads in the output: serif, more space above than below. */
+.output h2,
+.detail-results h2 {
+  margin: 0 0 var(--gap-heading);
+  font-family: var(--font-serif);
+  font-size: var(--type-section);
+  line-height: 28px;
+  font-weight: 620;
+  letter-spacing: -0.01em;
 }
-.chart-tooltip {
-  position: absolute;
-  z-index: 3;
-  inset: auto 8px 8px auto;
-  max-width: calc(100% - 16px);
-  padding: 8px 12px;
-  border: 1px solid var(--rule);
-  border-radius: var(--control-radius);
-  background: var(--graphite);
-  color: var(--silicon);
-  font-size: 13px;
-  line-height: 1.5;
-  pointer-events: none;
-  box-shadow: 0 3px 10px color-mix(in srgb, var(--graphite) 15%, transparent);
-}
-.chart-crosshair {
-  fill: none;
-  stroke: var(--muted);
-  stroke-width: 1;
-  stroke-dasharray: 3 4;
-  pointer-events: none;
-}
-.sweep .chart-tooltip,
-.roofline .chart-tooltip {
-  top: 32px;
-  bottom: auto;
-}
-[data-chart-point] {
-  cursor: pointer;
-}
-svg [data-chart-point] {
-  stroke-width: 2;
-}
-svg [data-chart-point].is-active {
-  stroke: var(--tensor);
-  stroke-width: 4;
-}
-.capacity-bar [data-chart-point] {
-  position: relative;
-}
-.capacity-bar [data-chart-point]::after {
-  content: '';
-  position: absolute;
-  inset: -8px 0;
-}
-.capacity-bar .is-active {
-  outline: 2px solid var(--tensor);
-  outline-offset: 2px;
-}
-.capacity-bar::after,
-.capacity-bar::before {
-  pointer-events: none;
-}
-.bound-legend {
-  display: flex;
-  gap: 16px;
-  padding: 0;
-  margin: 16px 0 8px;
-  list-style: none;
-  font-size: 12px;
-}
-.bound-legend li {
+/* A heading with a "?" keeps the icon on its text line, 6px after the last word. */
+.memory > h2,
+.breakdown h2 {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--gap-label-icon);
 }
-.bound-legend li span {
-  width: 8px;
-  height: 8px;
-  background: currentColor;
+/* The serif's x-height sits high in its line box: lift the icon 1px onto the heading's optical centre. */
+.memory > h2 .help,
+.breakdown h2 .help { top: -1px; }
+
+/* Hero: the configuration as a headline, then the figures. */
+.hero.pending { opacity: 0.6; }
+.rig {
+  max-width: 34ch;
+  margin: 0 0 var(--space-6);
+  font-family: var(--font-serif);
+  font-size: var(--type-headline);
+  line-height: 1.2;
+  font-weight: 560;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
 }
-.memory-limit {
-  font-size: 12px;
+.hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 480px);
+  align-items: start;
+  gap: var(--space-6) var(--space-7);
+}
+.hero-grid.no-roofline { grid-template-columns: minmax(0, 1fr); }
+.answers {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-5);
+  align-content: start;
+}
+.answer { min-width: 0; }
+.answer h2 {
+  margin: 0 0 var(--space-1);
   color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: var(--type-control);
+  line-height: 20px;
+  font-weight: 600;
+  letter-spacing: 0;
 }
 .answer .answer-line {
+  display: flex;
   flex-wrap: wrap;
-  column-gap: 10px;
-  row-gap: 0;
+  align-items: baseline;
+  column-gap: var(--space-2);
+  margin: 0;
 }
-.answer .answer-line > span {
-  font-size: 16px;
+.answer strong {
+  font-size: var(--type-figure);
+  line-height: 1;
+  font-weight: 750;
+  letter-spacing: -0.025em;
+  font-variant-numeric: tabular-nums;
 }
-.toggles {
-  flex-wrap: wrap;
-}
-@media (max-width: 760px) {
-  .chart-tooltip {
-    font-size: 12px;
-  }
-  .sweep svg text {
-    font-size: 18px;
-  }
-}
-
-/* Warnings encode capacity risk; allocation patterns remain neutral. */
-.memory-danger {
-  color: var(--danger);
-}
-.memory-warning {
-  color: var(--warning);
-}
-.memory-warning-icon {
-  display: inline-block;
-  width: 20px;
-  height: 20px;
-  flex-shrink: 0;
-  vertical-align: -0.2em;
-}
-.memory-stage .memory-warning-icon {
-  margin-right: 6px;
-}
-.hero-memory-warning {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 24px;
-  min-height: 24px;
-}
-.memory .capacity-bar.memory-warning {
-  outline: 1px solid var(--warning);
-  outline-offset: 2px;
-}
-.memory .capacity-bar.overflow {
-  background: color-mix(in srgb, var(--graphite) 9%, var(--silicon));
-}
-.memory .capacity-bar.overflow::before {
-  background: var(--danger);
-  z-index: 1;
-}
-.memory .capacity-bar.overflow::after {
-  border-color: var(--danger);
-  z-index: 2;
-}
-#memory-fit {
-  scroll-margin-top: 80px;
-}
-
-/* Roofline text: one step below the 14px body size, and never under 11px as rendered. SVG text scales with
-   the chart's rendered width W (its viewBox is 470 wide), so the rendered size is font-size × W / 470; each
-   container step below keeps font-size ≥ 11px × 470 / W for the widths it covers (phones included). */
-.roofline {
-  container-type: inline-size;
-}
-.roofline svg text {
-  font-size: 12px;
-}
-@container (max-width: 430px) {
-  .roofline svg text {
-    font-size: 13px;
-  }
-}
-@container (max-width: 397px) {
-  .roofline svg text {
-    font-size: 14px;
-  }
-}
-@container (max-width: 369px) {
-  .roofline svg text {
-    font-size: 15px;
-  }
-}
-@container (max-width: 344px) {
-  .roofline svg text {
-    font-size: 16px;
-  }
-}
-@container (max-width: 323px) {
-  .roofline svg text {
-    font-size: 17px;
-  }
-}
-@container (max-width: 304px) {
-  .roofline svg text {
-    font-size: 19px;
-  }
-}
-
-/* Bounds beyond the three regimes: comm splits into latency (hatched link colour) and bandwidth (solid link
-   colour); off-device transfers take a darkened link colour, since they cross a link too. */
-.transfer-text {
-  color: color-mix(in srgb, var(--link) 55%, var(--graphite));
-  fill: color-mix(in srgb, var(--link) 55%, var(--graphite));
-}
-.comm-latency-text,
-.comm-bandwidth-text {
-  color: var(--link);
-  fill: var(--link);
-}
-.bound-bar .comm-latency,
-.bound-legend .comm-latency-text span {
-  background: repeating-linear-gradient(135deg, var(--link) 0 2px, transparent 2px 4px);
-}
-.bound-bar .comm-bandwidth {
-  background: var(--link);
-}
-.bound-bar .transfer {
-  background: color-mix(in srgb, var(--link) 55%, var(--graphite));
-}
-.bound-legend {
-  flex-wrap: wrap;
-  row-gap: 6px;
-}
-.bound-cell > span {
-  width: auto;
-  min-width: 64px;
+.answer-unit {
+  color: var(--muted);
+  font-size: var(--type-unit);
+  line-height: 20px;
+  font-weight: 500;
   white-space: nowrap;
 }
-.breakdown-section th,
-.breakdown-section td {
-  font-weight: 650;
-  padding-top: 14px;
-}
-
-/* Memory: the n-gram table is a weight, hatched against the solid weights; the deployment extras stay neutral. */
-.allocation-table {
-  background: repeating-linear-gradient(45deg, var(--graphite) 0 1.5px, var(--silicon) 1.5px 5px);
-}
-.allocation-staging {
-  background: color-mix(in srgb, var(--graphite) 45%, var(--silicon));
-}
-.allocation-draft {
-  background: color-mix(in srgb, var(--graphite) 70%, var(--silicon));
-}
-.allocation-snapshots {
-  background:
-    linear-gradient(90deg, var(--graphite) 1px, transparent 1px) 0 0 / 4px 100%,
-    var(--silicon);
-}
-.allocation-offloaded {
-  background: color-mix(in srgb, var(--graphite) 60%, var(--silicon));
-}
-.memory-tier {
-  margin-top: 16px;
-}
-.memory-tier > div:first-child {
-  margin-bottom: 6px;
-  font-size: 14px;
-}
-.memory-legend button.quiet {
-  margin-left: 8px;
-}
-.memory-unified-host {
-  font-size: 14px;
-}
-
-/* Result annotations: spec-dec speedup next to the decode rate, offload chips under the rates. */
 .answer .answer-line > span.spec-dec {
   display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
+  align-items: center;
+  gap: var(--gap-label-icon);
   color: var(--muted);
+  font-size: var(--type-label);
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+}
+.answer small {
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: var(--type-meta);
+}
+/* The fit warning follows the unit and sits on its baseline like a capital letter (16px glyph, 2px below). */
+.hero-memory-warning {
+  order: 2;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  transform: translateY(2px);
+}
+.hero-memory-warning .memory-warning-icon { width: 16px; height: 16px; }
+.answer .answer-line > span.spec-dec { order: 3; }
+/* Phone and narrow output panes: the two figures side by side. */
+.hero-grid.no-roofline .answers { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+@container output (max-width: 760px) {
+  .hero-grid { grid-template-columns: minmax(0, 1fr); }
+  .answers { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .roofline { max-width: 520px; }
 }
 .result-chips {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 8px;
-  list-style: none;
+  gap: var(--space-2);
+  grid-column: 1 / -1;
+  margin: 0;
   padding: 0;
-  margin: 18px 0 0;
+  list-style: none;
 }
 .result-chip {
-  display: inline-block;
-  padding: 1px 8px;
-  border: 1px solid var(--rule);
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 var(--space-2);
   border-radius: var(--control-radius);
-  font-size: 13px;
-  line-height: 1.6;
+  background: var(--mist);
+  color: var(--ink);
+  font-size: var(--type-meta);
   white-space: nowrap;
 }
 /* A chip and, on the last one, the "?": kept on one line together. */
 .result-chip-item {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--gap-label-icon);
+}
+.theory {
+  margin: var(--space-5) 0 0;
+  color: var(--muted);
+  font-size: var(--type-meta);
+  line-height: 18px;
+}
+.empty-result {
+  max-width: 45ch;
+  padding: var(--space-7) 0;
+  color: var(--muted);
+}
+
+/* The mini result bar (MiniResult.tsx): hidden until the hero figures scroll away. Split layout: pinned to the
+   top of the output pane; stacked layout: to the top of the window. */
+.compact-results {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-6);
+  min-height: 44px;
+  padding: 12px var(--pane-pad);
+  border-bottom: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--paper) 94%, transparent);
+  backdrop-filter: blur(6px);
+  font-variant-numeric: tabular-nums;
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(-6px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    visibility 0s linear 140ms;
+}
+.compact-results[data-visible] {
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+.workspace[data-layout='stacked'] .compact-results { position: fixed; }
+.mini-cell {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.mini-label { color: var(--muted); font-size: var(--type-meta); font-weight: 600; }
+.mini-value { font-size: var(--type-value-lg); line-height: 20px; font-weight: 700; }
+.mini-unit { color: var(--muted); font-size: var(--type-meta); }
+.mini-fit {
+  margin-left: auto;
+  font-size: var(--type-meta);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.compact-results { color: var(--ink); }
+.compact-results.memory-fits .mini-fit { color: var(--muted); }
+.compact-results.memory-warning .mini-fit { color: var(--warning); }
+.compact-results.memory-danger .mini-fit { color: var(--danger); }
+.workspace[data-layout='stacked'] .compact-results {
+  gap: var(--space-1) var(--space-4);
+  flex-wrap: wrap;
+  padding-block: 8px;
+}
+.workspace[data-layout='stacked'] .mini-fit { display: none; }
+/* Without the fit text on phones, the figures themselves take the warning colour. */
+.workspace[data-layout='stacked'] .compact-results.memory-warning .mini-value { color: var(--warning); }
+.workspace[data-layout='stacked'] .compact-results.memory-danger .mini-value { color: var(--danger); }
+.workspace[data-layout='stacked'] .mini-value { font-size: var(--type-control); }
+
+/* Charts: no axis titles' boxes, light gridlines, 1px hover cursor, a white tooltip with a 1px border. */
+.interactive-chart { position: relative; }
+.roofline { margin: 0; min-width: 0; container-type: inline-size; }
+svg {
+  display: block;
+  width: 100%;
+  overflow: visible;
+}
+svg text {
+  font: 13px var(--font-sans);
+  fill: var(--muted);
+}
+.axis {
+  fill: none;
+  stroke: var(--control-border);
+  stroke-width: 1;
+}
+.grid { stroke: var(--rule); stroke-width: 1; }
+.roof-memory,
+.roof-compute {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+.roof-memory { stroke: var(--bandwidth); }
+.roof-compute { stroke: var(--tensor); }
+.point {
+  fill: var(--ink);
+  stroke: var(--paper);
+  stroke-width: 2;
+}
+.point.decode { fill: var(--paper); stroke: var(--ink); }
+.compute-text { color: var(--tensor); fill: var(--tensor); font-weight: 600; }
+.memory-text { color: var(--bandwidth); fill: var(--bandwidth); font-weight: 600; }
+.comm-text { color: var(--link); fill: var(--link); }
+.chart-tooltip {
+  position: absolute;
+  z-index: 3;
+  inset: auto 8px 8px auto;
+  max-width: calc(100% - 16px);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--popover-radius);
+  background: var(--field);
+  color: var(--ink);
+  font-size: var(--type-meta);
+  line-height: 18px;
+  font-weight: 500;
+  pointer-events: none;
+  box-shadow: var(--shadow-float);
+}
+.sweep .chart-tooltip,
+.roofline .chart-tooltip { top: 32px; bottom: auto; }
+.chart-crosshair {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  pointer-events: none;
+}
+[data-chart-point] { cursor: pointer; }
+svg [data-chart-point] { stroke-width: 2; }
+svg [data-chart-point].is-active { stroke: var(--primary); stroke-width: 3; }
+svg [data-chart-point]:focus-visible { outline: none; stroke: var(--primary); stroke-width: 3; }
+
+/* Roofline text: SVG text scales with the chart's rendered width W (its viewBox is 470 wide), so the rendered
+   size is font-size × W / 470; each step keeps it ≥ 11px for the widths it covers (phones included). */
+.roofline svg text { font-size: 13px; }
+@container (max-width: 430px) { .roofline svg text { font-size: 14px; } }
+@container (max-width: 397px) { .roofline svg text { font-size: 15px; } }
+@container (max-width: 369px) { .roofline svg text { font-size: 16px; } }
+@container (max-width: 344px) { .roofline svg text { font-size: 17px; } }
+@container (max-width: 323px) { .roofline svg text { font-size: 18px; } }
+@container (max-width: 304px) { .roofline svg text { font-size: 19px; } }
+
+/* Memory fit. */
+.memory { margin-top: var(--gap-section); scroll-margin-top: var(--space-7); }
+.memory-stage + .memory-stage { margin-top: var(--space-5); }
+.memory-stage > div:first-child {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 var(--gap-icon-text);
+  margin-bottom: var(--space-2);
+  font-size: var(--type-value-lg);
+  line-height: 24px;
+  font-weight: 600;
+}
+.memory-danger { color: var(--danger); }
+.memory-warning { color: var(--warning); }
+.memory-warning-icon {
+  display: inline-block;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  vertical-align: -0.2em;
+}
+.memory-stage .memory-warning-icon { margin-right: 2px; }
+.capacity-bar {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--track);
+}
+.capacity-bar::after {
+  content: '';
+  position: absolute;
+  top: -4px;
+  right: 0;
+  height: 20px;
+  border-right: 2px solid var(--ink);
+}
+.capacity-bar.overflow::after { right: calc(100% - var(--capacity)); }
+.capacity-bar::after,
+.capacity-bar::before { pointer-events: none; }
+.memory .capacity-bar.memory-warning { outline: 1px solid var(--warning); outline-offset: 2px; }
+.memory .capacity-bar.overflow { background: var(--track); }
+.memory .capacity-bar.overflow::before {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  inset: 0 0 0 var(--capacity);
+  background: var(--danger);
+}
+.memory .capacity-bar.overflow::after { z-index: 2; border-color: var(--danger); }
+.capacity-bar [data-chart-point] { position: relative; }
+.capacity-bar [data-chart-point]::after {
+  content: '';
+  position: absolute;
+  inset: -8px 0;
+}
+.capacity-bar .is-active { outline: 2px solid var(--primary); outline-offset: 2px; }
+.allocation-weights { background: var(--ink); }
+.allocation-state { background: repeating-linear-gradient(135deg, var(--ink) 0 2px, var(--paper) 2px 4px); }
+.allocation-activations {
+  background:
+    radial-gradient(var(--ink) 1px, transparent 1px) 0 0 / 4px 4px,
+    var(--paper);
+}
+/* The n-gram table is a weight, hatched against the solid weights; the deployment extras stay neutral. */
+.allocation-table { background: repeating-linear-gradient(45deg, var(--ink) 0 1.5px, var(--paper) 1.5px 5px); }
+.allocation-staging { background: color-mix(in srgb, var(--ink) 45%, var(--paper)); }
+.allocation-draft { background: color-mix(in srgb, var(--ink) 70%, var(--paper)); }
+.allocation-snapshots {
+  background:
+    linear-gradient(90deg, var(--ink) 1px, transparent 1px) 0 0 / 4px 100%,
+    var(--paper);
+}
+.allocation-offloaded { background: color-mix(in srgb, var(--ink) 60%, var(--paper)); }
+.memory-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: var(--type-meta);
+  line-height: 18px;
+}
+.memory-legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-icon-text);
+}
+.memory-legend strong {
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.memory-swatch {
+  display: inline-block;
+  flex: none;
+  width: var(--swatch);
+  height: var(--swatch);
+  border: 1px solid var(--ink);
 }
 /* The legend's one-click action (place the n-gram table off the device): legend-sized, not a full button. */
-.memory-legend button.legend-action {
-  padding: 1px 8px;
-  font-size: 13px;
-  line-height: 1.6;
+.memory-legend button.legend-action { height: 22px; margin-left: var(--space-1); padding: 0 var(--space-2); }
+.memory-tier > div:first-child { font-size: var(--type-control); }
+.memory-unified-host {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-label-icon);
+  margin-top: var(--space-4);
+  font-size: var(--type-label);
+}
+.memory-limit {
+  margin: var(--space-3) 0 0;
+  color: var(--muted);
+  font-size: var(--type-meta);
+}
+#memory-fit:focus { outline: none; }
+
+/* Bottleneck estimation. */
+.breakdown,
+.sweep { margin-top: var(--gap-section); }
+.workspace[data-layout='stacked'] .breakdown { margin-top: var(--space-7); }
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-3);
+}
+.section-head h2 { margin: 0; }
+.toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.toggles .segmented {
+  display: flex;
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+}
+.toggles .segmented button {
+  height: calc(var(--control-h-sm) - 2px);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--type-meta);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.toggles .segmented button + button { border-left: 1px solid var(--rule); }
+.toggles .segmented button:first-child { border-radius: 3px 0 0 3px; }
+.toggles .segmented button:last-child { border-radius: 0 3px 3px 0; }
+.toggles .segmented button:hover { background: var(--tint); }
+.toggles .segmented button[aria-pressed='true'] {
+  background: var(--primary-fill);
+  color: var(--on-primary);
+  font-weight: 650;
+}
+.bound-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+  font-size: var(--type-meta);
+  font-weight: 500;
+}
+.bound-legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-icon-text);
+}
+.bound-legend li span {
+  width: var(--swatch);
+  height: var(--swatch);
+  background: currentColor;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--type-label);
+}
+td { font-variant-numeric: tabular-nums; }
+th {
+  text-align: left;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+thead th {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--ink);
+  color: var(--muted);
+  font-size: var(--type-meta);
+  font-weight: 600;
+}
+tbody tr { border-bottom: 1px solid var(--rule); }
+tbody th,
+tbody td { height: 36px; padding: 0; }
+tbody td,
+td {
+  padding-left: var(--space-5);
+  text-align: right;
+  white-space: nowrap;
+}
+thead th:not(:first-child) { padding-left: var(--space-5); text-align: right; }
+thead th:last-child { text-align: left; }
+tbody td:last-child { text-align: left; }
+.bound-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: left;
+}
+.bound-cell > span { min-width: 64px; white-space: nowrap; }
+.bound-track { flex: none; width: 96px; }
+.bound-bar { display: flex; height: 6px; }
+.bound-bar .compute { background: var(--tensor); }
+.bound-bar .memory { margin: 0; background: var(--bandwidth); }
+.bound-bar .comm { background: var(--link); }
+.breakdown-section th,
+.breakdown-section td { padding-top: var(--space-3); font-weight: 650; }
+.breakdown > button.quiet { margin-top: var(--space-3); }
+
+/* Bounds beyond the three regimes: comm splits into latency (hatched link colour) and bandwidth (solid link
+   colour); off-device transfers take a darkened link colour, since they cross a link too. */
+.transfer-text {
+  color: color-mix(in srgb, var(--link) 55%, var(--ink));
+  fill: color-mix(in srgb, var(--link) 55%, var(--ink));
+}
+.comm-latency-text,
+.comm-bandwidth-text { color: var(--link); fill: var(--link); }
+.bound-bar .comm-latency,
+.bound-legend .comm-latency-text span {
+  background: repeating-linear-gradient(135deg, var(--link) 0 2px, transparent 2px 4px);
+}
+.bound-bar .comm-bandwidth { background: var(--link); }
+.bound-bar .transfer { background: color-mix(in srgb, var(--link) 55%, var(--ink)); }
+
+/* Batch sweep. */
+.sweep { max-width: 760px; }
+.sweep-line { fill: none; stroke: var(--ink); stroke-width: 2; }
+.sweep-point { fill: var(--paper); stroke: var(--ink); stroke-width: 2; }
+.sweep-point.fits { fill: var(--ink); }
+.notes {
+  max-width: 72ch;
+  margin-top: var(--space-6);
+  font-size: var(--type-label);
+}
+.notes li { margin: var(--space-2) 0; }
+
+/* Stacked layout: the table becomes two-line rows. */
+@media (max-width: 899px) {
+  .section-head { display: block; }
+  .toggles { margin-top: var(--space-3); }
+  table, tbody { display: block; }
+  thead { display: none; }
+  tr {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: var(--space-1) var(--space-3);
+    padding: var(--space-3) 0;
+  }
+  tbody th, tbody td { height: auto; }
+  tr > th { grid-column: 1; grid-row: 1; }
+  tr > td:nth-child(2) { grid-column: 2; grid-row: 2; color: var(--muted); font-size: var(--type-meta); }
+  tr > td:nth-child(3) { grid-column: 2; grid-row: 1; }
+  tr > td:nth-child(4) { grid-column: 1; grid-row: 2; padding: 0; }
+  td { padding-left: 0; }
+  .bound-cell { font-size: var(--type-meta); }
+  .bound-track { width: 96px; }
+  .sweep svg { min-height: 145px; }
+  .sweep svg text { font-size: 20px; }
+  .chart-tooltip { font-size: var(--type-micro); }
 }

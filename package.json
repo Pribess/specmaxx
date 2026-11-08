@@ -19,10 +19,12 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.sim.json && tsc -p tsconfig.node.json",
     "check": "bun run typecheck && bun run lint && bun run test && bun run build && bun run e2e",
     "e2e": "playwright test --project=smoke",
-    "screenshots": "bun run build && playwright test --project=screenshots"
+    "screenshots": "bun run build && playwright test --project=screenshots",
+    "screenshots:redesign": "bun run build && playwright test --project=redesign"
   },
   "dependencies": {
-    "@fontsource-variable/archivo": "5.3.0",
+    "@fontsource-variable/newsreader": "5.3.0",
+    "@fontsource-variable/schibsted-grotesk": "5.3.0",
     "@radix-ui/react-popover": "1.3.1",
     "@radix-ui/react-scroll-area": "1.4.0",
     "cmdk": "1.1.1",

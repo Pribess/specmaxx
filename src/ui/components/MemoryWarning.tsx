@@ -49,8 +49,8 @@ export function MemoryWarningIcon({
       }
     >
       <path d="M12 3 22 21H2Z" fill="currentColor" />
-      <path d="M12 9v5" stroke="var(--silicon)" strokeWidth="2" strokeLinecap="round" />
-      <circle cx="12" cy="17.5" r="1.2" fill="var(--silicon)" />
+      <path d="M12 9v5" stroke="var(--paper)" strokeWidth="2" strokeLinecap="round" />
+      <circle cx="12" cy="17.5" r="1.2" fill="var(--paper)" />
     </svg>
   );
 }

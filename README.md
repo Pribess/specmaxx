@@ -59,7 +59,8 @@ Layout:
 - `src/ui/`: React controls, roofline and throughput charts, memory fit and op breakdown.
   - `state/`: pure state/reducer, URL codec, hardware resolution, validation, summaries and batch sweep.
   - `sim/`: the real web-worker runner (32-entry LRU) and an injectable inline runner for component tests.
-- `src/styles/tokens.css`: shared Archivo typography and semantic light/dark palette.
+- `src/styles/tokens.css`: design tokens (Newsreader + Schibsted Grotesk, the deep-blue light/dark palette,
+  type, spacing and control sizes); the design plan is `docs/design/redesign/plan.md`.
 - `src/about/`, `about.html`: the readable methodology page with working documentation anchors.
 - `src/main.tsx`: React entry point.
 - `e2e/`: fixture-backed production-worker smoke test and desktop/phone screenshot generation.

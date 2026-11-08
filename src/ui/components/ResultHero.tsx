@@ -1,3 +1,4 @@
+import type { Ref } from 'react';
 import {
   formatTokensPerSec,
   formatContextTokens,
@@ -13,6 +14,7 @@ import { RooflineChart } from './RooflineChart';
 import { MemoryFit } from './MemoryFit';
 import { HeroMemoryWarning } from './MemoryWarning';
 import { HelpIcon } from './HelpIcon';
+import { Num } from './Num';
 
 /** Display name of an off-device tier. */
 export function tierName(tier: 'host_ram' | 'nvme'): string {
@@ -45,6 +47,8 @@ export function ResultHero({
   built,
   pending,
   onPlaceTablesOnHost,
+  roofline = true,
+  figuresRef,
 }: {
   result?: ResultSummary;
   state: AppState;
@@ -53,6 +57,10 @@ export function ResultHero({
   pending: boolean;
   /** Moves an on-device n-gram lookup table to host RAM; shown as a button in the memory card when given. */
   onPlaceTablesOnHost?: () => void;
+  /** Show the roofline chart beside the figures (false: the stacked layout places it further down). */
+  roofline?: boolean;
+  /** The element holding the two figures, watched to show the mini result bar once it scrolls away. */
+  figuresRef?: Ref<HTMLDivElement>;
 }) {
   const link = built.hardware?.links.intra?.link;
   const intraName = link
@@ -68,28 +76,37 @@ export function ResultHero({
   const linkName = [intraName, interName].filter((n) => n !== undefined).join(' and ');
   const offload = result?.offload ?? [];
   const spec = result?.decode.speculative;
+  // The count and "×" stay on one line with the device name's first word (never "on 2 ×" / "NVIDIA …").
+  const [deviceFirst, ...deviceRest] = (
+    built.hardware?.device.device.name ?? state.hw.deviceId
+  ).split(' ');
   return (
     <section className={`hero ${pending ? 'pending' : ''}`} aria-busy={pending}>
-      <p className="rig">
-        {loaded?.label ?? 'Loading model'} on {state.hw.devicesPerNode * state.hw.nodes} ×{' '}
-        {built.hardware?.device.device.name ?? state.hw.deviceId}
+      <h1 className="rig">
+        {loaded?.label ?? 'Loading model'} on{' '}
+        <span className="keep-together">
+          {state.hw.devicesPerNode * state.hw.nodes} × {deviceFirst}
+        </span>
+        {deviceRest.length > 0 && ` ${deviceRest.join(' ')}`}
         {built.hardware?.edited && !built.hardware.device.edited ? ' (edited)' : ''}
         {linkName ? ` over ${linkName}` : ''}, with{' '}
-        <span className="keep-together">TP {state.parallel.tp}.</span>
-      </p>
+        <span className="keep-together">TP {state.parallel.tp}</span>
+      </h1>
       {result ? (
         <>
-          <div className="hero-grid">
-            <div className="answers">
+          <div className={`hero-grid${roofline ? '' : ' no-roofline'}`}>
+            <div className="answers" ref={figuresRef}>
               {(['prefill', 'decode'] as const).map((phase) => (
                 <div className="answer" key={phase}>
-                  <h1>{phase === 'prefill' ? 'Prefill' : 'Decode'}</h1>
+                  <h2>{phase === 'prefill' ? 'Prefill' : 'Decode'}</h2>
                   <div className="answer-line">
                     <strong data-testid={`${phase}-tps`}>
-                      {formatTokensPerSec(result[phase].tokensPerSec)}
+                      <Num>{formatTokensPerSec(result[phase].tokensPerSec)}</Num>
                     </strong>
                     <HeroMemoryWarning stages={result.memory.stages} />
-                    <span>tok/s @ {formatContextTokens(result[phase].contextTokens)}</span>
+                    <span className="answer-unit">
+                      tok/s @ {formatContextTokens(result[phase].contextTokens)}
+                    </span>
                     {phase === 'decode' && spec && (
                       <span className="spec-dec" data-testid="spec-dec">
                         (spec-dec ×{spec.speedup.toFixed(2)}){' '}
@@ -140,13 +157,15 @@ export function ResultHero({
                 </ul>
               )}
             </div>
-            <RooflineChart
-              roof={result.roofline}
-              contexts={{
-                prefill: result.prefill.contextTokens,
-                decode: result.decode.contextTokens,
-              }}
-            />
+            {roofline && (
+              <RooflineChart
+                roof={result.roofline}
+                contexts={{
+                  prefill: result.prefill.contextTokens,
+                  decode: result.decode.contextTokens,
+                }}
+              />
+            )}
           </div>
           <p className="theory">
             This is a theoretical maximum. <a href="./about.html">Read how the estimate works</a>

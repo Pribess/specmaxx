@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useReducer, useState } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from 'react';
 import { loadHfModel } from '../hf/load';
 import { getHfToken } from '../hf/token';
 import { drafterLoadMessage, loadDrafter } from '../hf/loadDrafter';
 import { ModelPanel } from './components/ModelPanel';
 import { ScrollArea } from './components/ScrollArea';
+import { Splitter, splitBounds, useSplit } from './components/Splitter';
+import { MiniResult } from './components/MiniResult';
+import { useStacked } from './layout';
 import {
   decodeState,
   encodeState,
@@ -25,7 +28,7 @@ import {
   WorkloadPanel,
   AssumptionsPanel,
 } from './Panels';
-import { ResultHero, BreakdownTable, BatchSweepChart } from './Results';
+import { ResultHero, BreakdownTable, BatchSweepChart, RooflineChart } from './Results';
 import '../styles/tokens.css';
 import './panels.css';
 import './app.css';
@@ -70,7 +73,9 @@ export function App({
   const loading =
     !isBundled && (modelState.key !== choiceKey || (!modelState.loaded && !modelState.error));
   // The drafter repo a block spec-dec method needs (none for MTP, the checkpoint's own or the hypothetical drafter).
-  const source = loaded ? drafterSource(state.deployment.specDec, loaded.model, state.model.id) : undefined;
+  const source = loaded
+    ? drafterSource(state.deployment.specDec, loaded.model, state.model.id)
+    : undefined;
   const drafterRepo = source?.kind === 'repo' ? source.repoId : undefined;
   const [drafterState, setDrafterState] = useState<DrafterStatus | undefined>(undefined);
   const drafter = useMemo<DrafterStatus | undefined>(
@@ -92,7 +97,12 @@ export function App({
       .then((result) => {
         if (!current) return;
         if (result.kind === 'ok')
-          setDrafterState({ kind: 'ok', repoId: drafterRepo, spec: result.spec, notes: result.notes });
+          setDrafterState({
+            kind: 'ok',
+            repoId: drafterRepo,
+            spec: result.spec,
+            notes: result.notes,
+          });
         else fail(drafterLoadMessage(result));
       })
       .catch(() => fail('Drafter load failed. Check your connection.'));
@@ -208,6 +218,23 @@ export function App({
   };
   const result = built.kind === 'ok' ? simulation.result?.summary : undefined;
   const error = modelState.key === choiceKey ? modelState.error : undefined;
+  const stacked = useStacked();
+  const workspaceRef = useRef<HTMLElement>(null);
+  const split = useSplit(workspaceRef);
+  // The mini result bar shows once the hero figures are mostly out of view: of the output pane (split layout) or
+  // of the window (stacked layout).
+  const [outputViewport, setOutputViewport] = useState<HTMLDivElement | null>(null);
+  const [figures, setFigures] = useState<HTMLDivElement | null>(null);
+  const [figuresVisible, setFiguresVisible] = useState(true);
+  useEffect(() => {
+    if (!figures || typeof IntersectionObserver !== 'function') return;
+    const observer = new IntersectionObserver(
+      ([entry]) => setFiguresVisible(entry.intersectionRatio >= 0.5),
+      { root: stacked ? null : outputViewport, threshold: [0, 0.5, 1] },
+    );
+    observer.observe(figures);
+    return () => observer.disconnect();
+  }, [figures, outputViewport, stacked]);
   function load(typed?: string) {
     const nextId = (typed ?? id).trim();
     if (!nextId) return;
@@ -217,6 +244,96 @@ export function App({
     setModelState({ key: modelKey(choice) });
     setAttempt((n) => n + 1);
   }
+  const notices = (
+    <>
+      {dropped.length > 0 && (
+        <aside className="notice">
+          Ignored invalid URL values: {dropped.join(', ')}.{' '}
+          <button className="quiet" onClick={() => setDropped([])}>
+            Dismiss
+          </button>
+        </aside>
+      )}
+      {built.issues.length > 0 && (
+        <aside className="notice" role="alert">
+          <p>
+            {built.kind === 'issues'
+              ? 'No estimate is computed until the input errors are resolved.'
+              : 'Input notes'}
+          </p>
+          <ul>
+            {built.issues.map((issue, index) => (
+              <li className={issue.level === 'error' ? 'error' : ''} key={index}>
+                {issue.message}
+              </li>
+            ))}
+          </ul>
+        </aside>
+      )}
+      {simulation.error && simulation.key === query && (
+        <p role="alert" className="error">
+          {simulation.error}
+        </p>
+      )}
+    </>
+  );
+  const hero = (
+    <ResultHero
+      state={state}
+      loaded={loaded}
+      built={built}
+      result={result}
+      pending={dim && simulation.key !== query}
+      onPlaceTablesOnHost={placeTablesOnHost}
+      roofline={!stacked}
+      figuresRef={setFigures}
+    />
+  );
+  const mini = result && <MiniResult result={result} visible={!figuresVisible} />;
+  const inputs = (
+    <>
+      <ModelPanel
+        id={id}
+        onIdChange={setId}
+        onLoad={load}
+        onRetry={() => {
+          setModelState({ key: choiceKey });
+          setAttempt((n) => n + 1);
+        }}
+        loaded={loaded}
+        loading={loading}
+        error={error}
+        gated={modelState.key === choiceKey && !!modelState.gated}
+      />
+      <QuantPanel {...props} />
+      <HardwarePanel {...props} />
+      <ParallelPanel {...props} />
+      <WorkloadPanel {...props} drafter={drafter} />
+      <AssumptionsPanel {...props} />
+    </>
+  );
+  const details = result && (
+    <div className="detail-results">
+      {stacked && (
+        <RooflineChart
+          roof={result.roofline}
+          contexts={{ prefill: result.prefill.contextTokens, decode: result.decode.contextTokens }}
+        />
+      )}
+      <BreakdownTable result={result} />
+      <BatchSweepChart points={simulation.result!.sweep} />
+      {result.warnings.length > 0 && (
+        <details className="notes">
+          <summary>Notes and approximations ({result.warnings.length})</summary>
+          <ul>
+            {result.warnings.map((w, n) => (
+              <li key={n}>{w}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
   return (
     <>
       <header className="app-header">
@@ -227,92 +344,48 @@ export function App({
         <span className="tagline">Theoretical ceilings for your rig</span>
         <a href="./about.html">How it works</a>
       </header>
-      <main className="workspace">
-        <div className="input-band">
-          <ScrollArea className="input-band-scroll">
-            <ModelPanel
-              id={id}
-              onIdChange={setId}
-              onLoad={load}
-              onRetry={() => {
-                setModelState({ key: choiceKey });
-                setAttempt((n) => n + 1);
-              }}
-              loaded={loaded}
-              loading={loading}
-              error={error}
-              gated={modelState.key === choiceKey && !!modelState.gated}
+      {/* Split layout: output (left) | splitter | inputs (right), each pane scrolling on its own. Stacked layout
+          (phone): hero and memory, then the inputs, then the analysis, in one document scroll. */}
+      <main
+        ref={workspaceRef}
+        className="workspace"
+        data-layout={stacked ? 'stacked' : 'split'}
+        style={stacked ? undefined : ({ '--inputs-fraction': split.fraction } as CSSProperties)}
+      >
+        {stacked ? (
+          <>
+            <div className="output">
+              {notices}
+              {hero}
+              {mini}
+            </div>
+            <section className="input-band" id="inputs-pane" aria-label="Inputs">
+              {inputs}
+            </section>
+            {details}
+          </>
+        ) : (
+          <>
+            <div className="output">
+              {mini}
+              <ScrollArea className="pane-scroll output-scroll" viewportRef={setOutputViewport}>
+                {notices}
+                {hero}
+                {details}
+              </ScrollArea>
+            </div>
+            <Splitter
+              fraction={split.fraction}
+              bounds={splitBounds(split.width)}
+              controls="inputs-pane"
+              onChange={split.set}
+              onReset={split.reset}
             />
-            <QuantPanel {...props} />
-            <HardwarePanel {...props} />
-            <ParallelPanel {...props} />
-            <WorkloadPanel {...props} drafter={drafter} />
-            <AssumptionsPanel {...props} />
-          </ScrollArea>
-        </div>
-        <div className="output">
-          {dropped.length > 0 && (
-            <aside className="notice">
-              Ignored invalid URL values: {dropped.join(', ')}.{' '}
-              <button onClick={() => setDropped([])}>Dismiss</button>
-            </aside>
-          )}
-          {built.issues.length > 0 && (
-            <aside className="notice" role="alert">
-              <p>
-                {built.kind === 'issues'
-                  ? 'No estimate is computed until the input errors are resolved.'
-                  : 'Input notes'}
-              </p>
-              <ul>
-                {built.issues.map((issue, index) => (
-                  <li className={issue.level === 'error' ? 'error' : ''} key={index}>
-                    {issue.message}
-                  </li>
-                ))}
-              </ul>
-            </aside>
-          )}
-          {simulation.error && simulation.key === query && (
-            <p role="alert" className="error">
-              {simulation.error}
-            </p>
-          )}
-          <ResultHero
-            state={state}
-            loaded={loaded}
-            built={built}
-            result={result}
-            pending={dim && simulation.key !== query}
-            onPlaceTablesOnHost={placeTablesOnHost}
-          />
-          {result && (
-            <>
-              <div className="compact-results">
-                Prefill {formatRateAtContext(result.prefill.tokensPerSec, state.workload.promptLen)}
-                {' · '}
-                <span>
-                  Decode {formatRateAtContext(result.decode.tokensPerSec, state.workload.decodeContextLen)}
-                  {result.decode.speculative && ` (spec-dec ×${result.decode.speculative.speedup.toFixed(2)})`}
-                </span>
-              </div>
-              <div className="detail-results">
-                <BreakdownTable result={result} />
-                <BatchSweepChart points={simulation.result!.sweep} />
-                {result.warnings.length > 0 && (
-                  <details className="notes">
-                    <summary>Notes and approximations ({result.warnings.length})</summary>
-                    <ul>
-                      {result.warnings.map((w, n) => (
-                        <li key={n}>{w}</li>
-                      ))}
-                    </ul>
-                  </details>
-                )}
-              </div>
-            </>
-          )}
-        </div>
+            <section className="input-band" id="inputs-pane" aria-label="Inputs">
+              <ScrollArea className="pane-scroll input-band-scroll">{inputs}</ScrollArea>
+            </section>
+          </>
+        )}
       </main>
     </>
   );
