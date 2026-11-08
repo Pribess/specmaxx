@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "packageManager": "bun@1.4.4",
   "description": "Theoretical maximum prefill/decode tokens/s for an LLM on a hardware stack (frontend-only).",
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
@@ -16,9 +17,9 @@
     "format": "prettier --write",
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.sim.json && tsc -p tsconfig.node.json",
-    "check": "npm run typecheck && npm run lint && npm run test && npm run build && npm run e2e",
+    "check": "bun run typecheck && bun run lint && bun run test && bun run build && bun run e2e",
     "e2e": "playwright test --project=smoke",
-    "screenshots": "npm run build && playwright test --project=screenshots"
+    "screenshots": "bun run build && playwright test --project=screenshots"
   },
   "dependencies": {
     "@fontsource-variable/archivo": "5.3.0",

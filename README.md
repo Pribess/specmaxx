@@ -8,16 +8,16 @@ Requires Node.js 22.12+ on the 22 line, 24.x, or 26+ (`^22.12.0 || ^24.0.0 || >=
 what Vitest 5, Vite 8 and @vitejs/plugin-react 6 support; Node 20 and 23 are not supported).
 
 ```sh
-npm ci            # install the locked dependencies
-npm run dev       # Vite dev server
-npm run test      # unit tests (vitest), once; npm run test:watch to watch
-npm run check     # typecheck + lint + unit/component tests + build + worker smoke test
-npm run e2e       # Playwright smoke against the production build (run npm run build first)
-npm run screenshots # rebuild and regenerate docs/screenshots/*.png
-npm run format -- src/ui/components/MemoryFit.tsx # format only the files you changed
+bun install --frozen-lockfile  # install the locked dependencies (Bun; see bun.lock)
+bun run dev       # Vite dev server
+bun run test      # unit tests (vitest), once; bun run test:watch to watch
+bun run check     # typecheck + lint + unit/component tests + build + worker smoke test
+bun run e2e       # Playwright smoke against the production build (run bun run build first)
+bun run screenshots # rebuild and regenerate docs/screenshots/*.png
+bun run format -- src/ui/components/MemoryFit.tsx # format only the files you changed
 ```
 
-The browser tests need Chromium: `npx playwright install chromium --only-shell`. HF responses are mocked
+The browser tests need Chromium: `bunx playwright install chromium --only-shell`. HF responses are mocked
 from checked-in fixtures, so the tests do not call the live Hub.
 Screenshots include the 1440×900 and 390×844 light/dark views, extra tall desktop views showing all
 input controls (`desktop-full-*.png`), and a viewport-sized About page.

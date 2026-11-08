@@ -22,7 +22,7 @@ Code: [`src/sim/__sanity__/`](../src/sim/__sanity__/)
 | `reports.test.ts` | the assertion, the known-exception check, a weight-file-size cross-check, and the printed ratio table |
 | `configs.testutil.ts` | loads HF configs from `__sanity__/configs/` or the shared fixtures |
 
-Run: `npx vitest run src/sim/__sanity__` (the comparison table and the ratio summary are printed).
+Run: `bunx vitest run src/sim/__sanity__` (the comparison table and the ratio summary are printed).
 
 ## Method
 
