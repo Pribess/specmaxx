@@ -18,6 +18,34 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+describe('quant picker defaults', () => {
+  it('labels the default option with the resolved format and updates when the model changes', async () => {
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B');
+    mount(async (id) =>
+      mapHfModel(fixtureRepoFiles(id, id.includes('EXL3') ? { dir: 'quant' } : {})),
+    );
+    await screen.findByText(/qwen:/);
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Weights' }).textContent).toMatch(
+        /Model default \(bf16\)/,
+      ),
+    );
+    expect(screen.getByRole('combobox', { name: 'KV cache' }).textContent).toMatch(
+      /Model default \(bf16\)/,
+    );
+    const input = screen.getByRole('combobox', { name: 'Hugging Face model ID' });
+    fireEvent.change(input, {
+      target: { value: 'bertholomus/DeepSeek-V4.1-Flash-1017-EXL3-2.5bpw' },
+    });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Weights' }).textContent).toMatch(
+        /Model default \(exl3 2\.52bpw\)/,
+      ),
+    );
+  });
+});
+
 describe('estimator inputs', () => {
   it('rejects TP and world-size errors without computing a result', async () => {
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B');

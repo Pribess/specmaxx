@@ -3,7 +3,7 @@
  * a model's default `QuantConfig` (from the checkpoint's quant metadata, `QuantDefaults`).
  */
 
-import { DTYPE_INFO, type Dtype } from '../../sim/ir/dtype';
+import { DTYPE_INFO, type Dtype, type TensorFormat } from '../../sim/ir/dtype';
 import { EXL3_DEFAULT_HEAD_BPW, EXL3_MAX_BPW, EXL3_MIN_BPW, exl3Format } from '../../sim/ir/exl3';
 import type { QuantConfig } from '../../sim/ir/model';
 import type { QuantDefaults } from '../../sim/models/hf/types';
@@ -109,4 +109,59 @@ export function quantSummary(defaults: Pick<QuantDefaults, 'scheme' | 'exl3'>, o
   if (o.activations !== undefined) parts.push(`activations ${o.activations}`);
   if (o.kvCache !== undefined) parts.push(`KV ${o.kvCache}`);
   return parts.length === 0 ? defaults.scheme : `${parts.join(', ')} (over ${defaults.scheme})`;
+}
+
+/** Which quant field a default label describes. */
+export type QuantFieldKey = 'weights' | 'activations' | 'kvCache';
+
+/** Display name of a tensor format: the dtype, or `exl3 <bpw>bpw` for a fractional-bit trellis format. */
+function formatName(f: TensorFormat): string {
+  return f.valueBitsPerElem !== undefined ? `exl3 ${f.valueBitsPerElem}bpw` : f.dtype;
+}
+
+/** Distinct entries in first-seen order. */
+function distinct(xs: string[]): string[] {
+  return [...new Set(xs)];
+}
+
+/**
+ * What a field's "Model default" resolves to: `label` is short (one name, or `a + b` for a mixed default, with
+ * `a + b + …` beyond two) and `detail` is the full split by tensor class, present only for a mixed default.
+ */
+export function resolvedDefault(
+  q: QuantConfig,
+  field: QuantFieldKey,
+): { label: string; detail?: string } {
+  const parts: { name: string; where: string }[] = [];
+  if (field === 'weights') {
+    parts.push({ name: formatName(q.weights), where: 'other linear layers' });
+    // residual_mixer is not a Weights-picker target (it stays at high precision under an override): skip it.
+    for (const [mod, m] of Object.entries(q.modules ?? {})) {
+      if (mod !== 'residual_mixer') parts.push({ name: formatName(m.weights), where: mod });
+    }
+  } else if (field === 'activations') {
+    parts.push({ name: q.activations, where: 'other activations' });
+    for (const [mod, m] of Object.entries(q.modules ?? {})) {
+      if (m.gemmInput !== undefined) parts.push({ name: m.gemmInput, where: `${mod} GEMM input` });
+    }
+  } else {
+    parts.push({ name: formatName(q.kvCache), where: 'KV cache' });
+    if (q.compressedKvCache)
+      parts.push({ name: formatName(q.compressedKvCache), where: 'compressed KV cache' });
+    if (q.indexerKeyCache)
+      parts.push({ name: formatName(q.indexerKeyCache), where: 'indexer key cache' });
+  }
+  const names = distinct(parts.map((p) => p.name));
+  if (names.length === 1) return { label: names[0] };
+  const label = names.length <= 2 ? names.join(' + ') : `${names.slice(0, 2).join(' + ')} + …`;
+  const detail = names
+    .map(
+      (n) =>
+        `${n}: ${parts
+          .filter((p) => p.name === n)
+          .map((p) => p.where)
+          .join(', ')}`,
+    )
+    .join('; ');
+  return { label, detail };
 }

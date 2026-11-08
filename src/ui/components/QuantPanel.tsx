@@ -7,6 +7,7 @@ import {
   isValidBpw,
   isValidHeadBpw,
   isWeightFormat,
+  resolvedDefault,
   type FieldIssue,
 } from '../state';
 import { Picker } from './Picker';
@@ -32,14 +33,14 @@ const FIELDS = [
   },
 ] as const;
 
-/** The "Model default" option (value ''), then every storage dtype. */
-const DEFAULT_OPTION: PickerOption = { value: '', label: 'Model default' };
-const DTYPE_OPTIONS: PickerOption[] = [
-  DEFAULT_OPTION,
-  ...QUANT_DTYPE_CHOICES.map((d) => ({ value: d, label: d })),
-];
-/** The Weights picker also offers EXL3, which has its own bits-per-weight inputs. */
-const WEIGHT_OPTIONS: PickerOption[] = [...DTYPE_OPTIONS, { value: 'exl3', label: 'exl3' }];
+/** The picker options for one field: the default option (value '') labelled with what it resolves to, then every dtype. */
+function optionsFor(defaultLabel: string, weights: boolean): PickerOption[] {
+  const opts: PickerOption[] = [
+    { value: '', label: defaultLabel },
+    ...QUANT_DTYPE_CHOICES.map((d) => ({ value: d, label: d })),
+  ];
+  return weights ? [...opts, { value: 'exl3', label: 'exl3' }] : opts;
+}
 
 const BPW_HELP =
   'Bits per weight (bpw): the average number of bits stored per weight, including fractional values such as 2.5. ' +
@@ -56,7 +57,6 @@ function rangeIssue(field: 'bpw' | 'headBpw', valid: boolean): FieldIssue[] {
 }
 
 export function QuantPanel({ state, dispatch, loaded }: Props) {
-  const defaultScheme = loaded?.quant.scheme ?? 'loading';
   const { bpw, headBpw } = effectiveBpw(state.quant, loaded?.quant.exl3);
   return (
     <Panel
@@ -65,30 +65,34 @@ export function QuantPanel({ state, dispatch, loaded }: Props) {
       open
     >
       <div className="fields">
-        {FIELDS.map((f) => (
-          <Picker
-            key={f.key}
-            label={f.label}
-            value={state.quant[f.key] ?? ''}
-            options={f.key === 'weights' ? WEIGHT_OPTIONS : DTYPE_OPTIONS}
-            help={
-              f.key === 'weights' ? (
+        {FIELDS.map((f) => {
+          const resolved = loaded ? resolvedDefault(loaded.quant.quant, f.key) : undefined;
+          return (
+            <Picker
+              key={f.key}
+              label={f.label}
+              value={state.quant[f.key] ?? ''}
+              options={optionsFor(
+                resolved ? `Model default (${resolved.label})` : 'Model default',
+                f.key === 'weights',
+              )}
+              help={
                 <>
-                  {f.help} Model default: {defaultScheme}.
+                  {f.help}
+                  {loaded && f.key === 'weights' && <> Model default: {loaded.quant.scheme}.</>}
+                  {resolved?.detail && <> Model default split: {resolved.detail}.</>}
                 </>
-              ) : (
-                f.help
-              )
-            }
-            onChange={(v) =>
-              dispatch({
-                type: 'setQuant',
-                field: f.key,
-                dtype: isWeightFormat(v) && (f.key === 'weights' || v !== 'exl3') ? v : undefined,
-              })
-            }
-          />
-        ))}
+              }
+              onChange={(v) =>
+                dispatch({
+                  type: 'setQuant',
+                  field: f.key,
+                  dtype: isWeightFormat(v) && (f.key === 'weights' || v !== 'exl3') ? v : undefined,
+                })
+              }
+            />
+          );
+        })}
         {state.quant.weights === 'exl3' && (
           <>
             <NumberField

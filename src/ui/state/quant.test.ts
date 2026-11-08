@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mapHfModel } from '../../sim/models/hf/index';
 import { fixtureRepoFiles } from '../../sim/models/__fixtures__/fixtures.testutil';
 import type { QuantDefaults } from '../../sim/models/hf/types';
-import { QUANT_DTYPE_CHOICES, REFERENCE_QUANT_DEFAULTS, applyQuantOverride, hasQuantOverride, quantSummary } from './quant';
+import { QUANT_DTYPE_CHOICES, REFERENCE_QUANT_DEFAULTS, applyQuantOverride, hasQuantOverride, quantSummary, resolvedDefault } from './quant';
 
 function defaults(repo: string, dir?: string): QuantDefaults {
   const r = mapHfModel(fixtureRepoFiles(repo, dir ? { dir } : {}));
@@ -91,5 +91,30 @@ describe('quant labels and choices', () => {
     expect(QUANT_DTYPE_CHOICES).not.toContain('tf32');
     expect(QUANT_DTYPE_CHOICES).toContain('nvfp4');
     expect(QUANT_DTYPE_CHOICES).toContain('bf16');
+  });
+});
+
+describe('resolvedDefault', () => {
+  it('names a single format for a bf16 model', () => {
+    for (const f of ['weights', 'activations', 'kvCache'] as const) {
+      expect(resolvedDefault(REFERENCE_QUANT_DEFAULTS.quant, f)).toEqual({ label: 'bf16' });
+    }
+  });
+  it('summarises a mixed fp8/nvfp4 scheme and keeps the split in the detail', () => {
+    const d = defaults('nvidia/Qwen3.8-27B-NVFP4', 'quant');
+    expect(resolvedDefault(d.quant, 'weights')).toEqual({
+      label: 'nvfp4 + fp8_e4m3',
+      detail: 'nvfp4: other linear layers, dense_mlp; fp8_e4m3: attention, linear_attention',
+    });
+  });
+  it('abbreviates three or more formats', () => {
+    const d = defaults('deepseek-ai/DeepSeek-V4.1-Flash');
+    const kv = resolvedDefault(d.quant, 'kvCache');
+    expect(kv.label).toMatch(/^\S+ \+ \S+ \+ …$/);
+    expect(kv.detail).toBeDefined();
+  });
+  it('names the EXL3 bits per weight', () => {
+    const d = defaults('bertholomus/DeepSeek-V4.1-Flash-1017-EXL3-2.5bpw', 'quant');
+    expect(resolvedDefault(d.quant, 'weights').label).toBe('exl3 2.52bpw');
   });
 });
