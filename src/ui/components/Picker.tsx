@@ -1,6 +1,8 @@
+import * as Popover from '@radix-ui/react-popover';
+import { Command } from 'cmdk';
 import {
-  useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -9,8 +11,7 @@ import {
 } from 'react';
 import { fuzzyFilter, groupOptions, stepIndex, type NavStep, type PickerOption } from './fuzzy';
 import { HelpIcon } from './HelpIcon';
-import { useFloating } from './floating';
-import { OptionList, optionDomId } from './OptionList';
+import { OptionList, findOptionElement, revealOption, setActiveDescendant } from './OptionList';
 
 /** Keys that move the active option, and the step each makes. */
 const NAV_KEYS: Record<string, NavStep> = {
@@ -28,17 +29,22 @@ function firstValue(list: PickerOption[]): string | undefined {
 }
 
 /**
- * Select-only custom picker: an ARIA combobox (`role="combobox"`, popup `listbox`) that replaces the native
- * select element.
+ * Select-only custom picker (shadcn/ui's combobox pattern): a Radix Popover anchored to the trigger, with a
+ * cmdk Command listbox in a themed ScrollArea. It replaces the native select element.
  *
- * - Trigger: a button named by `label`; Enter, Space, ArrowDown or ArrowUp open the list. While the list is
- *   open, focus stays on the trigger and `aria-activedescendant` names the active option.
+ * - Trigger: a button with `role="combobox"` named by `label`; Enter, Space, ArrowDown or ArrowUp open the
+ *   list. Without a search box, focus stays on the trigger and `aria-activedescendant` names the active
+ *   option.
  * - Keys (list open): ArrowUp/ArrowDown move, Home/End jump, PageUp/PageDown move 10 rows, Enter or Space
- *   pick the active option, Escape closes and returns focus to the trigger, Tab closes.
- * - Search: with more than `searchThreshold` options the list has a search box, focused on open. Typing
- *   filters with {@link fuzzyFilter}; the best match is active, so Enter picks it. Home and End stay in the
- *   search box.
- * - Pointer: a click picks; an outside click closes without changing the value.
+ *   pick the active option, Escape closes and returns focus to the trigger, Tab closes and moves on from
+ *   the trigger.
+ * - Search: with more than `searchThreshold` options a search box sits in a header above the scrolling list
+ *   (the rows scroll beneath it, never through it) and takes focus on open. Typing filters and ranks with
+ *   {@link fuzzyFilter} (cmdk's own filter is off); the best match is active, so Enter picks it. Home and
+ *   End stay in the search box.
+ * - Popup: as wide as the trigger, below it (above when there is more room there), its height capped at
+ *   360px and at the room the viewport has.
+ * - Pointer: hovering highlights, a click picks; an outside click closes without changing the value.
  */
 export function Picker({
   label,
@@ -69,11 +75,9 @@ export function Picker({
 }) {
   const id = useId();
   const labelId = `${id}-label`;
-  const triggerId = `${id}-trigger`;
-  const listId = `${id}-list`;
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const popupRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [activeValue, setActiveValue] = useState<string | undefined>(undefined);
@@ -87,11 +91,6 @@ export function Picker({
   const flat = useMemo(() => groupOptions(shown).flatMap((g) => g.options), [shown]);
   const activeIdx = flat.findIndex((o) => o.value === activeValue);
   const activeOpt = activeIdx >= 0 ? flat[activeIdx] : undefined;
-  const popupStyle = useFloating(triggerRef, popupRef, open, {
-    preferred: 'below',
-    maxHeight: 360,
-    width: 'anchor',
-  });
 
   const openPopup = () => {
     setQuery('');
@@ -106,70 +105,50 @@ export function Picker({
     onChange(o.value);
     close(true);
   };
-  const move = (step: NavStep) => {
-    const i = stepIndex(activeIdx, flat.length, step);
-    if (i >= 0) setActiveValue(flat[i].value);
-  };
-  /** Enter / Space: open the list when closed, otherwise pick the active option (or just close). */
-  const commit = () => {
-    if (!open) openPopup();
-    else if (activeOpt) pick(activeOpt);
-    else close(true);
-  };
 
   const onKeyDown = (e: KeyboardEvent<HTMLElement>, inSearch: boolean) => {
     const step = NAV_KEYS[e.key];
     if (step) {
-      if (inSearch && (e.key === 'Home' || e.key === 'End')) return; // the caret, not the list
+      if (inSearch && (e.key === 'Home' || e.key === 'End')) {
+        e.stopPropagation(); // the caret, not the list (cmdk would jump)
+        return;
+      }
       e.preventDefault();
-      if (open) move(step);
-      else openPopup();
+      if (!open) openPopup();
+      else {
+        const i = stepIndex(activeIdx, flat.length, step);
+        if (i >= 0) setActiveValue(flat[i].value);
+      }
       return;
     }
     switch (e.key) {
       case 'Enter':
         e.preventDefault();
-        commit();
+        if (!open) openPopup();
+        else if (activeOpt) pick(activeOpt);
+        else close(true);
         return;
       case ' ':
         if (inSearch) return;
         e.preventDefault();
-        commit();
-        return;
-      case 'Escape':
-        if (!open) return;
-        e.preventDefault();
-        e.stopPropagation();
-        close(true);
+        if (!open) openPopup();
+        else if (activeOpt) pick(activeOpt);
         return;
       case 'Tab':
-        if (open) close(false);
+        // Back on the trigger before the browser moves focus, so Tab continues from the field.
+        if (open) close(inSearch);
         return;
     }
   };
 
-  // Focus the search box when the list opens (it is the keyboard target while searching).
-  useEffect(() => {
-    if (open && searchable) searchRef.current?.focus();
-  }, [open, searchable]);
-
-  // An outside pointer closes the list without changing the value.
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: PointerEvent) => {
-      const t = e.target as Node;
-      if (!triggerRef.current?.contains(t) && !popupRef.current?.contains(t)) close(false);
-    };
-    document.addEventListener('pointerdown', onDown);
-    return () => document.removeEventListener('pointerdown', onDown);
-  }, [open]);
-
-  // Keep the active option visible while moving with the keyboard.
-  useEffect(() => {
-    if (open && activeIdx >= 0) {
-      document.getElementById(optionDomId(id, activeIdx))?.scrollIntoView?.({ block: 'nearest' });
-    }
-  }, [open, activeIdx, id]);
+  // aria-activedescendant on the focused element (the search box, else the trigger) names the active option,
+  // whose id cmdk generates; keep that option in view.
+  useLayoutEffect(() => {
+    const el = open ? findOptionElement(listEl, activeValue) : undefined;
+    setActiveDescendant(searchRef.current, el);
+    setActiveDescendant(triggerRef.current, searchable ? undefined : el);
+    revealOption(el);
+  }, [open, listEl, activeValue, shown, searchable]);
 
   return (
     <div className="field picker">
@@ -179,76 +158,90 @@ export function Picker({
         </span>
         {help && <HelpIcon term={label}>{help}</HelpIcon>}
       </div>
-      <button
-        ref={triggerRef}
-        id={triggerId}
-        type="button"
-        role="combobox"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={listId}
-        aria-labelledby={labelId}
-        aria-activedescendant={
-          !searchable && open && activeOpt ? optionDomId(id, activeIdx) : undefined
-        }
-        className="picker-trigger"
-        onClick={() => (open ? close(true) : openPopup())}
-        onKeyDown={(e) => onKeyDown(e, false)}
-      >
-        <span className="picker-value">
-          {renderValue ? renderValue(selected) : (selected?.label ?? placeholder ?? '')}
-        </span>
-        <span className="picker-chevron" aria-hidden="true" />
-      </button>
-      {open && (
-        <div
-          ref={popupRef}
-          className="picker-popup"
-          style={popupStyle}
-          onMouseDown={(e) => {
-            if (e.target !== searchRef.current) e.preventDefault();
-          }}
-        >
-          {searchable && (
-            <input
-              ref={searchRef}
-              type="text"
-              role="combobox"
-              aria-label={`Search ${label}`}
-              aria-expanded={true}
-              aria-controls={listId}
-              aria-autocomplete="list"
-              aria-activedescendant={activeOpt ? optionDomId(id, activeIdx) : undefined}
-              className="picker-search"
-              value={query}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="Search"
-              onChange={(e) => {
-                const q = e.target.value;
-                setQuery(q);
-                setActiveValue(firstValue(fuzzyFilter(options, q)));
-              }}
-              onKeyDown={(e) => onKeyDown(e, true)}
-            />
-          )}
-          <OptionList
-            idPrefix={id}
-            labelId={labelId}
-            listId={listId}
-            options={shown}
-            selectedValue={value}
-            activeValue={activeValue}
-            onPick={pick}
-            onHover={(o) => setActiveValue(o.value)}
-          />
-          {shown.length === 0 && (
-            <div className="listbox-empty" role="status">
-              No matches
-            </div>
-          )}
-        </div>
-      )}
+      <Popover.Root open={open} onOpenChange={(next) => (next ? openPopup() : close(false))}>
+        <Popover.Trigger asChild>
+          <button
+            ref={triggerRef}
+            type="button"
+            role="combobox"
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            aria-controls={open ? listEl?.id : undefined}
+            aria-labelledby={labelId}
+            className="picker-trigger"
+            onKeyDown={(e) => onKeyDown(e, false)}
+          >
+            <span className="picker-value">
+              {renderValue ? renderValue(selected) : (selected?.label ?? placeholder ?? '')}
+            </span>
+            <span className="picker-chevron" aria-hidden="true" />
+          </button>
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Content
+            className="picker-popup"
+            role="presentation"
+            side="bottom"
+            align="start"
+            sideOffset={4}
+            collisionPadding={8}
+            onOpenAutoFocus={(e) => {
+              e.preventDefault();
+              searchRef.current?.focus({ preventScroll: true });
+            }}
+            onCloseAutoFocus={(e) => e.preventDefault()}
+            onEscapeKeyDown={() => triggerRef.current?.focus()}
+            onMouseDown={(e) => {
+              if (e.target !== searchRef.current) e.preventDefault();
+            }}
+          >
+            <Command
+              className="picker-command"
+              shouldFilter={false}
+              vimBindings={false}
+              value={activeValue ?? ''}
+              onValueChange={setActiveValue}
+            >
+              {searchable && (
+                <div className="picker-search-head">
+                  <input
+                    ref={searchRef}
+                    type="text"
+                    role="combobox"
+                    aria-label={`Search ${label}`}
+                    aria-expanded={true}
+                    aria-controls={listEl?.id}
+                    aria-autocomplete="list"
+                    className="picker-search"
+                    value={query}
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="Search"
+                    onChange={(e) => {
+                      const q = e.target.value;
+                      setQuery(q);
+                      setActiveValue(firstValue(fuzzyFilter(options, q)));
+                    }}
+                    onKeyDown={(e) => onKeyDown(e, true)}
+                  />
+                </div>
+              )}
+              <OptionList
+                label={label}
+                listRef={setListEl}
+                options={shown}
+                selectedValue={value}
+                onPick={pick}
+              />
+              {shown.length === 0 && (
+                <div className="listbox-empty" role="status">
+                  No matches
+                </div>
+              )}
+            </Command>
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
     </div>
   );
 }

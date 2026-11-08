@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useFloating } from './floating';
+import { ScrollArea } from './ScrollArea';
 
 /**
  * A "?" toggletip showing its children as a definition next to an input or heading.
@@ -31,11 +32,13 @@ export function HelpIcon({
   const popupRef = useRef<HTMLSpanElement>(null);
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
-  const style = useFloating(buttonRef, popupRef, open, {
+  const floating = useFloating(buttonRef, popupRef, open, {
     preferred: 'below',
     maxHeight: 320,
     width: 260,
   });
+  // The popup is placed by useFloating; its height cap goes on the ScrollArea viewport, which scrolls.
+  const { maxHeight, ...style } = floating ?? {};
 
   const close = () => {
     setOpen(false);
@@ -86,15 +89,13 @@ export function HelpIcon({
       >
         ?
       </button>
-      <span
-        ref={popupRef}
-        id={popupId}
-        role="tooltip"
-        className="help-popup"
-        hidden={!open}
-        style={style}
-      >
-        {children}
+      <span ref={popupRef} className="help-popup" hidden={!open} style={style}>
+        {/* The tooltip is the text itself, so its description excludes the ScrollArea's own markup. */}
+        <ScrollArea viewportProps={{ style: { maxHeight } }}>
+          <span id={popupId} role="tooltip" className="help-text" hidden={!open}>
+            {children}
+          </span>
+        </ScrollArea>
       </span>
     </span>
   );

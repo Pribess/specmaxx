@@ -40,9 +40,32 @@ export function renderMarkdown(
         const rows = token.rows.map(row =>
           `<tr>${row.map(cell => this.tablecell(cell)).join('')}</tr>`
         ).join('');
-        return `<div class="table-scroll" tabindex="0" role="region" aria-label="Data table"><table><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table></div>`;
+        // AboutPage wraps each table in a themed horizontal ScrollArea (see splitTables).
+        return `<table><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
       },
     },
   });
   return markdown.parse(source, { async: false });
+}
+
+/** One piece of rendered Markdown: prose HTML, or one table to show in its own scroll region. */
+export interface HtmlSegment {
+  kind: 'html' | 'table';
+  html: string;
+}
+
+/**
+ * Splits rendered Markdown at its tables, so each table can sit in a horizontally scrolling ScrollArea
+ * (wide tables scroll sideways with a themed scrollbar instead of a native one). GFM tables never nest.
+ */
+export function splitTables(html: string): HtmlSegment[] {
+  const segments: HtmlSegment[] = [];
+  let at = 0;
+  for (const match of html.matchAll(/<table>[\s\S]*?<\/table>/g)) {
+    if (match.index > at) segments.push({ kind: 'html', html: html.slice(at, match.index) });
+    segments.push({ kind: 'table', html: match[0] });
+    at = match.index + match[0].length;
+  }
+  if (at < html.length) segments.push({ kind: 'html', html: html.slice(at) });
+  return segments;
 }

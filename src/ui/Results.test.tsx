@@ -162,6 +162,9 @@ it('shows roofline x/y units and per-phase contexts on hover, focus, arrows and 
   fireEvent.pointerDown(points[0]);
   expect(screen.getByRole('tooltip').textContent).toContain('Prefill');
   expect(screen.getByText('TFLOP/s @ 8k prefill / 32k decode')).toBeTruthy();
+  expect(screen.getByText('Compute bound')).toBeTruthy();
+  expect(screen.getByText('Bandwidth bound')).toBeTruthy();
+  expect(container.textContent).not.toMatch(/Tensor ceiling|Bandwidth slope/);
 });
 
 it('warns about an oversized workload while still showing theoretical rates', async () => {

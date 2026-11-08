@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import simulationModel from '../../docs/simulation-model.md?raw';
 import { AboutPage, estimateHref } from './AboutPage';
-import { githubSlug, renderMarkdown } from './markdown';
+import { githubSlug, renderMarkdown, splitTables } from './markdown';
 
 afterEach(() => {
   cleanup();
@@ -47,11 +47,14 @@ describe('repository Markdown', () => {
     expect(renderMarkdown('[Checks](sanity-check.md)')).toBe('<p>Checks</p>\n');
   });
 
-  it('renders GFM tables in a keyboard-focusable scroll region', () => {
+  it('splits rendered GFM tables out of the prose', () => {
+    const html = renderMarkdown('Intro\n\n| Limit | Value |\n| --- | --- |\n| Memory | 32 GB |\n\nOutro');
+    const segments = splitTables(html);
+    expect(segments.map((s) => s.kind)).toEqual(['html', 'table', 'html']);
     const container = document.createElement('div');
-    container.innerHTML = renderMarkdown('| Limit | Value |\n| --- | --- |\n| Memory | 32 GB |');
+    container.innerHTML = segments[1].html;
     expect(container.querySelector('table tbody td')?.textContent).toBe('Memory');
-    expect(container.querySelector('[role="region"]')?.getAttribute('tabindex')).toBe('0');
+    expect(segments.map((s) => s.html).join('')).toBe(html);
   });
 });
 
@@ -75,6 +78,17 @@ describe('About page', () => {
     expect(screen.getByRole('heading', { name: 'Memory fit' })).toBeTruthy();
     expect(screen.getByRole('navigation', { name: 'Documents' })).toBeTruthy();
     expect(screen.getAllByRole('link', { name: 'Back to the estimate' })).toHaveLength(2);
+  });
+
+  it('puts every table in a keyboard-focusable themed scroll region', () => {
+    const { container } = render(<AboutPage />);
+    const tables = container.querySelectorAll('table');
+    expect(tables.length).toBeGreaterThan(0);
+    for (const table of tables) {
+      const region = table.closest('[role="region"]');
+      expect(region?.getAttribute('tabindex')).toBe('0');
+      expect(region?.hasAttribute('data-radix-scroll-area-viewport')).toBe(true);
+    }
   });
 
   it('keeps the estimate query on return, with a storage fallback', () => {

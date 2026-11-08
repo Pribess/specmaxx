@@ -1,5 +1,6 @@
 import simulationModel from '../../docs/simulation-model.md?raw';
-import { renderMarkdown } from './markdown';
+import { ScrollArea } from '../ui/components/ScrollArea';
+import { renderMarkdown, splitTables } from './markdown';
 
 const optionalDocs = import.meta.glob<string>('../../docs/sanity-check.md', {
   query: '?raw', import: 'default', eager: true,
@@ -47,13 +48,35 @@ export function AboutPage() {
             {sanitySource && <a href="#sanity-check">Sanity checks</a>}
           </nav>
         </section>
-        {/* Only trusted, build-time repository Markdown enters these HTML containers. */}
-        <article className="about-prose" id="simulation-model" aria-label="Simulation model"
-          dangerouslySetInnerHTML={{ __html: simulationHtml }} />
-        {sanitySource && <article className="about-prose" id="sanity-check" aria-label="Sanity checks"
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(sanitySource, renderedDocs) }} />}
+        <Prose id="simulation-model" label="Simulation model" html={simulationHtml} />
+        {sanitySource && (
+          <Prose id="sanity-check" label="Sanity checks"
+            html={renderMarkdown(sanitySource, renderedDocs)} />
+        )}
         <footer className="about-footer"><a href={estimateHref()}>Back to the estimate</a></footer>
       </main>
     </>
+  );
+}
+
+/**
+ * One rendered document. Only trusted, build-time repository Markdown enters these HTML containers. Each
+ * table gets a keyboard-focusable horizontal ScrollArea (themed scrollbar); the prose between tables is
+ * inserted as-is, in `display: contents` wrappers so the article's layout is unchanged.
+ */
+function Prose({ id, label, html }: { id: string; label: string; html: string }) {
+  return (
+    <article className="about-prose" id={id} aria-label={label}>
+      {splitTables(html).map((segment, n) =>
+        segment.kind === 'table' ? (
+          <ScrollArea key={n} axis="horizontal" className="table-scroll"
+            viewportProps={{ tabIndex: 0, role: 'region', 'aria-label': 'Data table' }}>
+            <div dangerouslySetInnerHTML={{ __html: segment.html }} />
+          </ScrollArea>
+        ) : (
+          <div key={n} className="prose-segment" dangerouslySetInnerHTML={{ __html: segment.html }} />
+        ),
+      )}
+    </article>
   );
 }

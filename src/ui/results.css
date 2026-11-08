@@ -139,3 +139,43 @@ svg [data-chart-point].is-active {
 #memory-fit {
   scroll-margin-top: 80px;
 }
+
+/* Roofline text: one step below the 14px body size, and never under 11px as rendered. SVG text scales with
+   the chart's rendered width W (its viewBox is 470 wide), so the rendered size is font-size × W / 470; each
+   container step below keeps font-size ≥ 11px × 470 / W for the widths it covers (phones included). */
+.roofline {
+  container-type: inline-size;
+}
+.roofline svg text {
+  font-size: 12px;
+}
+@container (max-width: 430px) {
+  .roofline svg text {
+    font-size: 13px;
+  }
+}
+@container (max-width: 397px) {
+  .roofline svg text {
+    font-size: 14px;
+  }
+}
+@container (max-width: 369px) {
+  .roofline svg text {
+    font-size: 15px;
+  }
+}
+@container (max-width: 344px) {
+  .roofline svg text {
+    font-size: 16px;
+  }
+}
+@container (max-width: 323px) {
+  .roofline svg text {
+    font-size: 17px;
+  }
+}
+@container (max-width: 304px) {
+  .roofline svg text {
+    font-size: 19px;
+  }
+}

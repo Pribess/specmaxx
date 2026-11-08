@@ -14,5 +14,7 @@ export default defineConfig({
     // The environment is node; component tests opt in with a `// @vitest-environment jsdom` docblock.
     include: ['src/**/*.test.{ts,tsx}'],
     environment: 'node',
+    // Polyfills jsdom lacks for Radix and cmdk (no-op in the node environment).
+    setupFiles: ['src/test/setupDom.ts'],
   },
 });

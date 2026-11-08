@@ -94,6 +94,24 @@ for (const size of ['desktop', 'phone'] as const) {
       await page.screenshot({ path: `${name}-device-picker.png` });
       await page.keyboard.press('Escape');
 
+      // The opened device picker scrolled to the middle of its list: rows scroll beneath the search header,
+      // the popup is as wide as its trigger, and its themed scrollbar sits inside the rounded border.
+      const deviceTrigger = page.getByRole('combobox', { name: 'Device', exact: true });
+      await deviceTrigger.click();
+      const viewport = page.locator('.picker-popup [data-radix-scroll-area-viewport]');
+      await viewport.evaluate((el) => {
+        el.scrollTop = (el.scrollHeight - el.clientHeight) / 2;
+      });
+      await viewport.hover();
+      await expect(page.locator('.picker-popup .scroll-area-thumb')).toBeVisible();
+      const popup = await page.locator('.picker-popup').boundingBox();
+      const anchor = await deviceTrigger.boundingBox();
+      expect(Math.abs(popup!.width - anchor!.width)).toBeLessThan(1);
+      expect(Math.abs(popup!.x - anchor!.x)).toBeLessThan(1);
+      expect(popup!.y + popup!.height).toBeLessThanOrEqual((page.viewportSize()?.height ?? 0) + 1);
+      await page.screenshot({ path: `${name}-device-picker-scrolled.png` });
+      await page.keyboard.press('Escape');
+
       if (size === 'desktop') {
         // Scrolled to the bottom: the sidebar must still span the viewport.
         await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));

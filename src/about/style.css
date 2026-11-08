@@ -47,7 +47,11 @@
 }
 .about-prose pre { white-space: pre-wrap; padding: 16px; background: var(--input-band); }
 .about-prose pre code { padding: 0; background: transparent; }
-.table-scroll { max-width: 100%; overflow-x: auto; margin: 24px 0; }
+/* Prose between tables is inserted in wrappers that take no part in layout (AboutPage.tsx). */
+.prose-segment { display: contents; }
+/* Each table scrolls sideways in a themed ScrollArea; its padding keeps the bar clear of the last row. */
+.table-scroll { max-width: 100%; margin: 24px 0; }
+.table-scroll .scroll-area-content { padding-bottom: 12px; }
 .about-prose table {
   width: 100%;
   border-collapse: collapse;

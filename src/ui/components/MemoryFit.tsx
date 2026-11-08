@@ -40,7 +40,7 @@ export function MemoryFit({ result }: { result: ResultSummary }) {
         const state = memoryState(stage);
         return (
           <div className="memory-stage" key={stage.stage}>
-            <p data-testid="memory-verdict" className={`memory-${state}`}>
+            <div data-testid="memory-verdict" className={`memory-${state}`}>
               <MemoryWarningIcon stage={stage} />
               {result.memory.stages.length > 1 && `Stage ${stage.stage + 1}. `}
               {stage.fits ? 'Fits' : 'Does not fit'}: {formatBytes(stage.totalBytes)} of{' '}
@@ -55,7 +55,7 @@ export function MemoryFit({ result }: { result: ResultSummary }) {
                   </HelpIcon>
                 </>
               )}
-            </p>
+            </div>
             <div
               className={`capacity-bar memory-${state} ${stage.fits ? '' : 'overflow'}`}
               role="group"

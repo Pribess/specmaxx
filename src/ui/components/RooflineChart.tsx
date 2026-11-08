@@ -44,7 +44,7 @@ export function RooflineChart({
           Logarithmic axes. Decode: {roof.decode.intensityFlopPerByte.toFixed(1)} FLOP per byte at{' '}
           {formatFlopsPerSec(roof.decode.attainedFlopsPerSec)}. Prefill:{' '}
           {roof.prefill.intensityFlopPerByte.toFixed(1)} FLOP per byte at{' '}
-          {formatFlopsPerSec(roof.prefill.attainedFlopsPerSec)}. Ceiling:{' '}
+          {formatFlopsPerSec(roof.prefill.attainedFlopsPerSec)}. Compute bound:{' '}
           {formatFlopsPerSec(roof.peakFlopsPerSec)}.
         </desc>
         <path className="axis" d="M48 22V218H447" />
@@ -74,10 +74,10 @@ export function RooflineChart({
         />
         <path className="roof-compute" d={`M${x(ridge)} ${y(roof.peakFlopsPerSec)}H${x(maxI)}`} />
         <text className="compute-text" x="438" y={y(roof.peakFlopsPerSec) - 12} textAnchor="end">
-          Tensor ceiling
+          Compute bound
         </text>
         <text className="memory-text" x="62" y="140">
-          Bandwidth slope
+          Bandwidth bound
         </text>
         <text x="48" y="14">
           TFLOP/s @ {contextLabel}

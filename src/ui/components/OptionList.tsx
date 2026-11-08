@@ -1,105 +1,106 @@
-import type { MouseEvent, RefObject } from 'react';
+import { Command } from 'cmdk';
+import type { Ref } from 'react';
 import { groupOptions, type PickerOption } from './fuzzy';
+import { ScrollArea } from './ScrollArea';
 
-/** Props of {@link OptionList}. The popup container is owned by the caller (it positions and scrolls it). */
+/**
+ * Value given to cmdk while no option is active. cmdk highlights its first item whenever its value is empty;
+ * a value that matches no item keeps every option unhighlighted (the combobox before the arrow keys).
+ */
+export const NO_ACTIVE_OPTION = '\u0000none';
+
+/** Props of {@link OptionList}. It must render inside a cmdk `Command` with `shouldFilter={false}`. */
 export interface OptionListProps {
-  /** Id prefix: options get `${idPrefix}-opt-<index>`, group headers `${idPrefix}-grp-<n>`. */
-  idPrefix: string;
-  /** Id of the element naming the listbox (the field label). */
-  labelId: string;
-  /** The listbox's own id, referenced by the trigger's aria-controls. */
-  listId: string;
-  /** Options to show, already filtered and ranked. Grouped by `group` here. */
+  /** Accessible name of the listbox (the field label). */
+  label: string;
+  /** Options to show, already filtered and ranked by fuzzyFilter. Grouped by `group` here. */
   options: PickerOption[];
-  /** Value of the selected option (aria-selected), if any. */
+  /** Value of the chosen option (check mark, `data-checked`), if any. */
   selectedValue?: string;
-  /** Value of the keyboard-active option (highlighted), if any. */
-  activeValue?: string;
-  /** A click or tap picked this option. */
+  /** A click, tap, or Enter picked this option. */
   onPick(option: PickerOption): void;
-  /** The pointer moved over this option (it becomes active). */
-  onHover(option: PickerOption): void;
-  /** Ref to the listbox element, for the caller's focus handling. */
-  listRef?: RefObject<HTMLDivElement | null>;
-}
-
-/** The DOM id of the option at `index` in the flat (group-ordered) list. */
-export function optionDomId(idPrefix: string, index: number): string {
-  return `${idPrefix}-opt-${index}`;
+  /** The listbox element (cmdk's `Command.List`), for its DOM id and option lookups. */
+  listRef?: Ref<HTMLDivElement>;
 }
 
 /**
- * The listbox body: options grouped under headers, with ARIA `listbox` / `group` / `option` roles.
- * Pointer-down is cancelled so a click does not move focus out of the trigger or search box.
- * Renders nothing for an empty list; the caller shows its own "no matches" text.
+ * The popup body of a picker: cmdk's listbox with options grouped under headings, inside a themed
+ * {@link ScrollArea} whose viewport is the only scrolling element (the search header sits outside it).
+ *
+ * cmdk gives the ARIA roles (`listbox`, `group` named by its heading, `option`), pointer highlight and click
+ * picks; the keyboard-active option is the cmdk value the caller controls (`aria-selected` / `data-selected`).
+ * Filtering and ranking stay in fuzzy.ts: options arrive filtered, so cmdk's own filter is off.
  */
-export function OptionList({
-  idPrefix,
-  labelId,
-  listId,
-  options,
-  selectedValue,
-  activeValue,
-  onPick,
-  onHover,
-  listRef,
-}: OptionListProps) {
+export function OptionList({ label, options, selectedValue, onPick, listRef }: OptionListProps) {
   const groups = groupOptions(options);
-  const flat = groups.flatMap((g) => g.options);
-  const indexOf = new Map(flat.map((o, i) => [o.value, i] as const));
-  const stop = (e: MouseEvent) => e.preventDefault();
-  let groupNo = 0;
   return (
-    <div
-      ref={listRef}
-      id={listId}
-      role="listbox"
-      aria-labelledby={labelId}
-      className="listbox"
-      tabIndex={-1}
-      onMouseDown={stop}
-    >
-      {groups.map((g) => {
-        const headerId = g.group !== undefined ? `${idPrefix}-grp-${groupNo++}` : undefined;
-        return (
-          <div role="group" aria-labelledby={headerId} key={g.group ?? '\u0000'}>
-            {g.group !== undefined && (
-              <div id={headerId} role="presentation" className="listbox-group">
-                {g.group}
-              </div>
-            )}
-            {g.options.map((o) => {
-              const index = indexOf.get(o.value) ?? -1;
-              const isSelected = o.value === selectedValue;
-              return (
-                <div
-                  id={optionDomId(idPrefix, index)}
-                  role="option"
-                  aria-selected={isSelected}
-                  key={o.value}
-                  className={
-                    'listbox-option' +
-                    (o.value === activeValue ? ' is-active' : '') +
-                    (isSelected ? ' is-selected' : '')
-                  }
-                  onClick={() => onPick(o)}
-                  onMouseEnter={() => {
-                    if (o.value !== activeValue) onHover(o);
-                  }}
-                >
-                  <span className="listbox-check" aria-hidden="true">
-                    {isSelected ? '✓' : ''}
-                  </span>
-                  <span className="listbox-text">
-                    <span className="listbox-label">{o.label}</span>
-                    {o.description && <span className="listbox-desc">{o.description}</span>}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        );
-      })}
-    </div>
+    <ScrollArea className="picker-scroll">
+      <Command.List ref={listRef} label={label} className="listbox">
+        {groups.map((g) => {
+          const items = g.options.map((o) => {
+            const isSelected = o.value === selectedValue;
+            return (
+              <Command.Item
+                key={o.value}
+                value={o.value}
+                className="listbox-option"
+                data-checked={isSelected || undefined}
+                onSelect={() => onPick(o)}
+              >
+                <span className="listbox-check" aria-hidden="true">
+                  {isSelected ? '✓' : ''}
+                </span>
+                <span className="listbox-text">
+                  <span className="listbox-label">{o.label}</span>
+                  {o.description && <span className="listbox-desc">{o.description}</span>}
+                </span>
+              </Command.Item>
+            );
+          });
+          return (
+            <Command.Group key={g.group ?? '\u0000'} value={g.group ?? '\u0000'} heading={g.group}>
+              {items}
+            </Command.Group>
+          );
+        })}
+      </Command.List>
+    </ScrollArea>
   );
+}
+
+/** The DOM element of the option whose value is `value` inside `list`, if it is rendered. */
+export function findOptionElement(
+  list: HTMLElement | null,
+  value: string | undefined,
+): HTMLElement | undefined {
+  if (!list || value === undefined) return undefined;
+  for (const el of list.querySelectorAll<HTMLElement>('[cmdk-item]')) {
+    if (el.getAttribute('data-value') === value.trim()) return el;
+  }
+  return undefined;
+}
+
+/**
+ * Scrolls the option element into the list's viewport (nearest edge). For the first option of a group the
+ * group heading comes into view too, so a heading is never left hidden above its first row.
+ */
+export function revealOption(el: HTMLElement | undefined): void {
+  if (!el) return;
+  if (el.parentElement?.firstElementChild === el) {
+    el.closest('[cmdk-group]')
+      ?.querySelector<HTMLElement>('[cmdk-group-heading]')
+      ?.scrollIntoView?.({ block: 'nearest' });
+  }
+  el.scrollIntoView?.({ block: 'nearest' });
+}
+
+/**
+ * Points `owner`'s `aria-activedescendant` at the active option `el` (or removes it). cmdk generates the
+ * option ids, so they are only known once rendered; the attribute is set on the DOM after each render
+ * instead of through React state, and the owner must not render the attribute itself.
+ */
+export function setActiveDescendant(owner: HTMLElement | null, el: HTMLElement | undefined): void {
+  if (!owner) return;
+  if (el?.id) owner.setAttribute('aria-activedescendant', el.id);
+  else owner.removeAttribute('aria-activedescendant');
 }

@@ -1,6 +1,8 @@
+import * as Popover from '@radix-ui/react-popover';
+import { Command } from 'cmdk';
 import {
-  useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -9,8 +11,13 @@ import {
 } from 'react';
 import { fuzzyFilter, groupOptions, stepIndex, type NavStep, type PickerOption } from './fuzzy';
 import { HelpIcon } from './HelpIcon';
-import { useFloating } from './floating';
-import { OptionList, optionDomId } from './OptionList';
+import {
+  NO_ACTIVE_OPTION,
+  OptionList,
+  findOptionElement,
+  revealOption,
+  setActiveDescendant,
+} from './OptionList';
 
 /** Keys that move the active suggestion, and the step each makes. */
 const NAV_KEYS: Record<string, NavStep> = {
@@ -21,11 +28,13 @@ const NAV_KEYS: Record<string, NavStep> = {
 };
 
 /**
- * Free-text input with a filtered suggestion list (ARIA combobox with `aria-autocomplete="list"`).
+ * Free-text input with a filtered suggestion list (ARIA combobox with `aria-autocomplete="list"`), built
+ * like {@link Picker}: a Radix Popover anchored to the input, with a cmdk listbox in a themed ScrollArea.
  * The user can type or paste any value; suggestions are a shortcut, not a restriction.
  *
  * - Typing filters the suggestions with {@link fuzzyFilter} and opens the list; focus opens it too.
- * - ArrowUp/ArrowDown move the active suggestion (none is active until a key moves into the list).
+ * - ArrowUp/ArrowDown move the active suggestion (none is active until a key or the pointer moves into
+ *   the list, so Enter after typing commits the typed text).
  * - Enter with an active suggestion calls `onCommit(option.value)`; Enter without one calls
  *   `onCommit(value)` with the typed text. Either closes the list.
  * - Escape closes the list (a second Escape does nothing); Tab closes it and keeps the typed text.
@@ -56,10 +65,9 @@ export function Combobox({
 }) {
   const id = useId();
   const labelId = `${id}-label`;
-  const listId = `${id}-list`;
   const boxRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const popupRef = useRef<HTMLDivElement>(null);
+  const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [activeValue, setActiveValue] = useState<string | undefined>(undefined);
 
@@ -68,11 +76,6 @@ export function Combobox({
   const activeIdx = flat.findIndex((o) => o.value === activeValue);
   const activeOpt = activeIdx >= 0 ? flat[activeIdx] : undefined;
   const isOpen = open && flat.length > 0;
-  const popupStyle = useFloating(boxRef, popupRef, isOpen, {
-    preferred: 'below',
-    maxHeight: 360,
-    width: 'anchor',
-  });
 
   const close = () => {
     setOpen(false);
@@ -97,11 +100,9 @@ export function Combobox({
         e.preventDefault();
         commit(activeOpt ? activeOpt.value : value);
         return;
-      case 'Escape':
-        if (!isOpen) return;
-        e.preventDefault();
-        e.stopPropagation();
-        close();
+      case 'Home':
+      case 'End':
+        e.stopPropagation(); // the caret, not the list (cmdk would jump)
         return;
       case 'Tab':
         close();
@@ -109,26 +110,12 @@ export function Combobox({
     }
   };
 
-  // An outside pointer closes the list; the typed text stays.
-  useEffect(() => {
-    if (!isOpen) return;
-    const onDown = (e: PointerEvent) => {
-      const t = e.target as Node;
-      if (!boxRef.current?.contains(t) && !popupRef.current?.contains(t)) {
-        setOpen(false);
-        setActiveValue(undefined);
-      }
-    };
-    document.addEventListener('pointerdown', onDown);
-    return () => document.removeEventListener('pointerdown', onDown);
-  }, [isOpen]);
-
-  // Keep the active suggestion visible while moving with the keyboard.
-  useEffect(() => {
-    if (isOpen && activeIdx >= 0) {
-      document.getElementById(optionDomId(id, activeIdx))?.scrollIntoView?.({ block: 'nearest' });
-    }
-  }, [isOpen, activeIdx, id]);
+  // aria-activedescendant on the input names the active suggestion, whose id cmdk generates; keep it in view.
+  useLayoutEffect(() => {
+    const el = isOpen ? findOptionElement(listEl, activeValue) : undefined;
+    setActiveDescendant(inputRef.current, el);
+    revealOption(el);
+  }, [isOpen, listEl, activeValue, shown]);
 
   return (
     <div className="field combobox">
@@ -138,50 +125,66 @@ export function Combobox({
         </span>
         {help && <HelpIcon term={label}>{help}</HelpIcon>}
       </div>
-      <div className="combobox-box" ref={boxRef}>
-        <input
-          ref={inputRef}
-          type="text"
-          role="combobox"
-          aria-labelledby={labelId}
-          aria-expanded={isOpen}
-          aria-controls={listId}
-          aria-autocomplete="list"
-          aria-activedescendant={isOpen && activeOpt ? optionDomId(id, activeIdx) : undefined}
-          value={value}
-          placeholder={placeholder}
-          autoComplete="off"
-          spellCheck={false}
-          onFocus={() => setOpen(true)}
-          onChange={(e) => {
-            onValueChange(e.target.value);
-            setOpen(true);
-            setActiveValue(undefined);
-          }}
-          onKeyDown={onKeyDown}
-        />
-      </div>
-      {isOpen && (
-        <div
-          ref={popupRef}
-          className="picker-popup"
-          style={popupStyle}
-          onMouseDown={(e) => {
-            if (e.target !== inputRef.current) e.preventDefault();
-          }}
-        >
-          <OptionList
-            idPrefix={id}
-            labelId={labelId}
-            listId={listId}
-            options={shown}
-            selectedValue={value}
-            activeValue={activeValue}
-            onPick={(o) => commit(o.value)}
-            onHover={(o) => setActiveValue(o.value)}
-          />
-        </div>
-      )}
+      {/* The input sits inside cmdk's root so the portalled list shares its state. */}
+      <Command
+        className="combobox-command"
+        shouldFilter={false}
+        vimBindings={false}
+        value={activeValue ?? NO_ACTIVE_OPTION}
+        onValueChange={setActiveValue}
+      >
+        <Popover.Root open={isOpen} onOpenChange={(next) => (next ? setOpen(true) : close())}>
+          <Popover.Anchor asChild>
+            <div className="combobox-box" ref={boxRef}>
+              <input
+                ref={inputRef}
+                type="text"
+                role="combobox"
+                aria-labelledby={labelId}
+                aria-expanded={isOpen}
+                aria-controls={isOpen ? listEl?.id : undefined}
+                aria-autocomplete="list"
+                value={value}
+                placeholder={placeholder}
+                autoComplete="off"
+                spellCheck={false}
+                onFocus={() => setOpen(true)}
+                onChange={(e) => {
+                  onValueChange(e.target.value);
+                  setOpen(true);
+                  setActiveValue(undefined);
+                }}
+                onKeyDown={onKeyDown}
+              />
+            </div>
+          </Popover.Anchor>
+          <Popover.Portal>
+            <Popover.Content
+              className="picker-popup"
+              role="presentation"
+              side="bottom"
+              align="start"
+              sideOffset={4}
+              collisionPadding={8}
+              onOpenAutoFocus={(e) => e.preventDefault()}
+              onCloseAutoFocus={(e) => e.preventDefault()}
+              onInteractOutside={(e) => {
+                // Pressing in the input itself keeps the list open.
+                if (boxRef.current?.contains(e.target as Node)) e.preventDefault();
+              }}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <OptionList
+                label={label}
+                listRef={setListEl}
+                options={shown}
+                selectedValue={value}
+                onPick={(o) => commit(o.value)}
+              />
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
+      </Command>
     </div>
   );
 }

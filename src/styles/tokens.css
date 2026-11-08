@@ -26,6 +26,12 @@
   --text-5xl: 4.5rem;
   --text-answer: var(--text-5xl);
   --control-radius: 6px;
+  /* Scrollbars: every in-page scroller is a ScrollArea (src/ui/components/ScrollArea.tsx); the document's own
+     scrollbar is styled below. Thumb and track are quiet mixes of the two UI colours. */
+  --scrollbar-size: 10px;
+  --scrollbar-thumb: color-mix(in srgb, var(--graphite) 30%, var(--silicon));
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--graphite) 52%, var(--silicon));
+  --scrollbar-track: color-mix(in srgb, var(--graphite) 7%, var(--silicon));
   font-family: var(--font-family);
   color: var(--graphite);
   background: var(--silicon);
@@ -45,6 +51,9 @@
     --overflow: var(--danger);
     --muted: #9aa6b5;
     --input-band: #1b2838;
+    --scrollbar-thumb: color-mix(in srgb, var(--graphite) 28%, var(--silicon));
+    --scrollbar-thumb-hover: color-mix(in srgb, var(--graphite) 48%, var(--silicon));
+    --scrollbar-track: color-mix(in srgb, var(--graphite) 8%, var(--silicon));
   }
 }
 
@@ -57,6 +66,57 @@ body { margin: 0; }
 button, input, textarea { font: inherit; }
 a { color: inherit; text-underline-offset: 0.18em; }
 :focus-visible { outline: 2px solid var(--graphite); outline-offset: 4px; }
+
+/* The page-level (document) scrollbar: the one native scrollbar left, since wrapping the document in a
+   ScrollArea would cost scrolling performance and accessibility. Standard properties first (Chromium,
+   Firefox); Safari takes the ::-webkit-scrollbar rules. */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+html::-webkit-scrollbar { width: var(--scrollbar-size); height: var(--scrollbar-size); background: var(--scrollbar-track); }
+html::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border: 2px solid var(--scrollbar-track);
+  border-radius: 999px;
+}
+html::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+
+/* ScrollArea (Radix): a thin bar that shows while the pointer is over the area. The viewport scrolls
+   natively, so wheel, trackpad momentum, touch and keyboard scrolling are the browser's own. */
+.scroll-area { position: relative; overflow: hidden; }
+.scroll-area-viewport { width: 100%; height: 100%; border-radius: inherit; }
+.scroll-area-viewport:focus-visible { outline: 2px solid var(--graphite); outline-offset: -2px; }
+.scroll-area-bar {
+  display: flex;
+  z-index: 2;
+  padding: 2px;
+  touch-action: none;
+  user-select: none;
+  transition: background-color 160ms ease;
+}
+.scroll-area-bar[data-orientation='vertical'] { width: var(--scrollbar-size); }
+.scroll-area-bar[data-orientation='horizontal'] { height: var(--scrollbar-size); flex-direction: column; }
+.scroll-area-bar:hover { background: var(--scrollbar-track); }
+.scroll-area-thumb {
+  position: relative;
+  flex: 1;
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+}
+.scroll-area-thumb:hover, .scroll-area-bar:active .scroll-area-thumb { background: var(--scrollbar-thumb-hover); }
+/* A larger hit area than the thin thumb, for pointers and fingers. */
+.scroll-area-thumb::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 100%;
+  height: 100%;
+  min-width: 24px;
+  min-height: 24px;
+  transform: translate(-50%, -50%);
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

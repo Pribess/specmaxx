@@ -2,6 +2,7 @@ import { useEffect, useMemo, useReducer, useState } from 'react';
 import { loadHfModel } from '../hf/load';
 import { getHfToken } from '../hf/token';
 import { ModelPanel } from './components/ModelPanel';
+import { ScrollArea } from './components/ScrollArea';
 import {
   decodeState,
   encodeState,
@@ -182,24 +183,26 @@ export function App({
       </header>
       <main className="workspace">
         <div className="input-band">
-          <ModelPanel
-            id={id}
-            onIdChange={setId}
-            onLoad={load}
-            onRetry={() => {
-              setModelState({ key: choiceKey });
-              setAttempt((n) => n + 1);
-            }}
-            loaded={loaded}
-            loading={loading}
-            error={error}
-            gated={modelState.key === choiceKey && !!modelState.gated}
-          />
-          <QuantPanel {...props} />
-          <HardwarePanel {...props} />
-          <ParallelPanel {...props} />
-          <WorkloadPanel {...props} />
-          <AssumptionsPanel {...props} />
+          <ScrollArea className="input-band-scroll">
+            <ModelPanel
+              id={id}
+              onIdChange={setId}
+              onLoad={load}
+              onRetry={() => {
+                setModelState({ key: choiceKey });
+                setAttempt((n) => n + 1);
+              }}
+              loaded={loaded}
+              loading={loading}
+              error={error}
+              gated={modelState.key === choiceKey && !!modelState.gated}
+            />
+            <QuantPanel {...props} />
+            <HardwarePanel {...props} />
+            <ParallelPanel {...props} />
+            <WorkloadPanel {...props} />
+            <AssumptionsPanel {...props} />
+          </ScrollArea>
         </div>
         <div className="output">
           {dropped.length > 0 && (

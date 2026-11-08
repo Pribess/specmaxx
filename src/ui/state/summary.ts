@@ -103,7 +103,7 @@ export interface RooflinePoint {
   attainedFlopsPerSec: number;
 }
 
-/** The roofline of the rig: one tensor ceiling, one bandwidth slope, and the two phase points. */
+/** The roofline of the rig: the compute-bound roof, the bandwidth-bound slope, and the two phase points. */
 export interface RooflineSummary {
   /** Peak of the dominant GEMM format (most prefill FLOP), per device. Unit: FLOP/s. */
   peakFlopsPerSec: number;

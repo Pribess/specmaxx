@@ -1,11 +1,17 @@
 // @vitest-environment jsdom
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { Picker } from './Picker';
 import type { PickerOption } from './fuzzy';
 
 afterEach(cleanup);
+
+/**
+ * Radix arms its outside-press listener a tick after the popup opens (so the opening click is not one), and
+ * acts on a primary-button press at its click.
+ */
+const tick = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 
 const SMALL: PickerOption[] = [
   { value: 'a', label: 'Alpha' },
@@ -64,7 +70,7 @@ describe('Picker', () => {
     expect(t.textContent).toContain('Beta');
   });
 
-  it('opens on click with a listbox of options and marks the selected one', () => {
+  it('opens on click with a listbox of options and checks the selected one', () => {
     render(<Harness options={SMALL} initial="b" />);
     fireEvent.click(trigger());
     const list = screen.getByRole('listbox', { name: 'Device' });
@@ -74,6 +80,8 @@ describe('Picker', () => {
       'Beta',
       'Gamma',
     ]);
+    expect(options.map((o) => o.hasAttribute('data-checked'))).toEqual([false, true, false]);
+    // The selected option is also the active (aria-selected) one when the list opens.
     expect(options[1].getAttribute('aria-selected')).toBe('true');
     expect(trigger().getAttribute('aria-expanded')).toBe('true');
     expect(trigger().getAttribute('aria-controls')).toBe(list.id);
@@ -140,6 +148,31 @@ describe('Picker', () => {
     expect(document.activeElement).toBe(t);
   });
 
+  it('picks the active option with Space, and moves ten rows with PageDown / PageUp', () => {
+    const spy = vi.fn();
+    const many = Array.from({ length: 14 }, (_, i) => ({ value: `v${i}`, label: `Item ${i}` }));
+    render(<Harness options={many} onChangeSpy={spy} />);
+    fireEvent.click(trigger());
+    const search = screen.getByRole('combobox', { name: 'Search Device' });
+    fireEvent.keyDown(search, { key: 'PageDown' });
+    expect(search.getAttribute('aria-activedescendant')).toBe(
+      screen.getByRole('option', { name: 'Item 10' }).id,
+    );
+    fireEvent.keyDown(search, { key: 'PageUp' });
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(spy).toHaveBeenCalledWith('v1');
+    const t = trigger();
+    render(<Harness options={SMALL} onChangeSpy={spy} label="Small" />);
+    const small = trigger('Small');
+    small.focus();
+    fireEvent.keyDown(small, { key: 'ArrowDown' });
+    fireEvent.keyDown(small, { key: 'ArrowDown' });
+    fireEvent.keyDown(small, { key: ' ' });
+    expect(spy).toHaveBeenLastCalledWith('b');
+    expect(t.getAttribute('aria-expanded')).toBe('false');
+  });
+
   it('opens with Enter, Space and ArrowUp when closed', () => {
     render(<Harness options={SMALL} />);
     const t = trigger();
@@ -177,7 +210,7 @@ describe('Picker', () => {
     expect(t.getAttribute('aria-expanded')).toBe('false');
   });
 
-  it('closes on an outside pointer press without changing the value', () => {
+  it('closes on an outside pointer press without changing the value', async () => {
     const spy = vi.fn();
     render(
       <>
@@ -187,7 +220,9 @@ describe('Picker', () => {
     );
     fireEvent.click(trigger());
     expect(trigger().getAttribute('aria-expanded')).toBe('true');
+    await tick();
     fireEvent.pointerDown(screen.getByRole('button', { name: 'outside' }));
+    fireEvent.click(screen.getByRole('button', { name: 'outside' }));
     expect(trigger().getAttribute('aria-expanded')).toBe('false');
     expect(spy).not.toHaveBeenCalled();
   });
@@ -258,6 +293,26 @@ describe('Picker', () => {
     const before = search.getAttribute('aria-activedescendant');
     fireEvent.keyDown(search, { key: 'Home' });
     expect(search.getAttribute('aria-activedescendant')).toBe(before);
+  });
+
+  it('keeps the search header outside the scrolling viewport, which holds the whole listbox', () => {
+    render(<Harness options={LONG} />);
+    fireEvent.click(trigger());
+    const search = screen.getByRole('combobox', { name: 'Search Device' });
+    const list = screen.getByRole('listbox', { name: 'Device' });
+    const viewport = list.closest('[data-radix-scroll-area-viewport]');
+    expect(viewport).not.toBeNull();
+    expect(viewport!.contains(search)).toBe(false);
+    // Header and scroll area are siblings in one popup, so rows scroll beneath the header.
+    const header = search.closest('.picker-search-head')!;
+    expect(header.parentElement).toBe(viewport!.closest('.scroll-area')!.parentElement);
+    expect(
+      header.compareDocumentPosition(viewport!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // Every option scrolls inside the themed viewport, never in a native scroller.
+    for (const option of within(list).getAllByRole('option')) {
+      expect(viewport!.contains(option)).toBe(true);
+    }
   });
 
   it('shows the help icon next to the label', () => {

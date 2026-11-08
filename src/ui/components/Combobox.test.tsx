@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { Combobox } from './Combobox';
 import type { PickerOption } from './fuzzy';
 
@@ -96,13 +96,31 @@ describe('Combobox', () => {
     expect(input().value).toBe('qwen');
   });
 
-  it('closes on an outside pointer press and keeps the typed text', () => {
+  it('closes on an outside pointer press and keeps the typed text, but not on a press in the input', async () => {
     render(<Harness onCommit={() => {}} initial="qwen" />);
     fireEvent.focus(input());
     expect(screen.getAllByRole('option').length).toBeGreaterThan(0);
+    // Radix arms its outside-press listener a tick after the popup opens, and acts on the press's click.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    fireEvent.pointerDown(input());
+    fireEvent.click(input());
+    expect(screen.getAllByRole('option').length).toBeGreaterThan(0);
     fireEvent.pointerDown(document.body);
+    fireEvent.click(document.body);
     expect(screen.queryAllByRole('option')).toHaveLength(0);
     expect(input().value).toBe('qwen');
+  });
+
+  it('commits the typed text on Enter even while suggestions match, until a key moves into the list', () => {
+    const spy = vi.fn();
+    render(<Harness onCommit={spy} />);
+    fireEvent.change(input(), { target: { value: 'Qwen/Qwen3.8' } });
+    expect(screen.getAllByRole('option').length).toBeGreaterThan(0);
+    expect(screen.queryAllByRole('option', { selected: true })).toHaveLength(0);
+    expect(input().getAttribute('aria-activedescendant')).toBeNull();
+    fireEvent.keyDown(input(), { key: 'Home' });
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    expect(spy).toHaveBeenCalledWith('Qwen/Qwen3.8');
   });
 
   it('shows the help icon next to the label', () => {
