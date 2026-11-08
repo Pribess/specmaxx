@@ -969,7 +969,9 @@ not modeled, and `simulate` adds a warning saying so.
 Excluded on purpose (only hardware and math limits are modeled):
 
 - **Inference-engine knobs**: paged attention, continuous batching, chunked prefill, scheduler overhead,
-  speculative decoding, kernel launch overhead of a specific engine, CUDA graphs.
+  kernel launch overhead of a specific engine, CUDA graphs. Speculative decoding and weight/expert/lookup-table
+  offloading are opt-in deployment-scenario knobs (off by default, identical results when off); their design is
+  `docs/design/offload-specdec-latency.md`.
 - Softmax / SFU throughput (it can bind for head_dim ≤ 64).
 - Dequantization compute of weight-only quantized GEMMs (they run at the wider format's peak, §2).
 - Split-K / stream-K; L2 / cache reuse beyond compulsory traffic.
