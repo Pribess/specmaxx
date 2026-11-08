@@ -23,6 +23,10 @@ describe('Apple per-SKU presets', () => {
   it('has eight distinct SKUs, and no nonexistent M4 Ultra', () => {
     expect(APPLE_DEVICE_PRESETS).toHaveLength(8);
     expect(new Set(APPLE_DEVICE_PRESETS.map((d) => d.id)).size).toBe(8);
+    // Newest generation first, then Ultra before Max, then more GPU cores first.
+    expect(APPLE_DEVICE_PRESETS).toEqual([
+      M5_ULTRA_80C, M5_ULTRA_64C, M5_MAX_40C, M5_MAX_32C, M4_MAX_40C, M4_MAX_32C, M3_ULTRA_80C, M3_ULTRA_60C,
+    ]);
     expect(APPLE_DEVICE_PRESETS.some((d) => d.name.includes('M4 Ultra'))).toBe(false);
   });
 

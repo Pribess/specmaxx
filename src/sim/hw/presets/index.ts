@@ -6,11 +6,12 @@
  * Files:
  * - `nvidia.ts`: GeForce RTX 3090 / 4090 / 5090 and their community unlock axes.
  * - `nvidia-datacenter.ts`: DGX Spark (GB10), H100 SXM, H200 SXM, B200, B300.
- * - `apple.ts`: M4 Max, M3 Ultra, M5 Max, M5 Ultra (binned GPU-core SKUs as separate presets).
+ * - `apple.ts`: M5 Ultra, M5 Max, M4 Max, M3 Ultra (binned GPU-core SKUs as separate presets).
  * - `amd.ts`: Radeon AI PRO R9700, RX 9070 XT, Ryzen AI Max+ 395 (Strix Halo), Instinct MI300X / MI325X / MI355X / MI455X.
  * - `intel.ts`: Arc Pro B70, B65, B60, Arc B580.
  * - `links.ts`: interconnect `LinkSpec`s (PCIe, NVLink, InfiniBand, ConnectX-7, xGMI, Thunderbolt, USB4, Ethernet).
  * - `topologies.ts`: multi-device `TopologySpec` builders and named presets.
+ * - `setups.ts`: `SYSTEM_PRESETS`, complete multi-device rigs (device + memory option + topology) for one pick.
  */
 
 import type { DeviceSpec, TopologySpec } from '../types';
@@ -36,6 +37,7 @@ export * from './amd';
 export * from './intel';
 export * from './links';
 export * from './topologies';
+export * from './setups';
 
 /** A named group of device presets, one section of the UI's device picker. */
 export interface DevicePresetGroup {
@@ -49,6 +51,9 @@ export interface DevicePresetGroup {
  * The device presets by group, in display order: consumer / prosumer hardware first (GeForce, Apple, AMD Radeon
  * and Strix Halo, Intel Arc, DGX Spark), datacenter accelerators last. Every vendor array's device appears in
  * exactly one group (enforced by presets.test.ts).
+ *
+ * Order within a group: newest generation first, then by tier (Ultra before Max, more cores first; within a
+ * vendor family the higher-end part first).
  */
 export const DEVICE_PRESET_GROUPS: DevicePresetGroup[] = [
   { name: 'NVIDIA GeForce', devices: NVIDIA_CONSUMER_DEVICE_PRESETS },
@@ -58,7 +63,7 @@ export const DEVICE_PRESET_GROUPS: DevicePresetGroup[] = [
   { name: 'NVIDIA DGX Spark', devices: [DGX_SPARK] },
   {
     name: 'Datacenter',
-    devices: [H100_SXM, H200_SXM, B200, B300, INSTINCT_MI300X, INSTINCT_MI325X, INSTINCT_MI355X, INSTINCT_MI455X],
+    devices: [B300, B200, H200_SXM, H100_SXM, INSTINCT_MI455X, INSTINCT_MI355X, INSTINCT_MI325X, INSTINCT_MI300X],
   },
 ];
 

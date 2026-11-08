@@ -32,9 +32,9 @@ export interface LoadedModel {
   hf?: HfMapOk;
 }
 
-/** Identity of a model choice: `'reference'` or `'hf:<id>@<revision>'` (revision default `main`). */
+/** Identity of a model choice: `'hf:<id>@<revision>'` (revision default `main`). */
 export function modelKey(choice: ModelChoice): string {
-  return choice.kind === 'reference' ? 'reference' : `hf:${choice.id}@${choice.revision ?? 'main'}`;
+  return `hf:${choice.id}@${choice.revision ?? 'main'}`;
 }
 
 /** The built-in reference model (REF_DENSE_8B, bf16), available without network. */

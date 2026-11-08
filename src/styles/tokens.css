@@ -50,7 +50,7 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 body { margin: 0; }
-button, input, select, textarea { font: inherit; }
+button, input, textarea { font: inherit; }
 a { color: inherit; text-underline-offset: 0.18em; }
 :focus-visible { outline: 2px solid var(--graphite); outline-offset: 4px; }
 

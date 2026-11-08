@@ -1,6 +1,12 @@
-import { useId } from 'react';
+import { useId, type ReactNode } from 'react';
 import type { FieldIssue } from '../state';
+import { HelpIcon } from './HelpIcon';
 
+/**
+ * A labelled numeric input. The input's accessible name is exactly `label`: the "?" help icon sits beside
+ * the label, not inside it, and the help popup is referenced by aria-describedby together with the hint and
+ * the validation messages.
+ */
 export function NumberField({
   label,
   value,
@@ -8,6 +14,7 @@ export function NumberField({
   issues = [],
   hint,
   step = '1',
+  help,
 }: {
   label: string;
   value: number;
@@ -15,11 +22,25 @@ export function NumberField({
   issues?: FieldIssue[];
   hint?: string;
   step?: string;
+  /** Definition shown by a "?" help icon next to the label. */
+  help?: ReactNode;
 }) {
   const id = useId();
+  const helpId = `${id}-help`;
+  const hintId = `${id}-hint`;
+  const describedBy = [help ? helpId : undefined, hintId].filter(Boolean).join(' ');
   return (
-    <label className="field" htmlFor={id}>
-      <span>{label}</span>
+    <div className="field">
+      <div className="field-head">
+        <label className="field-label" htmlFor={id}>
+          {label}
+        </label>
+        {help && (
+          <HelpIcon term={label} id={helpId}>
+            {help}
+          </HelpIcon>
+        )}
+      </div>
       <input
         id={id}
         type="number"
@@ -27,9 +48,9 @@ export function NumberField({
         value={Number.isFinite(value) ? value : ''}
         onChange={(e) => onChange(e.target.value === '' ? 0 : Number(e.target.value))}
         aria-invalid={issues.some((i) => i.level === 'error')}
-        aria-describedby={`${id}-help`}
+        aria-describedby={describedBy}
       />
-      <span className="hint" id={`${id}-help`}>
+      <span className="hint" id={hintId}>
         {hint}
         {issues.map((i, n) => (
           <span className={i.level === 'error' ? 'error' : ''} key={n}>
@@ -37,6 +58,6 @@ export function NumberField({
           </span>
         ))}
       </span>
-    </label>
+    </div>
   );
 }

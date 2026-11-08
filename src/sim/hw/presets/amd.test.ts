@@ -37,10 +37,10 @@ describe('AMD presets', () => {
       'radeon-ai-pro-r9700',
       'radeon-rx-9070-xt',
       'ryzen-ai-max-plus-395',
-      'instinct-mi300x',
-      'instinct-mi325x',
-      'instinct-mi355x',
       'instinct-mi455x',
+      'instinct-mi355x',
+      'instinct-mi325x',
+      'instinct-mi300x',
     ]);
     for (const d of AMD_DEVICE_PRESETS) {
       expect(validateDevice(d)).toEqual([]);

@@ -7,6 +7,8 @@ import type { SimInput } from '../../sim/engine/types';
 
 /** One point of the sweep. */
 export interface SweepPoint {
+  /** Tokens already cached per sequence at this decode step. Unit: tokens. */
+  contextTokens: number;
   /** Global batch (sequences). Count. */
   batch: number;
   /** Aggregate decode rate. Unit: tokens/s. */
@@ -32,6 +34,7 @@ export function batchSweep(input: SimInput): SweepPoint[] {
       const r = simulate({ ...input, workload: { ...input.workload, batch } });
       points.push({
         batch,
+        contextTokens: input.workload.decodeContextLen,
         decodeTokensPerSec: r.decode.tokensPerSec,
         perSeqTokensPerSec: r.decode.perSequenceTokensPerSec,
         fits: r.memory.fits,

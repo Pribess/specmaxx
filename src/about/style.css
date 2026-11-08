@@ -40,7 +40,6 @@
 .about-prose hr { border: 0; height: 1px; background: var(--rule); margin: 40px 0; }
 .about-prose code {
   font-family: var(--font-family);
-  font-stretch: 75%;
   font-size: 0.94em;
   background: var(--input-band);
   padding: 1px 4px;
@@ -53,7 +52,6 @@
   width: 100%;
   border-collapse: collapse;
   font-size: var(--text-sm);
-  font-stretch: 75%;
   font-variant-numeric: tabular-nums;
   line-height: 1.5;
 }

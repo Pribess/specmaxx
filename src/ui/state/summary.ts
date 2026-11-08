@@ -13,6 +13,8 @@ import type { Op } from '../../sim/ir/ops';
 
 /** Headline numbers of one phase. */
 export interface PhaseSummary {
+  /** Prefill prompt length or tokens already cached for decode, per sequence. Unit: tokens. */
+  contextTokens: number;
   /** Aggregate rate over all DP replicas. Unit: tokens/s. */
   tokensPerSec: number;
   /** Rate seen by one sequence. Unit: tokens/s. */
@@ -137,8 +139,9 @@ export interface ResultSummary {
   warnings: string[];
 }
 
-function phaseSummary(p: PhaseResult): PhaseSummary {
+function phaseSummary(p: PhaseResult, contextTokens: number): PhaseSummary {
   return {
+    contextTokens,
     tokensPerSec: p.tokensPerSec,
     perSequenceTokensPerSec: p.perSequenceTokensPerSec,
     latencySec: p.latencySec,
@@ -153,20 +156,33 @@ function phaseSummary(p: PhaseResult): PhaseSummary {
 function phaseOps(p: PhaseResult): { layer: string; op: OpResult }[] {
   const out: { layer: string; op: OpResult }[] = [];
   for (const stage of p.stages) {
-    for (const layer of stage.layers) for (const op of layer.ops) out.push({ layer: layer.name, op });
+    for (const layer of stage.layers)
+      for (const op of layer.ops) out.push({ layer: layer.name, op });
     if (stage.sendToNext !== undefined) out.push({ layer: 'pp.send', op: stage.sendToNext });
   }
   return out;
 }
 
 /** Groups ops by `keyOf`, keeping first-seen order; shares use `totalSec`. */
-function group(ops: { layer: string; op: OpResult }[], keyOf: (e: { layer: string; op: OpResult }) => string, totalSec: number): BreakdownRow[] {
+function group(
+  ops: { layer: string; op: OpResult }[],
+  keyOf: (e: { layer: string; op: OpResult }) => string,
+  totalSec: number,
+): BreakdownRow[] {
   const rows = new Map<string, BreakdownRow>();
   for (const e of ops) {
     const key = keyOf(e);
     let row = rows.get(key);
     if (row === undefined) {
-      row = { key, sec: 0, share: 0, boundSec: { compute: 0, memory: 0, comm: 0 }, flops: 0, bytes: 0, count: 0 };
+      row = {
+        key,
+        sec: 0,
+        share: 0,
+        boundSec: { compute: 0, memory: 0, comm: 0 },
+        flops: 0,
+        bytes: 0,
+        count: 0,
+      };
       rows.set(key, row);
     }
     row.sec += e.op.sec;
@@ -216,8 +232,13 @@ function rooflinePoint(p: PhaseResult): RooflinePoint {
 /** Roofline of a result: the peak of the GEMM format with the most prefill FLOP, the engine's memory bandwidth. */
 function roofline(result: SimResult, input: SimInput): RooflineSummary {
   const device = result.effectiveDevice;
-  const engine = device.engines.find((e) => e.id === (input.hardware.engineId ?? device.engines[0].id)) ?? device.engines[0];
-  const memBandwidthBytesPerSec = engineMemBandwidthBytesPerSec(engine, device.memory.bandwidthBytesPerSec);
+  const engine =
+    device.engines.find((e) => e.id === (input.hardware.engineId ?? device.engines[0].id)) ??
+    device.engines[0];
+  const memBandwidthBytesPerSec = engineMemBandwidthBytesPerSec(
+    engine,
+    device.memory.bandwidthBytesPerSec,
+  );
   const flopsByPeak = new Map<string, { flops: number; peak: number }>();
   for (const { op } of phaseOps(result.prefill)) {
     if (op.op.kind !== 'gemm' || op.peakFlopsPerSec === undefined) continue;
@@ -246,8 +267,8 @@ function roofline(result: SimResult, input: SimInput): RooflineSummary {
 /** Reduces a result for the UI. `notes` (loader notes, unlock descriptions) are appended to the warnings. */
 export function summarize(result: SimResult, input: SimInput, notes: string[] = []): ResultSummary {
   return {
-    prefill: phaseSummary(result.prefill),
-    decode: phaseSummary(result.decode),
+    prefill: phaseSummary(result.prefill, input.workload.promptLen),
+    decode: phaseSummary(result.decode, input.workload.decodeContextLen),
     memory: {
       kind: result.memory.kind,
       fits: result.memory.fits,

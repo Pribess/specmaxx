@@ -36,7 +36,7 @@ describe('estimator inputs', () => {
     expect(screen.getByLabelText(/^Batch size/).getAttribute('aria-invalid')).toBe('true');
     expect(screen.queryByTestId('decode-tps')).toBeNull();
     fireEvent.change(screen.getByLabelText(/^Batch size/), { target: { value: '2' } });
-    expect(screen.getByLabelText(/^Devices per node/).getAttribute('aria-invalid')).toBe('true');
+    expect(screen.getByRole('spinbutton', { name: /^(GPUs|Devices) in one machine$/ }).getAttribute('aria-invalid')).toBe('true');
     expect(screen.getAllByText(/needs 2 devices; the rig has 1/).length).toBeGreaterThan(0);
   });
   it('restores the URL and writes canonical state after a change', async () => {
@@ -47,8 +47,8 @@ describe('estimator inputs', () => {
     );
     mount();
     await screen.findByText(/qwen:/);
-    expect((screen.getByLabelText('Device preset') as HTMLSelectElement).value).toBe('rtx-4090');
-    expect((screen.getByLabelText('KV cache') as HTMLSelectElement).value).toBe('fp8_e4m3');
+    expect(screen.getByRole('combobox', { name: 'Device' }).textContent).toMatch(/RTX 4090/);
+    expect(screen.getByRole('combobox', { name: 'KV cache' }).textContent).toMatch(/fp8/i);
     expect((screen.getByLabelText(/^TP/) as HTMLInputElement).value).toBe('2');
     expect((screen.getByLabelText(/^Batch size/) as HTMLInputElement).value).toBe('4');
     fireEvent.change(screen.getByLabelText(/^Batch size/), { target: { value: '8' } });
@@ -62,55 +62,62 @@ describe('estimator inputs', () => {
     );
   });
   it('prompts for a gated token, stores it, retries and forgets it without leaking into the URL', async () => {
-    const loader = vi
-      .fn<ModelLoader>()
-      .mockResolvedValueOnce({
-        kind: 'unauthorized',
-        message: 'Gated model. Add a token.',
-        status: 401,
-      })
-      .mockImplementation(fixtureLoader);
+    let gated = true;
+    const loader = vi.fn<ModelLoader>().mockImplementation(async (id, options) => {
+      if (id === 'zai-org/GLM-5.3' && gated) {
+        gated = false;
+        return { kind: 'unauthorized', message: 'Gated model. Add a token.', status: 401 };
+      }
+      return fixtureLoader(id, options);
+    });
     mount(loader);
-    fireEvent.change(screen.getByLabelText('Hugging Face model ID'), {
-      target: { value: 'Qwen/Qwen3.8-27B' },
+    fireEvent.change(screen.getByRole('combobox', { name: 'Hugging Face model ID' }), {
+      target: { value: 'zai-org/GLM-5.3' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Load' }));
     fireEvent.change(await screen.findByLabelText('Hugging Face token'), {
       target: { value: 'hf_test_secret' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save token and retry' }));
-    await screen.findByText(/qwen:/);
+    await waitFor(() => expect(loader.mock.calls.at(-1)?.[1]?.token).toBe('hf_test_secret'));
     expect(localStorage.getItem(HF_TOKEN_KEY)).toBe('hf_test_secret');
-    expect(loader.mock.calls.at(-1)?.[1]?.token).toBe('hf_test_secret');
     expect(location.search).not.toContain('secret');
     fireEvent.click(screen.getByRole('button', { name: 'Forget token' }));
     expect(localStorage.getItem(HF_TOKEN_KEY)).toBeNull();
   });
   it('resets quantization overrides to the model defaults', async () => {
     mount();
-    fireEvent.change(screen.getByLabelText('Weights'), { target: { value: 'int4' } });
-    expect((screen.getByLabelText('Weights') as HTMLSelectElement).value).toBe('int4');
+    fireEvent.click(screen.getByRole('combobox', { name: 'Weights' }));
+    fireEvent.click(await screen.findByRole('option', { name: /int4/i }));
+    expect(screen.getByRole('combobox', { name: 'Weights' }).textContent).toMatch(/int4/i);
     fireEvent.click(screen.getByRole('button', { name: 'Reset to model default' }));
-    expect((screen.getByLabelText('Weights') as HTMLSelectElement).value).toBe('');
+    expect(screen.getByRole('combobox', { name: 'Weights' }).textContent).not.toMatch(/int4/i);
     expect(screen.queryByRole('button', { name: 'Reset to model default' })).toBeNull();
     await screen.findByTestId('decode-tps');
   });
   it('ignores stale HF responses', async () => {
-    let resolve!: (value: Awaited<ReturnType<ModelLoader>>) => void;
-    const loader: ModelLoader = () =>
-      new Promise((r) => {
-        resolve = r;
-      });
+    const pending = new Map<string, (value: Awaited<ReturnType<ModelLoader>>) => void>();
+    const loader: ModelLoader = (id) =>
+      id === 'Qwen/Qwen3.8-27B'
+        ? fixtureLoader(id)
+        : new Promise((r) => {
+            pending.set(id, r);
+          });
     mount(loader);
-    fireEvent.change(screen.getByLabelText('Hugging Face model ID'), {
-      target: { value: 'Qwen/Qwen3.8-27B' },
+    fireEvent.change(screen.getByRole('combobox', { name: 'Hugging Face model ID' }), {
+      target: { value: 'zai-org/GLM-5.3' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Load' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Use built-in reference' }));
-    resolve(mapHfModel(fixtureRepoFiles('Qwen/Qwen3.8-27B')));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Hugging Face model ID' }), {
+      target: { value: 'Qwen/Qwen3.8-Flash-Next' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Load' }));
+    pending.get('Qwen/Qwen3.8-Flash-Next')?.(mapHfModel(fixtureRepoFiles('Qwen/Qwen3.8-Flash-Next')));
     await screen.findByTestId('decode-tps');
-    expect(screen.getByText('Built-in dense reference')).toBeTruthy();
-    expect(screen.queryByText(/qwen:/)).toBeNull();
+    pending.get('zai-org/GLM-5.3')?.(mapHfModel(fixtureRepoFiles('zai-org/GLM-5.3')));
+    await new Promise((r) => setTimeout(r, 300));
+    expect(location.search).toContain('Flash-Next');
+    expect(screen.queryByText(/glm/i, { selector: '[data-testid="model-facts"] *' })).toBeNull();
   });
   it('keeps revision and quant overrides when reloading the same model', async () => {
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B&rev=test-revision&w=int4');
@@ -120,7 +127,7 @@ describe('estimator inputs', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Load' }));
     await waitFor(() => expect(loader).toHaveBeenCalledTimes(2));
     expect(loader.mock.calls.at(-1)?.[1]?.revision).toBe('test-revision');
-    expect((screen.getByLabelText('Weights') as HTMLSelectElement).value).toBe('int4');
+    expect(screen.getByRole('combobox', { name: 'Weights' }).textContent).toMatch(/int4/i);
     await waitFor(() =>
       expect(new URLSearchParams(location.search).get('rev')).toBe('test-revision'),
     );
@@ -132,5 +139,59 @@ describe('estimator inputs', () => {
     const output = container.querySelector('.output')!;
     expect(output.textContent).toMatch(/needs 3 devices; the rig has 2/);
     expect(output.textContent).not.toMatch(/inputs below/);
+  });
+  it('opens on the default state: Qwen3.8-27B, 8k / 8k, numbers without any loader call', async () => {
+    const loader = vi.fn<ModelLoader>().mockRejectedValue(new Error('offline'));
+    mount(loader);
+    expect((screen.getByLabelText(/^Prefill length/) as HTMLInputElement).value).toBe('8192');
+    expect((screen.getByLabelText(/^Decode context/) as HTMLInputElement).value).toBe('8192');
+    expect(screen.getByTestId('model-facts').textContent).toMatch(/\d+(\.\d+)?B total, \d+(\.\d+)?B active, \d+ layers/);
+    expect((await screen.findByTestId('decode-tps')).textContent).toMatch(/[1-9]/);
+    expect(screen.queryByRole('alert')).toBeNull();
+    await waitFor(() => expect(document.title).toMatch(/@ 8k/));
+  });
+  it('picking a multi-device setup sets the counts and links in the URL', async () => {
+    mount();
+    fireEvent.click(screen.getByRole('combobox', { name: 'Device' }));
+    fireEvent.click(await screen.findByRole('option', { name: /RTX 5090 ×4/ }));
+    expect(screen.getByRole('combobox', { name: 'Device' }).textContent).toMatch(/RTX 5090 ×4/);
+    await waitFor(() => expect(new URLSearchParams(location.search).get('n')).toBe('4'));
+    expect(new URLSearchParams(location.search).get('il')).toBeTruthy();
+  });
+  it('filters the device list by search and selects with the keyboard', async () => {
+    mount();
+    fireEvent.click(screen.getByRole('combobox', { name: 'Device' }));
+    const search = await screen.findByRole('combobox', { name: /search/i });
+    fireEvent.change(search, { target: { value: '4090' } });
+    const options = screen.getAllByRole('option');
+    expect(options.length).toBeGreaterThan(0);
+    expect(options.every((o) => /4090/.test(o.textContent ?? ''))).toBe(true);
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Device' }).textContent).toMatch(/4090/));
+  });
+  it('keeps Advanced closed until opened, then its subsections are open', async () => {
+    const { container } = mount();
+    await screen.findByTestId('decode-tps');
+    const advanced = container.querySelector('details.advanced') as HTMLDetailsElement;
+    expect(advanced.open).toBe(false);
+    advanced.open = true;
+    expect((container.querySelector('details.quick-picks') as HTMLDetailsElement).open).toBe(true);
+    expect((container.querySelector('details.spec-editor') as HTMLDetailsElement).open).toBe(true);
+  });
+  it('labels the counts in plain language with a total', async () => {
+    history.replaceState(null, '', '/?n=4');
+    mount();
+    expect(screen.getByRole('spinbutton', { name: 'GPUs in one machine' })).toBeTruthy();
+    expect(screen.getByRole('spinbutton', { name: 'Machines' })).toBeTruthy();
+    expect(screen.getByTestId('device-total').textContent).toMatch(/= 4 GPUs total/);
+  });
+  it('typing a model ID and pressing Enter loads it', async () => {
+    const loader = vi.fn<ModelLoader>().mockImplementation(fixtureLoader);
+    mount(loader);
+    const input = screen.getByRole('combobox', { name: 'Hugging Face model ID' });
+    fireEvent.change(input, { target: { value: 'zai-org/GLM-5.3-Flash' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(loader.mock.calls.some((c) => c[0] === 'zai-org/GLM-5.3-Flash')).toBe(true));
   });
 });

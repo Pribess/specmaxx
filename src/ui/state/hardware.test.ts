@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { simulate } from '../../sim/engine/simulate';
-import { DEVICE_PRESETS } from '../../sim/hw/presets/index';
+import { DEVICE_PRESETS, SYSTEM_PRESETS } from '../../sim/hw/presets/index';
 import { PCIE_4_X16, PCIE_5_X16, SPARK_CONNECTX_7, TB5_RDMA, USB4_HALO_RDMA, NVLINK_4, XGMI_MI300X_8_GPU } from '../../sim/hw/presets/links';
 import { validateDevice, validateLink, validateTopology } from '../../sim/hw/validate';
 import { REF_DENSE_8B } from '../../sim/models/reference';
-import { DEFAULT_HW, type HardwareChoice } from './appState';
+import { SINGLE_DEVICE_HW, type HardwareChoice } from './appState';
 import {
   EDITED_REASON, UNITS, applyEdits, defaultLinks, editableFields, editableLinkFields, findDevice, fromDisplay,
-  resolveDevice, resolveHardware, toDisplay, topologyPresetsFor,
+  matchingSystem, resolveDevice, resolveHardware, systemChoice, toDisplay, topologyPresetsFor,
 } from './hardware';
 import { REFERENCE_QUANT_DEFAULTS } from './quant';
 
-const hw = (over: Partial<HardwareChoice>): HardwareChoice => ({ ...DEFAULT_HW, ...over });
+const hw = (over: Partial<HardwareChoice>): HardwareChoice => ({ ...SINGLE_DEVICE_HW, ...over });
 
 describe('defaultLinks and topologies', () => {
   it.each(DEVICE_PRESETS.map((d) => [d.id, d] as const))('%s: default links and node topologies validate', (_id, device) => {
@@ -40,6 +40,9 @@ describe('defaultLinks and topologies', () => {
     expect(topologyPresetsFor(findDevice('rtx-5090')!).map((t) => t.devicesPerNode)).toEqual([2, 4]);
     expect(topologyPresetsFor(findDevice('h100-sxm')!).length).toBe(2);
     expect(topologyPresetsFor(findDevice('instinct-mi300x')!).map((t) => t.id)).toEqual(['mi300x-xgmi-8']);
+    // The R9700 has a named 4-card workstation now, so it gets a quick pick.
+    expect(topologyPresetsFor(findDevice('radeon-ai-pro-r9700')!).map((t) => t.devicesPerNode)).toEqual([4]);
+    expect(topologyPresetsFor(findDevice('dgx-spark')!).map((t) => t.nodes)).toEqual([2, 4]);
   });
 
   it('applies the P2P unlock to the host-bounce intra-node link', () => {
@@ -49,6 +52,46 @@ describe('defaultLinks and topologies', () => {
     expect(p2p.topology.intraNode?.p2p).toBe('direct');
     expect(p2p.notes.some((n) => n.startsWith('intraNode link variant: p2p direct'))).toBe(true);
     expect(validateTopology(p2p.topology)).toEqual([]);
+  });
+});
+
+describe('multi-device setups', () => {
+  it.each(SYSTEM_PRESETS.map((p) => [p.id, p] as const))('%s: round-trips through systemChoice and resolves to its topology', (_id, p) => {
+    const choice = systemChoice(p);
+    expect(matchingSystem(choice)).toBe(p);
+    const r = resolveHardware(choice);
+    expect(validateTopology(r.topology)).toEqual([]);
+    expect(r.topology.devicesPerNode).toBe(p.topology.devicesPerNode);
+    expect(r.topology.nodes).toBe(p.topology.nodes);
+    expect(r.topology.intraNode).toBe(p.topology.intraNode);
+    expect(r.topology.interNode).toBe(p.topology.interNode);
+    expect(r.memCapacityBytes).toBe(p.memCapacityBytes ?? p.device.memory.capacityOptionsBytes[0]);
+  });
+
+  it('RTX 5090 ×2 (PCIe) sets the device, counts and the PCIe link', () => {
+    const p = SYSTEM_PRESETS.find((s) => s.id === 'rtx-5090-x2-pcie5')!;
+    expect(systemChoice(p)).toEqual({
+      ...SINGLE_DEVICE_HW,
+      deviceId: 'rtx-5090',
+      devicesPerNode: 2,
+      intraLinkId: 'pcie-5-0-x16-host-bounce',
+    });
+  });
+
+  it('M5 Ultra 256GB picks the 256GB option', () => {
+    const p = SYSTEM_PRESETS.find((s) => s.id === 'm5-ultra-80c-256gb-x2-tb5')!;
+    expect(systemChoice(p).capacityIndex).toBe(1);
+  });
+
+  it('a default-link choice with the same counts matches; any change matches nothing', () => {
+    const p = SYSTEM_PRESETS.find((s) => s.id === 'rtx-5090-x2-pcie5')!;
+    expect(matchingSystem(hw({ devicesPerNode: 2 }))).toBe(p);
+    expect(matchingSystem(SINGLE_DEVICE_HW)).toBeUndefined();
+    const choice = systemChoice(p);
+    expect(matchingSystem({ ...choice, devicesPerNode: 3 })).toBeUndefined();
+    expect(matchingSystem({ ...choice, intraLinkId: 'pcie-5-0-x8-host-bounce' })).toBeUndefined();
+    expect(matchingSystem({ ...choice, deviceEdits: { 'memory.bandwidthBytesPerSec': 2e12 } })).toBeUndefined();
+    expect(matchingSystem({ ...choice, unlocks: { 'pcie-p2p': 'direct' } })).toBeUndefined();
   });
 });
 

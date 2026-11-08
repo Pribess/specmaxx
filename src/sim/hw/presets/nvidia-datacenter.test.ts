@@ -18,7 +18,7 @@ function expectClose(actual: number, expected: number, rel = 1e-9): void {
 
 describe('NVIDIA datacenter presets', () => {
   it('every preset passes validateDevice and has sourced URLs', () => {
-    expect(NVIDIA_DATACENTER_DEVICE_PRESETS.map((d) => d.id)).toEqual(['dgx-spark', 'h100-sxm', 'h200-sxm', 'b200', 'b300']);
+    expect(NVIDIA_DATACENTER_DEVICE_PRESETS.map((d) => d.id)).toEqual(['dgx-spark', 'b300', 'b200', 'h200-sxm', 'h100-sxm']);
     for (const d of NVIDIA_DATACENTER_DEVICE_PRESETS) {
       expect(validateDevice(d)).toEqual([]);
       expect(d.sources.length).toBeGreaterThan(0);

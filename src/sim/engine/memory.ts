@@ -26,7 +26,10 @@ export interface MemoryInput {
   ctx: LoweringContext;
   /** Sequences per DP replica `B_r` (every one keeps its state on every stage). Count. */
   sequencesPerReplica: number;
-  /** Context length the state is sized for: `max(promptLen, decodeContextLen)`. Unit: tokens. */
+  /**
+   * Context length the state is sized for: `max(promptLen, decodeContextLen + 1)` (the cache after prefill, or after
+   * the decode step appended its new token). Unit: tokens.
+   */
   contextTokens: number;
   /** The lowered phases (prefill and decode), for the activation peak. */
   lowered: LoweredModel[];

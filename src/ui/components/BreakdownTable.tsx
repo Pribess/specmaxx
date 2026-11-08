@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { formatSeconds, formatShare, type ResultSummary } from '../state';
+import { HelpIcon } from './HelpIcon';
+import { formatSeconds, formatShare, formatContextTokens, type ResultSummary } from '../state';
 
 export function BreakdownTable({ result }: { result: ResultSummary }) {
   const [phase, setPhase] = useState<'prefill' | 'decode'>('decode');
@@ -10,12 +11,18 @@ export function BreakdownTable({ result }: { result: ResultSummary }) {
   return (
     <section className="breakdown">
       <div className="section-head">
-        <h2>Where the time goes</h2>
+        <h2>
+          Bottleneck estimation{' '}
+          <HelpIcon term="Bottleneck estimation">
+            Summed op time before overlap, across all stages.
+          </HelpIcon>
+        </h2>
         <div className="toggles">
           <div className="segmented" aria-label="Phase">
             {(['decode', 'prefill'] as const).map((p) => (
               <button aria-pressed={phase === p} onClick={() => setPhase(p)} key={p}>
-                {p === 'decode' ? 'Decode' : 'Prefill'}
+                {p === 'decode' ? 'Decode' : 'Prefill'} @{' '}
+                {formatContextTokens(result[p].contextTokens)}
               </button>
             ))}
           </div>
@@ -35,9 +42,14 @@ export function BreakdownTable({ result }: { result: ResultSummary }) {
           </div>
         </div>
       </div>
-      <p className="hint">
-        Summed op time before overlap, across all stages. Colour shows the limiting resource.
-      </p>
+      <ul className="bound-legend" aria-label="Limiting resource">
+        {(['compute', 'memory', 'comm'] as const).map((bound) => (
+          <li className={`${bound}-text`} key={bound}>
+            <span aria-hidden="true" />
+            {bound}
+          </li>
+        ))}
+      </ul>
       <table>
         <thead>
           <tr>

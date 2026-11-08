@@ -446,14 +446,16 @@ spot values against the datasheet).
 |---|---|---|
 | `presets/nvidia.ts` | GeForce RTX 3090, 4090, 5090 and their unlock axes | `NVIDIA_CONSUMER_DEVICE_PRESETS`, `RTX_3090_UNLOCKS`, `RTX_4090_UNLOCKS`, `RTX_5090_UNLOCKS` |
 | `presets/nvidia-datacenter.ts` | DGX Spark (GB10), H100 SXM, H200 SXM, B200, B300 | `NVIDIA_DATACENTER_DEVICE_PRESETS` |
-| `presets/apple.ts` | M4 Max, M3 Ultra, M5 Max, M5 Ultra; binned GPU-core counts as separate SKUs | `APPLE_DEVICE_PRESETS` |
+| `presets/apple.ts` | M5 Ultra, M5 Max, M4 Max, M3 Ultra; binned GPU-core counts as separate SKUs | `APPLE_DEVICE_PRESETS` |
 | `presets/amd.ts` | Radeon AI PRO R9700, RX 9070 XT, Ryzen AI Max+ 395 (Strix Halo iGPU), Instinct MI300X / MI325X / MI355X / MI455X | `AMD_DEVICE_PRESETS` |
 | `presets/intel.ts` | Arc Pro B70, B65, B60, Arc B580 | `INTEL_DEVICE_PRESETS` |
 | `presets/links.ts` | PCIe, NVLink bridge / NVLink 4 / 5, InfiniBand, ConnectX-7, xGMI, Thunderbolt, USB4, Ethernet | `LINK_PRESETS`, `HOST_BOUNCE_PCIE_LINKS` |
 | `presets/topologies.ts` | PCIe boxes, SoC clusters, HGX nodes, MI300X xGMI node | `TOPOLOGY_PRESETS`, `pcieBox`, `socCluster`, `hgxCluster` |
+| `presets/setups.ts` | Multi-device setups (device + memory option + topology) the UI offers as one pick | `SYSTEM_PRESETS` |
 
 `DEVICE_PRESET_GROUPS` is the display order: consumer / prosumer first (GeForce, Apple, AMD Radeon and Strix
-Halo, Intel Arc, DGX Spark), datacenter last; `DEVICE_PRESETS` is the groups flattened.
+Halo, Intel Arc, DGX Spark), datacenter last; `DEVICE_PRESETS` is the groups flattened. Within a group: newest
+generation first, then by tier (Ultra before Max, more cores first).
 
 Conventions every preset follows (each file's header states its own traps):
 
@@ -541,6 +543,12 @@ costed in §6
   assumes a non-oversubscribed switch), `hgxCluster` (8-GPU NVLink nodes, one full-rate NIC per GPU), and the
   general `nodeTopology` (`devicesPerNode × nodes`, a link only at the levels that exist; the UI composes it from
   device and node counts and link presets). Device and node counts are user configuration and cite no source.
+  Named presets added for the setups list: `DGX_SPARK_4` (four Sparks through a non-oversubscribed 200GbE
+  switch) and `R9700_PCIE_4` (four R9700s, PCIe 5.0 x16 per AMD's page, host bounce: no cited ROCm Radeon P2P).
+- **Multi-device setups** (`src/sim/hw/presets/setups.ts: SYSTEM_PRESETS`): a device, a memory option and a named
+  topology picked together (RTX 5090 ×2 / ×4 PCIe, RTX 3090 ×2 NVLink bridge, DGX Spark ×2 / ×4, M5 Ultra 256GB ×2
+  TB5, Strix Halo 128GB ×2 USB4 RDMA, R9700 ×4 PCIe). The UI expands one into its hardware choice
+  (`src/ui/state/hardware.ts: systemChoice`, `matchingSystem`).
 - **Link ids**: `LinkSpec` has no id; `linkPresetId(link)` slugs the name (`'PCIe 5.0 x16 (host bounce)'` →
   `'pcie-5-0-x16-host-bounce'`), unique over `LINK_PRESETS`. Builder ids and the UI's URL use it.
 
@@ -853,7 +861,15 @@ op times, `lat_s` = Σ collective α terms, `bw_s` = Σ collective β terms, `p2
 - Example (`pipeline.test.ts`): TINY_DENSE, pp 2, batch 2, prompt 128 over a 1 B/s link: each microbatch sends
   128·256·2 = 65,536 B, so `cycle = 2·65,536 s = 131,072 s` and TTFT ≈ 131,072 s; decode sends 512 B per
   microbatch → `cycle = 1,024 s`.
-- Decode is evaluated at one step with `kvLen = decodeContextLen` (the KV length including the new token).
+- **Context of each rate** (`src/sim/engine/simulate.ts: simulate`, `types.ts: Workload`). Every rate is quoted
+  at the context it applies to ("33.9 tok/s @ 8k"):
+  - **Prefill @ P** (`promptLen = P`): the whole P-token prompt from an *empty* KV cache, so `past = 0` and
+    `qLen = kvLen = P`. Prefill tok/s @ P = `P / latency` per sequence (`dp·B_r·P/cycle` aggregate).
+  - **Decode @ N** (`decodeContextLen = N`): one decode step with N tokens *already* in the KV cache. The new
+    token's query also sees its own key, so `qLen = 1` and `kvLen = past + qLen = N + 1`. Attention FLOP
+    (`2·seqs·heads·(N + 1)·(qk + v)`) and KV reads (`seqs·(N + 1)·elemsPerToken·bpe(kv)`) grow linearly in N
+    (full attention; a window or top-k selection caps both, §3 "Attended pairs").
+    Decode tok/s @ N = `1/cycle` per sequence (`dp·B_r/cycle` aggregate). Test: `simulate.test.ts`.
 
 ---
 
@@ -876,7 +892,8 @@ Per device of stage s:
   embedding allocation only with pp = 1 and an identical stored format (dtype and `extraBitsPerElem`,
   `memory.ts: sameStoredFormat`); a tied head stored differently (e.g. bf16 embeddings, int4 head) is a second
   copy and counted in full.
-- `state_s` per sequence at `ctx = max(promptLen, decodeContextLen)`: GQA `min(ctx, W)·2·KVl·hd·bpe(kv)`
+- `state_s` per sequence at `ctx = max(promptLen, decodeContextLen + 1)` (the cache after prefill, or after the
+  decode step appended its token): GQA `min(ctx, W)·2·KVl·hd·bpe(kv)`
   (a sliding window keeps W tokens) + K/V conv state `(K−1)·2·KVl·hd·bpe(act)`; MLA latent `ctx·(rkv+dr)·bpe(kv)`
   (0 with `kvCacheFromLayer`); CSA `min(ctx, W)·hd·bpe(kv)` + owner `ceil(ctx/r)·hd·bpe(ckv) + [r > 1] 2·r·hd·4`;
   owned indexer keys `ceil(ctx/p)·hd_I·bpe(key)` (0 for `reuse` and `ownsKeys: false`); linear attention
@@ -956,10 +973,11 @@ REF_DENSE_8B has Qwen3-8B's shape (h 4096, 36 layers, 32 heads, 8 KV heads, hd 1
 8,190,735,360 params). bf16 weights, activations and KV; fp32 accumulate; batch 1. RTX 5090: bf16 / fp32-acc
 209.5 TFLOP/s dense, 1.792 TB/s (whitepaper Table 3). Tests: `src/sim/engine/e2e.test.ts` (T9).
 
-**Decode at a 1024-token context.** Bytes that must stream per token: GEMM weights
-`2·(36·192,937,984 + 622,329,856) = 15,136,194,560 B` (linear weights per layer: qkv 25,165,824 + o 16,777,216 +
-MLP 150,994,944; plus the LM head) and KV `36 layers·1024 tokens·(2·8·128·2 B) = 150,994,944 B`, total
-15,287,189,504 B → bound `1.792e12 / 15.287e9 = 117.2 tok/s`. The simulator gives **117.1 tok/s** (norms,
+**Decode at a 1024-token context** (1024 tokens cached + the new one: `kvLen = 1025`). Bytes that must stream per
+token: GEMM weights `2·(36·192,937,984 + 622,329,856) = 15,136,194,560 B` (linear weights per layer: qkv
+25,165,824 + o 16,777,216 + MLP 150,994,944; plus the LM head) and KV
+`36 layers·1025 tokens·(2·8·128·2 B) = 151,142,400 B`, total 15,287,336,960 B → bound
+`1.792e12 / 15.287e9 = 117.2 tok/s`. The simulator gives **117.1 tok/s** (norms,
 activations and the embedding row add 0.1%); every op is memory-bound.
 
 **Prefill of 4096 tokens.** Tensor FLOP: linear GEMMs `2·6,945,767,424·4096 = 56,899,726,737,408`, attention
@@ -971,9 +989,12 @@ The simulator gives **12,892 tok/s** with `elementwiseFusion 'none'` (0.93 of th
 **Memory**: weights 16,381,470,720 B + KV at 4096 tokens 603,979,776 B + activation peak 301,989,888 B
 (the prefill `silu_mul`) = 17.29e9 B ≤ 32e9 B: fits.
 
-The estimator's default state (`src/ui/state/appState.ts`, rendered by `src/ui/App.tsx`) runs the same
-model with prompt 1024 and decode context 1024 (≈ 12,800 prefill tok/s, 117.1 decode tok/s). The UI lets
-you change the model and hardware; the About page renders this document.
+The estimator's default state (`src/ui/state/appState.ts`, rendered by `src/ui/App.tsx`) is Qwen/Qwen3.8-27B
+(bundled from its Hub fixture, `src/ui/state/bundledModel.ts`; 26.9e9 params, bf16) on one RTX 5090, TP 1,
+batch 1, prefill length 8192 and decode context 8192. The simulator gives **3,953 tok/s @ 8k** prefill and
+**34.4 tok/s @ 8k** decode, and the memory check says it does **not fit**: weights 53.79e9 B + state 0.69e9 B +
+activation peak 0.86e9 B = 55.34e9 B > 32e9 B (the "RTX 5090 ×2 (PCIe)" setup with TP 2 holds it). The UI lets you
+change the model and hardware; the About page renders this document.
 
 ---
 

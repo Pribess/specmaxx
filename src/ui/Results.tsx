@@ -1,3 +1,4 @@
+import './results.css';
 export { RooflineChart } from './components/RooflineChart';
 export { ResultHero } from './components/ResultHero';
 export { MemoryFit } from './components/MemoryFit';

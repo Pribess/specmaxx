@@ -33,8 +33,8 @@ const DEGREE_LABEL: Record<keyof ParallelConfig, string> = { tp: 'TP', pp: 'PP',
 /** Label of a workload field in messages. */
 const WORKLOAD_LABEL: Record<keyof Workload, string> = {
   batch: 'Batch',
-  promptLen: 'Prompt length',
-  decodeContextLen: 'Decode context length',
+  promptLen: 'Prefill length',
+  decodeContextLen: 'Decode context',
 };
 
 /** True for an integer ≥ 1. */

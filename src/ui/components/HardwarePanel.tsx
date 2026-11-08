@@ -1,41 +1,69 @@
 import {
   DEVICE_PRESET_GROUPS,
+  SYSTEM_PRESETS,
   deviceUnlocks,
   LINK_PRESETS,
   linkPresetId,
 } from '../../sim/hw/presets';
-import { topologyPresetsFor } from '../state';
+import { topologyPresetsFor, matchingSystem, systemChoice } from '../state';
 import { Panel } from './Panel';
+import { Picker } from './Picker';
+import type { PickerOption } from './fuzzy';
 import { NumberField } from './NumberField';
 import { CustomSpecEditor } from './CustomSpecEditor';
 import type { PanelProps as Props } from './types';
 
+/** Picker options: every device preset by vendor group, then the multi-device setups. */
+const deviceOptions: PickerOption[] = [
+  ...DEVICE_PRESET_GROUPS.flatMap((g) =>
+    g.devices.map((d) => ({ value: `device:${d.id}`, label: d.name, group: g.name })),
+  ),
+  ...SYSTEM_PRESETS.map((p) => ({
+    value: `system:${p.id}`,
+    label: p.name,
+    group: 'Multi-device setups',
+  })),
+];
+
 export function HardwarePanel(props: Props) {
   const { state, dispatch, built } = props;
   const device = built.hardware?.device;
+  const system = matchingSystem(state.hw);
+  const selected = system ? `system:${system.id}` : `device:${state.hw.deviceId}`;
+  const unit = device?.device.memory.kind === 'unified' ? 'Devices' : 'GPUs';
+  const total = state.hw.devicesPerNode * state.hw.nodes;
   return (
     <Panel
       title="Hardware"
-      value={`${state.hw.devicesPerNode * state.hw.nodes} × ${device?.base.name ?? state.hw.deviceId}`}
+      value={system?.name ?? `${total} × ${device?.base.name ?? state.hw.deviceId}`}
       open
     >
-      <label className="field">
-        <span>Device preset</span>
-        <select
-          value={state.hw.deviceId}
-          onChange={(e) => dispatch({ type: 'setDevice', deviceId: e.target.value })}
-        >
-          {DEVICE_PRESET_GROUPS.map((g) => (
-            <optgroup label={g.name} key={g.name}>
-              {g.devices.map((d) => (
-                <option value={d.id} key={d.id}>
-                  {d.name}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-      </label>
+      <Picker
+        label="Device"
+        value={selected}
+        options={deviceOptions}
+        onChange={(value) => {
+          if (value.startsWith('system:')) {
+            const preset = SYSTEM_PRESETS.find((p) => `system:${p.id}` === value);
+            if (preset) dispatch({ type: 'setHardware', hw: systemChoice(preset) });
+          } else dispatch({ type: 'setDevice', deviceId: value.slice('device:'.length) });
+        }}
+        help="A single device, or a ready-made multi-device setup that also sets the memory option, device counts and links."
+      />
+      {device && device.device.memory.capacityOptionsBytes.length > 1 && (
+        <Picker
+          label="Memory capacity"
+          value={String(state.hw.capacityIndex)}
+          options={device.device.memory.capacityOptionsBytes.map((v, i) => ({
+            value: String(i),
+            label: `${v / 1e9}GB`,
+          }))}
+          onChange={(v) => dispatch({ type: 'setCapacity', index: Number(v) })}
+          help="Memory per device, for the SKU variants this device ships with."
+        />
+      )}
+      <details className="advanced">
+        <summary>Advanced</summary>
       {device &&
         deviceUnlocks(device.base).map((axis) => (
           <fieldset className="unlock" key={axis.id}>
@@ -85,71 +113,56 @@ export function HardwarePanel(props: Props) {
           </fieldset>
         ))}
       {device && device.device.engines.length > 1 && (
-        <label className="field">
-          <span>Compute engine</span>
-          <select
-            value={state.hw.engineId ?? device.device.engines[0].id}
-            onChange={(e) => dispatch({ type: 'setEngine', engineId: e.target.value })}
-          >
-            {device.device.engines.map((e) => (
-              <option value={e.id} key={e.id}>
-                {e.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      {device && device.device.memory.capacityOptionsBytes.length > 1 && (
-        <label className="field">
-          <span>Memory capacity</span>
-          <select
-            value={state.hw.capacityIndex}
-            onChange={(e) => dispatch({ type: 'setCapacity', index: +e.target.value })}
-          >
-            {device.device.memory.capacityOptionsBytes.map((v, i) => (
-              <option value={i} key={i}>
-                {v / 1e9} GB
-              </option>
-            ))}
-          </select>
-        </label>
+        <Picker
+          label="Compute engine"
+          value={state.hw.engineId ?? device.device.engines[0].id}
+          options={device.device.engines.map((e) => ({ value: e.id, label: e.name }))}
+          onChange={(engineId) => dispatch({ type: 'setEngine', engineId })}
+          help="The matrix engine whose peak rates are used (for example tensor cores versus shader cores)."
+        />
       )}
       <div className="fields two">
         <NumberField
-          label="Devices per node"
+          label={`${unit} in one machine`}
           value={state.hw.devicesPerNode}
           onChange={(devicesPerNode) => dispatch({ type: 'setCounts', devicesPerNode })}
           issues={built.issues.filter((i) => i.field === 'devices')}
+          help={`How many ${unit.toLowerCase()} sit in one machine. They talk to each other over the fast local link (NVLink, PCIe or the unified fabric).`}
         />
         <NumberField
-          label="Nodes"
+          label="Machines"
           value={state.hw.nodes}
           onChange={(nodes) => dispatch({ type: 'setCounts', nodes })}
+          help="How many machines are connected. Machines talk to each other over the network link (Ethernet, InfiniBand, Thunderbolt or ConnectX), which is much slower than the local link."
         />
       </div>
+      <p className="total" data-testid="device-total">
+        = {total} {unit} total
+      </p>
       {(['intra', 'inter'] as const).map(
         (level) =>
           (level === 'intra' ? state.hw.devicesPerNode : state.hw.nodes) > 1 && (
-            <label className="field" key={level}>
-              <span>{level === 'intra' ? 'Intra-node' : 'Inter-node'} interconnect</span>
-              <select
-                value={state.hw[level === 'intra' ? 'intraLinkId' : 'interLinkId'] ?? ''}
-                onChange={(e) =>
-                  dispatch({ type: 'setLink', level, linkId: e.target.value || undefined })
-                }
-              >
-                <option value="">Device default</option>
-                {LINK_PRESETS.map((l) => (
-                  <option key={linkPresetId(l)} value={linkPresetId(l)}>
-                    {l.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <Picker
+              key={level}
+              label={level === 'intra' ? 'Local link (within a machine)' : 'Network link (between machines)'}
+              value={state.hw[level === 'intra' ? 'intraLinkId' : 'interLinkId'] ?? 'default'}
+              options={[
+                { value: 'default', label: 'Device default' },
+                ...LINK_PRESETS.map((l) => ({ value: linkPresetId(l), label: l.name })),
+              ]}
+              onChange={(v) =>
+                dispatch({ type: 'setLink', level, linkId: v === 'default' ? undefined : v })
+              }
+              help={
+                level === 'intra'
+                  ? 'The link between devices inside one machine.'
+                  : 'The link between machines.'
+              }
+            />
           ),
       )}
       {device && (
-        <details className="quick-picks">
+        <details className="quick-picks" open>
           <summary>Topology quick picks</summary>
           {topologyPresetsFor(device.base).map((t) => (
             <button
@@ -169,6 +182,7 @@ export function HardwarePanel(props: Props) {
         </details>
       )}
       <CustomSpecEditor {...props} />
+      </details>
     </Panel>
   );
 }

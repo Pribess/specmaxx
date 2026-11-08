@@ -5,7 +5,7 @@
  *
  * | key | field | example |
  * |---|---|---|
- * | `m`, `rev` | HF repo id, revision (absent: built-in reference; `rev` default `main`) | `m=Qwen/Qwen3.8-27B` |
+ * | `m`, `rev` | HF repo id, revision (absent: the default model `Qwen/Qwen3.8-27B`; `rev` default `main`) | `m=zai-org/GLM-5.3` |
  * | `w`, `a`, `kv` | weight / activation / KV dtype overrides | `kv=fp8_e4m3` |
  * | `d` | device preset id (default `rtx-5090`) | `d=rtx-4090` |
  * | `u` | unlocks, `axis.option` comma list | `u=pcie-p2p.direct,vram-mod.48gb` |
@@ -14,7 +14,7 @@
  * | `il`, `xl` | intra / inter link preset ids (`linkPresetId`) | `il=pcie-5-0-x16-direct-p2p` |
  * | `x`, `xi`, `xe` | spec edits on device / intra link / inter link, `path:value` comma list, SI units | `x=memory.bandwidthBytesPerSec:2e12` |
  * | `tp`, `pp`, `dp`, `ep` | parallel degrees | `tp=2` |
- * | `b`, `p`, `c` | batch, prompt length, decode context length | `b=8` |
+ * | `b`, `p`, `c` | batch, prefill length (default 8192), decode context (default 8192) | `b=8` |
  * | `ov`, `fu`, `ar` | overlap, elementwise fusion, all-reduce algorithm | `ov=none` |
  */
 
@@ -76,7 +76,9 @@ export function encodeState(s: AppState): string {
   const put = (key: string, value: string | number | undefined) => {
     if (value !== undefined) out.push([key, typeof value === 'number' ? encodeNumber(value) : value]);
   };
-  if (s.model.kind === 'hf') {
+  const dm = DEFAULT_STATE.model;
+  const isDefaultModel = s.model.id === dm.id && (s.model.revision ?? 'main') === (dm.revision ?? 'main');
+  if (!isDefaultModel) {
     put('m', s.model.id);
     if (s.model.revision !== undefined && s.model.revision !== 'main') put('rev', s.model.revision);
   }
@@ -150,7 +152,7 @@ export function decodeState(search: string): DecodedState {
   for (const [key, value] of params) if (!(URL_KEYS as readonly string[]).includes(key)) drop(key, value);
 
   // Model.
-  let model: ModelChoice = { kind: 'reference' };
+  let model: ModelChoice = DEFAULT_STATE.model;
   const m = get('m');
   const rev = get('rev');
   if (m !== undefined) {
@@ -158,7 +160,7 @@ export function decodeState(search: string): DecodedState {
       model = rev !== undefined && rev !== '' && rev !== 'main' ? { kind: 'hf', id: m, revision: rev } : { kind: 'hf', id: m };
     } else drop('m', m);
   }
-  if (rev !== undefined && model.kind !== 'hf') drop('rev', rev);
+  if (rev !== undefined && m === undefined) drop('rev', rev);
 
   // Quant overrides.
   const quant: QuantOverrides = {};

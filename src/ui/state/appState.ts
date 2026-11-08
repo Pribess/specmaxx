@@ -12,17 +12,16 @@ import type { ParallelConfig } from '../../sim/ir/model';
 import type { SimOptions, Workload } from '../../sim/engine/types';
 import type { UnlockSelection } from '../../sim/hw/unlocks';
 import { DEFAULT_SIM_OPTIONS } from '../../sim/engine/simulate';
+import { DEFAULT_MODEL_ID } from './modelShortlist';
 
-/** Which model to simulate: the built-in reference (REF_DENSE_8B, no network) or a Hugging Face repo. */
-export type ModelChoice =
-  | { kind: 'reference' }
-  | {
-      kind: 'hf';
-      /** Repo id `owner/name`. */
-      id: string;
-      /** Branch, tag or commit; absent = `main`. Never `'main'` itself (normalized away). */
-      revision?: string;
-    };
+/** Which model to simulate: a Hugging Face repo (the default one is bundled, so it needs no network). */
+export type ModelChoice = {
+  kind: 'hf';
+  /** Repo id `owner/name`. */
+  id: string;
+  /** Branch, tag or commit; absent = `main`. Never `'main'` itself (normalized away). */
+  revision?: string;
+};
 
 /** User overrides of the model's default numeric formats; an absent field keeps the model default. */
 export interface QuantOverrides {
@@ -73,7 +72,7 @@ export interface AppState {
   hw: HardwareChoice;
   /** Parallelism degrees (each an integer ≥ 1 once valid; the state may hold invalid values while editing). */
   parallel: ParallelConfig;
-  /** Batch, prompt length and decode context length. */
+  /** Batch size, prefill length (prompt tokens from an empty KV cache) and decode context (tokens already cached). */
   workload: Workload;
   /** Assumption switches that differ from `DEFAULT_SIM_OPTIONS` (a default value is never stored). */
   options: Partial<SimOptions>;
@@ -82,7 +81,10 @@ export interface AppState {
 /** Device of the default state. */
 export const DEFAULT_DEVICE_ID = 'rtx-5090';
 
-/** The default hardware choice: one stock RTX 5090. */
+/**
+ * The default hardware choice: one stock RTX 5090. The default model (Qwen3.8-27B, about 54GB of bf16
+ * weights) does not fit its 32GB, so the page opens on the "does not fit" verdict; that is intended.
+ */
 export const DEFAULT_HW: HardwareChoice = {
   deviceId: DEFAULT_DEVICE_ID,
   unlocks: {},
@@ -94,17 +96,20 @@ export const DEFAULT_HW: HardwareChoice = {
   interEdits: {},
 };
 
+/** One stock device with no links; the same as {@link DEFAULT_HW} (kept as a name for the base of `setDevice`). */
+export const SINGLE_DEVICE_HW: HardwareChoice = DEFAULT_HW;
+
 /**
- * The default state: REF_DENSE_8B on one RTX 5090, model-default formats (bf16), parallel 1/1/1/1, batch 1,
- * prompt 1024, decode context 1024 (docs/simulation-model.md §10: ≈ 12.8k prefill / 117.1 decode tok/s).
- * First paint has numbers without any network.
+ * The default state: the default model (`DEFAULT_MODEL_ID`, bundled so the first paint has numbers without
+ * any network), model-default formats, parallel 1/1/1/1, batch 1, prefill length 8192 and decode context
+ * 8192 tokens (8k). The default hardware is set by `DEFAULT_HW`.
  */
 export const DEFAULT_STATE: AppState = {
-  model: { kind: 'reference' },
+  model: { kind: 'hf', id: DEFAULT_MODEL_ID },
   quant: {},
   hw: DEFAULT_HW,
   parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
-  workload: { batch: 1, promptLen: 1024, decodeContextLen: 1024 },
+  workload: { batch: 1, promptLen: 8192, decodeContextLen: 8192 },
   options: {},
 };
 
@@ -121,6 +126,8 @@ export type AppAction =
   | { type: 'setQuant'; field: keyof QuantOverrides; dtype: Dtype | undefined }
   /** Clear every quant override. */
   | { type: 'resetQuant' }
+  /** Replace the whole hardware choice (a multi-device setup preset, see `systemChoice`). */
+  | { type: 'setHardware'; hw: HardwareChoice }
   /** Pick a device; resets unlocks, engine, capacity, links and every edit. Counts are kept. */
   | { type: 'setDevice'; deviceId: string }
   /** Choose (optionId) or clear (undefined: stock) one unlock axis; resets the capacity index. */
@@ -186,10 +193,12 @@ export function reduce(state: AppState, action: AppAction): AppState {
       };
     case 'resetQuant':
       return { ...state, quant: {} };
+    case 'setHardware':
+      return { ...state, hw: action.hw };
     case 'setDevice':
       return {
         ...state,
-        hw: { ...DEFAULT_HW, deviceId: action.deviceId, devicesPerNode: hw.devicesPerNode, nodes: hw.nodes },
+        hw: { ...SINGLE_DEVICE_HW, deviceId: action.deviceId, devicesPerNode: hw.devicesPerNode, nodes: hw.nodes },
       };
     case 'setUnlock': {
       const unlocks =

@@ -34,7 +34,7 @@ const CASES = [
 
 describe('NVIDIA consumer vendor tables', () => {
   it('all devices validate with every numeric field covered by provenance', () => {
-    expect(NVIDIA_CONSUMER_DEVICE_PRESETS).toEqual([RTX_3090, RTX_4090, RTX_5090]);
+    expect(NVIDIA_CONSUMER_DEVICE_PRESETS).toEqual([RTX_5090, RTX_4090, RTX_3090]); // newest generation first
     for (const device of NVIDIA_CONSUMER_DEVICE_PRESETS) expect(validateDevice(device)).toEqual([]);
   });
 

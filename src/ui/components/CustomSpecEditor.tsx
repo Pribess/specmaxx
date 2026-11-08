@@ -9,6 +9,7 @@ import {
   type EditableField,
 } from '../state';
 import { NumberField } from './NumberField';
+import { HelpIcon } from './HelpIcon';
 import type { PanelProps as Props } from './types';
 
 export function CustomSpecEditor({ state, dispatch, built }: Props) {
@@ -33,12 +34,14 @@ export function CustomSpecEditor({ state, dispatch, built }: Props) {
       });
   }
   return (
-    <details className="spec-editor">
-      <summary>Edit spec numbers{hardware.edited ? ' (edited)' : ''}</summary>
-      <p className="hint">
-        Starts as a copy of this preset. Rates and capacity are per device; link bandwidth is per
-        direction.
-      </p>
+    <details className="spec-editor" open>
+      <summary>
+        Edit spec numbers{hardware.edited ? ' (edited)' : ''}
+        <HelpIcon term="Edit spec numbers">
+          Starts as a copy of this preset. Rates and capacity are per device; link bandwidth is per
+          direction.
+        </HelpIcon>
+      </summary>
       {specs.map((s) => (
         <details key={s.target}>
           <summary>{s.name}</summary>

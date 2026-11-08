@@ -413,7 +413,7 @@ export interface SanityResult {
   decodeTokensPerSec: number;
   /** Decode rate of one sequence (what llama-bench `tg` reports at batch 1). Unit: tokens/s. */
   decodePerSequenceTokensPerSec: number;
-  /** KV length the decode step was evaluated at: `contextDepth + ceil(genLen / 2)`. Unit: tokens. */
+  /** Tokens already in the KV cache at the evaluated decode step: `contextDepth + ceil(genLen / 2)`. Unit: tokens. */
   decodeContextLen: number;
   /** The bound with the most op time in prefill, and the time per bound. */
   prefillBound: { dominant: Bound; seconds: BoundSeconds };

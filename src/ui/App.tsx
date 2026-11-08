@@ -7,10 +7,10 @@ import {
   encodeState,
   reduce,
   modelKey,
-  REFERENCE_MODEL,
+  BUNDLED_DEFAULT_MODEL,
   loadedFromHf,
   buildSimInput,
-  formatTokensPerSecCompact,
+  formatRateAtContext,
   type LoadedModel,
 } from './state';
 import { workerRunner, type SimRunner, type RunResult } from './sim/runner';
@@ -23,6 +23,7 @@ import {
 } from './Panels';
 import { ResultHero, BreakdownTable, BatchSweepChart } from './Results';
 import '../styles/tokens.css';
+import './panels.css';
 import './app.css';
 
 export type ModelLoader = typeof loadHfModel;
@@ -36,29 +37,30 @@ export function App({
   const initial = useMemo(() => decodeState(location.search), []);
   const [state, dispatch] = useReducer(reduce, initial.state);
   const [dropped, setDropped] = useState(initial.dropped);
-  const [id, setId] = useState(initial.state.model.kind === 'hf' ? initial.state.model.id : '');
+  const [id, setId] = useState(initial.state.model.id);
   const [attempt, setAttempt] = useState(0);
   const [modelState, setModelState] = useState<{
     key: string;
     loaded?: LoadedModel;
     error?: string;
     gated?: boolean;
-  }>({ key: 'reference', loaded: REFERENCE_MODEL });
+  }>({ key: BUNDLED_DEFAULT_MODEL.key, loaded: BUNDLED_DEFAULT_MODEL });
   const [simulation, setSimulation] = useState<{ key: string; result?: RunResult; error?: string }>(
     { key: '' },
   );
   const [dim, setDim] = useState(false);
   const runner = useMemo(() => suppliedRunner ?? workerRunner(), [suppliedRunner]);
   const choiceKey = modelKey(state.model);
+  const isBundled = choiceKey === BUNDLED_DEFAULT_MODEL.key;
+  // The bundled default model is used until (and unless) a fresher copy loads; its refresh never errors.
   const loaded =
-    choiceKey === 'reference'
-      ? REFERENCE_MODEL
-      : modelState.key === choiceKey
-        ? (modelState.loaded ?? null)
+    modelState.key === choiceKey
+      ? (modelState.loaded ?? (isBundled ? BUNDLED_DEFAULT_MODEL : null))
+      : isBundled
+        ? BUNDLED_DEFAULT_MODEL
         : null;
   const loading =
-    choiceKey !== 'reference' &&
-    (modelState.key !== choiceKey || (!modelState.loaded && !modelState.error));
+    !isBundled && (modelState.key !== choiceKey || (!modelState.loaded && !modelState.error));
   const built = useMemo(() => buildSimInput(state, loaded), [state, loaded]);
   const query = encodeState(state);
   useEffect(() => {
@@ -78,13 +80,12 @@ export function App({
       const parsed = decodeState(location.search);
       dispatch({ type: 'replace', state: parsed.state });
       setDropped(parsed.dropped);
-      setId(parsed.state.model.kind === 'hf' ? parsed.state.model.id : '');
+      setId(parsed.state.model.id);
     };
     addEventListener('popstate', restore);
     return () => removeEventListener('popstate', restore);
   }, []);
   useEffect(() => {
-    if (state.model.kind !== 'hf') return;
     const choice = state.model;
     let current = true;
     loader(choice.id, { revision: choice.revision, token: getHfToken() })
@@ -99,15 +100,21 @@ export function App({
               : result.kind === 'invalid_config'
                 ? result.errors.join('; ')
                 : result.message;
-          setModelState({
-            key: modelKey(choice),
-            error,
-            gated: result.kind === 'unauthorized' || result.kind === 'forbidden',
-          });
+          if (modelKey(choice) === BUNDLED_DEFAULT_MODEL.key)
+            setModelState({ key: modelKey(choice), loaded: BUNDLED_DEFAULT_MODEL });
+          else
+            setModelState({
+              key: modelKey(choice),
+              error,
+              gated: result.kind === 'unauthorized' || result.kind === 'forbidden',
+            });
         }
       })
       .catch(() => {
-        if (current)
+        if (!current) return;
+        if (modelKey(choice) === BUNDLED_DEFAULT_MODEL.key)
+          setModelState({ key: modelKey(choice), loaded: BUNDLED_DEFAULT_MODEL });
+        else
           setModelState({
             key: modelKey(choice),
             error: 'Model load failed. Check your connection and try Load again.',
@@ -143,14 +150,21 @@ export function App({
       clearTimeout(timer);
     };
   }, [built, query, runner]);
+  const titleModel = loaded?.label ?? state.model.id;
+  const titleResult = built.kind === 'ok' ? simulation.result?.summary : undefined;
+  useEffect(() => {
+    document.title = titleResult
+      ? `${titleModel} · ${formatRateAtContext(titleResult.prefill.tokensPerSec, state.workload.promptLen)} prefill · ${formatRateAtContext(titleResult.decode.tokensPerSec, state.workload.decodeContextLen)} decode`
+      : `${titleModel} · specmaxx`;
+  }, [titleModel, titleResult, state.workload.promptLen, state.workload.decodeContextLen]);
   useEffect(() => () => runner.dispose?.(), [runner]);
   const props = { state, dispatch, loaded, built };
   const result = built.kind === 'ok' ? simulation.result?.summary : undefined;
   const error = modelState.key === choiceKey ? modelState.error : undefined;
-  function load() {
-    const nextId = id.trim();
+  function load(typed?: string) {
+    const nextId = (typed ?? id).trim();
     if (!nextId) return;
-    const unchanged = state.model.kind === 'hf' && state.model.id === nextId;
+    const unchanged = state.model.id === nextId;
     const choice = unchanged ? state.model : { kind: 'hf' as const, id: nextId };
     if (!unchanged) dispatch({ type: 'setModel', model: choice });
     setModelState({ key: modelKey(choice) });
@@ -176,15 +190,10 @@ export function App({
               setModelState({ key: choiceKey });
               setAttempt((n) => n + 1);
             }}
-            onReference={() => {
-              dispatch({ type: 'setModel', model: { kind: 'reference' } });
-              setId('');
-            }}
             loaded={loaded}
             loading={loading}
             error={error}
             gated={modelState.key === choiceKey && !!modelState.gated}
-            isHf={state.model.kind === 'hf'}
           />
           <QuantPanel {...props} />
           <HardwarePanel {...props} />
@@ -230,8 +239,11 @@ export function App({
           {result && (
             <>
               <div className="compact-results">
-                Prefill {formatTokensPerSecCompact(result.prefill.tokensPerSec)}{' '}
-                <span>Decode {formatTokensPerSecCompact(result.decode.tokensPerSec)} tok/s</span>
+                Prefill {formatRateAtContext(result.prefill.tokensPerSec, state.workload.promptLen)}
+                {' · '}
+                <span>
+                  Decode {formatRateAtContext(result.decode.tokensPerSec, state.workload.decodeContextLen)}
+                </span>
               </div>
               <div className="detail-results">
                 <BreakdownTable result={result} />

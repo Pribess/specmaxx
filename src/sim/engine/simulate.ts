@@ -112,8 +112,9 @@ function simulatePhase(
 }
 
 /**
- * Simulate one input: validate, apply modifiers, cost prefill (the whole prompt) and decode (one token at
- * `decodeContextLen`), and check the memory fit. Throws `Error(errors.join('\n'))` on an invalid input.
+ * Simulate one input: validate, apply modifiers, cost prefill (the whole prompt from an empty KV cache) and decode
+ * (one new token with `decodeContextLen` tokens already cached), and check the memory fit. Throws
+ * `Error(errors.join('\n'))` on an invalid input.
  */
 export function simulate(input: SimInput): SimResult {
   const errors = validateInput(input);
@@ -146,6 +147,7 @@ export function simulate(input: SimInput): SimResult {
   const sequencesPerReplica = workload.batch / parallel.dp;
   const mb = microbatching(parallel.pp, sequencesPerReplica);
   const shape = { sequencesPerReplica, ...mb };
+  // Prefill @ P: the whole P-token prompt from an empty KV cache, so past = 0 and qLen = kvLen = P.
   const prefillCtx: LoweringContext = {
     phase: 'prefill',
     seqs: mb.microbatchSize,
@@ -154,7 +156,10 @@ export function simulate(input: SimInput): SimResult {
     quant,
     parallel,
   };
-  const decodeCtx: LoweringContext = { ...prefillCtx, phase: 'decode', qLen: 1, kvLen: workload.decodeContextLen };
+  // Decode @ N: N tokens are already in the KV cache and one new token is generated, so the new token's query
+  // sees its own key too.  Formula: qLen = 1; kvLen = past + qLen = N + 1  (docs §7 "Pipeline and DP").
+  const decodePastTokens = workload.decodeContextLen;
+  const decodeCtx: LoweringContext = { ...prefillCtx, phase: 'decode', qLen: 1, kvLen: decodePastTokens + 1 };
   const prefillLowered = lowerModel(model, prefillCtx);
   const decodeLowered = lowerModel(model, decodeCtx);
   const prefill = simulatePhase(prefillLowered, 'prefill', base, input, hw.topology, options, shape);
@@ -166,7 +171,8 @@ export function simulate(input: SimInput): SimResult {
     model,
     ctx: decodeCtx,
     sequencesPerReplica,
-    contextTokens: Math.max(workload.promptLen, workload.decodeContextLen),
+    // The cache must hold the prompt after prefill and N + 1 tokens after the decode step (docs §8).
+    contextTokens: Math.max(workload.promptLen, decodeCtx.kvLen),
     lowered: [prefillLowered, decodeLowered],
     capacityBytes,
     kind: device.memory.kind,

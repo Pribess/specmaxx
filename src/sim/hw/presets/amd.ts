@@ -1003,13 +1003,16 @@ export const INSTINCT_MI455X: DeviceSpec = {
   ],
 };
 
-/** All AMD device presets, per-device peaks at each part's vendor boost / peak engine clock. */
+/**
+ * All AMD device presets, per-device peaks at each part's vendor boost / peak engine clock. Display order: client
+ * parts (Radeon AI PRO R9700, RX 9070 XT, Strix Halo), then Instinct newest generation first.
+ */
 export const AMD_DEVICE_PRESETS: DeviceSpec[] = [
   RADEON_AI_PRO_R9700,
   RADEON_RX_9070_XT,
   RYZEN_AI_MAX_PLUS_395,
-  INSTINCT_MI300X,
-  INSTINCT_MI325X,
-  INSTINCT_MI355X,
   INSTINCT_MI455X,
+  INSTINCT_MI355X,
+  INSTINCT_MI325X,
+  INSTINCT_MI300X,
 ];

@@ -1,5 +1,6 @@
 import {
   formatTokensPerSec,
+  formatContextTokens,
   type ResultSummary,
   type AppState,
   type LoadedModel,
@@ -45,19 +46,25 @@ export function ResultHero({
                     <strong data-testid={`${phase}-tps`}>
                       {formatTokensPerSec(result[phase].tokensPerSec)}
                     </strong>
-                    <span>tok/s</span>
+                    <span>tok/s @ {formatContextTokens(result[phase].contextTokens)}</span>
                   </p>
                   <small>
-                    {formatTokensPerSec(result[phase].perSequenceTokensPerSec)} per sequence
+                    {formatTokensPerSec(result[phase].perSequenceTokensPerSec)} tok/s per sequence @{' '}
+                    {formatContextTokens(result[phase].contextTokens)}
                   </small>
                 </div>
               ))}
             </div>
-            <RooflineChart roof={result.roofline} />
+            <RooflineChart
+              roof={result.roofline}
+              contexts={{
+                prefill: result.prefill.contextTokens,
+                decode: result.decode.contextTokens,
+              }}
+            />
           </div>
           <p className="theory">
-            Theoretical maximum: excludes engine overheads.{' '}
-            <a href="./about.html">How the estimate works</a>
+            This is a theoretical maximum. <a href="./about.html">Read how the estimate works</a>
           </p>
           <MemoryFit result={result} />
         </>

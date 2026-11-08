@@ -1,20 +1,21 @@
 import { useState } from 'react';
 import { getHfToken, setHfToken, clearHfToken } from '../../hf/token';
 import { countParams, activeParamsPerToken } from '../../sim/ir/params';
-import { formatParams, type LoadedModel } from '../state';
+import { formatParams, MODEL_SHORTLIST, type LoadedModel } from '../state';
 import { Panel } from './Panel';
+import { Combobox } from './Combobox';
+import { HelpIcon } from './HelpIcon';
 
 interface ModelPanelProps {
   id: string;
   onIdChange(id: string): void;
-  onLoad(): void;
+  /** Load `typedId` (a committed pick or Enter) or, when absent, the text in the field. */
+  onLoad(typedId?: string): void;
   onRetry(): void;
-  onReference(): void;
   loaded: LoadedModel | null;
   loading: boolean;
   error?: string;
   gated: boolean;
-  isHf: boolean;
 }
 
 export function ModelPanel({
@@ -22,36 +23,32 @@ export function ModelPanel({
   onIdChange,
   onLoad,
   onRetry,
-  onReference,
   loaded,
   loading,
   error,
   gated,
-  isHf,
 }: ModelPanelProps) {
   const [token, setToken] = useState('');
   const [hasToken, setHasToken] = useState(() => !!getHfToken());
   return (
     <Panel title="Model" value={loaded?.label ?? id} open>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          onLoad();
-        }}
-      >
-        <label className="field">
-          <span>Hugging Face model ID</span>
-          <div className="model-entry">
-            <input
-              value={id}
-              placeholder="Qwen/Qwen3.8-27B"
-              onChange={(event) => onIdChange(event.target.value)}
-            />
-            <button type="submit">Load</button>
-          </div>
-        </label>
-      </form>
-      <p className="hint">Paste a model ID, or keep the built-in 8B reference.</p>
+      <div className="model-entry">
+        <Combobox
+          label="Hugging Face model ID"
+          value={id}
+          onValueChange={onIdChange}
+          onCommit={(value) => {
+            onIdChange(value);
+            onLoad(value);
+          }}
+          options={MODEL_SHORTLIST.map((m) => ({ value: m.id, label: m.name, description: m.id }))}
+          placeholder="Qwen/Qwen3.8-27B"
+          help="Pick a popular model or paste any Hugging Face repo ID (owner/name), then press Enter or Load. Gated models need a token."
+        />
+        <button type="button" onClick={() => onLoad()}>
+          Load
+        </button>
+      </div>
       {loading && <p role="status">Loading model config…</p>}
       {error && (
         <p role="alert" className="error">
@@ -77,9 +74,9 @@ export function ModelPanel({
               onChange={(event) => setToken(event.target.value)}
             />
           </label>
-          <p className="hint">
+          <HelpIcon term="Hugging Face token">
             Stored in this browser only. Sent only to Hugging Face; never included in a shared URL.
-          </p>
+          </HelpIcon>
           <button>Save token and retry</button>
         </form>
       )}
@@ -99,13 +96,12 @@ export function ModelPanel({
           <p>
             {loaded.hf
               ? `${loaded.hf.family}: ${loaded.hf.modelType ?? loaded.hf.architecture}`
-              : 'Built-in dense reference'}
+              : loaded.label}
           </p>
           <p>
             {formatParams(countParams(loaded.model))} total,{' '}
-            {formatParams(activeParamsPerToken(loaded.model))} active
-            <br />
-            {loaded.model.layers.length} layers
+            {formatParams(activeParamsPerToken(loaded.model))} active, {loaded.model.layers.length}{' '}
+            layers
           </p>
           {loaded.hf?.excluded.parts.length ? (
             <p className="hint">Excluded: {loaded.hf.excluded.parts.join(', ')}</p>
@@ -114,11 +110,6 @@ export function ModelPanel({
             <p className="error">{loaded.hf.paramCheck.note}</p>
           )}
         </div>
-      )}
-      {isHf && (
-        <button className="quiet" onClick={onReference}>
-          Use built-in reference
-        </button>
       )}
     </Panel>
   );

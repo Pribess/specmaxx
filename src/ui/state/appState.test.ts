@@ -65,4 +65,14 @@ describe('reduce', () => {
     apply(frozen, { type: 'setParallel', parallel: { tp: 2 } }, { type: 'setWorkload', workload: { batch: 4 } });
     expect(frozen).toEqual(DEFAULT_STATE);
   });
+
+  it('opens on the default model at 8k / 8k', () => {
+    expect(DEFAULT_STATE.model).toEqual({ kind: 'hf', id: 'Qwen/Qwen3.8-27B' });
+    expect(DEFAULT_STATE.workload).toEqual({ batch: 1, promptLen: 8192, decodeContextLen: 8192 });
+  });
+
+  it('setHardware replaces the whole hardware choice', () => {
+    const hw = { ...DEFAULT_STATE.hw, deviceId: 'rtx-3090', devicesPerNode: 2, intraLinkId: 'x' };
+    expect(reduce(DEFAULT_STATE, { type: 'setHardware', hw }).hw).toEqual(hw);
+  });
 });

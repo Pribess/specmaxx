@@ -685,5 +685,8 @@ export const B300: DeviceSpec = {
   estimated: tilingEstimates(BLACKWELL_DC_TILING_KEYS, 'Typical CUTLASS sm100 CTA tiles (m a multiple of 128)'),
 };
 
-/** Every NVIDIA datacenter / DGX device preset, in display order. Each must pass `validateDevice`. */
-export const NVIDIA_DATACENTER_DEVICE_PRESETS: DeviceSpec[] = [DGX_SPARK, H100_SXM, H200_SXM, B200, B300];
+/**
+ * Every NVIDIA datacenter / DGX device preset, in display order (DGX Spark, then the datacenter parts newest
+ * generation first and higher tier first). Each must pass `validateDevice`.
+ */
+export const NVIDIA_DATACENTER_DEVICE_PRESETS: DeviceSpec[] = [DGX_SPARK, B300, B200, H200_SXM, H100_SXM];

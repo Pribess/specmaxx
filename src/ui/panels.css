@@ -1,0 +1,25 @@
+/* Input-panel styles (model entry, advanced disclosure, device totals). Shared primitives live in app.css. */
+.model-entry {
+  display: flex;
+  gap: 0.5rem;
+  align-items: end;
+}
+.model-entry > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+details.advanced {
+  margin-top: 0.75rem;
+}
+details.advanced > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+details.advanced > :not(summary) {
+  margin-top: 0.75rem;
+}
+.total {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}

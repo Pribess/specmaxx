@@ -451,14 +451,17 @@ export const M5_ULTRA_80C = appleDevice({
   memoryNote: '80-core GPU; 96GB, 256GB or 512GB unified memory; 1.2TB/s memory bandwidth.',
 });
 
-/** Apple per-SoC GPU SKU library; all rates per device, derived compute explicitly estimated. */
+/**
+ * Apple per-SoC GPU SKU library; all rates per device, derived compute explicitly estimated. Display order: newest
+ * generation first, then by tier (Ultra before Max), then more GPU cores first.
+ */
 export const APPLE_DEVICE_PRESETS: DeviceSpec[] = [
-  M4_MAX_32C,
-  M4_MAX_40C,
-  M3_ULTRA_60C,
-  M3_ULTRA_80C,
-  M5_MAX_32C,
-  M5_MAX_40C,
-  M5_ULTRA_64C,
   M5_ULTRA_80C,
+  M5_ULTRA_64C,
+  M5_MAX_40C,
+  M5_MAX_32C,
+  M4_MAX_40C,
+  M4_MAX_32C,
+  M3_ULTRA_80C,
+  M3_ULTRA_60C,
 ];

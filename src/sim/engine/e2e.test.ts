@@ -61,11 +61,12 @@ describe('T9 REF_DENSE_8B on 1×RTX 5090, bf16 (fp32 acc), batch 1', () => {
 
   it('decode @ctx 1024 is within 3% below the weights + KV bandwidth bound (117.2 tok/s)', () => {
     const r = simulate(input());
+    // Decode @ 1024: 1024 tokens already cached + the new token, so attention reads kvLen = 1025 keys.
     // Bytes that must stream per token: GEMM weights (36 layers × 192,937,984 linear params + LM head
-    // 622,329,856, × 2 B) + KV cache 36 layers × 1024 tokens × (2·8·128 elems × 2 B = 4096 B):
-    // 2·(36·192,937,984 + 622,329,856) + 36·1024·4096 = 15,136,194,560 + 150,994,944 = 15,287,189,504 B.
-    const streamedBytes = 15_287_189_504;
-    const decodeOps = lowerModel(REF_DENSE_8B, { phase: 'decode', seqs: 1, qLen: 1, kvLen: 1024, quant: BF16, parallel: P1 })
+    // 622,329,856, × 2 B) + KV cache 36 layers × 1025 tokens × (2·8·128 elems × 2 B = 4096 B):
+    // 2·(36·192,937,984 + 622,329,856) + 36·1025·4096 = 15,136,194,560 + 151,142,400 = 15,287,336,960 B.
+    const streamedBytes = 15_287_336_960;
+    const decodeOps = lowerModel(REF_DENSE_8B, { phase: 'decode', seqs: 1, qLen: 1, kvLen: 1025, quant: BF16, parallel: P1 })
       .stages.flatMap((s) => s.layers.flatMap((l) => l.ops));
     const gemmWeightAndKv = decodeOps.reduce(
       (s, op) => s + (op.kind === 'gemm' ? opBytes(op).weightBytes : 0) + opBytes(op).kvReadBytes,
@@ -133,12 +134,13 @@ describe('T10 batch sweep on RTX 5090', () => {
     // Prompt 128 keeps the prefill activation peak small (the plan's estimate ignores it).
     const r = simulate(input({ workload: { batch: 64, promptLen: 128, decodeContextLen: 8192 } }));
     const d = r.memory.perStage[0];
-    // KV: 64 seqs · 36 layers · 8192 tokens · 4096 B = 77,309,411,328 B ≈ 77.3e9
-    expect(d.sequenceStateBytes).toBe(77_309_411_328);
+    // KV after the decode step at ctx 8192 holds 8193 tokens: 64 seqs · 36 layers · 8193 tokens · 4096 B
+    // = 77,318,848,512 B ≈ 77.3e9
+    expect(d.sequenceStateBytes).toBe(77_318_848_512);
     expect(r.memory.fits).toBe(false);
-    // floor((32e9 − 16.38e9 − act) / 1.208e9): per-sequence state 36·8192·4096 = 1,207,959,552 B; the
+    // floor((32e9 − 16.38e9 − act) / 1.208e9): per-sequence state 36·8193·4096 = 1,208,107,008 B; the
     // activation peak (prefill silu_mul of 64·128 tokens: 3·8192·12288·2 B = 0.60e9) leaves 15.0e9 → 12.
-    const statePerSeq = 1_207_959_552;
+    const statePerSeq = 1_208_107_008;
     const expected = Math.floor((32e9 - d.weightBytes - d.activationPeakBytes) / statePerSeq);
     expect(d.activationPeakBytes).toBe(3 * 64 * 128 * 12288 * 2);
     expect(expected).toBe(12);

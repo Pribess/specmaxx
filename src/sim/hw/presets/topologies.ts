@@ -4,7 +4,7 @@
  * see docs/simulation-model.md §6. Builders permit swapping a lane width, host DRAM spec or device SKU.
  */
 import type { DeviceSpec, LinkSpec, TopologySpec } from '../types';
-import { RYZEN_AI_MAX_PLUS_395 } from './amd';
+import { RADEON_AI_PRO_R9700, RYZEN_AI_MAX_PLUS_395 } from './amd';
 import { M3_ULTRA_80C, M4_MAX_40C, M5_MAX_40C, M5_ULTRA_80C } from './apple';
 import { ARC_PRO_B60 } from './intel';
 import { RTX_3090, RTX_4090, RTX_5090 } from './nvidia';
@@ -140,6 +140,13 @@ export const RTX_3090_NVLINK_2: TopologySpec = {
 };
 /** Two DGX Sparks, one device per node, linked by ConnectX-7 200GbE RoCE at 25 GB/s each direction. */
 export const DGX_SPARK_PAIR = socCluster(DGX_SPARK, 2, SPARK_CONNECTX_7);
+/**
+ * Four DGX Sparks, one device per node, each injecting at its ConnectX-7 200GbE RoCE budget (25 GB/s per
+ * direction). Two Sparks can be cabled back to back; four need a 200GbE switch, assumed non-oversubscribed (every
+ * Spark keeps its full 25 GB/s through it). The link numbers cite `SPARK_CONNECTX_7`; the count is user
+ * configuration.
+ */
+export const DGX_SPARK_4 = socCluster(DGX_SPARK, 4, SPARK_CONNECTX_7);
 
 /** M3 Ultra Mac Studio RDMA cluster, 2/3/4 nodes, one TB5 per-device injection budget. */
 export const M3_ULTRA_TB5_CLUSTERS = [2, 3, 4].map((n) => socCluster(M3_ULTRA_80C, n, TB5_RDMA));
@@ -164,6 +171,24 @@ export const STRIX_HALO_10GBE_CLUSTERS = [2, 3, 4].map((n) => socCluster(RYZEN_A
 export const ARC_PRO_B60_PCIE_2 = pcieBox(ARC_PRO_B60, 2, PCIE_5_X8_DIRECT);
 /** Four Intel Arc Pro B60 GPUs, Gen5 x8 each, direct P2P on compatible xe driver/host routing. */
 export const ARC_PRO_B60_PCIE_4 = pcieBox(ARC_PRO_B60, 4, PCIE_5_X8_DIRECT);
+/** AMD's R9700 page, "Bus Type PCIe® 5.0 x16" (the interface each card gets in `R9700_PCIE_4`). */
+const R9700_PRODUCT_URL =
+  'https://www.amd.com/en/products/graphics/workstations/radeon-ai-pro/ai-9000-series/amd-radeon-ai-pro-r9700.html';
+/**
+ * Four Radeon AI PRO R9700s in one workstation, PCIe 5.0 x16 each, host-staged (no cited ROCm source for direct
+ * Radeon peer-to-peer over PCIe, so the stock host-bounce link is used). Four full x16 Gen5 slots need a
+ * workstation platform (e.g. Threadripper PRO / Xeon W lane counts); a desktop board bifurcates to x8. Shared
+ * root-complex uplinks are not modeled (docs §6).
+ */
+export const R9700_PCIE_4: TopologySpec = {
+  ...pcieBox(RADEON_AI_PRO_R9700, 4, PCIE_5_X16),
+  sources: [{
+    url: R9700_PRODUCT_URL,
+    title: 'AMD Radeon AI PRO R9700 product page',
+    fields: ['intraNode'],
+    note: '"Bus Type PCIe® 5.0 x16": the card\'s link; the count of four is user configuration.',
+  }],
+};
 /** One HGX H100 eight-GPU NVLink4 scale-up node, 450 GB/s per direction per GPU. */
 export const HGX_H100_8 = hgxCluster('h100');
 /** Two HGX H100 nodes, NVLink4 inside and NDR400 per GPU between nodes. */
@@ -190,7 +215,7 @@ export const MI300X_XGMI_8: TopologySpec = {
 /** All named multi-device topology presets; each is independently schema-valid. */
 export const TOPOLOGY_PRESETS: TopologySpec[] = [
   RTX_5090_PCIE_2, RTX_5090_PCIE_4, RTX_4090_PCIE_2, RTX_4090_PCIE_4, RTX_3090_PCIE_2, RTX_3090_PCIE_4,
-  RTX_3090_NVLINK_2, DGX_SPARK_PAIR, ARC_PRO_B60_PCIE_2, ARC_PRO_B60_PCIE_4,
+  RTX_3090_NVLINK_2, DGX_SPARK_PAIR, DGX_SPARK_4, ARC_PRO_B60_PCIE_2, ARC_PRO_B60_PCIE_4, R9700_PCIE_4,
   ...M3_ULTRA_TB5_CLUSTERS, ...M4_MAX_TB5_CLUSTERS, ...M5_MAX_TB5_CLUSTERS, ...M5_ULTRA_TB5_CLUSTERS,
   ...MAC_TB4_TCP_CLUSTERS, ...STRIX_HALO_USB4_TCP_CLUSTERS, ...STRIX_HALO_USB4_RDMA_CLUSTERS,
   ...STRIX_HALO_5GBE_CLUSTERS, ...STRIX_HALO_10GBE_CLUSTERS,

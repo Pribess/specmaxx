@@ -373,8 +373,11 @@ export const RTX_4090: DeviceSpec = {
   estimated: ADA_TILING_EVIDENCE.estimated,
 };
 
-/** All stock NVIDIA consumer devices, per-device peaks at vendor boost clocks. Unlocks are separate axes. */
-export const NVIDIA_CONSUMER_DEVICE_PRESETS: DeviceSpec[] = [RTX_3090, RTX_4090, RTX_5090];
+/**
+ * All stock NVIDIA consumer devices, per-device peaks at vendor boost clocks. Unlocks are separate axes. Display
+ * order: newest generation first (Blackwell, Ada, Ampere).
+ */
+export const NVIDIA_CONSUMER_DEVICE_PRESETS: DeviceSpec[] = [RTX_5090, RTX_4090, RTX_3090];
 
 /** Community project: Ampere stable, Ada experimental; Blackwell explicitly unsupported. */
 const TENSOR_UNLOCK_SOURCE: SourceRef = {

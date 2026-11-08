@@ -16,9 +16,16 @@ import type { DeviceSpec, HardwareStack } from '../hw/types';
 export interface Workload {
   /** GLOBAL concurrent sequences; each DP replica serves `B_r = batch / dp` (must divide). Count. */
   batch: number;
-  /** Prompt length processed by prefill, per sequence. Unit: tokens. */
+  /**
+   * Prefill length P: prompt tokens per sequence that prefill processes from an EMPTY KV cache. Prefill tok/s @ P =
+   * P ÷ the time for that whole prompt (so attention sees `qLen = kvLen = P`). Unit: tokens.
+   */
   promptLen: number;
-  /** KV length at the evaluated decode step, including the new token. Unit: tokens. */
+  /**
+   * Decode context N: tokens ALREADY in the KV cache at the evaluated decode step (not counting the token being
+   * generated). Decode tok/s @ N = the rate of generating one new token per sequence at that point, so attention
+   * sees `qLen = 1, kvLen = N + 1` (the new token attends to itself too). Unit: tokens.
+   */
   decodeContextLen: number;
 }
 

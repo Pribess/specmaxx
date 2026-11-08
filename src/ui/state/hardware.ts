@@ -15,7 +15,7 @@ import type { LinkModifier } from '../../sim/hw/modifiers';
 import { applyDeviceModifiers, applyLinkModifiers, describeDeviceModifier, describeLinkModifier } from '../../sim/hw/modifiers';
 import { resolveUnlocks } from '../../sim/hw/unlocks';
 import { numericLeafPaths } from '../../sim/hw/validate';
-import { DEVICE_PRESETS, deviceUnlocks } from '../../sim/hw/presets/index';
+import { DEVICE_PRESETS, SYSTEM_PRESETS, deviceUnlocks, type SystemPreset } from '../../sim/hw/presets/index';
 import {
   ETHERNET_10G_TCP, IB_NDR_400, IB_XDR_800, LINK_PRESETS, NVLINK_4, NVLINK_5, PCIE_5_X16, PCIE_5_X16_DIRECT,
   SPARK_CONNECTX_7, TB5_RDMA, USB4_HALO_RDMA, XGMI_MI300X_8_GPU,
@@ -85,6 +85,60 @@ export function topologyPresetsFor(device: Pick<DeviceSpec, 'id'>): TopologySpec
   return TOPOLOGY_PRESETS.filter(
     (t) => t.id.includes(device.id) || (hgx !== undefined && t.id.startsWith(`hgx-${hgx}-`)) || (device.id === 'instinct-mi300x' && t.id === 'mi300x-xgmi-8'),
   );
+}
+
+/**
+ * The hardware choice of a multi-device setup: its device (stock, no unlocks, first engine), the index of its memory
+ * option (0 when it names none), its device and node counts, and its links as explicit preset ids (only at the
+ * levels that exist). No edits.
+ */
+export function systemChoice(p: SystemPreset): HardwareChoice {
+  const capacityIndex = p.memCapacityBytes === undefined ? 0 : p.device.memory.capacityOptionsBytes.indexOf(p.memCapacityBytes);
+  if (capacityIndex < 0) throw new Error(`setup '${p.id}': ${p.memCapacityBytes} B is not a memory option of ${p.device.id}`);
+  const { devicesPerNode, nodes, intraNode, interNode } = p.topology;
+  return {
+    deviceId: p.device.id,
+    unlocks: {},
+    capacityIndex,
+    devicesPerNode,
+    nodes,
+    ...(devicesPerNode > 1 && intraNode !== undefined ? { intraLinkId: linkPresetId(intraNode) } : {}),
+    ...(nodes > 1 && interNode !== undefined ? { interLinkId: linkPresetId(interNode) } : {}),
+    deviceEdits: {},
+    intraEdits: {},
+    interEdits: {},
+  };
+}
+
+/**
+ * The multi-device setup a hardware choice is, or undefined: same device, memory option, counts and effective
+ * links (an absent link id means the device default, `defaultLinks`), with no unlocks, engine choice or edits.
+ * So picking a setup and then changing anything (a count, a link, a spec number) shows the plain device again.
+ */
+export function matchingSystem(hw: HardwareChoice): SystemPreset | undefined {
+  const stock =
+    Object.keys(hw.unlocks).length === 0 &&
+    hw.engineId === undefined &&
+    Object.keys(hw.deviceEdits).length === 0 &&
+    Object.keys(hw.intraEdits).length === 0 &&
+    Object.keys(hw.interEdits).length === 0;
+  if (!stock) return undefined;
+  const device = findDevice(hw.deviceId);
+  if (device === undefined) return undefined;
+  const defaults = defaultLinks(device);
+  const intraId = hw.devicesPerNode > 1 ? (hw.intraLinkId ?? (defaults.intraNode && linkPresetId(defaults.intraNode))) : undefined;
+  const interId = hw.nodes > 1 ? (hw.interLinkId ?? linkPresetId(defaults.interNode)) : undefined;
+  return SYSTEM_PRESETS.find((p) => {
+    const c = systemChoice(p);
+    return (
+      c.deviceId === hw.deviceId &&
+      c.capacityIndex === hw.capacityIndex &&
+      c.devicesPerNode === hw.devicesPerNode &&
+      c.nodes === hw.nodes &&
+      c.intraLinkId === intraId &&
+      c.interLinkId === interId
+    );
+  });
 }
 
 /** A deep copy of a plain-data spec (presets are JSON-safe: numbers, strings, booleans, arrays, objects). */

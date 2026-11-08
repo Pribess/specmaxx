@@ -8,7 +8,7 @@ function state(over: Omit<Partial<AppState>, 'hw'> & { hw?: Partial<AppState['hw
 }
 
 const STATES: [string, AppState][] = [
-  ['reference default', DEFAULT_STATE],
+  ['default', DEFAULT_STATE],
   ['HF model', state({ model: { kind: 'hf', id: 'Qwen/Qwen3.8-27B' } })],
   ['HF model with revision', state({ model: { kind: 'hf', id: 'nvidia/Qwen3.8-27B-NVFP4', revision: 'a1b2c3d' } })],
   ['quant overrides', state({ quant: { weights: 'nvfp4', activations: 'fp8_e4m3', kvCache: 'fp8_e4m3' } })],
@@ -45,10 +45,10 @@ describe('URL codec', () => {
   });
 
   it.each([
-    'm=Qwen/Qwen3.8-27B&kv=fp8_e4m3&d=rtx-4090&u=vram-mod.48gb&n=2&tp=2&b=4',
+    'm=zai-org/GLM-5.3&kv=fp8_e4m3&d=rtx-4090&u=vram-mod.48gb&n=2&tp=2&b=4',
     'm=Qwen/Qwen3.8-27B&rev=main2&w=fp8_e4m3&a=fp8_e4m3',
     'u=pcie-p2p.direct,power-clock.400w&n=2&il=pcie-5-0-x16-host-bounce&xi=latencySec:5e-7&tp=2',
-    'x=memory.bandwidthBytesPerSec:2e12&b=16&p=8192&c=8192',
+    'x=memory.bandwidthBytesPerSec:2e12&b=16&p=4096&c=4096',
     'n=4&nodes=2&xl=10gbe-tcp&xe=bandwidthPerDirectionBytesPerSec:2.5e9&tp=4&dp=2&ov=none&fu=ideal&ar=tree',
   ])('keeps a canonical query unchanged: %s', (q) => {
     const { state: s, dropped } = decodeState(q);
@@ -57,8 +57,8 @@ describe('URL codec', () => {
   });
 
   it('keeps / : , . readable', () => {
-    const q = encodeState(state({ model: { kind: 'hf', id: 'Qwen/Qwen3.8-27B' }, hw: { deviceEdits: { 'memory.bandwidthBytesPerSec': 2e12 } } }));
-    expect(q).toBe('m=Qwen/Qwen3.8-27B&x=memory.bandwidthBytesPerSec:2e12');
+    const q = encodeState(state({ model: { kind: 'hf', id: 'Qwen/Qwen3.8-Flash-Next' }, hw: { deviceEdits: { 'memory.bandwidthBytesPerSec': 2e12 } } }));
+    expect(q).toBe('m=Qwen/Qwen3.8-Flash-Next&x=memory.bandwidthBytesPerSec:2e12');
   });
 
   it('drops junk values and unknown keys, never throws', () => {
@@ -111,5 +111,20 @@ describe('URL codec', () => {
     }
     expect(encodeNumber(2e12)).toBe('2e12');
     expect(encodeNumber(1024)).toBe('1024');
+  });
+
+  it('omits the default model and hardware; another model and old links still work', () => {
+    expect(encodeState(DEFAULT_STATE)).toBe('');
+    expect(encodeState(state({ model: { kind: 'hf', id: 'zai-org/GLM-5.3' } }))).toBe('m=zai-org/GLM-5.3');
+    expect(decodeState('m=zai-org/GLM-5.3').state.model).toEqual({ kind: 'hf', id: 'zai-org/GLM-5.3' });
+    // Old link without m: the default model; `?b=2` keeps the default hardware.
+    const old = decodeState('b=2');
+    expect(old.state.model).toEqual(DEFAULT_STATE.model);
+    expect(old.state.hw).toEqual(DEFAULT_STATE.hw);
+    expect(old.state.workload.batch).toBe(2);
+  });
+
+  it('prefill length and decode context default to 8192 and are written only when different', () => {
+    expect(encodeState(state({ workload: { batch: 1, promptLen: 8192, decodeContextLen: 32768 } }))).toBe('c=32768');
   });
 });

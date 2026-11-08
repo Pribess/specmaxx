@@ -145,6 +145,20 @@ describe('preset library: every device preset', () => {
     expect(DEVICE_PRESET_GROUPS[DEVICE_PRESET_GROUPS.length - 1].name).toBe('Datacenter');
   });
 
+  it('orders every group newest generation first, then by tier', () => {
+    const ids = (name: string) => DEVICE_PRESET_GROUPS.find((g) => g.name === name)?.devices.map((d) => d.id);
+    expect(ids('NVIDIA GeForce')).toEqual(['rtx-5090', 'rtx-4090', 'rtx-3090']);
+    expect(ids('Apple silicon')).toEqual([
+      'apple-m5-ultra-80c', 'apple-m5-ultra-64c', 'apple-m5-max-40c', 'apple-m5-max-32c',
+      'apple-m4-max-40c', 'apple-m4-max-32c', 'apple-m3-ultra-80c', 'apple-m3-ultra-60c',
+    ]);
+    expect(ids('AMD Radeon / Ryzen AI')).toEqual(['radeon-ai-pro-r9700', 'radeon-rx-9070-xt', 'ryzen-ai-max-plus-395']);
+    expect(ids('Intel Arc')).toEqual(['arc-pro-b70', 'arc-pro-b65', 'arc-pro-b60', 'arc-b580']);
+    expect(ids('Datacenter')).toEqual([
+      'b300', 'b200', 'h200-sxm', 'h100-sxm', 'instinct-mi455x', 'instinct-mi355x', 'instinct-mi325x', 'instinct-mi300x',
+    ]);
+  });
+
   it('device ids are unique', () => {
     const ids = DEVICE_PRESETS.map((d) => d.id);
     expect(new Set(ids).size).toBe(ids.length);
