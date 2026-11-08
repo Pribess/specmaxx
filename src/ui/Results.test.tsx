@@ -2,7 +2,7 @@
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { ResultHero, BreakdownTable, MemoryFit, BatchSweepChart, RooflineChart } from './Results';
-import { DEFAULT_STATE, buildSimInput, reduce } from './state';
+import { DEFAULT_STATE, buildSimInput, formatTokensPerSec, reduce } from './state';
 import { BUNDLED_DEFAULT_MODEL } from './state/bundledModel';
 import { inlineRunner } from './sim/runner';
 
@@ -32,7 +32,7 @@ it('describes the effective P2P transport rather than the base host-bounce prese
   expect(screen.getByText(/with direct P2P/)).toBeTruthy();
   expect(screen.queryByText(/host bounce/)).toBeNull();
 });
-it('quotes hero rates at 8k, links only the About text, and removes hardware captions', async () => {
+it('quotes hero rates at 8k and omits redundant per-sequence rates at batch 1', async () => {
   const { built, summary } = await defaultResult();
   const { container } = render(
     <ResultHero
@@ -46,7 +46,13 @@ it('quotes hero rates at 8k, links only the About text, and removes hardware cap
   for (const phase of ['prefill', 'decode']) {
     expect(screen.getByTestId(`${phase}-tps`).parentElement?.textContent).toMatch(/tok\/s @ 8k/);
   }
-  expect(screen.getAllByText(/tok\/s per sequence @ 8k/)).toHaveLength(2);
+  expect(container.querySelectorAll('.answer small[aria-hidden="true"]')).toHaveLength(2);
+  expect(container.querySelectorAll('.answer small')).toHaveLength(2);
+  expect(
+    [...container.querySelectorAll<HTMLElement>('.answer small')].every(
+      (line) => line.style.visibility === 'hidden',
+    ),
+  ).toBe(true);
   const note = container.querySelector('.theory');
   expect(note?.textContent).toContain('This is a theoretical maximum.');
   expect(
@@ -56,6 +62,28 @@ it('quotes hero rates at 8k, links only the About text, and removes hardware cap
   ).toBe('./about.html');
   expect(container.querySelector('figcaption')).toBeNull();
   expect(screen.queryByText(/memory bandwidth per device/)).toBeNull();
+});
+it('shows terse per-sequence rates at batch 8', async () => {
+  const state = reduce(DEFAULT_STATE, { type: 'setWorkload', workload: { batch: 8 } });
+  const built = buildSimInput(state, BUNDLED_DEFAULT_MODEL);
+  if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));
+  const { summary } = await inlineRunner.run(built.input, built.notes);
+  render(
+    <ResultHero
+      state={state}
+      loaded={BUNDLED_DEFAULT_MODEL}
+      built={built}
+      result={summary}
+      pending={false}
+    />,
+  );
+  for (const phase of ['prefill', 'decode'] as const) {
+    expect(
+      screen.getByText(
+        `${formatTokensPerSec(summary[phase].perSequenceTokensPerSec)} per sequence`,
+      ),
+    ).toBeTruthy();
+  }
 });
 it('scales bound bars by relative row share and uses a labels-only resource legend', async () => {
   const { summary } = await defaultResult();

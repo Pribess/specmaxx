@@ -50,9 +50,18 @@ export function ResultHero({
                     <HeroMemoryWarning stages={result.memory.stages} />
                     <span>tok/s @ {formatContextTokens(result[phase].contextTokens)}</span>
                   </p>
-                  <small>
-                    {formatTokensPerSec(result[phase].perSequenceTokensPerSec)} tok/s per sequence @{' '}
-                    {formatContextTokens(result[phase].contextTokens)}
+                  <small
+                    aria-hidden={state.workload.batch === 1}
+                    style={{
+                      display: 'block',
+                      height: '1.2em',
+                      lineHeight: '1.2',
+                      visibility: state.workload.batch > 1 ? 'visible' : 'hidden',
+                    }}
+                  >
+                    {state.workload.batch > 1
+                      ? `${formatTokensPerSec(result[phase].perSequenceTokensPerSec)} per sequence`
+                      : ''}
                   </small>
                 </div>
               ))}
