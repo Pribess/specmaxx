@@ -94,7 +94,8 @@ export function buildSimInput(state: AppState, loaded: LoadedModel | null): Buil
   const input: SimInput = {
     model: loaded.model,
     quant,
-    parallel: state.parallel,
+    // DP and EP are not user-facing: always 1.
+    parallel: { tp: state.parallel.tp, pp: state.parallel.pp, dp: 1, ep: 1 },
     workload: state.workload,
     hardware: hardware.stack,
     ...(Object.keys(state.options).length > 0 ? { options: state.options } : {}),

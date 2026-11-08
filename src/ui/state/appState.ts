@@ -251,7 +251,8 @@ export function reduce(state: AppState, action: AppAction): AppState {
         ? { ...state, hw: { ...hw, deviceEdits: {}, intraEdits: {}, interEdits: {} } }
         : { ...state, hw: { ...hw, [editsKey(action.target)]: {} } };
     case 'setParallel':
-      return { ...state, parallel: { ...state.parallel, ...action.parallel } };
+      // DP and EP are fixed at 1 (not exposed in the UI).
+      return { ...state, parallel: { ...state.parallel, ...action.parallel, dp: 1, ep: 1 } };
     case 'setWorkload':
       return { ...state, workload: { ...state.workload, ...action.workload } };
     case 'setOptions':

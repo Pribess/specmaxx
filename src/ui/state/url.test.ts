@@ -28,7 +28,7 @@ const STATES: [string, AppState][] = [
       parallel: { tp: 8, pp: 2, dp: 1, ep: 1 },
     }),
   ],
-  ['parallel + workload', state({ parallel: { tp: 2, pp: 1, dp: 2, ep: 4 }, workload: { batch: 8, promptLen: 4096, decodeContextLen: 32768 } })],
+  ['parallel + workload', state({ parallel: { tp: 2, pp: 2, dp: 1, ep: 1 }, workload: { batch: 8, promptLen: 4096, decodeContextLen: 32768 } })],
   ['every option', state({ options: { overlap: 'none', elementwiseFusion: 'ideal', collectiveAlgorithm: 'ring' } })],
 ];
 
@@ -51,11 +51,18 @@ describe('URL codec', () => {
     'm=Qwen/Qwen3.8-27B&rev=main2&w=fp8_e4m3&a=fp8_e4m3',
     'u=pcie-p2p.direct,power-clock.400w&n=2&il=pcie-5-0-x16-host-bounce&xi=latencySec:5e-7&tp=2',
     'x=memory.bandwidthBytesPerSec:2e12&b=16&p=4096&c=4096',
-    'n=4&nodes=2&xl=10gbe-tcp&xe=bandwidthPerDirectionBytesPerSec:2.5e9&tp=4&dp=2&ov=none&fu=ideal&ar=tree',
+    'n=4&nodes=2&xl=10gbe-tcp&xe=bandwidthPerDirectionBytesPerSec:2.5e9&tp=4&ov=none&fu=ideal&ar=tree',
   ])('keeps a canonical query unchanged: %s', (q) => {
     const { state: s, dropped } = decodeState(q);
     expect(dropped).toEqual([]);
     expect(encodeState(s)).toBe(q);
+  });
+
+  it('loads an old URL with dp / ep as 1 / 1 and stops writing them', () => {
+    const { state: s, dropped } = decodeState('tp=2&dp=2&ep=2');
+    expect(s.parallel).toEqual({ tp: 2, pp: 1, dp: 1, ep: 1 });
+    expect(dropped).toEqual([]);
+    expect(encodeState(s)).toBe('tp=2');
   });
 
   it('drops EXL3 bpw values that are out of range or lack w=exl3', () => {
@@ -74,11 +81,11 @@ describe('URL codec', () => {
 
   it('drops junk values and unknown keys, never throws', () => {
     const { state: s, dropped } = decodeState(
-      'm=not a model&w=fp7&d=gtx-1080&tp=0&pp=-1&dp=1.5&b=abc&ov=sometimes&zzz=1&cap=9&eng=npu&n=0',
+      'm=not a model&w=fp7&d=gtx-1080&tp=0&pp=-1&b=abc&ov=sometimes&zzz=1&cap=9&eng=npu&n=0',
     );
     expect(s).toEqual(DEFAULT_STATE);
     expect(dropped.sort()).toEqual(
-      ['m=not a model', 'w=fp7', 'd=gtx-1080', 'tp=0', 'pp=-1', 'dp=1.5', 'b=abc', 'ov=sometimes', 'zzz=1', 'cap=9', 'eng=npu', 'n=0'].sort(),
+      ['m=not a model', 'w=fp7', 'd=gtx-1080', 'tp=0', 'pp=-1', 'b=abc', 'ov=sometimes', 'zzz=1', 'cap=9', 'eng=npu', 'n=0'].sort(),
     );
   });
 

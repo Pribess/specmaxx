@@ -5,7 +5,16 @@ import {
   LINK_PRESETS,
   linkPresetId,
 } from '../../sim/hw/presets';
-import { topologyPresetsFor, matchingSystem, systemChoice } from '../state';
+import {
+  topologyPresetsFor,
+  matchingSystem,
+  systemChoice,
+  reduce,
+  resolveHardware,
+  chooseDegrees,
+  applyQuantOverride,
+  type AppAction,
+} from '../state';
 import { Panel } from './Panel';
 import { Picker } from './Picker';
 import type { PickerOption } from './fuzzy';
@@ -26,7 +35,25 @@ const deviceOptions: PickerOption[] = [
 ];
 
 export function HardwarePanel(props: Props) {
-  const { state, dispatch, built } = props;
+  const { state, built, loaded } = props;
+  /**
+   * Dispatches hardware actions, then picks TP and PP that use all devices of the resulting rig
+   * (TP × PP must equal the device count).
+   */
+  const dispatch = (...actions: AppAction[]) => {
+    for (const a of actions) props.dispatch(a);
+    // Capacity, unlock, engine, link and edit changes keep the user's TP and PP.
+    const resets = actions.some((a) => a.type === 'setHardware' || a.type === 'setDevice' || a.type === 'setCounts');
+    if (!loaded || !resets) return;
+    try {
+      const next = actions.reduce(reduce, state);
+      const topology = resolveHardware(next.hw).topology;
+      const quant = applyQuantOverride(loaded.quant.quant, next.quant, loaded.quant.exl3);
+      props.dispatch({ type: 'setParallel', parallel: chooseDegrees(loaded.model, quant, next.workload, topology) });
+    } catch {
+      // Unresolvable hardware: the build step reports it.
+    }
+  };
   const device = built.hardware?.device;
   const system = matchingSystem(state.hw);
   const selected = system ? `system:${system.id}` : `device:${state.hw.deviceId}`;
@@ -169,11 +196,10 @@ export function HardwarePanel(props: Props) {
               className="quiet"
               key={t.id}
               onClick={() => {
-                dispatch({ type: 'setCounts', devicesPerNode: t.devicesPerNode, nodes: t.nodes });
-                if (t.intraNode)
-                  dispatch({ type: 'setLink', level: 'intra', linkId: linkPresetId(t.intraNode) });
-                if (t.interNode)
-                  dispatch({ type: 'setLink', level: 'inter', linkId: linkPresetId(t.interNode) });
+                const actions: AppAction[] = [{ type: 'setCounts', devicesPerNode: t.devicesPerNode, nodes: t.nodes }];
+                if (t.intraNode) actions.push({ type: 'setLink', level: 'intra', linkId: linkPresetId(t.intraNode) });
+                if (t.interNode) actions.push({ type: 'setLink', level: 'inter', linkId: linkPresetId(t.interNode) });
+                dispatch(...actions);
               }}
             >
               {t.name}

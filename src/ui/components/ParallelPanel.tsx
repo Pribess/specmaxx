@@ -3,26 +3,41 @@ import { Panel } from './Panel';
 import { NumberField } from './NumberField';
 import type { PanelProps as Props } from './types';
 
+/** Help text per field: short sentences, each shown on its own line in the tooltip. */
 const HELP = {
-  tp: "Tensor parallelism: splits each layer's matrices across devices, so every device computes part of every layer and needs an all-reduce per layer. Matters locally when one GPU cannot hold the weights or you want lower latency; needs a fast link (NVLink or PCIe P2P).",
-  pp: 'Pipeline parallelism: splits the layers into consecutive stages on different devices. Only activations cross stage boundaries, so it tolerates slow links (Ethernet, Thunderbolt) and suits multi-machine local clusters. One sequence does not run faster.',
-  dp: 'Data parallelism: runs independent full replicas of the model for more aggregate throughput. Each replica needs the whole model in memory, so it matters when the model fits on a subset of your devices.',
-  ep: 'Expert parallelism: spreads the experts of a mixture-of-experts model across devices, with an all-to-all of tokens. Matters for large MoE models on fast links; no effect on dense models.',
+  tp: [
+    'Splits every layer across GPUs.',
+    'Each GPU holds a slice of the weights.',
+    'Needs a fast link: GPUs sync after every layer.',
+  ],
+  pp: [
+    'Splits the layers into stages, one per GPU.',
+    'Only small activations cross between stages, so slow links are fine.',
+    'A single sequence does not get faster.',
+  ],
 } as const;
+
+function helpLines(lines: readonly string[]) {
+  return lines.map((line) => (
+    <span key={line} className="help-line">
+      {line}
+    </span>
+  ));
+}
 
 export function ParallelPanel({ state, dispatch, loaded, built }: Props) {
   return (
     <Panel
       title="Parallelism"
-      value={`TP ${state.parallel.tp}, PP ${state.parallel.pp}, DP ${state.parallel.dp}, EP ${state.parallel.ep}`}
+      value={`TP ${state.parallel.tp}, PP ${state.parallel.pp}`}
       open
     >
       <div className="fields two">
-        {(['tp', 'pp', 'dp', 'ep'] as const).map((field) => (
+        {(['tp', 'pp'] as const).map((field) => (
           <NumberField
             key={field}
             label={field.toUpperCase()}
-            help={HELP[field]}
+            help={helpLines(HELP[field])}
             value={state.parallel[field]}
             onChange={(v) => dispatch({ type: 'setParallel', parallel: { [field]: v } })}
             issues={built.issues.filter((i) => i.field === field)}

@@ -19,7 +19,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('estimator inputs', () => {
-  it('rejects TP, EP, world-size and batch / DP errors without computing a result', async () => {
+  it('rejects TP and world-size errors without computing a result', async () => {
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B');
     mount();
     await screen.findByText(/qwen:/);
@@ -29,15 +29,11 @@ describe('estimator inputs', () => {
     expect(screen.getByLabelText(/^TP/).getAttribute('aria-invalid')).toBe('true');
     expect(screen.getByText(/Valid TP:/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText(/^TP/), { target: { value: '1' } });
-    fireEvent.change(screen.getByLabelText(/^EP/), { target: { value: '2' } });
-    expect(screen.getByLabelText(/^EP/).getAttribute('aria-invalid')).toBe('true');
-    fireEvent.change(screen.getByLabelText(/^EP/), { target: { value: '1' } });
-    fireEvent.change(screen.getByLabelText(/^DP/), { target: { value: '2' } });
-    expect(screen.getByLabelText(/^Batch size/).getAttribute('aria-invalid')).toBe('true');
-    expect(screen.queryByTestId('decode-tps')).toBeNull();
-    fireEvent.change(screen.getByLabelText(/^Batch size/), { target: { value: '2' } });
+    expect(screen.queryByLabelText(/^DP/)).toBeNull();
+    expect(screen.queryByLabelText(/^EP/)).toBeNull();
+    fireEvent.change(screen.getByLabelText(/^TP/), { target: { value: '2' } });
     expect(screen.getByRole('spinbutton', { name: /^(GPUs|Devices) in one machine$/ }).getAttribute('aria-invalid')).toBe('true');
-    expect(screen.getAllByText(/needs 2 devices; the rig has 1/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/TP × PP = 2, but the rig has 1 device/).length).toBeGreaterThan(0);
   });
   it('restores the URL and writes canonical state after a change', async () => {
     history.replaceState(
@@ -169,7 +165,7 @@ describe('estimator inputs', () => {
     const { container } = mount();
     await screen.findByText(/qwen:/);
     const output = container.querySelector('.output')!;
-    expect(output.textContent).toMatch(/needs 3 devices; the rig has 2/);
+    expect(output.textContent).toMatch(/TP × PP = 3, but the rig has 2 devices/);
     expect(output.textContent).not.toMatch(/inputs below/);
   });
   it('opens on the default state: Qwen3.8-27B, 8k / 8k, numbers without any loader call', async () => {
@@ -189,6 +185,38 @@ describe('estimator inputs', () => {
     expect(screen.getByRole('combobox', { name: 'Device' }).textContent).toMatch(/RTX 5090 ×4/);
     await waitFor(() => expect(new URLSearchParams(location.search).get('n')).toBe('4'));
     expect(new URLSearchParams(location.search).get('il')).toBeTruthy();
+  });
+  it.each([['DGX Spark ×4', ''], ['R9700 ×4', '?n=2&tp=2'], ['DGX Spark ×4', '?n=3&pp=3']])(
+    'picking %s from %j chooses TP and PP that use all 4 devices',
+    async (name, query) => {
+      history.replaceState(null, '', `/${query}${query ? '&' : '?'}m=Qwen/Qwen3.8-27B`);
+      mount();
+      await screen.findByTestId('prefill-tps');
+      fireEvent.click(screen.getByRole('combobox', { name: 'Device' }));
+      fireEvent.click(await screen.findByRole('option', { name: new RegExp(name) }));
+      await waitFor(() => expect(screen.getByTestId('device-total').textContent).toMatch(/= 4 /));
+      const tp = Number((screen.getByLabelText(/^TP/) as HTMLInputElement).value);
+      const pp = Number((screen.getByLabelText(/^PP/) as HTMLInputElement).value);
+      expect(tp * pp).toBe(4);
+      expect(await screen.findByTestId('prefill-tps')).toBeTruthy();
+      expect(screen.queryByText(/unused|must be equal/)).toBeNull();
+    },
+  );
+  it('a huge device count shows validation errors instead of hanging', async () => {
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B');
+    const { container } = mount();
+    await screen.findByTestId('prefill-tps');
+    (container.querySelector('details.advanced') as HTMLDetailsElement).open = true;
+    fireEvent.change(screen.getByRole('spinbutton', { name: /^(GPUs|Devices) in one machine$/ }), { target: { value: '18014398509481984' } });
+    await waitFor(() => expect(screen.queryByTestId('prefill-tps')).toBeNull());
+    expect(screen.getAllByText(/must be equal|TP × PP/).length).toBeGreaterThan(0);
+  });
+  it('TP × PP below the device count blocks the simulation', async () => {
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B&n=4&tp=2');
+    mount();
+    await screen.findByText(/qwen:/);
+    expect(await screen.findAllByText(/TP × PP = 2, but the rig has 4 devices/)).not.toHaveLength(0);
+    expect(screen.queryByTestId('prefill-tps')).toBeNull();
   });
   it('filters the device list by search and selects with the keyboard', async () => {
     mount();

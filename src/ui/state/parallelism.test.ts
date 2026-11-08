@@ -7,7 +7,9 @@ import { fixtureRepoFiles } from '../../sim/models/__fixtures__/fixtures.testuti
 import { nodeTopology } from '../../sim/hw/presets/topologies';
 import { PCIE_5_X16 } from '../../sim/hw/presets/links';
 import type { Workload } from '../../sim/engine/types';
-import { fieldIssues, placementField, shardingField, validDegrees, type FieldIssue } from './parallelism';
+import { SYSTEM_PRESETS } from '../../sim/hw/presets/index';
+import { resolveHardware, systemChoice } from './hardware';
+import { chooseDegrees, fieldIssues, placementField, shardingField, validDegrees, type FieldIssue } from './parallelism';
 
 function load(repo: string): { model: ModelSpec; quant: QuantConfig } {
   const r = mapHfModel(fixtureRepoFiles(repo));
@@ -26,11 +28,17 @@ const issues = (m: { model: ModelSpec; quant: QuantConfig }, parallel: Partial<P
 const errorsOf = (list: FieldIssue[], field: FieldIssue['field']) => list.filter((i) => i.level === 'error' && i.field === field);
 
 describe('fieldIssues', () => {
-  it('is clean for a valid input, with a warning for unused devices', () => {
-    const list = issues(QWEN_27B, { tp: 2 });
-    expect(list.filter((i) => i.level === 'error')).toEqual([]);
-    expect(list).toContainEqual({ field: 'devices', level: 'warning', message: '6 of 8 devices are unused (TP × PP × DP = 2).' });
+  it('is clean when TP × PP equals the device count', () => {
     expect(issues(QWEN_27B, { tp: 8 })).toEqual([]);
+    expect(issues(QWEN_27B, { tp: 4, pp: 2 })).toEqual([]);
+  });
+
+  it('TP × PP below or above the device count is an error on devices, mentioning only TP and PP', () => {
+    const under = errorsOf(issues(QWEN_27B, { tp: 2 }), 'devices');
+    expect(under).toHaveLength(1);
+    expect(under[0].message).toBe('TP × PP = 2, but the rig has 8 devices. They must be equal.');
+    expect(errorsOf(issues(QWEN_27B, { tp: 4, pp: 4 }), 'devices')[0].message).toMatch(/TP × PP = 16/);
+    for (const m of [under[0].message]) expect(m).not.toMatch(/\b(DP|EP)\b/);
   });
 
   it('TP 3 on Qwen3.8-27B: sharding and placement errors on tp, deduplicated over layers', () => {
@@ -47,20 +55,12 @@ describe('fieldIssues', () => {
     expect(list.map((i) => i.field).sort()).toEqual(['batch', 'pp', 'tp']);
   });
 
-  it('world size, batch % dp, pp ≤ layers, EP needs MoE', () => {
-    expect(errorsOf(issues(QWEN_27B, { tp: 4, dp: 4 }), 'devices')).toHaveLength(1);
-    expect(errorsOf(issues(QWEN_27B, { dp: 2 }, { batch: 3 }), 'batch')).toHaveLength(1);
+  it('world size and pp ≤ layers; DP and EP are ignored', () => {
+    expect(errorsOf(issues(QWEN_27B, { tp: 4, pp: 4 }), 'devices')).toHaveLength(1);
     const many = nodeTopology({ devicesPerNode: 128, nodes: 1, intraNode: PCIE_5_X16 });
     expect(errorsOf(issues(QWEN_27B, { pp: 65 }, {}, many), 'pp').some((i) => /exceeds the 64 layers/.test(i.message))).toBe(true);
-    expect(errorsOf(issues(QWEN_27B, { ep: 2, tp: 2 }), 'ep')[0].message).toMatch(/dense/);
-  });
-
-  it('EP errors on the MoE model go to ep, multi-rule messages split', () => {
-    const ep = errorsOf(issues(FLASH_NEXT, { tp: 2, ep: 3 }), 'ep');
-    expect(ep.some((i) => /experts \(512\) must be divisible by ep \(3\)/.test(i.message))).toBe(true);
-    expect(ep.some((i) => /^moe: ep \(3\) must divide tp/.test(i.message))).toBe(true);
-    expect(ep.every((i) => !i.message.includes('\n'))).toBe(true);
-    expect(issues(FLASH_NEXT, { tp: 2, dp: 4, ep: 8 }, { batch: 4 })).toEqual([]);
+    expect(issues(QWEN_27B, { tp: 8, dp: 4, ep: 2 }, { batch: 3 }).filter((i) => i.level === 'error')).toEqual([]);
+    expect(issues(FLASH_NEXT, { tp: 8, ep: 3 }).filter((i) => i.level === 'error')).toEqual([]);
   });
 
   it('a missing link is a placement error on the degree that needs it', () => {
@@ -72,21 +72,11 @@ describe('fieldIssues', () => {
 
 describe('validDegrees', () => {
   it('Qwen3.8-27B on 8 devices', () => {
-    const v = (field: keyof ParallelConfig, p: Partial<ParallelConfig> = {}) =>
+    const v = (field: 'tp' | 'pp', p: Partial<ParallelConfig> = {}) =>
       validDegrees(field, QWEN_27B.model, QWEN_27B.quant, { ...ONE, ...p }, LOAD, BOX_8);
     expect(v('tp')).toEqual([1, 2, 4, 8]);
-    expect(v('ep')).toEqual([1]);
     expect(v('pp')).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
-    expect(v('tp', { dp: 2 })).toEqual([1, 2, 4]);
-  });
-
-  it('Qwen3.8-Flash-Next: EP at the current TP and DP', () => {
-    const v = (field: keyof ParallelConfig, p: Partial<ParallelConfig>) =>
-      validDegrees(field, FLASH_NEXT.model, FLASH_NEXT.quant, { ...ONE, ...p }, { ...LOAD, batch: 4 }, BOX_8);
-    expect(v('ep', { tp: 2, dp: 4 })).toEqual([1, 2, 4, 8]);
-    expect(v('ep', { tp: 2, dp: 1 })).toEqual([1, 2]);
-    // TP is checked at ep = 1, so the current EP does not narrow it.
-    expect(v('tp', { ep: 8 })).toEqual(v('tp', { ep: 1 }));
+    expect(v('tp', { pp: 2 })).toEqual([1, 2, 4, 8]);
   });
 });
 
@@ -112,5 +102,34 @@ describe('engine message wording this classification relies on', () => {
     expect(checkPlacement({ ...ONE, tp: 1 }, BOX_8).warnings[0]).toMatch(/devices are unused/);
     expect(placementField('tp: x')).toBe('tp');
     expect(placementField('tp·pp·dp = 4 devices needed')).toBe('devices');
+  });
+});
+
+describe('chooseDegrees', () => {
+  const rig = (id: string) => resolveHardware(systemChoice(SYSTEM_PRESETS.find((p) => p.id === id)!)).topology;
+  it.each(['dgx-spark-x4', 'r9700-x4-pcie5'])('%s: TP × PP uses all 4 devices, with no errors', (id) => {
+    const topology = rig(id);
+    for (const m of [QWEN_27B, FLASH_NEXT]) {
+      const { tp, pp } = chooseDegrees(m.model, m.quant, LOAD, topology);
+      expect(tp * pp).toBe(4);
+      expect(fieldIssues(m.model, m.quant, { tp, pp, dp: 1, ep: 1 }, LOAD, topology).filter((i) => i.level === 'error')).toEqual([]);
+    }
+  });
+  it('one device: 1 × 1', () => {
+    expect(chooseDegrees(QWEN_27B.model, QWEN_27B.quant, LOAD, nodeTopology({ devicesPerNode: 1, nodes: 1 }))).toEqual({ tp: 1, pp: 1 });
+  });
+  it('3 devices on a model whose heads do not divide by 3: pipeline only', () => {
+    expect(chooseDegrees(QWEN_27B.model, QWEN_27B.quant, LOAD, nodeTopology({ devicesPerNode: 3, nodes: 1, intraNode: PCIE_5_X16 }))).toEqual({ tp: 1, pp: 3 });
+  });
+  it('no valid split: TP = PP = 1', () => {
+    expect(chooseDegrees(QWEN_27B.model, QWEN_27B.quant, LOAD, nodeTopology({ devicesPerNode: 1000, nodes: 1, intraNode: PCIE_5_X16 }))).toEqual({ tp: 1, pp: 1 });
+  });
+  it.each([1e6, 2 ** 54, 2 ** 60, Infinity, NaN])('a huge or unsafe device count (%s) returns promptly with TP = PP = 1', (n) => {
+    const start = Date.now();
+    const topology = nodeTopology({ devicesPerNode: n, nodes: 1, intraNode: PCIE_5_X16 });
+    const { tp, pp } = chooseDegrees(QWEN_27B.model, QWEN_27B.quant, LOAD, topology);
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(tp).toBe(1);
+    expect(pp).toBe(1);
   });
 });

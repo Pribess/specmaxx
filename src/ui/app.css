@@ -905,3 +905,10 @@ thead th:last-child {
   color: var(--muted);
   font-size: 13px;
 }
+
+.help-line {
+  display: block;
+}
+.help-line + .help-line {
+  margin-top: 0.5em;
+}

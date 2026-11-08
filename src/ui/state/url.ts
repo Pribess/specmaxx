@@ -13,7 +13,7 @@
  * | `n`, `nodes` | devices per node, nodes | `n=2` |
  * | `il`, `xl` | intra / inter link preset ids (`linkPresetId`) | `il=pcie-5-0-x16-direct-p2p` |
  * | `x`, `xi`, `xe` | spec edits on device / intra link / inter link, `path:value` comma list, SI units | `x=memory.bandwidthBytesPerSec:2e12` |
- * | `tp`, `pp`, `dp`, `ep` | parallel degrees | `tp=2` |
+ * | `tp`, `pp` | parallel degrees (old `dp` / `ep` are ignored: both fixed at 1) | `tp=2` |
  * | `b`, `p`, `c` | batch, prefill length (default 8192), decode context (default 8192) | `b=8` |
  * | `ov`, `fu`, `ar` | overlap, elementwise fusion, all-reduce algorithm | `ov=none` |
  */
@@ -103,7 +103,7 @@ export function encodeState(s: AppState): string {
   if (Object.keys(hw.deviceEdits).length > 0) put('x', encodeEdits(hw.deviceEdits));
   if (Object.keys(hw.intraEdits).length > 0) put('xi', encodeEdits(hw.intraEdits));
   if (Object.keys(hw.interEdits).length > 0) put('xe', encodeEdits(hw.interEdits));
-  for (const key of ['tp', 'pp', 'dp', 'ep'] as const) if (s.parallel[key] !== 1) put(key, s.parallel[key]);
+  for (const key of ['tp', 'pp'] as const) if (s.parallel[key] !== 1) put(key, s.parallel[key]);
   const w = s.workload;
   const dw = DEFAULT_STATE.workload;
   if (w.batch !== dw.batch) put('b', w.batch);
@@ -254,7 +254,10 @@ export function decodeState(search: string): DecodedState {
 
   // Parallelism and workload.
   const parallel = { ...DEFAULT_STATE.parallel };
-  for (const key of ['tp', 'pp', 'dp', 'ep'] as const) {
+  // Old URLs may carry dp / ep; they are accepted and forced to 1.
+  get('dp');
+  get('ep');
+  for (const key of ['tp', 'pp'] as const) {
     const v = get(key);
     if (v === undefined) continue;
     const parsed = parseInteger(v, 1, MAX_VALUE);
