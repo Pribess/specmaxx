@@ -2,7 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { mapHfModel } from '../../sim/models/hf/index';
 import { fixtureRepoFiles } from '../../sim/models/__fixtures__/fixtures.testutil';
 import type { QuantDefaults } from '../../sim/models/hf/types';
-import { QUANT_DTYPE_CHOICES, REFERENCE_QUANT_DEFAULTS, applyQuantOverride, hasQuantOverride, quantSummary, resolvedDefault } from './quant';
+import {
+  EXL3_CUSTOM_KEY,
+  EXL3_MODEL_KEY,
+  QUANT_DTYPE_CHOICES,
+  REFERENCE_QUANT_DEFAULTS,
+  applyQuantOverride,
+  exl3PickerKey,
+  hasQuantOverride,
+  quantSummary,
+  resolvedDefault,
+} from './quant';
 
 function defaults(repo: string, dir?: string): QuantDefaults {
   const r = mapHfModel(fixtureRepoFiles(repo, dir ? { dir } : {}));
@@ -116,5 +126,15 @@ describe('resolvedDefault', () => {
   it('names the EXL3 bits per weight', () => {
     const d = defaults('bertholomus/DeepSeek-V4.1-Flash-1017-EXL3-2.5bpw', 'quant');
     expect(resolvedDefault(d.quant, 'weights').label).toBe('exl3 2.52bpw');
+  });
+});
+
+describe('exl3PickerKey', () => {
+  it('selects the preset matching the bpw, the checkpoint entry for its own non-preset bpw, else custom', () => {
+    expect(exl3PickerKey(2.5, undefined, false)).toBe('exl3:2.5');
+    expect(exl3PickerKey(4, 2.9, false)).toBe('exl3:4');
+    expect(exl3PickerKey(2.9, 2.9, false)).toBe(EXL3_MODEL_KEY);
+    expect(exl3PickerKey(3.7, 2.9, false)).toBe(EXL3_CUSTOM_KEY);
+    expect(exl3PickerKey(2.5, undefined, true)).toBe(EXL3_CUSTOM_KEY);
   });
 });

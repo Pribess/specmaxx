@@ -43,6 +43,8 @@ describe('quant picker defaults', () => {
         /Model default \(exl3 2\.52bpw\)/,
       ),
     );
+    fireEvent.click(screen.getByRole('combobox', { name: 'Weights' }));
+    expect(await screen.findByRole('option', { name: 'EXL3 2.52bpw (model default)' })).toBeTruthy();
   });
 });
 
@@ -126,29 +128,35 @@ describe('estimator inputs', () => {
     const decodeBf16 = (await screen.findByTestId('decode-tps')).textContent;
     expect(screen.queryByLabelText('Bits per weight')).toBeNull();
     fireEvent.click(screen.getByRole('combobox', { name: 'Weights' }));
-    fireEvent.click(await screen.findByRole('option', { name: 'exl3' }));
-    const bpw = screen.getByLabelText('Bits per weight') as HTMLInputElement;
-    expect(bpw.value).toBe('4');
-    expect(bpw.step).toBe('0.05');
-    expect(screen.getByLabelText('Head bits per weight')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Bits per weight/ })).toBeTruthy(); // the "?" help icon
-    fireEvent.change(bpw, { target: { value: '2.5' } });
+    fireEvent.click(await screen.findByRole('option', { name: 'EXL3 2.5bpw' }));
     await waitFor(() => expect(new URLSearchParams(location.search).get('bpw')).toBe('2.5'));
     expect(new URLSearchParams(location.search).get('w')).toBe('exl3');
+    expect(screen.queryByLabelText('Bits per weight')).toBeNull();
+    expect(screen.getByLabelText('Head bits per weight')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'About Head bits per weight' })).toBeTruthy(); // the "?" help icon
     const decode25 = screen.getByTestId('decode-tps').textContent;
     expect(decode25).not.toBe(decodeBf16);
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Weights' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'EXL3 custom…' }));
+    const bpw = screen.getByLabelText('Bits per weight') as HTMLInputElement;
+    expect(bpw.value).toBe('2.5');
+    expect(bpw.step).toBe('0.05');
     fireEvent.change(bpw, { target: { value: '4' } });
     await waitFor(() => expect(screen.getByTestId('decode-tps').textContent).not.toBe(decode25));
     fireEvent.change(bpw, { target: { value: '2.5' } });
     await waitFor(() => expect(screen.getByTestId('decode-tps').textContent).toBe(decode25));
 
-    // Round trip: a fresh app from the written URL shows the same bpw and result.
+    // Round trip: a fresh app from the written URL selects the 2.5 preset and shows the same result.
     const url = location.search;
     first.unmount();
     history.replaceState(null, '', `/${url}`);
     mount();
     await screen.findByText(/qwen:/);
-    expect((screen.getByLabelText('Bits per weight') as HTMLInputElement).value).toBe('2.5');
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Weights' }).textContent).toMatch(/EXL3 2\.5bpw/),
+    );
+    expect(screen.queryByLabelText('Bits per weight')).toBeNull();
     await waitFor(() => expect(screen.getByTestId('decode-tps').textContent).toBe(decode25));
   });
   it('ignores stale HF responses', async () => {

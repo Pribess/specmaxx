@@ -94,6 +94,14 @@ for (const size of ['desktop', 'phone'] as const) {
       await page.screenshot({ path: `${name}-device-picker.png` });
       await page.keyboard.press('Escape');
 
+      // The opened Weights picker with the EXL3 group.
+      if (size === 'phone') await page.locator('details.panel > summary', { hasText: 'Quantization' }).click();
+      await page.getByRole('combobox', { name: 'Weights' }).click();
+      await page.getByRole('option', { name: 'EXL3 custom…' }).scrollIntoViewIfNeeded();
+      await expect(page.getByRole('option', { name: 'EXL3 custom…' })).toBeVisible();
+      await page.screenshot({ path: `${name}-weights-picker.png` });
+      await page.keyboard.press('Escape');
+
       // The opened device picker scrolled to the middle of its list: rows scroll beneath the search header,
       // the popup is as wide as its trigger, and its themed scrollbar sits inside the rounded border.
       const deviceTrigger = page.getByRole('combobox', { name: 'Device', exact: true });

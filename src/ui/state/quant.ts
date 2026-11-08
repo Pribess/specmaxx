@@ -165,3 +165,29 @@ export function resolvedDefault(
     .join('; ');
   return { label, detail };
 }
+
+/** The EXL3 average bpw presets listed in the Weights picker. Unit: bits/weight. */
+export const EXL3_BPW_PRESETS: number[] = [2, 2.5, 3, 3.5, 4, 5, 6, 8];
+
+/** Weights-picker value of the `EXL3 custom…` entry (the bpw field is shown). */
+export const EXL3_CUSTOM_KEY = 'exl3:custom';
+
+/** Weights-picker value of the `EXL3 <bpw>bpw (model default)` entry for a checkpoint bpw that is not a preset. */
+export const EXL3_MODEL_KEY = 'exl3:model';
+
+/** Weights-picker value of the preset entry for `bpw`. */
+export function exl3PresetKey(bpw: number): string {
+  return `exl3:${bpw}`;
+}
+
+/**
+ * The Weights-picker entry selected under EXL3 weights. `bpw` is the effective bpw, `checkpointBpw` the
+ * checkpoint's stated bpw, and `custom` whether the user picked `EXL3 custom…`. A bpw that is neither a
+ * preset nor the checkpoint's shows as custom.
+ */
+export function exl3PickerKey(bpw: number, checkpointBpw: number | undefined, custom: boolean): string {
+  if (custom) return EXL3_CUSTOM_KEY;
+  if (EXL3_BPW_PRESETS.includes(bpw)) return exl3PresetKey(bpw);
+  if (checkpointBpw === bpw) return EXL3_MODEL_KEY;
+  return EXL3_CUSTOM_KEY;
+}

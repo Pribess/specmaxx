@@ -25,13 +25,13 @@ test('EXL3 weights at 2.5 bpw change the rate and survive a reload', async ({ pa
   await expect(page.getByTestId('decode-tps')).toHaveText(/[1-9]/);
   const before = await page.getByTestId('decode-tps').textContent();
   await page.getByRole('combobox', { name: 'Weights' }).click();
-  await page.getByRole('option', { name: 'exl3', exact: true }).click();
-  await page.getByLabel('Bits per weight', { exact: true }).fill('2.5');
+  await page.getByRole('option', { name: 'EXL3 2.5bpw', exact: true }).click();
   await expect(page).toHaveURL(/w=exl3/);
   await expect(page).toHaveURL(/bpw=2\.5/);
+  await expect(page.getByLabel('Bits per weight', { exact: true })).toHaveCount(0);
   await expect(page.getByTestId('decode-tps')).not.toHaveText(before ?? '');
   const after = await page.getByTestId('decode-tps').textContent();
   await page.reload();
-  await expect(page.getByLabel('Bits per weight', { exact: true })).toHaveValue('2.5');
+  await expect(page.getByRole('combobox', { name: 'Weights' })).toHaveText(/EXL3 2\.5bpw/);
   await expect(page.getByTestId('decode-tps')).toHaveText(after ?? '');
 });
