@@ -235,5 +235,5 @@ export function assemble(reading: SchemeReading, set: ProbeSet, ctx: SchemeConte
   if (quant.modules) explicit.push('modules');
   if (quant.lookupTables) explicit.push('lookupTables');
 
-  return { quant, scheme: reading.label, source: reading.source, notes, explicit };
+  return { quant, scheme: reading.label, source: reading.source, notes, explicit, ...(reading.exl3 ? { exl3: reading.exl3 } : {}) };
 }

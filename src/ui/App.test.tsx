@@ -95,6 +95,38 @@ describe('estimator inputs', () => {
     expect(screen.queryByRole('button', { name: 'Reset to model default' })).toBeNull();
     await screen.findByTestId('decode-tps');
   });
+  it('EXL3 weights at 2.5 bpw change the result and survive a URL round-trip', async () => {
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B');
+    const first = mount();
+    await screen.findByText(/qwen:/);
+    const decodeBf16 = (await screen.findByTestId('decode-tps')).textContent;
+    expect(screen.queryByLabelText('Bits per weight')).toBeNull();
+    fireEvent.click(screen.getByRole('combobox', { name: 'Weights' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'exl3' }));
+    const bpw = screen.getByLabelText('Bits per weight') as HTMLInputElement;
+    expect(bpw.value).toBe('4');
+    expect(bpw.step).toBe('0.05');
+    expect(screen.getByLabelText('Head bits per weight')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Bits per weight/ })).toBeTruthy(); // the "?" help icon
+    fireEvent.change(bpw, { target: { value: '2.5' } });
+    await waitFor(() => expect(new URLSearchParams(location.search).get('bpw')).toBe('2.5'));
+    expect(new URLSearchParams(location.search).get('w')).toBe('exl3');
+    const decode25 = screen.getByTestId('decode-tps').textContent;
+    expect(decode25).not.toBe(decodeBf16);
+    fireEvent.change(bpw, { target: { value: '4' } });
+    await waitFor(() => expect(screen.getByTestId('decode-tps').textContent).not.toBe(decode25));
+    fireEvent.change(bpw, { target: { value: '2.5' } });
+    await waitFor(() => expect(screen.getByTestId('decode-tps').textContent).toBe(decode25));
+
+    // Round trip: a fresh app from the written URL shows the same bpw and result.
+    const url = location.search;
+    first.unmount();
+    history.replaceState(null, '', `/${url}`);
+    mount();
+    await screen.findByText(/qwen:/);
+    expect((screen.getByLabelText('Bits per weight') as HTMLInputElement).value).toBe('2.5');
+    await waitFor(() => expect(screen.getByTestId('decode-tps').textContent).toBe(decode25));
+  });
   it('ignores stale HF responses', async () => {
     const pending = new Map<string, (value: Awaited<ReturnType<ModelLoader>>) => void>();
     const loader: ModelLoader = (id) =>

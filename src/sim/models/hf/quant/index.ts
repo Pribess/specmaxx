@@ -20,6 +20,7 @@
 import type { SchemeContext, SchemeReading } from './common';
 import { modelDtypeOf, objAt, strAt } from './common';
 import { readBitsAndBytes } from './bnb';
+import { readExl3 } from './exl3';
 import { readCompressedTensors } from './compressedTensors';
 import { mistralCacheFlags, readFp8, readMistralParamsQuantization } from './fp8';
 import { readAutoRound, readAwq, readGptq } from './gptq';
@@ -81,6 +82,8 @@ function readByMethod(
     case 'autoround':
     case 'intel/auto-round':
       return { ...readAutoRound(qc, ctx), source };
+    case 'exl3':
+      return { ...readExl3(qc, ctx), source };
     case 'bitsandbytes':
       return { ...readBitsAndBytes(qc, ctx), source };
     case 'mlx':

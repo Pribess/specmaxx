@@ -105,7 +105,15 @@ parallelism into the ops ONE device runs per stage, with concrete shapes and dty
 - Storage bits per element: `bits = elementBits + blockScaleBitsPerElem + extraBitsPerElem`;
   `bpe = bits / 8`. Block scales: MX formats 8 bit per 32 elements (0.25 bit/elem); nvfp4 8 bit per 16 (0.5).
   `extraBitsPerElem` carries group-quantization overhead outside the dtype, e.g. GPTQ int4 g128 with a 16-bit
-  scale and 4-bit zero: (16 + 4)/128 = 0.15625.
+  scale and 4-bit zero: (16 + 4)/128 = 0.15625. Two more optional fields cover fractional-bit trellis formats
+  (EXL3, "Quant overheads" below): `valueBitsPerElem` replaces the dtype's `elementBits` (e.g. 2.5), and
+  `perDimBits` is stored once per row and once per column of each PHYSICAL matrix, so a `rows × cols` matrix takes
+  `matrixStoredBytes = rows·cols·bits/8 + perDimBits·(rows + cols)/8` (`dtype.ts`). A fused GEMM (`qkv_proj`,
+  `gate_up`, KDA `lin.qkv`, `in_proj`) lists its physical matrices in `GemmOp.outParts`; each part carries its own
+  vectors, so `sideVectorBytes = perDimBits·(rows + P·cols)/8` with `P` the number of non-empty parts. Empty
+  matrices (no shared experts, rank-0 gates) store nothing. An op that runs only a slice of one stored matrix sets `GemmOp.sideVectorElems`, its explicit share of the
+  side-vector entries: the MLA absorbed `q_absorb` (`Hl·dn + rkv`) and `v_absorb` (`Hl·dv`) split the stored `kv_b`
+  (`Hl·(dn+dv)` rows, `rkv` columns), so decode and prefill (MHA `kv_b`) charge identical bytes.
 - **GEMM input class** (`resolveGemmMath`): the operand with more element bits wins (int4 × bf16 runs at the
   bf16 rate, because weight-only quantization dequantizes); on a tie the activation's format wins.
 - **Accumulator** (`resolveAccumulate`): integer inputs → `int32`; bf16 / tf32 / fp32 → always `fp32`;
@@ -158,6 +166,49 @@ scale or zero point outside the dtype goes into `extraBitsPerElem`, amortized pe
 | bitsandbytes NF4 / FP4, absmax per 64 (codes stored as `int4`) | `int4` | fp32 absmax 32/64 = 0.5; double quant 8/64 + 32/(64·256) ≈ 0.127 | `bnb.ts` |
 | bitsandbytes int8 (LLM.int8(), per-row fp32 scale; fp16 outlier columns not modeled) | `int8` | ≈ 0 | `bnb.ts` |
 | MLX affine `b`-bit g`g` (16-bit scale + 16-bit bias per group) | `int4` / `int8` (widths without a dtype round up, noted) | 32/g: g64 0.5 | `mlx.ts` |
+
+#### EXL3 (ExLlamaV3, fractional bits per weight)
+
+`src/sim/ir/exl3.ts: exl3Format`, reader `quant/exl3.ts` (`quant_method: "exl3"`). Format facts, from exllamav3's
+`LinearEXL3` (`exllamav3/modules/quant/exl3.py`), its converter docs (`doc/convert.md`) and real EXL3 configs
+(fixtures in `src/sim/models/__fixtures__/quant/`):
+
+- Per quantized linear the checkpoint stores `trellis` (int16 `[in/16, out/16, 16·K]`: a 16×16 tile takes `16·K`
+  words = `256·K` bits, so exactly `K` bits per weight; `K` is an integer 1–8, or a half-integer with the `mul1`
+  codebook), `suh` (`in` fp16) and `svh` (`out` fp16) Hadamard sign/scale vectors, and one codebook scalar
+  (`mul1` / `mcg`, ≈ 0). A checkpoint's "2.5 bpw" is the AVERAGE of `K` over its tensors; the converter's
+  per-tensor allocation (and `--recipe` files) are not in `config.json`, so the simulation applies the average to
+  every linear layer.
+- `config.json` `quantization_config`: `{ quant_method: "exl3", version, bits, head_bits, calibration, out_scales,
+  codebook, mtp_bits, vision_bits, original_quantization_config? }`. The average key is `bits` (turboderp,
+  converter `-b`), `bpw` or `avg_bits` (community mixed-precision optimizers); `head_bits` (converter default 6;
+  16 = unquantized) is the LM head; `mtp_bits` / `vision_bits` concern parts outside the IR;
+  `original_quantization_config` describes the source checkpoint and is ignored. A community `scope:
+  "…routed_experts_only"` quantizes only the routed experts. turboderp publishes one repo per model with a branch
+  per bitrate (`SC_4.00bpw_H5_V6`, `sc_3.10bpw`), each with its own `config.json`.
+- Scope: attention, MLP, shared and routed experts, indexer and linear-attention projections at `bits`; LM head at
+  `head_bits`; embeddings, routers, norms, hyper-connection mixers and n-gram lookup tables stay unquantized
+  (`--embed_bits` default 16).
+
+Weight bytes, with `bpw` = average bits per weight and `n × k` the matrix shape:
+
+```
+bytes(n×k matrix) = n·k·bpw/8 + 16·(n + k)/8        (trellis + fp16 suh/svh;  bpw clamped to [1, 8])
+bytes(fused GEMM) = n·k·bpw/8 + 16·(n + P·k)/8     (P physical matrices share the k input features; GemmOp.outParts)
+```
+
+so 2.5 bpw costs `params × 2.5 / 8` bytes plus the side vectors (< 1 % for 4096-wide matrices); `head_bits` 16 is
+plain fp16. Decode in the memory-bound regime therefore scales as ≈ 1/bpw (`ir/exl3.test.ts`).
+
+**Compute dtype.** The kernels decode the trellis to fp16 inside the tensor-core matmul (small row counts), or
+reconstruct an fp16 weight and call a normal fp16 GEMM (above ~144 rows). Either way the GEMM is fp16 × fp16 with
+the accumulate of `QuantConfig.accumulate`. The format is stored as `{ dtype: 'fp16', valueBitsPerElem, perDimBits }`,
+so `resolveGemmMath` (more element bits wins, tie → activations) gives the activation dtype's peak for 16-bit
+activations and fp16 for fp8 activations. The reader sets `activations: 'fp16'` (exllamav3 runs in fp16). The
+trellis decode and the Hadamard rotations are NOT charged as FLOPs: they are integer/add-only work that overlaps the
+matmul, and this model counts weight bytes and GEMM FLOPs only (dequantization is free compute, like every
+weight-only scheme above). Where that overlap fails (very low bpw on a compute-limited GPU) the real kernel is
+slower than the theoretical maximum.
 
 Weight-only schemes leave `gemmInput` unset (the GEMM runs at the activations' format, §2 "GEMM input class");
 schemes that also quantize activations (`input_activations`, W8A8 / W4A4 algorithms, AutoRound `act_bits` < 16)
@@ -230,7 +281,7 @@ work of one device on its stage's critical path for one microbatch step. Notatio
 have distinct weights (grouped experts, MLA per-head absorb).
 
 - `F = 2·b·m·n·k`
-- weights `b·n·k·bpe(w)`; with 2:4 sparsity `b·n·k·(bits/2 + 1)/8` (half the values plus a 2-bit index per kept
+- weights `b·(n·k·bpe(w) + perDimBits·(n + P·k)/8)` (`perDimBits` = 0 except EXL3; `P` = fused physical matrices, `GemmOp.outParts`); with 2:4 sparsity `b·n·k·(bits/2 + 1)/8` (half the values plus a 2-bit index per kept
   value); bias `+ b·n·bpe(bias)`
 - read `b·m·k·bpe(in)`, write `b·m·n·bpe(out)`
 

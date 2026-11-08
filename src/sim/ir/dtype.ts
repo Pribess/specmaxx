@@ -91,7 +91,10 @@ export const DTYPE_INFO: Record<Dtype, DtypeInfo> = {
  * A stored tensor format: a dtype plus optional group-quantization overhead outside the dtype itself.
  */
 export interface TensorFormat {
-  /** Element storage dtype. */
+  /**
+   * Element dtype. For a format with {@link TensorFormat.valueBitsPerElem} it is the DEQUANTIZED dtype the
+   * matmul runs in (EXL3: `fp16`), not the stored width.
+   */
   dtype: Dtype;
   /**
    * Extra amortized bits per element for group-quantization scales/zeros that are not part of the dtype
@@ -99,17 +102,30 @@ export interface TensorFormat {
    * Unit: bits/element. Default 0.
    */
   extraBitsPerElem?: number;
+  /**
+   * Stored bits of one element's VALUE when it is not an integer dtype width: replaces `elementBits` of
+   * {@link TensorFormat.dtype}. Used by trellis formats with fractional bits per weight (EXL3 at 2.5 bpw).
+   * Unit: bits/element (may be fractional). Default: the dtype's `elementBits`.
+   */
+  valueBitsPerElem?: number;
+  /**
+   * Bits stored once per matrix row AND once per matrix column (rank-1 side vectors, e.g. the EXL3 `suh` /
+   * `svh` fp16 sign-flip vectors: 16). A matrix of `rows × cols` elements stores `perDimBits · (rows + cols)`
+   * extra bits, so the overhead is shape dependent and only {@link matrixStoredBytes} accounts for it
+   * ({@link bitsPerElement} does not). Unit: bits per row and per column. Default 0.
+   */
+  perDimBits?: number;
 }
 
 /**
- * Storage bits per element of a tensor format, including block scales and group-quant overhead.
- * Unit: bits/element.
+ * Storage bits per element of a tensor format, including block scales and group-quant overhead but not the
+ * shape-dependent {@link TensorFormat.perDimBits}. Unit: bits/element.
  */
 export function bitsPerElement(f: TensorFormat): number {
   const info = DTYPE_INFO[f.dtype];
-  // Formula: bits = elementBits + blockScaleBitsPerElem + extraBitsPerElem
+  // Formula: bits = valueBits + blockScaleBitsPerElem + extraBitsPerElem      (valueBits = elementBits by default)
   // See docs/simulation-model.md §2
-  const bits = info.elementBits + info.blockScaleBitsPerElem + (f.extraBitsPerElem ?? 0);
+  const bits = (f.valueBitsPerElem ?? info.elementBits) + info.blockScaleBitsPerElem + (f.extraBitsPerElem ?? 0);
   return bits;
 }
 
@@ -117,6 +133,32 @@ export function bitsPerElement(f: TensorFormat): number {
 export function bytesPerElement(f: TensorFormat): number {
   // Formula: bpe = bits / 8
   return bitsPerElement(f) / 8;
+}
+
+/**
+ * Bytes of the per-row and per-column side vectors ({@link TensorFormat.perDimBits}) of a `rows × cols` weight.
+ * An empty matrix (`rows` or `cols` 0) stores none. Unit: bytes.
+ *
+ * `rowParts` is for a GEMM whose weight is several PHYSICAL matrices fused along the row (output) dimension,
+ * e.g. q, k and v in one `qkv_proj` GEMM: the parts sum to `rows`, each part stores its own row vector and its
+ * own copy of the `cols` column vector, and empty parts are skipped.
+ */
+export function sideVectorBytes(f: TensorFormat, rows: number, cols: number, rowParts?: readonly number[]): number {
+  if (rows <= 0 || cols <= 0) return 0;
+  const matrices = rowParts === undefined ? 1 : rowParts.filter((p) => p > 0).length;
+  // Formula: bytes = perDimBits·(rows + P·cols)/8      (P = physical matrices sharing the columns)
+  // See docs/simulation-model.md §2 (EXL3)
+  return ((f.perDimBits ?? 0) * (rows + matrices * cols)) / 8;
+}
+
+/**
+ * Stored bytes of one dense `rows × cols` weight in format `f`: the elements plus {@link sideVectorBytes}.
+ * Empty weights store nothing. Unit: bytes.
+ */
+export function matrixStoredBytes(f: TensorFormat, rows: number, cols: number, rowParts?: readonly number[]): number {
+  if (rows <= 0 || cols <= 0) return 0;
+  // Formula: bytes = rows·cols·bits/8 + sideVectorBytes
+  return (rows * cols * bitsPerElement(f)) / 8 + sideVectorBytes(f, rows, cols, rowParts);
 }
 
 /** Matmul input class of a storage dtype. Throws for `int32`, which is never a matmul input. */

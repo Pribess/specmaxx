@@ -47,6 +47,19 @@ export interface GemmOp {
    * device's 2:4 sparse peak and stores half the values plus 2-bit indices per kept value).
    */
   sparsity: 'dense' | '2:4';
+  /**
+   * Output widths of the physical weight matrices fused into this GEMM's `n` (they sum to `n`), e.g. q, k, v of
+   * a `qkv_proj`. Only matters for formats with per-matrix side vectors (EXL3 `perDimBits`): each part carries
+   * its own vectors. Absent: one matrix. Unit: elements.
+   */
+  outParts?: number[];
+  /**
+   * Total side-vector entries (per-row plus per-column `perDimBits`-wide values, summed over the batch) this op
+   * is charged, replacing the shape-derived count. For an op that executes only a slice of a physical matrix:
+   * the MLA absorbed `q_absorb` / `v_absorb` split the one stored `kv_b` matrix, and their entries sum to the
+   * matrix's `rows + cols` so both forms store the same bytes. Unit: elements.
+   */
+  sideVectorElems?: number;
   /** Dtype of the bias vector; present iff the GEMM adds a bias of `n` elements per batch entry. */
   biasDtype?: Dtype;
 }

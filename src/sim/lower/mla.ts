@@ -113,10 +113,21 @@ export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
       // Formula: q_absorb: batch = Hl, m = T, n = rkv, k = dn; attention: kvHeads 1, qk = rkv + dr, v = rkv,
       //          kvRead = kvWrite = {kvCache, rkv + dr}; v_absorb: batch = Hl, m = T, n = dv, k = rkv
       // See docs/simulation-model.md §5 "MLA forms"
-      ops.push(linearGemm('mla.q_absorb', { m: T, n: rkv, k: dn }, ctx, { module: 'attention_kv_up', batch: Hl }));
+      // The stored kv_b matrix is (Hl·(dn + dv)) × rkv with Hl·(dn + dv) row and rkv column side vectors (EXL3).
+      // q_absorb owns the Hl·dn rows of its k_nope part and the rkv column vector; v_absorb the Hl·dv rows of
+      // its v part, so both forms charge the same stored bytes.
+      ops.push(
+        linearGemm('mla.q_absorb', { m: T, n: rkv, k: dn }, ctx, {
+          module: 'attention_kv_up',
+          batch: Hl,
+          sideVectorElems: Hl * dn + rkv,
+        }),
+      );
       const attention: AttentionOp = { ...common, kvHeads: 1, qkHeadDim: rkv + dr, vHeadDim: rkv, kvRead: latent };
       ops.push(attention);
-      ops.push(linearGemm('mla.v_absorb', { m: T, n: dv, k: rkv }, ctx, { module: 'attention_kv_up', batch: Hl }));
+      ops.push(
+        linearGemm('mla.v_absorb', { m: T, n: dv, k: rkv }, ctx, { module: 'attention_kv_up', batch: Hl, sideVectorElems: Hl * dv }),
+      );
       break;
     }
     case 'mha': {

@@ -26,7 +26,7 @@ import { deviceUnlocks } from '../../sim/hw/presets/index';
 import { isValidModelId } from '../../hf/urls';
 import { DEFAULT_HW, DEFAULT_STATE, normalizeOptions, type AppState, type HardwareChoice, type ModelChoice, type QuantOverrides, type SpecEdits } from './appState';
 import { findDevice, findLink, resolveDevice, resolveLinks } from './hardware';
-import { isQuantDtype } from './quant';
+import { isQuantDtype, isValidBpw, isValidHeadBpw, isWeightFormat } from './quant';
 
 /** Largest accepted devices-per-node and node count (keeps derived loops bounded). Count. */
 export const MAX_COUNT = 1024;
@@ -43,7 +43,7 @@ const OPTION_KEYS: [string, keyof SimOptions, readonly string[]][] = [
 
 /** Every key the codec knows, in encoding order. */
 export const URL_KEYS = [
-  'm', 'rev', 'w', 'a', 'kv', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'x', 'xi', 'xe',
+  'm', 'rev', 'w', 'bpw', 'hbpw', 'a', 'kv', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'x', 'xi', 'xe',
   'tp', 'pp', 'dp', 'ep', 'b', 'p', 'c', 'ov', 'fu', 'ar',
 ] as const;
 
@@ -83,6 +83,10 @@ export function encodeState(s: AppState): string {
     if (s.model.revision !== undefined && s.model.revision !== 'main') put('rev', s.model.revision);
   }
   put('w', s.quant.weights);
+  if (s.quant.weights === 'exl3') {
+    put('bpw', s.quant.bpw);
+    put('hbpw', s.quant.headBpw);
+  }
   put('a', s.quant.activations);
   put('kv', s.quant.kvCache);
   const hw = s.hw;
@@ -167,7 +171,15 @@ export function decodeState(search: string): DecodedState {
   for (const [key, field] of [['w', 'weights'], ['a', 'activations'], ['kv', 'kvCache']] as const) {
     const v = get(key);
     if (v === undefined) continue;
-    if (isQuantDtype(v)) quant[field] = v;
+    if (field === 'weights' ? isWeightFormat(v) : isQuantDtype(v)) Object.assign(quant, { [field]: v });
+    else drop(key, v);
+  }
+  // EXL3 bits per weight; meaningful only with `w=exl3`.
+  for (const [key, field, valid] of [['bpw', 'bpw', isValidBpw], ['hbpw', 'headBpw', isValidHeadBpw]] as const) {
+    const v = get(key);
+    if (v === undefined) continue;
+    const n = Number(v);
+    if (quant.weights === 'exl3' && v.trim() !== '' && valid(n)) quant[field] = n;
     else drop(key, v);
   }
 

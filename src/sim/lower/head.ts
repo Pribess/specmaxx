@@ -6,7 +6,7 @@
  * See docs/simulation-model.md §5 "Embedding and LM head".
  */
 
-import { bytesPerElement, type TensorFormat } from '../ir/dtype';
+import { matrixStoredBytes, type TensorFormat } from '../ir/dtype';
 import type { ModelSpec } from '../ir/model';
 import type { Op } from '../ir/ops';
 import { hpBpe, linearGemm, normOp, stepTokens } from './common';
@@ -45,6 +45,6 @@ export function lmHeadResidentWeightBytes(model: ModelSpec, ctx: LoweringContext
   const normVectors = model.finalNorm === 'none' ? 0 : model.finalNorm === 'layernorm' ? 2 : 1;
   // Formula: W_head = ceil(vocab/tp)·h·bpe(head) + (none ? 0 : layernorm ? 2 : 1)·h·bpe(hp)
   // See docs/simulation-model.md §8 "Memory fit"
-  const head = Math.ceil(model.vocab / ctx.parallel.tp) * model.hidden * bytesPerElement(lmHeadFormat(ctx));
+  const head = matrixStoredBytes(lmHeadFormat(ctx), Math.ceil(model.vocab / ctx.parallel.tp), model.hidden);
   return head + normVectors * model.hidden * hpBpe(ctx);
 }

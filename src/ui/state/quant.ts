@@ -4,6 +4,7 @@
  */
 
 import { DTYPE_INFO, type Dtype } from '../../sim/ir/dtype';
+import { EXL3_DEFAULT_HEAD_BPW, EXL3_MAX_BPW, EXL3_MIN_BPW, exl3Format } from '../../sim/ir/exl3';
 import type { QuantConfig } from '../../sim/ir/model';
 import type { QuantDefaults } from '../../sim/models/hf/types';
 import type { QuantOverrides } from './appState';
@@ -14,6 +15,35 @@ export const QUANT_DTYPE_CHOICES: Dtype[] = (Object.keys(DTYPE_INFO) as Dtype[])
 /** True when `value` is one of {@link QUANT_DTYPE_CHOICES}. */
 export function isQuantDtype(value: string): value is Dtype {
   return (QUANT_DTYPE_CHOICES as string[]).includes(value);
+}
+
+/** Default EXL3 average bits per weight when the checkpoint states none. Unit: bits/weight. */
+export const DEFAULT_EXL3_BPW = 4;
+
+/** The weight-format choices of the Weights picker: every dtype choice, then `'exl3'`. */
+export const WEIGHT_FORMAT_CHOICES: (Dtype | 'exl3')[] = [...QUANT_DTYPE_CHOICES, 'exl3'];
+
+/** True when `value` is one of {@link WEIGHT_FORMAT_CHOICES}. */
+export function isWeightFormat(value: string): value is Dtype | 'exl3' {
+  return (WEIGHT_FORMAT_CHOICES as string[]).includes(value);
+}
+
+/** True for a usable EXL3 average bpw (finite, within [1, 8]) — the range one tensor's `K` can take. */
+export function isValidBpw(n: number): boolean {
+  return Number.isFinite(n) && n >= EXL3_MIN_BPW && n <= EXL3_MAX_BPW;
+}
+
+/** True for a usable EXL3 head bpw: {@link isValidBpw} or 16 (unquantized head). */
+export function isValidHeadBpw(n: number): boolean {
+  return isValidBpw(n) || n === 16;
+}
+
+/** The bpw pair EXL3 weights are simulated with: the override, else the checkpoint's, else the defaults. Unit: bits/weight. */
+export function effectiveBpw(o: QuantOverrides, exl3: QuantDefaults['exl3']): { bpw: number; headBpw: number } {
+  return {
+    bpw: o.bpw ?? exl3?.bpw ?? DEFAULT_EXL3_BPW,
+    headBpw: o.headBpw ?? exl3?.headBpw ?? EXL3_DEFAULT_HEAD_BPW,
+  };
 }
 
 /** True when any override is set. */
@@ -27,18 +57,25 @@ export function hasQuantOverride(o: QuantOverrides): boolean {
  *   module (attention, MLP, experts, indexer, linear attention, n-gram projections) uses W; `residual_mixer`
  *   falls back to `highPrecision` as usual. Embeddings, the LM head and lookup tables keep their defaults.
  *   Per-module `gemmInput`s go with `modules`, so GEMM inputs follow `activations`.
+ * - **Weights `exl3`**: linear modules get `exl3Format(bpw)` (fractional bits, fp16 compute) and the LM head
+ *   `exl3Format(headBpw)`, both from {@link effectiveBpw}; activations become fp16 unless overridden (exllamav3
+ *   runs in fp16).
  * - **Activations A**: `activations = A`. A per-module `gemmInput` from the checkpoint (W8A8, W4A4) stays unless
  *   the weights are overridden too.
  * - **KV cache K**: `kvCache = { dtype: K }`, and `compressedKvCache` / `indexerKeyCache` are removed so they
  *   follow it (their documented default).
  * Nothing else changes. Pure: returns a new object.
  */
-export function applyQuantOverride(defaults: QuantConfig, o: QuantOverrides): QuantConfig {
+export function applyQuantOverride(defaults: QuantConfig, o: QuantOverrides, exl3?: QuantDefaults['exl3']): QuantConfig {
   let q: QuantConfig = { ...defaults };
   if (o.weights !== undefined) {
     const { modules: _modules, ...rest } = q;
     void _modules;
-    q = { ...rest, weights: { dtype: o.weights } };
+    if (o.weights === 'exl3') {
+      const { bpw, headBpw } = effectiveBpw(o, exl3);
+      q = { ...rest, weights: exl3Format(bpw), lmHead: exl3Format(headBpw), activations: 'fp16' };
+      delete q.lmHeadGemmInput;
+    } else q = { ...rest, weights: { dtype: o.weights } };
   }
   if (o.activations !== undefined) q = { ...q, activations: o.activations };
   if (o.kvCache !== undefined) {
@@ -63,9 +100,12 @@ export const REFERENCE_QUANT_DEFAULTS: QuantDefaults = {
  * A one-line label of the formats in use: the checkpoint's scheme when nothing is overridden, else the
  * overrides followed by the scheme they apply to, e.g. `'weights fp8_e4m3, KV fp8_e4m3 (over bf16 (unquantized))'`.
  */
-export function quantSummary(defaults: Pick<QuantDefaults, 'scheme'>, o: QuantOverrides): string {
+export function quantSummary(defaults: Pick<QuantDefaults, 'scheme' | 'exl3'>, o: QuantOverrides): string {
   const parts: string[] = [];
-  if (o.weights !== undefined) parts.push(`weights ${o.weights}`);
+  if (o.weights === 'exl3') {
+    const { bpw, headBpw } = effectiveBpw(o, defaults.exl3);
+    parts.push(`weights exl3 ${bpw} bpw (head ${headBpw})`);
+  } else if (o.weights !== undefined) parts.push(`weights ${o.weights}`);
   if (o.activations !== undefined) parts.push(`activations ${o.activations}`);
   if (o.kvCache !== undefined) parts.push(`KV ${o.kvCache}`);
   return parts.length === 0 ? defaults.scheme : `${parts.join(', ')} (over ${defaults.scheme})`;

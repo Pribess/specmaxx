@@ -103,6 +103,11 @@ export interface QuantDefaults {
   /** Human-readable notes (approximations, unrecognized fields). */
   notes: string[];
   /**
+   * EXL3 repos only: the average and LM-head bits per weight of the checkpoint (`bits` / `head_bits`), which
+   * prefill the UI's bpw inputs. Unit: bits/weight.
+   */
+  exl3?: { bpw: number; headBpw: number };
+  /**
    * QuantConfig fields the repo's quant metadata sets explicitly (e.g. `'kvCache'` from `kv_cache_scheme` /
    * `kv_cache_quant_algo` / Mistral `dsa.fp8_kv_cache`, `'indexerKeyCache'`, `'lookupTables'`).
    * Family `quantHints` never override these. Empty when the metadata sets none.

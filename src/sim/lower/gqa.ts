@@ -52,7 +52,7 @@ export function lowerGqa(block: GqaAttentionBlock, ctx: LoweringContext): Op[] {
   // Formula: qkv_proj: m = T, n = (Hl·(gate ? 2 : 1) + 2·KVl)·hd, k = h
   // See docs/simulation-model.md §5 "TP sharding"
   const qkvN = (Hl * (block.outputGate ? 2 : 1) + 2 * KVl) * hd;
-  ops.push(linearGemm('attn.qkv_proj', { m: T, n: qkvN, k: h }, ctx, { module: 'attention', bias: block.qkvBias }));
+  ops.push(linearGemm('attn.qkv_proj', { m: T, n: qkvN, k: h }, ctx, { module: 'attention', bias: block.qkvBias, outParts: [Hl * (block.outputGate ? 2 : 1) * hd, KVl * hd, KVl * hd] }));
 
   if (block.kvConvKernel !== undefined) {
     // Formula: kv_conv: causal_conv1d + residual over T·2·KVl·hd (K and V; 2·K + 1 FLOP/elem), state (K−1)·2·KVl·hd

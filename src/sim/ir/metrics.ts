@@ -6,7 +6,7 @@
  * or top-k of a {@link KvSelection}.
  */
 
-import { bitsPerElement, bytesPerElement, type Dtype, type TensorFormat } from './dtype';
+import { bitsPerElement, bytesPerElement, sideVectorBytes, type Dtype, type TensorFormat } from './dtype';
 import type {
   AttentionOp,
   EmbeddingOp,
@@ -83,18 +83,29 @@ export function gemmWeightBytes(
   k: number,
   weight: TensorFormat,
   sparsity: 'dense' | '2:4',
+  outParts?: readonly number[],
+  sideVectorElems?: number,
 ): number {
   const elems = batch * n * k;
   const bits = bitsPerElement(weight);
+  // Side vectors: per batch entry from the shape, or the explicit total of an op that owns a slice of a
+  // physical matrix stored elsewhere split (MLA absorbed kv_b).
+  // Formula: side = b·perDimBits·(n + P·k)/8, or perDimBits·sideVectorElems/8 when given
+  const side =
+    sideVectorElems !== undefined
+      ? elems > 0
+        ? ((weight.perDimBits ?? 0) * sideVectorElems) / 8
+        : 0
+      : batch * sideVectorBytes(weight, n, k, outParts);
   switch (sparsity) {
     case 'dense':
-      // Formula: W = b·n·k·bpe(w)
+      // Formula: W = b·n·k·bpe(w) + side      (side = 0 except EXL3; see above)
       // See docs/simulation-model.md §3 "GEMM"
-      return elems * (bits / 8);
+      return (elems * bits) / 8 + side;
     case '2:4':
-      // Formula: W = b·n·k·(bits/2 + 1)/8   (half the values + 2-bit index per kept value = 1 bit/elem)
+      // Formula: W = b·n·k·(bits/2 + 1)/8 + side   (half the values + 2-bit index per kept value = 1 bit/elem)
       // See docs/simulation-model.md §3 "GEMM"
-      return (elems * (bits / 2 + 1)) / 8;
+      return (elems * (bits / 2 + 1)) / 8 + side;
     default: {
       const _never: never = sparsity;
       throw new Error(`unknown sparsity ${String(_never)}`);
@@ -274,7 +285,7 @@ function gemmFlops(op: GemmOp): number {
 function gemmBytes(op: GemmOp): ByteBreakdown {
   // Formula: W = b·n·k·bpe(w) [2:4: b·n·k·(bits/2+1)/8] + b·n·bpe(bias); read = b·m·k·bpe(in); write = b·m·n·bpe(out)
   // See docs/simulation-model.md §3 "GEMM"
-  const matrixBytes = gemmWeightBytes(op.batch, op.n, op.k, op.weight, op.sparsity);
+  const matrixBytes = gemmWeightBytes(op.batch, op.n, op.k, op.weight, op.sparsity, op.outParts, op.sideVectorElems);
   const biasBytes = op.biasDtype === undefined ? 0 : op.batch * op.n * bpeOf(op.biasDtype);
   const inputBytes = op.batch * op.m * op.k * bpeOf(op.inputDtype);
   const outputBytes = op.batch * op.m * op.n * bpeOf(op.outputDtype);

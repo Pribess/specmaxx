@@ -14,6 +14,8 @@ export function NumberField({
   issues = [],
   hint,
   step = '1',
+  min,
+  max,
   help,
 }: {
   label: string;
@@ -22,6 +24,10 @@ export function NumberField({
   issues?: FieldIssue[];
   hint?: string;
   step?: string;
+  /** Smallest value the input's arrows and form validation allow. */
+  min?: number;
+  /** Largest value the input's arrows and form validation allow. */
+  max?: number;
   /** Definition shown by a "?" help icon next to the label. */
   help?: ReactNode;
 }) {
@@ -45,6 +51,8 @@ export function NumberField({
         id={id}
         type="number"
         step={step}
+        min={min}
+        max={max}
         value={Number.isFinite(value) ? value : ''}
         onChange={(e) => onChange(e.target.value === '' ? 0 : Number(e.target.value))}
         aria-invalid={issues.some((i) => i.level === 'error')}

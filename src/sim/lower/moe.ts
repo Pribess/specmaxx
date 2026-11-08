@@ -161,7 +161,7 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext): Op[] {
   // Grouped expert GEMMs over a active experts, mE tokens each.
   // Formula: gate_up: batch = a, m = mE, n = (gated ? 2 : 1)·fe/etp, k = h; down: batch = a, m = mE, n = h, k = fe/etp
   const upWidth = (block.gated ? 2 : 1) * feLocal;
-  ops.push(linearGemm('moe.gate_up', { m: mE, n: upWidth, k: h }, ctx, { module: 'routed_experts', batch: a }));
+  ops.push(linearGemm('moe.gate_up', { m: mE, n: upWidth, k: h }, ctx, { module: 'routed_experts', batch: a, outParts: block.gated ? [feLocal, feLocal] : [feLocal] }));
   ops.push(activationOp('moe.act', block, a * mE, feLocal, ctx));
   ops.push(linearGemm('moe.down', { m: mE, n: h, k: feLocal }, ctx, { module: 'routed_experts', batch: a }));
 

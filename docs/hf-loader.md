@@ -105,7 +105,7 @@ mHC hyper-connections, MTP estimates).
 source and notes. The defaults are plain data; the UI may override any of them. Source, first found wins:
 `params.json` `quantization_config` (Mistral consolidated exports), config.json `quantization_config` (top level,
 else `text_config`, dispatched on `quant_method`: `fp8`, `modelopt`, `compressed-tensors`, `quark`, `gptq`, `awq`,
-`auto-round`, `bitsandbytes`; a `bits` + `group_size` object without `quant_method` is MLX), `hf_quant_config.json`,
+`auto-round`, `bitsandbytes`, `exl3`; a `bits` + `group_size` object without `quant_method` is MLX), `hf_quant_config.json`,
 `quantization_config.json`, the MLX `quantization` key, `params.json` `quantization` (native Mistral fp8), and
 finally the model's `torch_dtype` / `dtype` (unquantized).
 
@@ -117,6 +117,10 @@ finally the model's `torch_dtype` / `dtype` (unquantized).
 - **Scale overheads.** MX and NV formats carry their block scale in the dtype; every other scale or zero point is
   amortized into `extraBitsPerElem` (block scale `s/(r·c)`, group scale `(s + z)/g`). The full table of schemes,
   overheads and readers is in docs/simulation-model.md §2 "Quant overheads".
+- **EXL3.** `quant_method: "exl3"` (`quant/exl3.ts`) gives fractional bits per weight: `bits` (or `bpw` /
+  `avg_bits`) for the linear layers, `head_bits` for the LM head. `QuantDefaults.exl3` carries both numbers so the
+  UI's bits-per-weight inputs start from the checkpoint. Format and weight-byte formula: docs/simulation-model.md
+  §2 "EXL3".
 - **Activations and caches.** W8A8 / W4A4 schemes set `ModuleQuant.gemmInput`; weight-only schemes leave it unset.
   `kv_cache_scheme`, `kv_cache_quant_algo` and Mistral's `dsa.fp8_kv_cache` / `dsa.fp8_indexer` set the KV and
   indexer-key caches.

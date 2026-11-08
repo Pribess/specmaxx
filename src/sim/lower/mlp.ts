@@ -82,7 +82,7 @@ export function lowerDenseFfn(
   // Formula: gate_up: m = T, n = (gated ? 2 : 1)·f/tp, k = h; down: m = T, n = h, k = f/tp
   // See docs/simulation-model.md §5 "TP sharding"
   return [
-    linearGemm(`${prefix}.gate_up`, { m: tokens, n: upWidth, k: shape.hidden }, ctx, { module, bias: shape.bias }),
+    linearGemm(`${prefix}.gate_up`, { m: tokens, n: upWidth, k: shape.hidden }, ctx, { module, bias: shape.bias, outParts: shape.gated ? [fLocal, fLocal] : [fLocal] }),
     activationOp(`${prefix}.act`, shape, tokens, fLocal, ctx),
     linearGemm(`${prefix}.down`, { m: tokens, n: shape.hidden, k: fLocal }, ctx, { module, bias: shape.bias }),
   ];

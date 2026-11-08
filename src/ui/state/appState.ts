@@ -25,8 +25,12 @@ export type ModelChoice = {
 
 /** User overrides of the model's default numeric formats; an absent field keeps the model default. */
 export interface QuantOverrides {
-  /** Weight storage dtype of every linear module (rules: `quant.ts`, `applyQuantOverride`). */
-  weights?: Dtype;
+  /** Weight storage dtype of every linear module, or `'exl3'` (rules: `quant.ts`, `applyQuantOverride`). */
+  weights?: Dtype | 'exl3';
+  /** EXL3 only: average bits per weight of the linear layers; absent = the checkpoint's `bits`, else 4. Unit: bits/weight. */
+  bpw?: number;
+  /** EXL3 only: LM-head bits per weight; absent = the checkpoint's `head_bits`, else 6. Unit: bits/weight. */
+  headBpw?: number;
   /** GEMM-input / activation dtype. */
   activations?: Dtype;
   /** KV-cache dtype (also the compressed-KV and indexer-key caches). */
@@ -123,7 +127,9 @@ export type AppAction =
   /** Pick a model; clears the quant overrides (they refer to the previous model's defaults). */
   | { type: 'setModel'; model: ModelChoice }
   /** Set (dtype) or clear (undefined) one quant override. */
-  | { type: 'setQuant'; field: keyof QuantOverrides; dtype: Dtype | undefined }
+  | { type: 'setQuant'; field: 'weights' | 'activations' | 'kvCache'; dtype: Dtype | 'exl3' | undefined }
+  /** Set one EXL3 bits-per-weight override (`bpw`: linear layers, `headBpw`: LM head). */
+  | { type: 'setBpw'; field: 'bpw' | 'headBpw'; value: number }
   /** Clear every quant override. */
   | { type: 'resetQuant' }
   /** Replace the whole hardware choice (a multi-device setup preset, see `systemChoice`). */
@@ -186,11 +192,15 @@ export function reduce(state: AppState, action: AppAction): AppState {
           : action.model;
       return { ...state, model, quant: {} };
     }
-    case 'setQuant':
-      return {
-        ...state,
-        quant: action.dtype === undefined ? without(state.quant, action.field) : { ...state.quant, [action.field]: action.dtype },
-      };
+    case 'setQuant': {
+      let quant: QuantOverrides =
+        action.dtype === undefined ? without(state.quant, action.field) : { ...state.quant, [action.field]: action.dtype };
+      // The bpw overrides belong to EXL3 weights; leaving EXL3 drops them.
+      if (action.field === 'weights' && action.dtype !== 'exl3') quant = without(without(quant, 'bpw'), 'headBpw');
+      return { ...state, quant };
+    }
+    case 'setBpw':
+      return { ...state, quant: { ...state.quant, weights: 'exl3', [action.field]: action.value } };
     case 'resetQuant':
       return { ...state, quant: {} };
     case 'setHardware':

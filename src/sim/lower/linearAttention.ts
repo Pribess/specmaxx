@@ -102,7 +102,7 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
     //          g_a: n = r, k = h; g_b: n = vL·dv, k = r
     // See docs/simulation-model.md §5 "KDA"
     const m = { module: 'linear_attention' } as const;
-    ops.push(linearGemm('lin.qkv', { m: T, n: 2 * qkL * dk + vL * dv + vL, k: h }, ctx, m));
+    ops.push(linearGemm('lin.qkv', { m: T, n: 2 * qkL * dk + vL * dv + vL, k: h }, ctx, { ...m, outParts: [qkL * dk, qkL * dk, vL * dv, vL] }));
     ops.push(linearGemm('lin.f_a', { m: T, n: r, k: h }, ctx, m));
     ops.push(linearGemm('lin.f_b', { m: T, n: vL * dk, k: r }, ctx, m));
     ops.push(linearGemm('lin.g_a', { m: T, n: r, k: h }, ctx, m));
@@ -111,7 +111,8 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
     // Formula: in_proj: m = T, n = 2·qkL·dk + vL·dv·(gate ? 2 : 1) + 2·vL, k = h
     // See docs/simulation-model.md §5 "Linear-attention sharding"
     const inN = 2 * qkL * dk + vL * dv * (block.outputGate ? 2 : 1) + 2 * vL;
-    ops.push(linearGemm('lin.in_proj', { m: T, n: inN, k: h }, ctx, { module: 'linear_attention' }));
+    const inParts = [qkL * dk, qkL * dk, vL * dv, ...(block.outputGate ? [vL * dv] : []), vL, vL];
+    ops.push(linearGemm('lin.in_proj', { m: T, n: inN, k: h }, ctx, { module: 'linear_attention', outParts: inParts }));
   }
 
   if (K > 0) {

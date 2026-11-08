@@ -74,6 +74,8 @@ export interface SchemeReading {
   kvCache?: TensorFormat;
   /** Indexer key cache format, when the scheme sets it (Mistral `dsa.fp8_indexer`). */
   indexerKeyCache?: TensorFormat;
+  /** EXL3 only: the average and LM-head bits per weight the config states (prefills the UI's bpw inputs). Unit: bits/weight. */
+  exl3?: { bpw: number; headBpw: number };
   /** Ignore / exclude lists, checked afterwards for entries that match no known module (each gives a note). */
   ignoreLists: { label: string; patterns: string[] }[];
   /** Notes from reading (approximations, unknown fields). */
@@ -166,13 +168,14 @@ export function intDtypeFor(bits: number): { dtype: Dtype; approx: boolean } {
 /** A canonical key of a module format, for equality and majority votes. */
 export function formatKey(mq: ModuleQuant): string {
   const extra = mq.weights.extraBitsPerElem ?? 0;
-  return `${mq.weights.dtype}|${extra.toFixed(8)}|${mq.gemmInput ?? '-'}`;
+  return `${mq.weights.dtype}|${extra.toFixed(8)}|${mq.gemmInput ?? '-'}|${mq.weights.valueBitsPerElem ?? '-'}|${mq.weights.perDimBits ?? '-'}`;
 }
 
 /** Short human-readable form of a module format, e.g. `'fp8_e4m3 +0.0020 bit/elem, fp8_e4m3 GEMM input'`. */
 export function describeFormat(mq: ModuleQuant): string {
   const extra = mq.weights.extraBitsPerElem ?? 0;
-  const scale = extra > 0 ? ` +${extra.toFixed(4)} bit/elem` : '';
+  const value = mq.weights.valueBitsPerElem !== undefined ? ` ${mq.weights.valueBitsPerElem} bpw` : '';
+  const scale = value + (extra > 0 ? ` +${extra.toFixed(4)} bit/elem` : '');
   const input = mq.gemmInput === undefined ? '' : `, ${mq.gemmInput} GEMM input`;
   return `${mq.weights.dtype}${scale}${input}`;
 }

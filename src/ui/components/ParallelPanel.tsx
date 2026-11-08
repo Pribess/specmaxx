@@ -28,7 +28,7 @@ export function ParallelPanel({ state, dispatch, loaded, built }: Props) {
             issues={built.issues.filter((i) => i.field === field)}
             hint={
               loaded && built.hardware
-                ? `Valid ${field.toUpperCase()}: ${validDegrees(field, loaded.model, applyQuantOverride(loaded.quant.quant, state.quant), state.parallel, state.workload, built.hardware.topology).join(', ')}`
+                ? `Valid ${field.toUpperCase()}: ${validDegrees(field, loaded.model, applyQuantOverride(loaded.quant.quant, state.quant, loaded.quant.exl3), state.parallel, state.workload, built.hardware.topology).join(', ')}`
                 : undefined
             }
           />

@@ -88,7 +88,7 @@ export function buildSimInput(state: AppState, loaded: LoadedModel | null): Buil
   } catch (e) {
     return { kind: 'issues', issues: [{ field: 'general', level: 'error', message: (e as Error).message }] };
   }
-  const quant = applyQuantOverride(loaded.quant.quant, state.quant);
+  const quant = applyQuantOverride(loaded.quant.quant, state.quant, loaded.quant.exl3);
   const issues = fieldIssues(loaded.model, quant, state.parallel, state.workload, hardware.topology);
   if (hasErrors(issues)) return { kind: 'issues', issues, hardware };
   const input: SimInput = {

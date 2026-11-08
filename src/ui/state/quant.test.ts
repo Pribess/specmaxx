@@ -55,6 +55,27 @@ describe('applyQuantOverride', () => {
   });
 });
 
+describe('applyQuantOverride with EXL3 weights', () => {
+  const qwen = defaults('Qwen/Qwen3.8-27B');
+  const exl3Repo = defaults('turboderp/Qwen3.8-27B-exl3', 'quant');
+
+  it('uses the override, else the checkpoint’s bits / head_bits, else 4 / 6', () => {
+    const own = applyQuantOverride(qwen.quant, { weights: 'exl3', bpw: 2.5 }, qwen.exl3);
+    expect(own.weights).toEqual({ dtype: 'fp16', valueBitsPerElem: 2.5, perDimBits: 16 });
+    expect(own.lmHead).toEqual({ dtype: 'fp16', valueBitsPerElem: 6, perDimBits: 16 });
+    expect(own.modules).toBeUndefined();
+    expect(own.activations).toBe('fp16');
+    const fromRepo = applyQuantOverride(exl3Repo.quant, { weights: 'exl3' }, exl3Repo.exl3);
+    expect(fromRepo.weights.valueBitsPerElem).toBe(4);
+    expect(fromRepo.lmHead?.valueBitsPerElem).toBe(5);
+    expect(applyQuantOverride(qwen.quant, { weights: 'exl3', bpw: 3, headBpw: 16 }).lmHead).toEqual({ dtype: 'fp16' });
+  });
+
+  it('labels the override with its bpw', () => {
+    expect(quantSummary(qwen, { weights: 'exl3', bpw: 2.5 })).toBe('weights exl3 2.5 bpw (head 6) (over bf16 (unquantized))');
+  });
+});
+
 describe('quant labels and choices', () => {
   it('summarizes the scheme or the overrides over it', () => {
     expect(quantSummary(REFERENCE_QUANT_DEFAULTS, {})).toBe('bf16 (unquantized)');

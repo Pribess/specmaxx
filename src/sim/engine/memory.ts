@@ -4,7 +4,7 @@
  * See docs/simulation-model.md §8 ("Memory fit").
  */
 
-import { bytesPerElement, type TensorFormat } from '../ir/dtype';
+import { matrixStoredBytes, type TensorFormat } from '../ir/dtype';
 import { opBytes } from '../ir/metrics';
 import type { ModelSpec } from '../ir/model';
 import { embeddingFormat, embeddingResidentWeightBytes } from '../lower/embedding';
@@ -44,7 +44,12 @@ export interface MemoryInput {
  * serve both the embedding and a tied LM head.
  */
 export function sameStoredFormat(a: TensorFormat, b: TensorFormat): boolean {
-  return a.dtype === b.dtype && (a.extraBitsPerElem ?? 0) === (b.extraBitsPerElem ?? 0);
+  return (
+    a.dtype === b.dtype &&
+    (a.extraBitsPerElem ?? 0) === (b.extraBitsPerElem ?? 0) &&
+    (a.valueBitsPerElem ?? 0) === (b.valueBitsPerElem ?? 0) &&
+    (a.perDimBits ?? 0) === (b.perDimBits ?? 0)
+  );
 }
 
 /**
@@ -64,7 +69,7 @@ export function stageWeightBytes(model: ModelSpec, ctx: LoweringContext, s: numb
   let headBytes = s === pp - 1 ? lmHeadResidentWeightBytes(model, ctx) : 0;
   if (model.tieEmbeddings && pp === 1 && sameStoredFormat(embeddingFormat(ctx), lmHeadFormat(ctx))) {
     // The shared matrix is already counted by the embedding; keep only the final-norm part of the head.
-    const headMatrixBytes = Math.ceil(model.vocab / ctx.parallel.tp) * model.hidden * bytesPerElement(lmHeadFormat(ctx));
+    const headMatrixBytes = matrixStoredBytes(lmHeadFormat(ctx), Math.ceil(model.vocab / ctx.parallel.tp), model.hidden);
     headBytes -= headMatrixBytes;
   }
   // Formula: W_s = Σ_{blocks of s} W_block + [s = 0] W_emb + [s = pp−1] W_head   (tied, pp = 1, same format: matrix once)

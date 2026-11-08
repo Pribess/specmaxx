@@ -49,3 +49,17 @@ trimmed config carries a `quantization_config._fixture_note` saying what was rem
 - compressed-tensors (`intel-ai/DeepSeek…`): the 47k explicit expert targets of `group_0` reduced to layers
   0–3, experts 0–1; the `RoutedExperts` class target, which covers all experts, is kept. Vision ignore entries
   removed.
+
+## EXL3 (ExLlamaV3) fixtures
+
+Real `config.json` files of EXL3 repos (`quant_method: "exl3"`), used by `src/sim/models/hf/quant/exl3.test.ts`.
+turboderp's repos keep each bitrate on its own branch; the config below is that branch's.
+
+| Repo (branch) | Scheme |
+|---|---|
+| `turboderp/Qwen3.8-27B-exl3` (`SC_4.00bpw_H5_V6`) | `bits` 4.0, `head_bits` 5, `vision_bits` 6, `mtp_bits` 4 |
+| `turboderp/GLM-5.3-Flash-exl3` (`sc_3.10bpw`) | `bits` 3.09, `head_bits` 6, `original_quantization_config` fp8 (trimmed, see note in file) |
+| `bertholomus/DeepSeek-V4.1-Flash-1017-EXL3-2.5bpw` | `bits` 2.52, `head_bits` 6, fp8/fp4 original config |
+| `Mia-AiLab/DeepSeek-V4.1-Flash-1017-EXL3-EAQ-v1-2.9-bpw` | no `bits`: `avg_bits` 2.9 (mixed per-tensor bits), `head_bits` 6 |
+| `doth4580/Qwen3.8-Flash-Next-EXL3-4.05bpw` | `bits` 4 (rounded; `native_quantization_config` says 4.05), n-gram model |
+| `Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold` | `bits` 4, `head_bits` 16 (fp16 head), `scope: glm53_routed_experts_only` |

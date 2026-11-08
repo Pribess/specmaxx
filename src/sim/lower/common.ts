@@ -139,6 +139,10 @@ export interface GemmOptions {
   sparsity?: 'dense' | '2:4';
   /** Input dtype of the op, without changing `math` (MLA kv_b reads the cached latent); default the resolved `gemmInput`. */
   inputDtype?: Dtype;
+  /** Output widths of the physical matrices fused into `n` (see `GemmOp.outParts`); default one matrix. Unit: elements. */
+  outParts?: number[];
+  /** Explicit side-vector entries charged to this op (see `GemmOp.sideVectorElems`). Unit: elements. */
+  sideVectorElems?: number;
   /** Adds an `n`-element bias per batch entry in the high-precision dtype. */
   bias?: boolean;
 }
@@ -211,6 +215,8 @@ export function linearGemm(
     accumulate: resolveAccumulate(math, ctx.quant.accumulate ?? 'fp32'),
     sparsity,
   };
+  if (opts.outParts !== undefined) op.outParts = opts.outParts;
+  if (opts.sideVectorElems !== undefined) op.sideVectorElems = opts.sideVectorElems;
   if (opts.bias === true) op.biasDtype = highPrecision(ctx);
   return op;
 }
