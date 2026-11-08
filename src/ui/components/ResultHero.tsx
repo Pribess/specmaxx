@@ -8,6 +8,7 @@ import {
 } from '../state';
 import { RooflineChart } from './RooflineChart';
 import { MemoryFit } from './MemoryFit';
+import { HeroMemoryWarning } from './MemoryWarning';
 
 export function ResultHero({
   result,
@@ -46,6 +47,7 @@ export function ResultHero({
                     <strong data-testid={`${phase}-tps`}>
                       {formatTokensPerSec(result[phase].tokensPerSec)}
                     </strong>
+                    <HeroMemoryWarning stages={result.memory.stages} />
                     <span>tok/s @ {formatContextTokens(result[phase].contextTokens)}</span>
                   </p>
                   <small>

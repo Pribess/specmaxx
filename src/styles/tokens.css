@@ -8,7 +8,9 @@
   --bandwidth: #0b7a83;
   --tensor: #6a3dc2;
   --link: #a86a00;
-  --overflow: #b3261e;
+  --danger: #b3261e;
+  --warning: #a34500;
+  --overflow: var(--danger);
   --muted: #5b6573;
   --input-band: #e3e8ed;
   --rule: color-mix(in srgb, var(--graphite) 22%, var(--silicon));
@@ -38,7 +40,9 @@
     --bandwidth: #47c1c9;
     --tensor: #a88bf0;
     --link: #f0b44c;
-    --overflow: #ff7a6e;
+    --danger: #ff7a6e;
+    --warning: #ffb45c;
+    --overflow: var(--danger);
     --muted: #9aa6b5;
     --input-band: #1b2838;
   }

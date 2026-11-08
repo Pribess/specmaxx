@@ -2,6 +2,7 @@ import type { CSSProperties } from 'react';
 import { formatBytes, formatContextTokens, type ResultSummary } from '../state';
 import { ChartTooltip, useChartPoint } from './ChartTooltip';
 import { HelpIcon } from './HelpIcon';
+import { memoryState, memoryUtilisation, MemoryWarningIcon } from './MemoryWarning';
 
 /** Per-device capacity and its three resident/transient allocations. */
 export function MemoryFit({ result }: { result: ResultSummary }) {
@@ -26,7 +27,7 @@ export function MemoryFit({ result }: { result: ResultSummary }) {
   const label = (segment: (typeof allocations)[number]) =>
     `Stage ${segment.stage + 1} · ${segment.label} · ${formatBytes(segment.bytes)} @ ${context}`;
   return (
-    <section className="memory interactive-chart" data-chart="memory">
+    <section className="memory interactive-chart" data-chart="memory" id="memory-fit" tabIndex={-1}>
       <h2>
         Memory per device{' '}
         <HelpIcon term="Memory fit">
@@ -36,15 +37,27 @@ export function MemoryFit({ result }: { result: ResultSummary }) {
       </h2>
       {result.memory.stages.map((stage, stageIndex) => {
         const segments = allocations.slice(stageIndex * 3, stageIndex * 3 + 3);
+        const state = memoryState(stage);
         return (
           <div className="memory-stage" key={stage.stage}>
-            <p data-testid="memory-verdict">
+            <p data-testid="memory-verdict" className={`memory-${state}`}>
+              <MemoryWarningIcon stage={stage} />
               {result.memory.stages.length > 1 && `Stage ${stage.stage + 1}. `}
               {stage.fits ? 'Fits' : 'Does not fit'}: {formatBytes(stage.totalBytes)} of{' '}
               {formatBytes(stage.capacityBytes)}
+              {state === 'warning' && (
+                <>
+                  {' '}
+                  ({memoryUtilisation(stage)}){' '}
+                  <HelpIcon term="High memory utilisation">
+                    There is little headroom for the OS, the runtime, and fragmentation. Unified
+                    memory shares this pool with the OS.
+                  </HelpIcon>
+                </>
+              )}
             </p>
             <div
-              className={`capacity-bar ${stage.fits ? '' : 'overflow'}`}
+              className={`capacity-bar memory-${state} ${stage.fits ? '' : 'overflow'}`}
               role="group"
               aria-label={`Stage ${stage.stage + 1} memory allocations`}
               style={

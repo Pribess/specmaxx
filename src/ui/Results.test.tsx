@@ -164,7 +164,7 @@ it('shows roofline x/y units and per-phase contexts on hover, focus, arrows and 
   expect(screen.getByText('TFLOP/s @ 8k prefill / 32k decode')).toBeTruthy();
 });
 
-it('keeps an oversized workload neutral while still showing theoretical rates', async () => {
+it('warns about an oversized workload while still showing theoretical rates', async () => {
   const { built, summary } = await defaultResult();
   const oversized = {
     ...summary,
@@ -184,7 +184,8 @@ it('keeps an oversized workload neutral while still showing theoretical rates', 
     />,
   );
   expect(screen.getByTestId('memory-verdict').textContent).toContain('Does not fit');
-  expect(screen.getByTestId('memory-verdict').classList.contains('error')).toBe(false);
+  expect(screen.getByTestId('memory-verdict').classList.contains('memory-danger')).toBe(true);
+  expect(screen.getAllByRole('link', { name: 'Warning: does not fit' })).toHaveLength(2);
   expect(screen.getByTestId('decode-tps').textContent).toMatch(/\d/);
   expect(container.querySelector('[role="alert"]')).toBeNull();
 });

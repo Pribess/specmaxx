@@ -97,14 +97,45 @@ svg [data-chart-point].is-active {
   }
 }
 
-/* Capacity overflow is a physical verdict, not a configuration error. */
+/* Warnings encode capacity risk; allocation patterns remain neutral. */
+.memory-danger {
+  color: var(--danger);
+}
+.memory-warning {
+  color: var(--warning);
+}
+.memory-warning-icon {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  vertical-align: -0.2em;
+}
+.memory-stage .memory-warning-icon {
+  margin-right: 6px;
+}
+.hero-memory-warning {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+}
+.memory .capacity-bar.memory-warning {
+  outline: 1px solid var(--warning);
+  outline-offset: 2px;
+}
 .memory .capacity-bar.overflow {
   background: color-mix(in srgb, var(--graphite) 9%, var(--silicon));
 }
 .memory .capacity-bar.overflow::before {
-  background: repeating-linear-gradient(135deg, transparent 0 3px, var(--muted) 3px 5px);
-  opacity: 0.25;
+  background: var(--danger);
+  z-index: 1;
 }
 .memory .capacity-bar.overflow::after {
-  border-color: var(--graphite);
+  border-color: var(--danger);
+  z-index: 2;
+}
+#memory-fit {
+  scroll-margin-top: 80px;
 }

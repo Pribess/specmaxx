@@ -18,6 +18,40 @@ async function open(page: Page, size: 'desktop' | 'phone', colorScheme: 'light' 
 
 for (const size of ['desktop', 'phone'] as const) {
   for (const colorScheme of ['light', 'dark'] as const) {
+    test(`memory states ${size} ${colorScheme}`, async ({ page }) => {
+      await open(page, size, colorScheme);
+      const bar = page.locator('.capacity-bar');
+      await expect(page.getByTestId('memory-verdict')).toHaveClass('memory-danger');
+      // Derive the exact default allocation from its capacity marker (default: 32 GB RTX 5090).
+      const capacityPercent = await bar.evaluate((el) =>
+        parseFloat((el as HTMLElement).style.getPropertyValue('--capacity')),
+      );
+      const totalBytes = (32e9 * 100) / capacityPercent;
+      for (const state of ['danger', 'warning', 'fits'] as const) {
+        if (state !== 'danger') {
+          const capacityBytes = Math.ceil(totalBytes / (state === 'warning' ? 0.92 : 0.65));
+          await page.goto(`/?x=memory.capacityOptionsBytes.0:${capacityBytes}`);
+        }
+        await expect(page.getByTestId('memory-verdict')).toHaveClass(`memory-${state}`);
+        await page.evaluate(() => document.fonts.ready);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+          true,
+        );
+        const warnings = page.locator('.hero-memory-warning');
+        await expect(warnings).toHaveCount(state === 'fits' ? 0 : 2);
+        if (state !== 'fits') {
+          await warnings.first().click();
+          await expect(page.locator('#memory-fit')).toBeFocused();
+        }
+        // Hide the sticky duplicate rates while capturing the complete hero and memory report.
+        await page.addStyleTag({ content: '.compact-results { visibility: hidden !important }' });
+        await page.evaluate(() => scrollTo(0, 0));
+        await page
+          .locator('section.hero')
+          .screenshot({ path: `${DIR}/memory-${state}-${size}-${colorScheme}.png` });
+      }
+    });
+
     test(`${size} ${colorScheme}`, async ({ page }) => {
       await open(page, size, colorScheme);
       const name = `${DIR}/${size}-${colorScheme}`;
