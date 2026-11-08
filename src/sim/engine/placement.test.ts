@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SYNTH_CLUSTER, SYNTH_IB, SYNTH_NVLINK } from '../__fixtures__/synthetic';
-import { checkPlacement, collectivePath, groupSpan, ppBoundaryIsInterNode, ppSendPath } from './placement';
+import { checkPlacement, collectivePath, groupSpan, ppBoundaryIsInterNode, ppSendHops, ppSendPath } from './placement';
 import type { TopologySpec } from '../hw/types';
 
 // SYNTH_CLUSTER: 8 devices per node × 2 nodes, NVLink intra, InfiniBand inter.
@@ -51,5 +51,55 @@ describe('placement on SYNTH_CLUSTER (T8)', () => {
   it('one device per node: a group across nodes is flat inter-node', () => {
     const macs: TopologySpec = { id: 'm', name: 'm', devicesPerNode: 1, nodes: 4, interNode: SYNTH_IB, sources: [] };
     expect(collectivePath(groupSpan(4, macs), macs)).toEqual({ kind: 'flat', level: 'inter', link: SYNTH_IB });
+  });
+});
+
+// Four single-device nodes cabled as a ring (node i to i ± 1), then the other shapes.
+describe('placement with an inter-node fabric', () => {
+  const ring4: TopologySpec = { id: 'r', name: 'r', devicesPerNode: 1, nodes: 4, interNode: SYNTH_IB, interNodeFabric: { kind: 'ring' }, sources: [] };
+
+  it('a TP group over the whole ring sees the ring', () => {
+    expect(collectivePath(groupSpan(4, ring4), ring4)).toEqual({ kind: 'flat', level: 'inter', link: SYNTH_IB, fabric: { kind: 'ring' } });
+  });
+
+  it('a TP subgroup on a ring is a chain (a segment)', () => {
+    expect(collectivePath(groupSpan(2, ring4), ring4)).toEqual({ kind: 'flat', level: 'inter', link: SYNTH_IB, fabric: { kind: 'chain' } });
+    expect(collectivePath(groupSpan(3, { ...ring4, nodes: 8 }), { ...ring4, nodes: 8 })).toMatchObject({ fabric: { kind: 'chain' } });
+  });
+
+  it('pp only on a ring: stages on neighbours, no sendHops', () => {
+    const par = { tp: 1, pp: 4, dp: 1, ep: 1 };
+    for (const stage of [0, 1, 2]) {
+      expect(ppSendPath(par, ring4, stage)).toEqual({ kind: 'flat', level: 'inter', link: SYNTH_IB, fabric: { kind: 'ring' } });
+    }
+  });
+
+  it('tp 2 × pp 2 on a ring of 4: ranks 0, 1 send to 2, 3 over 2 hops', () => {
+    const par = { tp: 2, pp: 2, dp: 1, ep: 1 };
+    expect(ppSendHops(par, ring4, 0)).toBe(2);
+    expect(ppSendPath(par, ring4, 0)).toEqual({ kind: 'flat', level: 'inter', link: SYNTH_IB, fabric: { kind: 'ring' }, sendHops: 2 });
+    expect(checkPlacement(par, ring4)).toEqual({ errors: [], warnings: [] });
+  });
+
+  it('a full mesh is seen whole by every group, and a send is 1 hop', () => {
+    const mesh: TopologySpec = { ...ring4, interNodeFabric: { kind: 'full_mesh', cablesPerPair: 2 } };
+    expect(collectivePath(groupSpan(2, mesh), mesh)).toEqual({ kind: 'flat', level: 'inter', link: SYNTH_IB, fabric: { kind: 'full_mesh', cablesPerPair: 2 } });
+    expect(ppSendPath({ tp: 2, pp: 2, dp: 1, ep: 1 }, mesh, 0)).toEqual({ kind: 'flat', level: 'inter', link: SYNTH_IB, fabric: { kind: 'full_mesh', cablesPerPair: 2 } });
+  });
+
+  it('a non-blocking switch, given explicitly, emits the pre-fabric paths', () => {
+    for (const f of [{ kind: 'switched' }, { kind: 'switched', oversubscription: 1 }] as const) {
+      const t: TopologySpec = { ...ring4, interNodeFabric: f };
+      expect(collectivePath(groupSpan(4, t), t)).toEqual({ kind: 'flat', level: 'inter', link: SYNTH_IB });
+      expect(ppSendPath({ tp: 2, pp: 2, dp: 1, ep: 1 }, t, 0)).toEqual({ kind: 'flat', level: 'inter', link: SYNTH_IB });
+    }
+  });
+
+  it('an oversubscribed switch: flat paths carry it, hierarchical paths carry interFabric', () => {
+    const over: TopologySpec = { ...SYNTH_CLUSTER, interNodeFabric: { kind: 'switched', oversubscription: 2 } };
+    expect(collectivePath(groupSpan(16, over), over)).toMatchObject({ kind: 'hierarchical', interFabric: { kind: 'switched', oversubscription: 2 } });
+    expect(collectivePath(groupSpan(8, over), over)).toEqual({ kind: 'flat', level: 'intra', link: SYNTH_NVLINK });
+    const send = ppSendPath({ tp: 8, pp: 2, dp: 1, ep: 1 }, over, 0);
+    expect(send).toEqual({ kind: 'flat', level: 'inter', link: SYNTH_IB, fabric: { kind: 'switched', oversubscription: 2 } });
   });
 });

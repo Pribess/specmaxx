@@ -17,14 +17,17 @@ import { gb, gbPerSec, tbPerSec } from '../units';
 
 const STUDIO_2025_URL = 'https://support.apple.com/en-us/122211';
 const STUDIO_2026_URL = 'https://support.apple.com/en-us/128107';
+const MBP14_M3_URL = 'https://support.apple.com/en-us/117736';
+const MBP16_M3_URL = 'https://support.apple.com/en-us/117737';
 const MSL_URL = 'https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf';
 const DVFS_URL = 'https://github.com/maderix/apple-gpu-dvfs';
 const ARCH_URL = 'https://tzakharko.github.io/apple-neural-accelerators-benchmark/';
 const SIMD_URL = 'https://stonesjtu.github.io/2026/09/09/apple-gpu-evolution/';
 const M5_MATMUL_URL = 'https://gist.github.com/wanderingmeow/6562adbbecf6426ebfce8ab05a83b05f';
 
-// Community DVFS tables: M2 Max 1398 MHz, used as an ESTIMATE for unmeasured M3 Ultra.
-const M3_ULTRA_GPU_CLOCK_HZ = 1.398e9;
+// Community DVFS tables: M2 Max 1398 MHz, used as an ESTIMATE for the unmeasured M3 Max and M3 Ultra (same GPU generation).
+const M3_GPU_CLOCK_HZ = 1.398e9;
+const M3_ULTRA_GPU_CLOCK_HZ = M3_GPU_CLOCK_HZ;
 // Community base-M4 device-tree P15 = 1578 MHz; extrapolated to M4 Max, not directly measured on Max.
 const M4_MAX_GPU_CLOCK_HZ = 1.578e9;
 // Community M5 Max powermetrics: uncapped 1620 MHz; DVFS_URL's GFLOPS column is explicitly invalid.
@@ -176,6 +179,11 @@ interface AppleDeviceParams {
   memoryNote: string;
   /** Additional SKU-specific citations, with field paths relative to the complete device. */
   additionalSources?: SourceRef[];
+  /**
+   * Apple tech-specs page that quotes the memory options, bandwidth and GPU cores. Default: the Mac Studio page of
+   * the chip's generation; the M3 Max exists only in the MacBook Pro, so it names that page.
+   */
+  specPage?: { url: string; title: string };
 }
 
 /** Assemble one SKU; SIMD and Neural Accelerator provenance remain separate and explicit. */
@@ -190,6 +198,7 @@ function appleDevice(params: AppleDeviceParams): DeviceSpec {
     clockNote,
     memoryNote,
     additionalSources = [],
+    specPage,
   } = params;
   const simd = simdEngine(gpuCores, gpuClockHz, hasNeuralAccelerators);
   const simdRoot = hasNeuralAccelerators ? 'engines.1' : 'engines.0';
@@ -321,8 +330,8 @@ function appleDevice(params: AppleDeviceParams): DeviceSpec {
   }
 
   const memorySource: SourceRef = {
-    url: hasNeuralAccelerators ? STUDIO_2026_URL : STUDIO_2025_URL,
-    title: 'Apple Mac Studio technical specifications',
+    url: specPage?.url ?? (hasNeuralAccelerators ? STUDIO_2026_URL : STUDIO_2025_URL),
+    title: specPage?.title ?? 'Apple Mac Studio technical specifications',
     fields: [
       'memory.capacityOptionsBytes',
       'memory.bandwidthBytesPerSec',
@@ -337,7 +346,8 @@ function appleDevice(params: AppleDeviceParams): DeviceSpec {
     engines,
     memory: {
       kind: 'unified',
-      technology: chip === 'M3 Ultra' ? 'LPDDR5' : 'LPDDR5X',
+      // The M3 generation (Max and Ultra) uses LPDDR5; M4 and M5 use LPDDR5X.
+      technology: chip.startsWith('M3') ? 'LPDDR5' : 'LPDDR5X',
       capacityOptionsBytes: capacityOptionsGb.map(gb),
       bandwidthBytesPerSec: memBandwidthBytesPerSec,
     },
@@ -347,6 +357,43 @@ function appleDevice(params: AppleDeviceParams): DeviceSpec {
 }
 
 const M3_CLOCK_NOTE = 'M3 Ultra clock estimated at 1.398 GHz from M2 Max DVFS; no direct Ultra measurement.';
+const M3_MAX_CLOCK_NOTE = 'M3 Max clock estimated at 1.398 GHz from M2 Max DVFS; no direct M3 Max measurement found.';
+/** The MacBook Pro (Nov 2023) spec pages: the only machines with an M3 Max. Thunderbolt 4 only (no TB5, so no RDMA). */
+const MBP_M3_SPEC_PAGE = { url: MBP14_M3_URL, title: 'Apple MacBook Pro (14-inch, Nov 2023) technical specifications' };
+const MBP16_M3_SOURCE: SourceRef = {
+  url: MBP16_M3_URL,
+  title: 'Apple MacBook Pro (16-inch, Nov 2023) technical specifications',
+  fields: ['memory.capacityOptionsBytes', 'memory.bandwidthBytesPerSec'],
+  note: 'Same M3 Max options as the 14-inch: 30-core GPU with 36GB or 96GB at 300GB/s; 40-core GPU with 48GB, 64GB or ' +
+    '128GB at 400GB/s. Three Thunderbolt 4 ports (40 Gb/s).',
+};
+
+/** M3 Max 30-core (14-core CPU): 36/96 GB, 300 GB/s; MacBook Pro only, Thunderbolt 4; SIMD compute estimated at 1.398 GHz. */
+export const M3_MAX_30C = appleDevice({
+  chip: 'M3 Max',
+  gpuCores: 30,
+  gpuClockHz: M3_GPU_CLOCK_HZ,
+  capacityOptionsGb: [36, 96],
+  memBandwidthBytesPerSec: gbPerSec(300),
+  hasNeuralAccelerators: false,
+  clockNote: M3_MAX_CLOCK_NOTE,
+  memoryNote: 'M3 Max with 14-core CPU, 30-core GPU; 36GB or 96GB unified memory; 300GB/s memory bandwidth.',
+  specPage: MBP_M3_SPEC_PAGE,
+  additionalSources: [MBP16_M3_SOURCE],
+});
+/** M3 Max 40-core (16-core CPU): 48/64/128 GB, 400 GB/s; MacBook Pro only, Thunderbolt 4; SIMD compute estimated at 1.398 GHz. */
+export const M3_MAX_40C = appleDevice({
+  chip: 'M3 Max',
+  gpuCores: 40,
+  gpuClockHz: M3_GPU_CLOCK_HZ,
+  capacityOptionsGb: [48, 64, 128],
+  memBandwidthBytesPerSec: gbPerSec(400),
+  hasNeuralAccelerators: false,
+  clockNote: M3_MAX_CLOCK_NOTE,
+  memoryNote: 'M3 Max with 16-core CPU, 40-core GPU; 48GB, 64GB or 128GB unified memory; 400GB/s memory bandwidth.',
+  specPage: MBP_M3_SPEC_PAGE,
+  additionalSources: [MBP16_M3_SOURCE],
+});
 const M4_CLOCK_NOTE = '1.578 GHz base-M4 device-tree P15 extrapolated to M4 Max, not an Apple clock guarantee.';
 const M5_MAX_CLOCK_NOTE =
   '1.62 GHz community M5 Max uncapped powermetrics; workload/cooling dependent, not Apple-published.';
@@ -453,7 +500,8 @@ export const M5_ULTRA_80C = appleDevice({
 
 /**
  * Apple per-SoC GPU SKU library; all rates per device, derived compute explicitly estimated. Display order: newest
- * generation first, then by tier (Ultra before Max), then more GPU cores first.
+ * generation first, then by tier (Ultra before Max), then more GPU cores first. The M3 Ultra (Mac Studio 2025) is
+ * newer than the M3 Max (MacBook Pro 2023).
  */
 export const APPLE_DEVICE_PRESETS: DeviceSpec[] = [
   M5_ULTRA_80C,
@@ -464,4 +512,6 @@ export const APPLE_DEVICE_PRESETS: DeviceSpec[] = [
   M4_MAX_32C,
   M3_ULTRA_80C,
   M3_ULTRA_60C,
+  M3_MAX_40C,
+  M3_MAX_30C,
 ];

@@ -4,6 +4,8 @@ import type { AttentionOp } from '../ir/ops';
 import { REF_DENSE_8B } from '../models/reference';
 import { singleDevice } from '../hw/presets';
 import { RTX_5090 } from '../hw/presets/nvidia';
+import { DGX_SPARK } from '../hw/presets/nvidia-datacenter';
+import type { LinkSpec, TopologySpec } from '../hw/types';
 import { simulate } from './simulate';
 import type { PhaseResult, SimInput } from './types';
 
@@ -78,5 +80,38 @@ describe('workload context semantics', () => {
     expect(run(128, 8192).memory.perStage[0].sequenceStateBytes).toBe(36 * 4096 * 8193);
     // P > N + 1: sized for the prompt.
     expect(run(8192, 1024).memory.perStage[0].sequenceStateBytes).toBe(36 * 4096 * 8192);
+  });
+});
+
+describe('4 × DGX Spark-like nodes: ring fabric vs switch (docs §6 "Fabric shapes")', () => {
+  // A Spark-like link built here (not the preset), so the test pins the engine, not preset numbers: one port
+  // 25 GB/s per direction, both ports capped at 25 GB/s together, α 1.5 µs, relay 5 µs.
+  const link: LinkSpec = {
+    kind: 'roce',
+    name: 'Spark-like',
+    bandwidthPerDirectionBytesPerSec: 25e9,
+    latencySec: 1.5e-6,
+    allPortsCapPerDirectionBytesPerSec: 25e9,
+    forwardingLatencySec: 5e-6,
+    p2p: 'direct',
+    sources: [{ url: 'synthetic://test', title: 't', fields: ['bandwidthPerDirectionBytesPerSec', 'latencySec', 'allPortsCapPerDirectionBytesPerSec', 'forwardingLatencySec'] }],
+    estimated: [],
+  };
+  const switched: TopologySpec = { id: 's', name: 's', devicesPerNode: 1, nodes: 4, interNode: link, sources: [] };
+  const ring: TopologySpec = { ...switched, interNodeFabric: { kind: 'ring' } };
+  const sim = (topology: TopologySpec) =>
+    simulate({
+      model: REF_DENSE_8B,
+      quant: BF16,
+      parallel: { tp: 4, pp: 1, dp: 1, ep: 1 },
+      workload: { batch: 1, promptLen: 4096, decodeContextLen: 8192 },
+      hardware: { device: DGX_SPARK, topology },
+    });
+
+  it('decode is slower on the ring (latency-bound: the tree needs a 2-hop step), prefill is bit-equal (ring at the cap)', () => {
+    const a = sim(switched);
+    const b = sim(ring);
+    expect(b.decode.tokensPerSec).toBeLessThan(a.decode.tokensPerSec);
+    expect(b.prefill.tokensPerSec).toBe(a.prefill.tokensPerSec);
   });
 });

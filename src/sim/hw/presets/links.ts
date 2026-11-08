@@ -14,6 +14,19 @@ const HALO_TCP_URL = 'https://forum.level1techs.com/t/benchmarking-usb4-performa
 const HALO_RDMA_URL = 'https://forum.level1techs.com/t/ryzen-ai-halo-usb4-clustering-with-rdma-testing-notes/253117';
 const TB5_BRIEF_URL =
   'https://www.thunderbolttechnology.net/sites/default/files/Thunderbolt_5_TechBrief_2023_09_12.pdf';
+const SPARK_CLUSTERING_URL = 'https://docs.nvidia.com/dgx/dgx-spark/spark-clustering.html';
+const SPARK_RING_FORUM_URL =
+  'https://forums.developer.nvidia.com/t/dgx-spark-networking-open-source-switchless-roce-collectives-nccl-profiles-and-fabric-tooling-for-multi-spark-inference/385049/1';
+const TN3205_URL = 'https://developer.apple.com/documentation/technotes/tn3205-low-latency-communication-with-rdma-over-thunderbolt';
+const MLX_JACCL_PR_URL = 'https://github.com/ml-explore/mlx/pull/2808';
+const MLX_MULTI_CABLE_PR_URL = 'https://github.com/ml-explore/mlx/pull/3900';
+
+/**
+ * Old `linkPresetId`s → the current id, for URLs written before a link was renamed. Empty so far: no link preset has
+ * been renamed (a link's id is the slug of its name, and the UI's URL stores it, so renames are avoided). The URL
+ * decoder (`src/ui/state/url.ts`) consults it.
+ */
+export const LEGACY_LINK_IDS: Record<string, string> = {};
 
 /** PCIe line-rate ceiling after 128b/130b encoding, before packet overhead. Gen4/5 rate is GT/s per lane. */
 function pcieLink(generation: 4 | 5, lanes: 8 | 16, direct: boolean): LinkSpec {
@@ -232,12 +245,18 @@ export const IB_XDR_800: LinkSpec = {
   ],
 };
 
-/** DGX Spark pair, one ConnectX-7 200GbE cable using both 100G rails: 25 GB/s per direction. */
+/**
+ * DGX Spark ConnectX-7 200GbE RoCE, one QSFP port: 25 GB/s per direction. The NIC has two QSFP ports, but they
+ * share the SoC attachment (two PCIe Gen5 x4 links, ~200 Gb/s together), so the all-ports cap equals one port: a
+ * second cable adds no bandwidth, and bytes a Spark relays on a switchless ring count against the same 25 GB/s.
+ */
 export const SPARK_CONNECTX_7: LinkSpec = {
   kind: 'roce',
   name: 'DGX Spark ConnectX-7 200GbE RoCE',
   bandwidthPerDirectionBytesPerSec: 200e9 / 8,
   latencySec: 1.5e-6,
+  allPortsCapPerDirectionBytesPerSec: 200e9 / 8,
+  forwardingLatencySec: 4.5e-6,
   p2p: 'direct',
   sources: [
     {
@@ -245,8 +264,25 @@ export const SPARK_CONNECTX_7: LinkSpec = {
       title: 'NVIDIA DGX Spark specifications',
       fields: [BANDWIDTH_FIELD],
       note: 'NVIDIA says both "each port up to 200 Gb/s" and "NIC @ 200 Gbps". ' +
-        'Use the conservative total: 200 Gb/s = 25 GB/s per direction, not 400 Gb/s across two ports. ' +
-        'Adding a second cable does not double the modeled bandwidth.',
+        'One port = 200 Gb/s = 25 GB/s per direction; the all-ports cap below says why two ports do not add up.',
+    },
+    {
+      url: SPARK_CLUSTERING_URL,
+      title: 'NVIDIA DGX Spark clustering documentation',
+      fields: ['allPortsCapPerDirectionBytesPerSec'],
+      note: 'The ConnectX-7 connects to GB10 over "two independent PCIe Gen 5 x4 links"; both QSFP ports share them, ' +
+        'so a node injects ~200 Gb/s in total (measured 185–190 Gb/s RoCE over both x4 links, ServeTheHome; ' +
+        '"both links to neighbor node will aggregate to 200G", NVIDIA forum). Cap = 25 GB/s per direction = one port. ' +
+        'NVIDIA\'s multi-Spark playbook: "Using two cables will not increase performance."',
+    },
+    {
+      url: SPARK_RING_FORUM_URL,
+      title: 'dgx-spark-networking: switchless RoCE collectives on a 4-Spark ring (measurements)',
+      kind: 'community',
+      fields: ['forwardingLatencySec'],
+      note: '10 KiB one-shot all-reduce: 10.9 µs on 2 direct nodes vs 16.9 µs on a 4-node ring where the opposite rank ' +
+        'is relayed by a neighbour\'s host: the 2-hop path costs ~6 µs more than the 1-hop one. RoCE cannot route through ' +
+        'a Spark in hardware (RC QPs fail across L3 hops), so relays are host store-and-forward.',
     },
     {
       url: 'https://contact.alessandrosangiorgi.net/posts/dgx-spark-roce-link-validation/',
@@ -257,7 +293,15 @@ export const SPARK_CONNECTX_7: LinkSpec = {
         'NCCL small-message 24–43 µs includes software overhead and is not used.',
     }
   ],
-  estimated: [],
+  estimated: [
+    {
+      field: 'forwardingLatencySec',
+      reason: 'ESTIMATED, relay handling only (the engine charges α = 1.5 µs for every hop crossed, so this excludes ' +
+        'the second wire hop): 4.5 µs = (16.9 − 10.9 µs) measured 2-hop vs 1-hop one-shot all-reduce − 1.5 µs for the ' +
+        'extra hop\'s wire latency; it is the relay host\'s completion poll, re-post and PCIe round trip. A 2-hop path ' +
+        'then costs 2 × 1.5 + 4.5 = 7.5 µs (+6 µs over direct, the measurement), a 3-hop one 3 × 1.5 + 2 × 4.5 = 13.5 µs.',
+    },
+  ],
 };
 
 /** MI300X per-peer xGMI link: 128 GB/s bidirectional / 2 = 64 GB/s per direction. */
@@ -299,12 +343,17 @@ export const XGMI_MI300X_8_GPU: LinkSpec = {
   })),
 };
 
-/** Mac TB5 RDMA: one port at 80 Gb/s each direction, not the asymmetric display-only 120 Gb/s mode. */
+/**
+ * Mac TB5 RDMA: one port at 80 Gb/s each direction, not the asymmetric display-only 120 Gb/s mode. No all-ports
+ * cap: Apple Thunderbolt controllers have a single port each (TN3205), and cables between two Macs scale about
+ * linearly to four (~36.5 GB/s, MLX PR #3900); the SoC-side ceiling for five or six concurrent ports is unmeasured.
+ */
 export const TB5_RDMA: LinkSpec = {
   kind: 'thunderbolt',
   name: 'Thunderbolt 5 RDMA (macOS 26.2+)',
   bandwidthPerDirectionBytesPerSec: 80e9 / 8,
   latencySec: 50e-6,
+  forwardingLatencySec: 3e-6,
   p2p: 'direct',
   sources: [
     {
@@ -314,8 +363,7 @@ export const TB5_RDMA: LinkSpec = {
       note: '80 Gb/s each direction = 10 GB/s. 120 Gb/s Bandwidth Boost is asymmetric and display-oriented.',
     },
     {
-      url: 'https://developer.apple.com/documentation/technotes/tn3' +
-        '205-low-latency-communication-with-rdma-over-thunderbolt',
+      url: TN3205_URL,
       title: 'Apple TN3205: RDMA over Thunderbolt',
       fields: ['p2p'],
       note: 'Apple silicon Macs with TB5, starting macOS 26.2; point-to-point RDMA interfaces.',
@@ -327,23 +375,76 @@ export const TB5_RDMA: LinkSpec = {
       fields: ['latencySec'],
       note: 'Reported memory-access latency <50 µs, an upper bound, not a hardware/verbs floor. ' +
         'Application throughput ~50–60 Gb/s; other file-transfer tests 3.5–3.8 GB/s.',
-    }
+    },
+    {
+      url: TN3205_URL,
+      title: 'Apple TN3205: RDMA over Thunderbolt cannot route; the application forwards',
+      fields: ['forwardingLatencySec'],
+      note: '"RDMA over Thunderbolt can\'t route data … the application is responsible for forwarding": a relay on a ' +
+        'ring is a receive completion plus a re-posted two-sided send on the next port (no remote writes).',
+    },
+    {
+      url: MLX_MULTI_CABLE_PR_URL,
+      title: 'MLX PR #3900: multiple Thunderbolt cables between two Macs',
+      kind: 'community',
+      fields: ['forwardingLatencySec'],
+      note: '1 → 4 cables between two Macs: ~9.25 → ~36.5 GB/s all_sum bandwidth (~3.95×), so ports add up and no ' +
+        'all-ports cap is set. ibv_uc_pingpong round trip ~14 µs (~7 µs one way, the measured per-hop wire + verbs time) on the same stack.',
+    },
+    {
+      url: MLX_JACCL_PR_URL,
+      title: 'MLX PR #2808: JACCL (RDMA over TB5) 4-way all-reduce timings',
+      kind: 'community',
+      fields: ['forwardingLatencySec'],
+      note: 'JACCL 4-way mesh all-reduce ~9–12 µs at 1–8 KB on M3 Ultra Mac Studios, vs ~290–300 µs for the TCP ring backend.',
+    },
   ],
   estimated: [
     {
       field: 'latencySec',
       reason: 'Hardware floor unknown; 50 µs is a conservative proxy from a reported <50 µs upper bound, not a ' +
         'verified one-way floor.'
-    }
+    },
+    {
+      field: 'forwardingLatencySec',
+      reason: 'ESTIMATED, relay handling only: the engine charges α for every hop crossed (the ~7 µs measured one-way ' +
+        'transfer; 50 µs in this preset), so the relay adds just the host turnaround between the incoming completion and ' +
+        'the outgoing post of a two-sided send: ~3 µs, the difference between JACCL\'s 9–12 µs small 4-way all-reduce and ' +
+        'its ~7 µs one-way transfer, the software step of a user-space verbs relay. Physically a 2-hop relay is ' +
+        '2 × 7 + 3 = 17 µs and a 3-hop one 3 × 7 + 2 × 3 = 27 µs; with this preset\'s 50 µs α, 103 and 156 µs.',
+    },
   ],
 };
 
-/** Mac TB4 TCP bridge: nominal 40 Gb/s per-direction ceiling; real bridge traffic is substantially lower. */
+/** The Thunderbolt bridge forwards in software: TN3205 (the source of the TCP links' forwarding latency). */
+const TB_BRIDGE_FORWARDING_SOURCE: SourceRef = {
+  url: MLX_JACCL_PR_URL,
+  title: 'MLX PR #2808: TCP ring backend 4-way all-reduce timings',
+  kind: 'community',
+  fields: ['forwardingLatencySec'],
+  note: 'MLX `ring` (TCP over Thunderbolt) 4-way all-reduce ≈ 290–300 µs at 1–32 KB, i.e. ~48 µs per ring step, each ' +
+    'step a kernel TCP receive plus send through the host: the per-hop cost is almost all software. TN3205: the ' +
+    'Thunderbolt bridge forwards in software, "like a physical Ethernet hub".',
+};
+/** Why a TCP relay adds ~20 µs on top of the per-hop α of the Thunderbolt bridge. */
+const TB_TCP_FORWARDING_REASON =
+  'ESTIMATED, relay handling only: α (70 µs, half the ICMP RTT) already holds each hop\'s send stack, wire and receive ' +
+  'stack, so the relay adds the user-space turnaround between the receive completing and the next send being issued ' +
+  '(wakeup, copy, syscall): ~20 µs, about a third of the ~48–70 µs one-way TCP time, which is itself almost all ' +
+  'software; no direct measurement of a Thunderbolt bridge relay exists. A 2-hop relay is 2 × 70 + 20 = 160 µs, a ' +
+  '3-hop one 3 × 70 + 2 × 20 = 250 µs.';
+
+/**
+ * Mac Thunderbolt bridge over TCP (IP over Thunderbolt) on Thunderbolt 4 cables and ports: nominal 40 Gb/s per
+ * direction; real bridge traffic is substantially lower. The Thunderbolt link of Macs without Thunderbolt 5 (the M3
+ * Max MacBook Pro); TB5 Macs use `TB5_TCP`. Older URLs naming this link on a TB5 Mac still resolve to it.
+ */
 export const TB4_TCP: LinkSpec = {
   kind: 'thunderbolt',
   name: 'Thunderbolt 4 bridge (TCP)',
   bandwidthPerDirectionBytesPerSec: 40e9 / 8,
   latencySec: 70e-6,
+  forwardingLatencySec: 20e-6,
   p2p: 'direct',
   sources: [
     {
@@ -359,22 +460,76 @@ export const TB4_TCP: LinkSpec = {
       fields: ['latencySec'],
       note: 'TB bridge ping minimum RTT 0.142 ms; one-way estimate 0.142 / 2 ≈ 0.070 ms. ' +
         'Measured TCP one-way 15.9–18.8 Gb/s, below the nominal rate.',
-    }
+    },
+    TB_BRIDGE_FORWARDING_SOURCE,
   ],
   estimated: [
     {
       field: 'latencySec',
       reason: '70 µs approximates half the 142 µs minimum ICMP RTT, not a measured one-way hardware latency.'
-    }
+    },
+    {
+      field: 'forwardingLatencySec',
+      reason: TB_TCP_FORWARDING_REASON,
+    },
   ],
 };
 
-/** Strix Halo USB4 native RDMA: AMD host-to-host negotiates one 20 Gb/s lane, i.e. 2.5 GB/s each way. */
+/**
+ * Mac Thunderbolt bridge over TCP on Thunderbolt 5 ports and cables: the 80 Gb/s per-direction line rate (the same
+ * hardware ceiling as `TB5_RDMA`; the 120 Gb/s Bandwidth Boost is asymmetric and display-oriented). Achieved TCP
+ * goodput over the bridge is lower and not cleanly measured, so this is the hardware ceiling, not a goodput claim.
+ * Latency and relay handling are the bridge's software costs, transferred from the TB4 bridge (same macOS stack).
+ */
+export const TB5_TCP: LinkSpec = {
+  kind: 'thunderbolt',
+  name: 'Thunderbolt 5 bridge (TCP)',
+  bandwidthPerDirectionBytesPerSec: 80e9 / 8,
+  latencySec: 70e-6,
+  forwardingLatencySec: 20e-6,
+  p2p: 'direct',
+  sources: [
+    {
+      url: TB5_BRIEF_URL,
+      title: 'Intel Thunderbolt 5 technology brief',
+      fields: [BANDWIDTH_FIELD],
+      note: '80 Gb/s each direction = 10 GB/s, the line rate the bridge can at most carry; 120 Gb/s Bandwidth Boost is ' +
+        'asymmetric and display-oriented. Not an achieved TCP goodput (none cleanly measured on TB5).',
+    },
+    {
+      url: 'https://sebastianalexis.com/blog/thunderbolt-networking-is-underused/',
+      title: 'Thunderbolt networking is underused',
+      kind: 'community',
+      fields: ['latencySec'],
+      note: 'Thunderbolt bridge ping minimum RTT 0.142 ms (TB4 Macs); one-way estimate ≈ 70 µs. The bridge is the same ' +
+        'macOS software path on TB5.',
+    },
+    TB_BRIDGE_FORWARDING_SOURCE,
+  ],
+  estimated: [
+    {
+      field: 'latencySec',
+      reason: '70 µs transferred from the TB4 bridge (half the 142 µs minimum ICMP RTT): the bridge\'s latency is the ' +
+        'software stack, not the wire; no TB5-specific bridge RTT found.',
+    },
+    {
+      field: 'forwardingLatencySec',
+      reason: TB_TCP_FORWARDING_REASON,
+    },
+  ],
+};
+
+/**
+ * Strix Halo USB4 native RDMA: AMD host-to-host negotiates one 20 Gb/s lane, i.e. 2.5 GB/s each way. Two native
+ * USB4 ports per SoC (AMD product page), one controller each: no all-ports cap. A relay on a 4-node ring goes through
+ * the host (no USB4 routing): ~3 µs of handling on top of each hop's α.
+ */
 export const USB4_HALO_RDMA: LinkSpec = {
   kind: 'usb4',
   name: 'Strix Halo USB4 native RDMA (20 Gb/s negotiated)',
   bandwidthPerDirectionBytesPerSec: 20e9 / 8,
   latencySec: 8e-6,
+  forwardingLatencySec: 3e-6,
   p2p: 'direct',
   sources: [
     {
@@ -386,14 +541,26 @@ export const USB4_HALO_RDMA: LinkSpec = {
         'Native usb4_rdma ib_write_lat avg 8.33 µs, min 7.39 µs, rounded to 8 µs. Requires experimental driver.',
     }
   ],
-  estimated: [],
+  estimated: [
+    {
+      field: 'forwardingLatencySec',
+      reason: 'ESTIMATED, relay handling only: α (8 µs, ib_write_lat) is charged for every hop crossed, so the relay adds ' +
+        'just the host turnaround between the incoming completion and the re-posted send, ~3 µs as for Thunderbolt 5 RDMA ' +
+        '(a user-space verbs relay; the Linux usb4_rdma path is experimental and unmeasured for relays). A 2-hop relay is ' +
+        '2 × 8 + 3 = 19 µs, a 3-hop one 3 × 8 + 2 × 3 = 30 µs.',
+    },
+  ],
 };
 
-/** Strix Halo stock thunderbolt-net USB4 TCP: same 20 Gb/s negotiated line rate, estimated 10 µs one-way. */
+/**
+ * Strix Halo stock thunderbolt-net USB4 TCP: same 20 Gb/s negotiated line rate, estimated 10 µs one-way, and an
+ * estimated 5 µs of relay handling per intermediate node (Linux IP forwarding through the host on a 4-node ring).
+ */
 export const USB4_HALO_TCP: LinkSpec = {
   ...USB4_HALO_RDMA,
   name: 'Strix Halo USB4 TCP (20 Gb/s negotiated)',
   latencySec: 10e-6,
+  forwardingLatencySec: 5e-6,
   sources: [
     ...USB4_HALO_RDMA.sources.map((s) => ({
       ...s,
@@ -411,7 +578,14 @@ export const USB4_HALO_TCP: LinkSpec = {
     {
       field: 'latencySec',
       reason: 'Half the tuned TCP ping-pong RTT; software-inclusive proxy because hardware-only floor is unknown.'
-    }
+    },
+    {
+      field: 'forwardingLatencySec',
+      reason: 'ESTIMATED, relay handling only: α (10 µs, half the tuned ping-pong RTT) already holds each hop\'s send ' +
+        'stack, wire and receive stack, so the relay adds the kernel\'s IP-forwarding turnaround (or a user-space ' +
+        'receive-to-send on a tuned stack), ~5 µs, half the one-way time; no relay measurement exists. A 2-hop relay is ' +
+        '2 × 10 + 5 = 25 µs, a 3-hop one 3 × 10 + 2 × 5 = 40 µs.',
+    },
   ],
 };
 
@@ -461,6 +635,6 @@ export const HOST_BOUNCE_PCIE_LINKS: LinkSpec[] = [PCIE_4_X16, PCIE_4_X8, PCIE_5
 export const LINK_PRESETS: LinkSpec[] = [
   ...HOST_BOUNCE_PCIE_LINKS, PCIE_4_X16_DIRECT, PCIE_4_X8_DIRECT, PCIE_5_X16_DIRECT, PCIE_5_X8_DIRECT,
   RTX_3090_NVLINK, NVLINK_4, NVLINK_5, IB_NDR_400, IB_XDR_800, SPARK_CONNECTX_7,
-  XGMI_MI300X_PER_PEER, XGMI_MI300X_8_GPU, TB5_RDMA, TB4_TCP,
+  XGMI_MI300X_PER_PEER, XGMI_MI300X_8_GPU, TB5_RDMA, TB5_TCP, TB4_TCP,
   USB4_HALO_RDMA, USB4_HALO_TCP, ETHERNET_5G_TCP, ETHERNET_10G_TCP,
 ];

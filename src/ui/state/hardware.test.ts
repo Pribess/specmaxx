@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { simulate } from '../../sim/engine/simulate';
-import { DEVICE_PRESETS, SYSTEM_PRESETS } from '../../sim/hw/presets/index';
+import { DEVICE_PRESETS } from '../../sim/hw/presets/index';
+import { POPULAR_SETUPS, composeTopology } from '../../sim/hw/presets/catalog';
 import { PCIE_4_X16, PCIE_5_X16, SPARK_CONNECTX_7, TB5_RDMA, USB4_HALO_RDMA, NVLINK_4, XGMI_MI300X_8_GPU } from '../../sim/hw/presets/links';
 import { validateDevice, validateLink, validateTopology } from '../../sim/hw/validate';
 import { REF_DENSE_8B } from '../../sim/models/reference';
 import { SINGLE_DEVICE_HW, type HardwareChoice } from './appState';
 import {
-  EDITED_REASON, UNITS, applyEdits, defaultLinks, editableFields, editableLinkFields, findDevice, fromDisplay,
-  matchingSystem, resolveDevice, resolveHardware, systemChoice, toDisplay, topologyPresetsFor,
+  EDITED_REASON, UNITS, applyEdits, cablingName, cablingOptions, defaultLinks, editableFields, editableLinkFields,
+  effectiveCabling, findDevice, fromDisplay, matchingPopularSetup, nearestCount, normalizeCabling, popularSetupChoice,
+  resolveDevice, resolveHardware, toDisplay,
 } from './hardware';
 import { REFERENCE_QUANT_DEFAULTS } from './quant';
 
@@ -36,13 +38,54 @@ describe('defaultLinks and topologies', () => {
     expect(defaultLinks(findDevice('dgx-spark')!).interNode).toBe(SPARK_CONNECTX_7);
   });
 
-  it('lists the named topologies of a device as quick picks', () => {
-    expect(topologyPresetsFor(findDevice('rtx-5090')!).map((t) => t.devicesPerNode)).toEqual([2, 4]);
-    expect(topologyPresetsFor(findDevice('h100-sxm')!).length).toBe(2);
-    expect(topologyPresetsFor(findDevice('instinct-mi300x')!).map((t) => t.id)).toEqual(['mi300x-xgmi-8']);
-    // The R9700 has a named 4-card workstation now, so it gets a quick pick.
-    expect(topologyPresetsFor(findDevice('radeon-ai-pro-r9700')!).map((t) => t.devicesPerNode)).toEqual([4]);
-    expect(topologyPresetsFor(findDevice('dgx-spark')!).map((t) => t.nodes)).toEqual([2, 4]);
+  it('offers the cablings the ports allow and defaults to a switch, else a mesh, else a ring', () => {
+    const spark = (nodes: number) => hw({ deviceId: 'dgx-spark', nodes });
+    expect(cablingOptions(spark(1))).toEqual([]);
+    expect(effectiveCabling(spark(1))).toBeUndefined();
+    expect(effectiveCabling(spark(4))).toBe('switched');
+    expect(cablingOptions(spark(4))).toContain('ring');
+    expect(cablingOptions(spark(3))).not.toContain('ring');
+    const halo = (nodes: number) => hw({ deviceId: 'ryzen-ai-max-plus-395', nodes });
+    expect(effectiveCabling(halo(2))).toBe('mesh');
+    expect(effectiveCabling(halo(3))).toBe('mesh');
+    expect(effectiveCabling(halo(4))).toBe('ring');
+    // Several GPUs per machine: a switch only.
+    expect(cablingOptions(hw({ devicesPerNode: 2, nodes: 2 }))).toEqual(['switched']);
+  });
+
+  it('a cabling the link does not allow falls back to the default; normalizeCabling drops it and defaults', () => {
+    const ring3 = hw({ deviceId: 'dgx-spark', nodes: 3, cabling: 'ring' });
+    expect(effectiveCabling(ring3)).toBe('switched');
+    expect(normalizeCabling(ring3).cabling).toBeUndefined();
+    expect(normalizeCabling(hw({ deviceId: 'dgx-spark', nodes: 4, cabling: 'switched' })).cabling).toBeUndefined();
+    expect(normalizeCabling(hw({ deviceId: 'dgx-spark', nodes: 4, cabling: 'ring' })).cabling).toBe('ring');
+    // A link the device's catalog does not list (an older URL) is switched only.
+    expect(cablingOptions(hw({ deviceId: 'ryzen-ai-max-plus-395', nodes: 4, interLinkId: 'infiniband-ndr400-one-nic-per-gpu' }))).toEqual(['switched']);
+  });
+
+  it('names cablings in plain language, two machines as cables', () => {
+    expect(cablingName('mesh', 2)).toBe('One cable');
+    expect(cablingName('mesh2', 2)).toBe('Two cables');
+    expect(cablingName('mesh', 4)).toBe('Full mesh');
+    expect(cablingName('chain', 4)).toBe('Daisy chain');
+    expect(cablingName('switched', 4)).toBe('Switch');
+  });
+
+  it('snaps a count to the nearest offered one', () => {
+    expect(nearestCount([1, 2, 4, 8], 3)).toBe(2);
+    expect(nearestCount([1, 2, 4, 8], 6)).toBe(4);
+    expect(nearestCount([1, 2, 4, 8], 16)).toBe(8);
+    expect(nearestCount([1], 4)).toBe(1);
+  });
+
+  it('a ring cabling reaches the topology; a switch leaves it absent', () => {
+    const ring = resolveHardware(hw({ deviceId: 'dgx-spark', nodes: 4, cabling: 'ring' }));
+    expect(ring.topology.interNodeFabric).toEqual({ kind: 'ring' });
+    expect(ring.cabling).toBe('ring');
+    expect(validateTopology(ring.topology)).toEqual([]);
+    const sw = resolveHardware(hw({ deviceId: 'dgx-spark', nodes: 4 }));
+    expect(sw.topology.interNodeFabric).toBeUndefined();
+    expect(sw.cabling).toBe('switched');
   });
 
   it('applies the P2P unlock to the host-bounce intra-node link', () => {
@@ -55,22 +98,25 @@ describe('defaultLinks and topologies', () => {
   });
 });
 
-describe('multi-device setups', () => {
-  it.each(SYSTEM_PRESETS.map((p) => [p.id, p] as const))('%s: round-trips through systemChoice and resolves to its topology', (_id, p) => {
-    const choice = systemChoice(p);
-    expect(matchingSystem(choice)).toBe(p);
+describe('popular setups', () => {
+  it.each(POPULAR_SETUPS.map((p) => [p.id, p] as const))('%s: round-trips through popularSetupChoice and resolves to its topology', (_id, p) => {
+    const choice = popularSetupChoice(p);
+    expect(matchingPopularSetup(choice)).toBe(p);
     const r = resolveHardware(choice);
+    const expected = composeTopology(p.choice);
     expect(validateTopology(r.topology)).toEqual([]);
-    expect(r.topology.devicesPerNode).toBe(p.topology.devicesPerNode);
-    expect(r.topology.nodes).toBe(p.topology.nodes);
-    expect(r.topology.intraNode).toBe(p.topology.intraNode);
-    expect(r.topology.interNode).toBe(p.topology.interNode);
-    expect(r.memCapacityBytes).toBe(p.memCapacityBytes ?? p.device.memory.capacityOptionsBytes[0]);
+    expect(r.topology.devicesPerNode).toBe(expected.devicesPerNode);
+    expect(r.topology.nodes).toBe(expected.nodes);
+    expect(r.topology.intraNode).toBe(expected.intraNode);
+    expect(r.topology.interNode).toBe(expected.interNode);
+    expect(r.topology.interNodeFabric).toEqual(expected.interNodeFabric);
+    const device = findDevice(p.choice.deviceId)!;
+    expect(r.memCapacityBytes).toBe(p.choice.memCapacityBytes ?? device.memory.capacityOptionsBytes[0]);
   });
 
-  it('RTX 5090 ×2 (PCIe) sets the device, counts and the PCIe link', () => {
-    const p = SYSTEM_PRESETS.find((s) => s.id === 'rtx-5090-x2-pcie5')!;
-    expect(systemChoice(p)).toEqual({
+  it('RTX 5090 ×2 sets the device, counts and the PCIe link', () => {
+    const p = POPULAR_SETUPS.find((s) => s.id === 'rtx-5090-x2-pcie5')!;
+    expect(popularSetupChoice(p)).toEqual({
       ...SINGLE_DEVICE_HW,
       deviceId: 'rtx-5090',
       devicesPerNode: 2,
@@ -79,19 +125,30 @@ describe('multi-device setups', () => {
   });
 
   it('M5 Ultra 256GB picks the 256GB option', () => {
-    const p = SYSTEM_PRESETS.find((s) => s.id === 'm5-ultra-80c-256gb-x2-tb5')!;
-    expect(systemChoice(p).capacityIndex).toBe(1);
+    const p = POPULAR_SETUPS.find((s) => s.id === 'm5-ultra-80c-256gb-x2-tb5')!;
+    expect(popularSetupChoice(p).capacityIndex).toBe(1);
+  });
+
+  it('DGX Spark ×4 ring and switch are told apart by the cabling', () => {
+    const sparks = POPULAR_SETUPS.filter((s) => s.choice.deviceId === 'dgx-spark' && s.choice.nodes === 4);
+    expect(sparks.length).toBe(2);
+    const ring = sparks.find((s) => s.choice.cabling === 'ring')!;
+    const other = sparks.find((s) => s !== ring)!;
+    expect(matchingPopularSetup(popularSetupChoice(ring))).toBe(ring);
+    expect(matchingPopularSetup(popularSetupChoice(other))).toBe(other);
+    expect(matchingPopularSetup(hw({ deviceId: 'dgx-spark', nodes: 4 }))).toBe(other);
+    expect(matchingPopularSetup(hw({ deviceId: 'dgx-spark', nodes: 4, cabling: 'ring' }))).toBe(ring);
   });
 
   it('a default-link choice with the same counts matches; any change matches nothing', () => {
-    const p = SYSTEM_PRESETS.find((s) => s.id === 'rtx-5090-x2-pcie5')!;
-    expect(matchingSystem(hw({ devicesPerNode: 2 }))).toBe(p);
-    expect(matchingSystem(SINGLE_DEVICE_HW)).toBeUndefined();
-    const choice = systemChoice(p);
-    expect(matchingSystem({ ...choice, devicesPerNode: 3 })).toBeUndefined();
-    expect(matchingSystem({ ...choice, intraLinkId: 'pcie-5-0-x8-host-bounce' })).toBeUndefined();
-    expect(matchingSystem({ ...choice, deviceEdits: { 'memory.bandwidthBytesPerSec': 2e12 } })).toBeUndefined();
-    expect(matchingSystem({ ...choice, unlocks: { 'pcie-p2p': 'direct' } })).toBeUndefined();
+    const p = POPULAR_SETUPS.find((s) => s.id === 'rtx-5090-x2-pcie5')!;
+    expect(matchingPopularSetup(hw({ devicesPerNode: 2 }))).toBe(p);
+    expect(matchingPopularSetup(SINGLE_DEVICE_HW)).toBeUndefined();
+    const choice = popularSetupChoice(p);
+    expect(matchingPopularSetup({ ...choice, devicesPerNode: 3 })).toBeUndefined();
+    expect(matchingPopularSetup({ ...choice, intraLinkId: 'pcie-5-0-x8-host-bounce' })).toBeUndefined();
+    expect(matchingPopularSetup({ ...choice, deviceEdits: { 'memory.bandwidthBytesPerSec': 2e12 } })).toBeUndefined();
+    expect(matchingPopularSetup({ ...choice, unlocks: { 'pcie-p2p': 'direct' } })).toBeUndefined();
   });
 });
 
@@ -170,5 +227,11 @@ describe('editable fields', () => {
       ['bandwidthPerDirectionBytesPerSec', 'hostBounce.extraLatencySec', 'hostBounce.hostMemBandwidthBytesPerSec', 'latencySec'],
     );
     expect(fields.find((f) => f.path === 'latencySec')?.unit).toBe(UNITS.us);
+  });
+
+  it('labels the multi-port link fields: the cap over all ports and the relay latency', () => {
+    const fields = editableLinkFields(SPARK_CONNECTX_7);
+    expect(fields.find((f) => f.path === 'allPortsCapPerDirectionBytesPerSec')).toMatchObject({ label: 'Bandwidth cap, all ports', unit: UNITS.gbps });
+    expect(fields.find((f) => f.path === 'forwardingLatencySec')).toMatchObject({ label: 'Relay latency per hop', unit: UNITS.us });
   });
 });

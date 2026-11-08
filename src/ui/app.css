@@ -189,8 +189,7 @@ p.hint {
   color: var(--muted);
   margin-left: 6px;
 }
-.spec-editor,
-.quick-picks {
+.spec-editor {
   font-size: 14px;
   margin-top: 16px;
 }
@@ -198,7 +197,6 @@ p.hint {
   margin: 12px 0 12px 8px;
 }
 .spec-editor summary,
-.quick-picks summary,
 .notes summary {
   cursor: pointer;
 }
@@ -209,8 +207,103 @@ p.hint {
   border-left: 3px solid var(--graphite);
   padding-left: 8px;
 }
-.quick-picks button {
-  margin: 6px 6px 0 0;
+/* Setup row (SetupRow.tsx): counts as segmented controls, then the links and the cabling. */
+.setup-row {
+  margin-top: 12px;
+}
+.setup-level + .setup-level {
+  margin-top: 14px;
+}
+.setup-level > .field + .field,
+.setup-level > .field + .fields,
+.setup-level > .fields {
+  margin-top: 12px;
+}
+.field-aside {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.field-static {
+  display: flex;
+  align-items: center;
+  height: 42px;
+  margin: 0;
+  padding: 0 10px;
+  border: 1px dashed var(--rule);
+  border-radius: var(--control-radius);
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.help-line {
+  display: block;
+}
+.help-line + .help-line {
+  margin-top: 4px;
+}
+/* Segmented control (Segmented.tsx): native radios, visually hidden; the labels form one joined control with
+   the pickers' height and radius. */
+.segmented {
+  display: flex;
+  min-width: 0;
+}
+.segment {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.segment input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.segment span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 42px;
+  border: 1px solid var(--rule);
+  background: var(--silicon);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.segment + .segment span {
+  border-left-width: 0;
+}
+.segment:first-child span {
+  border-radius: var(--control-radius) 0 0 var(--control-radius);
+}
+.segment:last-child span {
+  border-radius: 0 var(--control-radius) var(--control-radius) 0;
+}
+.segment:only-child span {
+  border-radius: var(--control-radius);
+}
+.segment:hover span {
+  background: color-mix(in srgb, var(--graphite) 7%, var(--silicon));
+}
+.segment input:checked + span {
+  background: var(--graphite);
+  border-color: var(--graphite);
+  color: var(--silicon);
+  font-weight: 600;
+}
+.segment input:focus-visible + span {
+  outline: 2px solid var(--graphite);
+  outline-offset: 2px;
+  position: relative;
+  z-index: 1;
+}
+@media (max-width: 760px) {
+  .setup-network.fields.two {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .output {
   padding: 24px 44px 64px;

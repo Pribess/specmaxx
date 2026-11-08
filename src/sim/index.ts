@@ -29,6 +29,7 @@ export * from './hw/peaks';
 export * from './hw/efficiency';
 export * from './hw/modifiers';
 export * from './hw/unlocks';
+export * from './hw/fabric';
 export * from './hw/validate';
 export * from './hw/presets/index';
 

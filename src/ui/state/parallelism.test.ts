@@ -7,8 +7,8 @@ import { fixtureRepoFiles } from '../../sim/models/__fixtures__/fixtures.testuti
 import { nodeTopology } from '../../sim/hw/presets/topologies';
 import { PCIE_5_X16 } from '../../sim/hw/presets/links';
 import type { Workload } from '../../sim/engine/types';
-import { SYSTEM_PRESETS } from '../../sim/hw/presets/index';
-import { resolveHardware, systemChoice } from './hardware';
+import { SINGLE_DEVICE_HW, type HardwareChoice } from './appState';
+import { resolveHardware } from './hardware';
 import { chooseDegrees, fieldIssues, placementField, shardingField, validDegrees, type FieldIssue } from './parallelism';
 
 function load(repo: string): { model: ModelSpec; quant: QuantConfig } {
@@ -106,8 +106,13 @@ describe('engine message wording this classification relies on', () => {
 });
 
 describe('chooseDegrees', () => {
-  const rig = (id: string) => resolveHardware(systemChoice(SYSTEM_PRESETS.find((p) => p.id === id)!)).topology;
-  it.each(['dgx-spark-x4', 'r9700-x4-pcie5'])('%s: TP × PP uses all 4 devices, with no errors', (id) => {
+  const RIGS: Record<string, Partial<HardwareChoice>> = {
+    'dgx-spark-x4-switch': { deviceId: 'dgx-spark', nodes: 4 },
+    'dgx-spark-x4-ring': { deviceId: 'dgx-spark', nodes: 4, cabling: 'ring' },
+    'r9700-x4-pcie5': { deviceId: 'radeon-ai-pro-r9700', devicesPerNode: 4 },
+  };
+  const rig = (id: string) => resolveHardware({ ...SINGLE_DEVICE_HW, ...RIGS[id] }).topology;
+  it.each(Object.keys(RIGS))('%s: TP × PP uses all 4 devices, with no errors', (id) => {
     const topology = rig(id);
     for (const m of [QWEN_27B, FLASH_NEXT]) {
       const { tp, pp } = chooseDegrees(m.model, m.quant, LOAD, topology);

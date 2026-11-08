@@ -11,7 +11,8 @@
  * | `u` | unlocks, `axis.option` comma list | `u=pcie-p2p.direct,vram-mod.48gb` |
  * | `eng`, `cap` | engine id, capacity option index | `cap=1` |
  * | `n`, `nodes` | devices per node, nodes | `n=2` |
- * | `il`, `xl` | intra / inter link preset ids (`linkPresetId`) | `il=pcie-5-0-x16-direct-p2p` |
+ * | `il`, `xl` | intra / inter link preset ids (`linkPresetId`; renamed ids load through `LEGACY_LINK_IDS`) | `il=pcie-5-0-x16-direct-p2p` |
+ * | `fab` | cabling between machines: `switched`, `mesh`, `mesh2` (2 cables per pair), `ring`, `chain` (absent: the default for the link and counts) | `fab=ring` |
  * | `x`, `xi`, `xe` | spec edits on device / intra link / inter link, `path:value` comma list, SI units | `x=memory.bandwidthBytesPerSec:2e12` |
  * | `tp`, `pp` | parallel degrees (old `dp` / `ep` are ignored: both fixed at 1) | `tp=2` |
  * | `b`, `p`, `c` | batch, prefill length (default 8192), decode context (default 8192) | `b=8` |
@@ -25,7 +26,8 @@ import { numericLeafPaths } from '../../sim/hw/validate';
 import { deviceUnlocks } from '../../sim/hw/presets/index';
 import { isValidModelId } from '../../hf/urls';
 import { DEFAULT_HW, DEFAULT_STATE, normalizeOptions, type AppState, type HardwareChoice, type ModelChoice, type QuantOverrides, type SpecEdits } from './appState';
-import { findDevice, findLink, resolveDevice, resolveLinks } from './hardware';
+import { currentLinkId, findDevice, findLink, cablingOptions, normalizeCabling, normalizeLocalLink, resolveDevice, resolveLinks } from './hardware';
+import { CABLING_IDS } from '../../sim/hw/presets/catalog';
 import { isQuantDtype, isValidBpw, isValidHeadBpw, isWeightFormat } from './quant';
 
 /** Largest accepted devices-per-node and node count (keeps derived loops bounded). Count. */
@@ -43,7 +45,7 @@ const OPTION_KEYS: [string, keyof SimOptions, readonly string[]][] = [
 
 /** Every key the codec knows, in encoding order. */
 export const URL_KEYS = [
-  'm', 'rev', 'w', 'bpw', 'hbpw', 'a', 'kv', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'x', 'xi', 'xe',
+  'm', 'rev', 'w', 'bpw', 'hbpw', 'a', 'kv', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'fab', 'x', 'xi', 'xe',
   'tp', 'pp', 'dp', 'ep', 'b', 'p', 'c', 'ov', 'fu', 'ar',
 ] as const;
 
@@ -100,6 +102,8 @@ export function encodeState(s: AppState): string {
   if (hw.nodes !== 1) put('nodes', hw.nodes);
   put('il', hw.intraLinkId);
   put('xl', hw.interLinkId);
+  // Absent when it is the default (the state keeps only a non-default cabling, `normalizeCabling`).
+  put('fab', normalizeCabling(hw).cabling);
   if (Object.keys(hw.deviceEdits).length > 0) put('x', encodeEdits(hw.deviceEdits));
   if (Object.keys(hw.intraEdits).length > 0) put('xi', encodeEdits(hw.intraEdits));
   if (Object.keys(hw.interEdits).length > 0) put('xe', encodeEdits(hw.interEdits));
@@ -235,8 +239,22 @@ export function decodeState(search: string): DecodedState {
   for (const [key, field] of [['il', 'intraLinkId'], ['xl', 'interLinkId']] as const) {
     const id = get(key);
     if (id === undefined) continue;
-    if (findLink(id) !== undefined) hw[field] = id;
+    if (findLink(id) !== undefined) hw[field] = currentLinkId(id);
     else drop(key, id);
+  }
+  // A catalog local link that cannot join the decoded devices per machine (the 2-card NVLink bridge at n=4) is dropped.
+  if (hw.intraLinkId !== undefined && normalizeLocalLink(hw).intraLinkId === undefined) {
+    drop('il', get('il') ?? hw.intraLinkId);
+    delete hw.intraLinkId;
+  }
+  // Cabling: only one the decoded device, link and counts allow (`allowedCablings`); a default one is stored as absent.
+  const fab = get('fab');
+  if (fab !== undefined) {
+    const cabling = CABLING_IDS.find((c) => c === fab);
+    if (cabling !== undefined && cablingOptions(hw).includes(cabling)) {
+      const normalized = normalizeCabling({ ...hw, cabling });
+      if (normalized.cabling !== undefined) hw.cabling = normalized.cabling;
+    } else drop('fab', fab);
   }
   // Link edits are checked against the link in use at their level (preset + unlock modifiers).
   const links = resolveLinks(hw, resolveDevice({ ...hw, deviceEdits: {} }));

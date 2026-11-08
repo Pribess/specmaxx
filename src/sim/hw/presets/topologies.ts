@@ -1,9 +1,12 @@
 /**
  * Local-AI and reference datacenter topologies. Counts are user configurations, not vendor peak claims.
  * Link bandwidths are per device per direction. Shared PCIe uplinks and nonuniform routing are not modeled;
- * see docs/simulation-model.md §6. Builders permit swapping a lane width, host DRAM spec or device SKU.
+ * see docs/simulation-model.md §6. Builders permit swapping a lane width, host DRAM spec or device SKU, and take
+ * the inter-node fabric shape (switched / full mesh / ring / chain, `FabricShape`). The UI composes topologies from
+ * `presets/catalog.ts` (device × count × link × cabling); the named constants here serve tests and the sanity harness.
  */
-import type { DeviceSpec, LinkSpec, TopologySpec } from '../types';
+import { isNonBlockingSwitched } from '../fabric';
+import type { DeviceSpec, FabricShape, LinkSpec, TopologySpec } from '../types';
 import { RADEON_AI_PRO_R9700, RYZEN_AI_MAX_PLUS_395 } from './amd';
 import { M3_ULTRA_80C, M4_MAX_40C, M5_MAX_40C, M5_ULTRA_80C } from './apple';
 import { ARC_PRO_B60 } from './intel';
@@ -25,6 +28,40 @@ export function linkPresetId(link: Pick<LinkSpec, 'name'>): string {
   return link.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
 
+/**
+ * Id suffix of an inter-node fabric shape, appended to a builder id: `''` for the default (absent, or switched
+ * non-blocking), `'-switched-o<k>'` for an oversubscribed switch, `'-mesh'` / `'-mesh<k>'` (k cables per pair > 1),
+ * `'-ring'`, `'-chain'`. Keeps every pre-fabric id unchanged.
+ */
+export function fabricIdSuffix(fabric: FabricShape | undefined): string {
+  if (fabric === undefined || isNonBlockingSwitched(fabric)) return '';
+  switch (fabric.kind) {
+    case 'switched':
+      return `-switched-o${fabric.oversubscription}`;
+    case 'full_mesh':
+      return (fabric.cablesPerPair ?? 1) > 1 ? `-mesh${fabric.cablesPerPair}` : '-mesh';
+    case 'ring':
+      return '-ring';
+    case 'chain':
+      return '-chain';
+  }
+}
+
+/** Words for an inter-node fabric shape in a topology name, e.g. `'ring'`, `'full mesh, 2 cables per pair'`; undefined for the default. */
+export function fabricWord(fabric: FabricShape | undefined): string | undefined {
+  if (fabric === undefined || isNonBlockingSwitched(fabric)) return undefined;
+  switch (fabric.kind) {
+    case 'switched':
+      return `switch, ${fabric.oversubscription}:1 oversubscribed`;
+    case 'full_mesh':
+      return (fabric.cablesPerPair ?? 1) > 1 ? `full mesh, ${fabric.cablesPerPair} cables per pair` : 'full mesh';
+    case 'ring':
+      return 'ring';
+    case 'chain':
+      return 'chain';
+  }
+}
+
 /** Arguments of {@link nodeTopology}. */
 export interface NodeTopologyArgs {
   /** Devices per node (scale-up domain), integer ≥ 1. Count. */
@@ -35,35 +72,45 @@ export interface NodeTopologyArgs {
   intraNode?: LinkSpec;
   /** Link between nodes; kept only when `nodes > 1`. */
   interNode?: LinkSpec;
+  /**
+   * Shape of the inter-node network; kept only when `nodes > 1` and `interNode` is present, and omitted from the
+   * result when it is the default (absent or non-blocking switched), so pre-fabric topologies are unchanged.
+   */
+  fabric?: FabricShape;
   /** Device that supplies the display name and the id part; omitted: a generic "device". */
   device?: Pick<DeviceSpec, 'id' | 'name'>;
 }
 
 /**
  * A general `devicesPerNode × nodes` topology, for configurations the named presets do not cover (the UI composes
- * device count, node count and link presets freely). A link is present only when that level exists: `intraNode`
- * when `devicesPerNode > 1`, `interNode` when `nodes > 1`; a link given for an absent level is dropped. A level
- * that exists but has no link is left without one, so a parallel group that needs it fails placement
- * (`engine/placement.ts`). Counts are user configuration and cite no source.
+ * device count, node count, link presets and cabling freely). A link is present only when that level exists:
+ * `intraNode` when `devicesPerNode > 1`, `interNode` when `nodes > 1`; a link given for an absent level is dropped. A
+ * level that exists but has no link is left without one, so a parallel group that needs it fails placement
+ * (`engine/placement.ts`). The fabric shape follows the inter-node link (dropped with it, and when default). Counts are
+ * user configuration and cite no source. The id ends in `fabricIdSuffix`; the name carries `fabricWord`.
  */
 export function nodeTopology(args: NodeTopologyArgs): TopologySpec {
   const { devicesPerNode, nodes } = args;
   const intraNode = devicesPerNode > 1 ? args.intraNode : undefined;
   const interNode = nodes > 1 ? args.interNode : undefined;
+  const fabric = interNode !== undefined && !isNonBlockingSwitched(args.fabric) ? args.fabric : undefined;
   const deviceId = args.device?.id ?? 'device';
   const deviceName = args.device?.name ?? 'device';
   const idParts = [`node-${devicesPerNode}x${nodes}`, deviceId];
   if (intraNode !== undefined) idParts.push(`intra-${linkPresetId(intraNode)}`);
   if (interNode !== undefined) idParts.push(`inter-${linkPresetId(interNode)}`);
   const inNode = `${devicesPerNode} × ${deviceName}${intraNode !== undefined ? ` / ${intraNode.name}` : ''}`;
-  const name = nodes > 1 ? `${nodes} nodes × (${inNode})${interNode !== undefined ? ` / ${interNode.name}` : ''}` : inNode;
+  const shape = fabricWord(fabric);
+  const network = interNode !== undefined ? ` / ${interNode.name}${shape !== undefined ? ` (${shape})` : ''}` : '';
+  const name = nodes > 1 ? `${nodes} nodes × (${inNode})${network}` : inNode;
   return {
-    id: idParts.join('-'),
+    id: idParts.join('-') + fabricIdSuffix(fabric),
     name,
     devicesPerNode,
     nodes,
     ...(intraNode !== undefined ? { intraNode } : {}),
     ...(interNode !== undefined ? { interNode } : {}),
+    ...(fabric !== undefined ? { interNodeFabric: fabric } : {}),
     sources: [],
   };
 }
@@ -82,16 +129,21 @@ export function pcieBox(device: Pick<DeviceSpec, 'id' | 'name'>, devices: number
 }
 
 /**
- * `nodes` single-SoC machines (count), connected over `link` with its per-device injection budget.
- * No automatic port aggregation: one link-rate budget per device. Ethernet assumes a non-oversubscribed
- * switch; point-to-point TB/USB needs suitable mesh/ring cabling and routing support. Four Halo machines
- * with two USB4 ports each can form a ring, not a full mesh: direct all-to-all latency is optimistic there.
+ * `nodes` single-SoC machines (count), connected over `link` with its per-device injection budget, cabled as
+ * `fabric` (absent = a non-blocking switch, the pre-fabric convention; a switch only exists for Ethernet and RoCE).
+ * Point-to-point links (Thunderbolt, USB4, back-to-back ConnectX-7) take `full_mesh` while the ports allow, else
+ * `ring` or `chain`; relays on a ring or chain go through the host (see `FabricShape`). Which shapes a machine's
+ * port count allows is the catalog's business (`presets/catalog.ts`); `validateTopology` checks only the structure.
  */
-export function socCluster(device: Pick<DeviceSpec, 'id' | 'name'>, nodes: number, link: LinkSpec): TopologySpec {
+export function socCluster(device: Pick<DeviceSpec, 'id' | 'name'>, nodes: number, link: LinkSpec, fabric?: FabricShape): TopologySpec {
+  const shape = nodes > 1 && !isNonBlockingSwitched(fabric) ? fabric : undefined;
+  const word = fabricWord(shape);
   return {
-    id: `cluster-${nodes}-${device.id}-${linkPresetId(link)}`,
-    name: `${nodes} × ${device.name} / ${link.name}`,
-    devicesPerNode: 1, nodes, interNode: link, sources: [],
+    id: `cluster-${nodes}-${device.id}-${linkPresetId(link)}${fabricIdSuffix(shape)}`,
+    name: `${nodes} × ${device.name} / ${link.name}${word !== undefined ? ` (${word})` : ''}`,
+    devicesPerNode: 1, nodes, interNode: link,
+    ...(shape !== undefined ? { interNodeFabric: shape } : {}),
+    sources: [],
   };
 }
 
@@ -138,30 +190,63 @@ export const RTX_3090_NVLINK_2: TopologySpec = {
     note: 'RTX 3090 NVLink supports a pair, not a four-card NVLink island.',
   }],
 };
-/** Two DGX Sparks, one device per node, linked by ConnectX-7 200GbE RoCE at 25 GB/s each direction. */
+/** The NVIDIA playbook that scripts 2-, 3- and 4-Spark direct cabling (`setup-cluster.sh --topology ring`) and names the 200GbE switches. */
+const SPARK_PLAYBOOK_URL = 'https://github.com/NVIDIA/dgx-spark-playbooks/blob/main/nvidia/playbook-connect-multiple-sparks/README.md';
+/** Cites the cabling of a DGX Spark cluster (the counts are user configuration; the link numbers live on `SPARK_CONNECTX_7`). */
+function sparkCabling(note: string): TopologySpec['sources'] {
+  return [{ url: SPARK_PLAYBOOK_URL, title: 'NVIDIA DGX Spark playbook: connect multiple Sparks', fields: ['interNodeFabric'], note }];
+}
+/**
+ * Two DGX Sparks, one device per node, one QSFP cable back to back: ConnectX-7 200GbE RoCE at 25 GB/s each
+ * direction. A two-node full mesh with one cable is the same cost as a switch, so the shape stays the default (the
+ * pre-fabric id and results are unchanged). A second cable adds nothing (the all-ports cap, `SPARK_CONNECTX_7`).
+ */
 export const DGX_SPARK_PAIR = socCluster(DGX_SPARK, 2, SPARK_CONNECTX_7);
 /**
- * Four DGX Sparks, one device per node, each injecting at its ConnectX-7 200GbE RoCE budget (25 GB/s per
- * direction). Two Sparks can be cabled back to back; four need a 200GbE switch, assumed non-oversubscribed (every
- * Spark keeps its full 25 GB/s through it). The link numbers cite `SPARK_CONNECTX_7`; the count is user
- * configuration.
+ * Three DGX Sparks cabled as a triangle (NVIDIA's "three-node ring"): every pair direct, two ports per Spark, one
+ * hop everywhere, i.e. a full mesh. Both ports share the 25 GB/s cap.
+ */
+export const DGX_SPARK_3: TopologySpec = {
+  ...socCluster(DGX_SPARK, 3, SPARK_CONNECTX_7, { kind: 'full_mesh' }),
+  sources: sparkCabling('"Three-device" topology: each Spark cabled to both others (QSFP port 0 and 1), no switch.'),
+};
+/**
+ * Four DGX Sparks through a 200GbE switch (e.g. MikroTik CRS804 / CRS812, named in the playbook), assumed
+ * non-oversubscribed: every Spark keeps its full 25 GB/s and every pair is one hop. One QSFP port per Spark. The
+ * pre-fabric preset (default shape, results unchanged).
  */
 export const DGX_SPARK_4 = socCluster(DGX_SPARK, 4, SPARK_CONNECTX_7);
+/**
+ * Four DGX Sparks in a switchless ring: each Spark's two QSFP ports go to its two neighbours (4 cables), so the
+ * opposite Spark is two hops away and a neighbour relays through its host (RoCE cannot route through a Spark in
+ * hardware; `SPARK_CONNECTX_7.forwardingLatencySec`). Both ports share the 25 GB/s cap, so a ring all-reduce costs
+ * exactly what the switch does; latency-bound and non-neighbour traffic pays the relay.
+ */
+export const DGX_SPARK_4_RING: TopologySpec = {
+  ...socCluster(DGX_SPARK, 4, SPARK_CONNECTX_7, { kind: 'ring' }),
+  sources: sparkCabling('"Four-device direct ring": `setup-cluster.sh --topology ring`; port 0 to the previous Spark, port 1 to the next.'),
+};
 
-/** M3 Ultra Mac Studio RDMA cluster, 2/3/4 nodes, one TB5 per-device injection budget. */
-export const M3_ULTRA_TB5_CLUSTERS = [2, 3, 4].map((n) => socCluster(M3_ULTRA_80C, n, TB5_RDMA));
-/** M4 Max Mac Studio RDMA cluster, 2/3/4 nodes; TB5 ports are required (not TB4-only machines). */
-export const M4_MAX_TB5_CLUSTERS = [2, 3, 4].map((n) => socCluster(M4_MAX_40C, n, TB5_RDMA));
-/** M5 Max RDMA cluster, 2/3/4 nodes, one TB5 per-device injection budget. */
-export const M5_MAX_TB5_CLUSTERS = [2, 3, 4].map((n) => socCluster(M5_MAX_40C, n, TB5_RDMA));
-/** M5 Ultra RDMA cluster, 2/3/4 nodes, one TB5 per-device injection budget. */
-export const M5_ULTRA_TB5_CLUSTERS = [2, 3, 4].map((n) => socCluster(M5_ULTRA_80C, n, TB5_RDMA));
-/** Mac TCP bridge fallback, 2/3/4 nodes with TB4-compatible cables, nominal 5 GB/s per direction. */
-export const MAC_TB4_TCP_CLUSTERS = [2, 3, 4].map((n) => socCluster(M3_ULTRA_80C, n, TB4_TCP));
-/** Strix Halo USB4 TCP clusters, 2/3/4 nodes; negotiated 20 Gb/s, with the four-node ring caveat above. */
-export const STRIX_HALO_USB4_TCP_CLUSTERS = [2, 3, 4].map((n) => socCluster(RYZEN_AI_MAX_PLUS_395, n, USB4_HALO_TCP));
-/** Strix Halo native USB4 RDMA clusters, 2/3/4 nodes; experimental driver required. */
-export const STRIX_HALO_USB4_RDMA_CLUSTERS = [2, 3, 4].map((n) => socCluster(RYZEN_AI_MAX_PLUS_395, n, USB4_HALO_RDMA));
+/** Thunderbolt and USB4 are point-to-point: no switch exists, so N Macs or Halo boxes are a full mesh while the ports allow (`presets/catalog.ts`). */
+const MESH: FabricShape = { kind: 'full_mesh' };
+/** M3 Ultra Mac Studio RDMA cluster, 2/3/4 nodes, full mesh of TB5 cables (5 RDMA-capable ports: up to 6 nodes). */
+export const M3_ULTRA_TB5_CLUSTERS = [2, 3, 4].map((n) => socCluster(M3_ULTRA_80C, n, TB5_RDMA, MESH));
+/** M4 Max Mac Studio RDMA cluster, 2/3/4 nodes, full mesh of TB5 cables (3 RDMA-capable ports: up to 4 nodes). */
+export const M4_MAX_TB5_CLUSTERS = [2, 3, 4].map((n) => socCluster(M4_MAX_40C, n, TB5_RDMA, MESH));
+/** M5 Max RDMA cluster, 2/3/4 nodes, full mesh of TB5 cables (3 RDMA-capable ports assumed: up to 4 nodes). */
+export const M5_MAX_TB5_CLUSTERS = [2, 3, 4].map((n) => socCluster(M5_MAX_40C, n, TB5_RDMA, MESH));
+/** M5 Ultra RDMA cluster, 2/3/4 nodes, full mesh of TB5 cables (6 ports inferred usable: up to 7 nodes, or 4 with two cables per pair). */
+export const M5_ULTRA_TB5_CLUSTERS = [2, 3, 4].map((n) => socCluster(M5_ULTRA_80C, n, TB5_RDMA, MESH));
+/** Mac TCP bridge fallback, 2/3/4 nodes with TB4-compatible cables in a full mesh, nominal 5 GB/s per direction. */
+export const MAC_TB4_TCP_CLUSTERS = [2, 3, 4].map((n) => socCluster(M3_ULTRA_80C, n, TB4_TCP, MESH));
+/** The shape of N Strix Halo boxes over their two native USB4 ports: 2 direct, 3 a triangle (mesh), 4 a ring (2 hops at most). */
+function haloUsb4Shape(nodes: number): FabricShape {
+  return nodes <= 3 ? MESH : { kind: 'ring' };
+}
+/** Strix Halo USB4 TCP clusters, 2/3/4 nodes over the two native USB4 ports (20 Gb/s negotiated); four boxes form a ring. */
+export const STRIX_HALO_USB4_TCP_CLUSTERS = [2, 3, 4].map((n) => socCluster(RYZEN_AI_MAX_PLUS_395, n, USB4_HALO_TCP, haloUsb4Shape(n)));
+/** Strix Halo native USB4 RDMA clusters, 2/3/4 nodes (experimental driver); four boxes form a ring. */
+export const STRIX_HALO_USB4_RDMA_CLUSTERS = [2, 3, 4].map((n) => socCluster(RYZEN_AI_MAX_PLUS_395, n, USB4_HALO_RDMA, haloUsb4Shape(n)));
 /** Strix Halo 5GbE clusters, 2/3/4 nodes, non-oversubscribed switch assumed. */
 export const STRIX_HALO_5GBE_CLUSTERS = [2, 3, 4].map((n) => socCluster(RYZEN_AI_MAX_PLUS_395, n, ETHERNET_5G_TCP));
 /** Strix Halo 10GbE clusters, 2/3/4 nodes; assumes add-in NICs and a non-oversubscribed switch. */
@@ -215,7 +300,7 @@ export const MI300X_XGMI_8: TopologySpec = {
 /** All named multi-device topology presets; each is independently schema-valid. */
 export const TOPOLOGY_PRESETS: TopologySpec[] = [
   RTX_5090_PCIE_2, RTX_5090_PCIE_4, RTX_4090_PCIE_2, RTX_4090_PCIE_4, RTX_3090_PCIE_2, RTX_3090_PCIE_4,
-  RTX_3090_NVLINK_2, DGX_SPARK_PAIR, DGX_SPARK_4, ARC_PRO_B60_PCIE_2, ARC_PRO_B60_PCIE_4, R9700_PCIE_4,
+  RTX_3090_NVLINK_2, DGX_SPARK_PAIR, DGX_SPARK_3, DGX_SPARK_4, DGX_SPARK_4_RING, ARC_PRO_B60_PCIE_2, ARC_PRO_B60_PCIE_4, R9700_PCIE_4,
   ...M3_ULTRA_TB5_CLUSTERS, ...M4_MAX_TB5_CLUSTERS, ...M5_MAX_TB5_CLUSTERS, ...M5_ULTRA_TB5_CLUSTERS,
   ...MAC_TB4_TCP_CLUSTERS, ...STRIX_HALO_USB4_TCP_CLUSTERS, ...STRIX_HALO_USB4_RDMA_CLUSTERS,
   ...STRIX_HALO_5GBE_CLUSTERS, ...STRIX_HALO_10GBE_CLUSTERS,

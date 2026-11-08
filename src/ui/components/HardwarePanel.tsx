@@ -1,16 +1,11 @@
+import { DEVICE_PRESET_GROUPS, deviceUnlocks } from '../../sim/hw/presets';
+import { POPULAR_SETUPS, setupLabel } from '../../sim/hw/presets/catalog';
 import {
-  DEVICE_PRESET_GROUPS,
-  SYSTEM_PRESETS,
-  deviceUnlocks,
-  LINK_PRESETS,
-  linkPresetId,
-} from '../../sim/hw/presets';
-import {
-  topologyPresetsFor,
-  matchingSystem,
-  systemChoice,
+  matchingPopularSetup,
+  popularSetupChoice,
   reduce,
   resolveHardware,
+  setupChoiceOf,
   chooseDegrees,
   applyQuantOverride,
   type AppAction,
@@ -18,20 +13,19 @@ import {
 import { Panel } from './Panel';
 import { Picker } from './Picker';
 import type { PickerOption } from './fuzzy';
-import { NumberField } from './NumberField';
 import { CustomSpecEditor } from './CustomSpecEditor';
+import { SetupRow } from './SetupRow';
 import type { PanelProps as Props } from './types';
 
-/** Picker options: every device preset by vendor group, then the multi-device setups. */
+/** The group of the curated multi-device setups, at the top of the device picker. */
+export const POPULAR_GROUP = 'Popular setups';
+
+/** Picker options: the popular setups first, then every single device by vendor group (newest first). */
 const deviceOptions: PickerOption[] = [
+  ...POPULAR_SETUPS.map((p) => ({ value: `setup:${p.id}`, label: p.name, group: POPULAR_GROUP })),
   ...DEVICE_PRESET_GROUPS.flatMap((g) =>
     g.devices.map((d) => ({ value: `device:${d.id}`, label: d.name, group: g.name })),
   ),
-  ...SYSTEM_PRESETS.map((p) => ({
-    value: `system:${p.id}`,
-    label: p.name,
-    group: 'Multi-device setups',
-  })),
 ];
 
 export function HardwarePanel(props: Props) {
@@ -42,40 +36,49 @@ export function HardwarePanel(props: Props) {
    */
   const dispatch = (...actions: AppAction[]) => {
     for (const a of actions) props.dispatch(a);
-    // Capacity, unlock, engine, link and edit changes keep the user's TP and PP.
-    const resets = actions.some((a) => a.type === 'setHardware' || a.type === 'setDevice' || a.type === 'setCounts');
+    // Capacity, unlock, engine, link, cabling and edit changes keep the user's TP and PP.
+    const resets = actions.some(
+      (a) => a.type === 'setHardware' || a.type === 'setDevice' || a.type === 'setCounts',
+    );
     if (!loaded || !resets) return;
     try {
       const next = actions.reduce(reduce, state);
       const topology = resolveHardware(next.hw).topology;
       const quant = applyQuantOverride(loaded.quant.quant, next.quant, loaded.quant.exl3);
-      props.dispatch({ type: 'setParallel', parallel: chooseDegrees(loaded.model, quant, next.workload, topology) });
+      props.dispatch({
+        type: 'setParallel',
+        parallel: chooseDegrees(loaded.model, quant, next.workload, topology),
+      });
     } catch {
       // Unresolvable hardware: the build step reports it.
     }
   };
   const device = built.hardware?.device;
-  const system = matchingSystem(state.hw);
-  const selected = system ? `system:${system.id}` : `device:${state.hw.deviceId}`;
-  const unit = device?.device.memory.kind === 'unified' ? 'Devices' : 'GPUs';
+  const setup = matchingPopularSetup(state.hw);
+  const selected = setup ? `setup:${setup.id}` : `device:${state.hw.deviceId}`;
   const total = state.hw.devicesPerNode * state.hw.nodes;
+  const label = (() => {
+    if (setup) return setup.name;
+    try {
+      const name = setupLabel(setupChoiceOf(state.hw, built.hardware?.memCapacityBytes));
+      return built.hardware?.edited ? `${name} (edited)` : name;
+    } catch {
+      return `${total} × ${device?.base.name ?? state.hw.deviceId}`;
+    }
+  })();
   return (
-    <Panel
-      title="Hardware"
-      value={system?.name ?? `${total} × ${device?.base.name ?? state.hw.deviceId}`}
-      open
-    >
+    <Panel title="Hardware" value={label} open>
       <Picker
         label="Device"
         value={selected}
         options={deviceOptions}
         onChange={(value) => {
-          if (value.startsWith('system:')) {
-            const preset = SYSTEM_PRESETS.find((p) => `system:${p.id}` === value);
-            if (preset) dispatch({ type: 'setHardware', hw: systemChoice(preset) });
+          if (value.startsWith('setup:')) {
+            const preset = POPULAR_SETUPS.find((p) => `setup:${p.id}` === value);
+            if (preset) dispatch({ type: 'setHardware', hw: popularSetupChoice(preset) });
           } else dispatch({ type: 'setDevice', deviceId: value.slice('device:'.length) });
         }}
-        help="A single device, or a ready-made multi-device setup that also sets the memory option, device counts and links."
+        help="A single device (chip and GPU-core count), or a popular setup that also sets the memory, machine count, link and cabling."
       />
       {device && device.device.memory.capacityOptionsBytes.length > 1 && (
         <Picker
@@ -89,125 +92,67 @@ export function HardwarePanel(props: Props) {
           help="Memory per device, for the SKU variants this device ships with."
         />
       )}
+      <SetupRow state={state} built={built} dispatch={dispatch} />
       <details className="advanced">
         <summary>Advanced</summary>
-      {device &&
-        deviceUnlocks(device.base).map((axis) => (
-          <fieldset className="unlock" key={axis.id}>
-            <legend>{axis.name}</legend>
-            {axis.options.length > 1 && (
-              <label className="check">
-                <input
-                  type="radio"
-                  name={axis.id}
-                  checked={!state.hw.unlocks[axis.id]}
-                  onChange={() =>
-                    dispatch({ type: 'setUnlock', axisId: axis.id, optionId: undefined })
-                  }
-                />
-                Stock
-              </label>
-            )}
-            {axis.options.map((o) => {
-              const community = [...o.deviceModifiers, ...(o.intraNodeLinkModifiers ?? [])].some(
-                (m) => m.sources?.some((s) => s.kind === 'community'),
-              );
-              return (
-                <label className="check" key={o.id}>
+        {device &&
+          deviceUnlocks(device.base).map((axis) => (
+            <fieldset className="unlock" key={axis.id}>
+              <legend>{axis.name}</legend>
+              {axis.options.length > 1 && (
+                <label className="check">
                   <input
-                    type={axis.options.length === 1 ? 'checkbox' : 'radio'}
+                    type="radio"
                     name={axis.id}
-                    checked={state.hw.unlocks[axis.id] === o.id}
-                    onChange={(e) =>
-                      dispatch({
-                        type: 'setUnlock',
-                        axisId: axis.id,
-                        optionId: e.target.checked ? o.id : undefined,
-                      })
+                    checked={!state.hw.unlocks[axis.id]}
+                    onChange={() =>
+                      dispatch({ type: 'setUnlock', axisId: axis.id, optionId: undefined })
                     }
                   />
-                  <span>
-                    {o.name}
-                    {community && <small className="tag">community-measured</small>}
-                  </span>
+                  Stock
                 </label>
-              );
-            })}
-            <details className="hint">
-              <summary>What this changes</summary>
-              {axis.description}
-            </details>
-          </fieldset>
-        ))}
-      {device && device.device.engines.length > 1 && (
-        <Picker
-          label="Compute engine"
-          value={state.hw.engineId ?? device.device.engines[0].id}
-          options={device.device.engines.map((e) => ({ value: e.id, label: e.name }))}
-          onChange={(engineId) => dispatch({ type: 'setEngine', engineId })}
-          help="The matrix engine whose peak rates are used (for example tensor cores versus shader cores)."
-        />
-      )}
-      <div className="fields two">
-        <NumberField
-          label={`${unit} in one machine`}
-          value={state.hw.devicesPerNode}
-          onChange={(devicesPerNode) => dispatch({ type: 'setCounts', devicesPerNode })}
-          issues={built.issues.filter((i) => i.field === 'devices')}
-          help={`How many ${unit.toLowerCase()} sit in one machine. They talk to each other over the fast local link (NVLink, PCIe or the unified fabric).`}
-        />
-        <NumberField
-          label="Machines"
-          value={state.hw.nodes}
-          onChange={(nodes) => dispatch({ type: 'setCounts', nodes })}
-          help="How many machines are connected. Machines talk to each other over the network link (Ethernet, InfiniBand, Thunderbolt or ConnectX), which is much slower than the local link."
-        />
-      </div>
-      <p className="total" data-testid="device-total">
-        = {total} {unit} total
-      </p>
-      {(['intra', 'inter'] as const).map(
-        (level) =>
-          (level === 'intra' ? state.hw.devicesPerNode : state.hw.nodes) > 1 && (
-            <Picker
-              key={level}
-              label={level === 'intra' ? 'Local link (within a machine)' : 'Network link (between machines)'}
-              value={state.hw[level === 'intra' ? 'intraLinkId' : 'interLinkId'] ?? 'default'}
-              options={[
-                { value: 'default', label: 'Device default' },
-                ...LINK_PRESETS.map((l) => ({ value: linkPresetId(l), label: l.name })),
-              ]}
-              onChange={(v) =>
-                dispatch({ type: 'setLink', level, linkId: v === 'default' ? undefined : v })
-              }
-              help={
-                level === 'intra'
-                  ? 'The link between devices inside one machine.'
-                  : 'The link between machines.'
-              }
-            />
-          ),
-      )}
-      {device && (
-        <details className="quick-picks" open>
-          <summary>Topology quick picks</summary>
-          {topologyPresetsFor(device.base).map((t) => (
-            <button
-              className="quiet"
-              key={t.id}
-              onClick={() => {
-                const actions: AppAction[] = [{ type: 'setCounts', devicesPerNode: t.devicesPerNode, nodes: t.nodes }];
-                if (t.intraNode) actions.push({ type: 'setLink', level: 'intra', linkId: linkPresetId(t.intraNode) });
-                if (t.interNode) actions.push({ type: 'setLink', level: 'inter', linkId: linkPresetId(t.interNode) });
-                dispatch(...actions);
-              }}
-            >
-              {t.name}
-            </button>
+              )}
+              {axis.options.map((o) => {
+                const community = [...o.deviceModifiers, ...(o.intraNodeLinkModifiers ?? [])].some(
+                  (m) => m.sources?.some((s) => s.kind === 'community'),
+                );
+                return (
+                  <label className="check" key={o.id}>
+                    <input
+                      type={axis.options.length === 1 ? 'checkbox' : 'radio'}
+                      name={axis.id}
+                      checked={state.hw.unlocks[axis.id] === o.id}
+                      onChange={(e) =>
+                        dispatch({
+                          type: 'setUnlock',
+                          axisId: axis.id,
+                          optionId: e.target.checked ? o.id : undefined,
+                        })
+                      }
+                    />
+                    <span>
+                      {o.name}
+                      {community && <small className="tag">community-measured</small>}
+                    </span>
+                  </label>
+                );
+              })}
+              <details className="hint">
+                <summary>What this changes</summary>
+                {axis.description}
+              </details>
+            </fieldset>
           ))}
-        </details>
-      )}
-      <CustomSpecEditor {...props} />
+        {device && device.device.engines.length > 1 && (
+          <Picker
+            label="Compute engine"
+            value={state.hw.engineId ?? device.device.engines[0].id}
+            options={device.device.engines.map((e) => ({ value: e.id, label: e.name }))}
+            onChange={(engineId) => dispatch({ type: 'setEngine', engineId })}
+            help="The matrix engine whose peak rates are used (for example tensor cores versus shader cores)."
+          />
+        )}
+        <CustomSpecEditor {...props} />
       </details>
     </Panel>
   );

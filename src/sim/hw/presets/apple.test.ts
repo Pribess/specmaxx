@@ -3,12 +3,14 @@ import type { DeviceSpec } from '../types';
 import { gb, gbPerSec, tbPerSec } from '../units';
 import { validateDevice } from '../validate';
 import {
-  APPLE_DEVICE_PRESETS, M3_ULTRA_60C, M3_ULTRA_80C, M4_MAX_32C, M4_MAX_40C,
+  APPLE_DEVICE_PRESETS, M3_MAX_30C, M3_MAX_40C, M3_ULTRA_60C, M3_ULTRA_80C, M4_MAX_32C, M4_MAX_40C,
   M5_MAX_32C, M5_MAX_40C, M5_ULTRA_64C, M5_ULTRA_80C,
 } from './apple';
 
-// Capacities and bandwidth as quoted in Apple Mac Studio tech specs (122211 / 128107).
+// Capacities and bandwidth as quoted in Apple tech specs: Mac Studio (122211 / 128107), MacBook Pro M3 Max (117736).
 const skuFacts: [DeviceSpec, number, number[], number][] = [
+  [M3_MAX_30C, 30, [36, 96], gbPerSec(300)],
+  [M3_MAX_40C, 40, [48, 64, 128], gbPerSec(400)],
   [M4_MAX_32C, 32, [36], gbPerSec(410)],
   [M4_MAX_40C, 40, [48, 64, 128], gbPerSec(546)],
   [M3_ULTRA_60C, 60, [96, 256], gbPerSec(819)],
@@ -20,14 +22,30 @@ const skuFacts: [DeviceSpec, number, number[], number][] = [
 ];
 
 describe('Apple per-SKU presets', () => {
-  it('has eight distinct SKUs, and no nonexistent M4 Ultra', () => {
-    expect(APPLE_DEVICE_PRESETS).toHaveLength(8);
-    expect(new Set(APPLE_DEVICE_PRESETS.map((d) => d.id)).size).toBe(8);
-    // Newest generation first, then Ultra before Max, then more GPU cores first.
+  it('has ten distinct SKUs, and no nonexistent M4 Ultra', () => {
+    expect(APPLE_DEVICE_PRESETS).toHaveLength(10);
+    expect(new Set(APPLE_DEVICE_PRESETS.map((d) => d.id)).size).toBe(10);
+    // Newest generation first, then Ultra before Max, then more GPU cores first (the M3 Ultra Studio of 2025 before
+    // the M3 Max MacBook Pro of 2023).
     expect(APPLE_DEVICE_PRESETS).toEqual([
       M5_ULTRA_80C, M5_ULTRA_64C, M5_MAX_40C, M5_MAX_32C, M4_MAX_40C, M4_MAX_32C, M3_ULTRA_80C, M3_ULTRA_60C,
+      M3_MAX_40C, M3_MAX_30C,
     ]);
     expect(APPLE_DEVICE_PRESETS.some((d) => d.name.includes('M4 Ultra'))).toBe(false);
+    // Every name carries the GPU-core binning (the SKU rule), and no two share a name.
+    for (const d of APPLE_DEVICE_PRESETS) expect(d.name).toMatch(/\(\d+-core GPU\)$/);
+    expect(new Set(APPLE_DEVICE_PRESETS.map((d) => d.name)).size).toBe(10);
+  });
+
+  it('the M3 Max is a MacBook Pro chip with LPDDR5, cited from the MacBook Pro spec pages', () => {
+    for (const d of [M3_MAX_30C, M3_MAX_40C]) {
+      expect(d.memory.technology).toBe('LPDDR5');
+      expect(d.sources.some((s) => s.url === 'https://support.apple.com/en-us/117736')).toBe(true);
+      expect(d.sources.some((s) => s.url === 'https://support.apple.com/en-us/117737')).toBe(true);
+      expect(d.sources.some((s) => s.url.includes('122211'))).toBe(false);
+    }
+    expect(M3_ULTRA_80C.memory.technology).toBe('LPDDR5');
+    expect(M5_MAX_40C.memory.technology).toBe('LPDDR5X');
   });
 
   it.each(skuFacts)('validates and preserves Apple memory facts for $id', (device, cores, capacities, bandwidth) => {
@@ -48,7 +66,7 @@ describe('Apple per-SKU presets', () => {
 
   it.each([
     [M4_MAX_32C, 32, 1.578e9], [M4_MAX_40C, 40, 1.578e9],
-    [M3_ULTRA_60C, 60, 1.398e9], [M3_ULTRA_80C, 80, 1.398e9],
+    [M3_ULTRA_60C, 60, 1.398e9], [M3_ULTRA_80C, 80, 1.398e9], [M3_MAX_30C, 30, 1.398e9], [M3_MAX_40C, 40, 1.398e9],
   ] as const)('uses SIMD matmul at vector rate for $id', (device, cores, clockHz) => {
     const engine = device.engines[0];
     expect(device.engines).toHaveLength(1);

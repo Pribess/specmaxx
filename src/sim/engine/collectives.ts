@@ -8,12 +8,17 @@
  * all_gather = the full OUTPUT, reduce_scatter = the full INPUT, all_to_all = the total sent incl. the self
  * share, send_recv = bytes sent), n = group size, B = per-device per-direction bandwidth (B/s), α = latency (s).
  *
+ * Inter-node fabric shapes other than a non-blocking switch (oversubscribed switch, full mesh, ring, chain) are
+ * costed in `fabricCollectives.ts`; a path without a fabric runs the formulas of this file unchanged.
+ *
  * Not modeled (documented): NVLS/SHARP in-switch reduction, PCIe switch / shared-uplink contention, the HBM
- * traffic of collectives, and contention between communication and compute for HBM.
+ * traffic of collectives, contention between communication and compute for HBM, and intra-node shapes (an
+ * intra-node link is always treated as switched; e.g. the MI300X xGMI mesh is encoded as aggregate injection).
  */
 
 import type { CollectiveOp } from '../ir/ops';
-import type { LinkSpec } from '../hw/types';
+import type { FabricShape, LinkSpec } from '../hw/types';
+import { fabricCollectiveTime } from './fabricCollectives';
 
 /** The kinds of collective (same as `CollectiveOp.collective`). */
 export type CollectiveKind = CollectiveOp['collective'];
@@ -46,11 +51,39 @@ export interface EffectiveLink {
  * - `'none'`: a group of one device (no communication);
  * - `'flat'`: every member on one link level (`'intra'` = one node, `'inter'` = one device per node);
  * - `'hierarchical'`: `devicesPerNode` (n1) members in each of `nodes` (n2) nodes, n = n1 · n2.
+ *
+ * The optional fabric fields are set only when they differ from the pre-fabric default (placement emits them only
+ * then), so an absent field always means the switched, non-blocking formulas of this file.
  */
 export type CollectivePath =
   | { kind: 'none' }
-  | { kind: 'flat'; level: 'intra' | 'inter'; link: LinkSpec }
-  | { kind: 'hierarchical'; devicesPerNode: number; nodes: number; intra: LinkSpec; inter: LinkSpec };
+  | {
+      kind: 'flat';
+      level: 'intra' | 'inter';
+      link: LinkSpec;
+      /**
+       * Inter-node fabric as this group sees it (`groupFabric`: a ring segment is a chain); absent = switched,
+       * non-blocking (the pre-fabric path). Only on `level: 'inter'`.
+       */
+      fabric?: FabricShape;
+      /**
+       * send_recv only: links the send crosses, ≥ 1 (absent = 1); also how many of the boundary's flows share the
+       * busiest link. Count.
+       */
+      sendHops?: number;
+    }
+  | {
+      kind: 'hierarchical';
+      devicesPerNode: number;
+      nodes: number;
+      intra: LinkSpec;
+      inter: LinkSpec;
+      /**
+       * Oversubscribed switch between nodes (oversubscription > 1); absent = non-blocking. Other shapes cannot be
+       * hierarchical (they need one device per node).
+       */
+      interFabric?: { kind: 'switched'; oversubscription: number };
+    };
 
 /** A zero cost (group of one). */
 const NO_TIME: CollectiveTime = { latencySec: 0, bandwidthSec: 0, totalSec: 0, algorithm: 'none' };
@@ -244,7 +277,9 @@ export function hierarchicalAllToAllSec(
 /**
  * Cost of one collective of `kind` with S = `messageBytes` per device over `groupSize` devices on `path`.
  * Host-bounce links are applied with nActive = the devices of the group in one node (1 for send/recv).
- * `algorithm` selects the all-reduce algorithm (flat, and the inter-node phase of hierarchical).
+ * `algorithm` selects the all-reduce algorithm (flat, and the inter-node phase of hierarchical). A flat path with a
+ * `fabric` is costed by `fabricCollectiveTime` (docs §6 "Fabric shapes"); a hierarchical path with an
+ * oversubscribed `interFabric` runs the formulas below with the inter-node bandwidth divided by the oversubscription.
  */
 export function collectiveTime(
   kind: CollectiveKind,
@@ -255,6 +290,9 @@ export function collectiveTime(
 ): CollectiveTime {
   if (path.kind === 'none') return NO_TIME;
   if (path.kind === 'flat') {
+    if (path.fabric !== undefined) {
+      return fabricCollectiveTime(kind, messageBytes, groupSize, path.fabric, path.link, algorithm, path.sendHops);
+    }
     const link = effectiveLink(path.link, kind === 'send_recv' ? 1 : groupSize);
     switch (kind) {
       case 'all_reduce':
@@ -276,7 +314,12 @@ export function collectiveTime(
   const { devicesPerNode: n1, nodes: n2 } = path;
   if (n1 * n2 !== groupSize) throw new Error(`hierarchical path ${n1} × ${n2} does not match group size ${groupSize}`);
   const intra = effectiveLink(path.intra, n1);
-  const inter = effectiveLink(path.inter, n1);
+  const interLink = effectiveLink(path.inter, n1);
+  // Formula: B_inter = B_eff / o  (oversubscribed switch between nodes; o absent = 1 keeps the link untouched)
+  const inter: EffectiveLink =
+    path.interFabric === undefined
+      ? interLink
+      : { ...interLink, bandwidthBytesPerSec: interLink.bandwidthBytesPerSec / path.interFabric.oversubscription };
   switch (kind) {
     case 'all_reduce':
       return hierarchicalAllReduceSec(messageBytes, n1, n2, intra, inter, algorithm);

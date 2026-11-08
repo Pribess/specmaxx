@@ -6,12 +6,13 @@
  * Files:
  * - `nvidia.ts`: GeForce RTX 3090 / 4090 / 5090 and their community unlock axes.
  * - `nvidia-datacenter.ts`: DGX Spark (GB10), H100 SXM, H200 SXM, B200, B300.
- * - `apple.ts`: M5 Ultra, M5 Max, M4 Max, M3 Ultra (binned GPU-core SKUs as separate presets).
+ * - `apple.ts`: M5 Ultra, M5 Max, M4 Max, M3 Ultra, M3 Max (binned GPU-core SKUs as separate presets).
  * - `amd.ts`: Radeon AI PRO R9700, RX 9070 XT, Ryzen AI Max+ 395 (Strix Halo), Instinct MI300X / MI325X / MI355X / MI455X.
  * - `intel.ts`: Arc Pro B70, B65, B60, Arc B580.
  * - `links.ts`: interconnect `LinkSpec`s (PCIe, NVLink, InfiniBand, ConnectX-7, xGMI, Thunderbolt, USB4, Ethernet).
- * - `topologies.ts`: multi-device `TopologySpec` builders and named presets.
- * - `setups.ts`: `SYSTEM_PRESETS`, complete multi-device rigs (device + memory option + topology) for one pick.
+ * - `topologies.ts`: multi-device `TopologySpec` builders (with the inter-node fabric shape) and named presets.
+ * - `catalog.ts`: the setup catalog (device × count × link × cabling, validated), `composeTopology`, `setupLabel`,
+ *   and `POPULAR_SETUPS`, the curated multi-device setups for one pick.
  */
 
 import type { DeviceSpec, TopologySpec } from '../types';
@@ -37,7 +38,7 @@ export * from './amd';
 export * from './intel';
 export * from './links';
 export * from './topologies';
-export * from './setups';
+export * from './catalog';
 
 /** A named group of device presets, one section of the UI's device picker. */
 export interface DevicePresetGroup {

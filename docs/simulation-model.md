@@ -497,12 +497,12 @@ spot values against the datasheet).
 |---|---|---|
 | `presets/nvidia.ts` | GeForce RTX 3090, 4090, 5090 and their unlock axes | `NVIDIA_CONSUMER_DEVICE_PRESETS`, `RTX_3090_UNLOCKS`, `RTX_4090_UNLOCKS`, `RTX_5090_UNLOCKS` |
 | `presets/nvidia-datacenter.ts` | DGX Spark (GB10), H100 SXM, H200 SXM, B200, B300 | `NVIDIA_DATACENTER_DEVICE_PRESETS` |
-| `presets/apple.ts` | M5 Ultra, M5 Max, M4 Max, M3 Ultra; binned GPU-core counts as separate SKUs | `APPLE_DEVICE_PRESETS` |
+| `presets/apple.ts` | M5 Ultra, M5 Max, M4 Max, M3 Ultra, M3 Max; binned GPU-core counts as separate SKUs | `APPLE_DEVICE_PRESETS` |
 | `presets/amd.ts` | Radeon AI PRO R9700, RX 9070 XT, Ryzen AI Max+ 395 (Strix Halo iGPU), Instinct MI300X / MI325X / MI355X / MI455X | `AMD_DEVICE_PRESETS` |
 | `presets/intel.ts` | Arc Pro B70, B65, B60, Arc B580 | `INTEL_DEVICE_PRESETS` |
 | `presets/links.ts` | PCIe, NVLink bridge / NVLink 4 / 5, InfiniBand, ConnectX-7, xGMI, Thunderbolt, USB4, Ethernet | `LINK_PRESETS`, `HOST_BOUNCE_PCIE_LINKS` |
-| `presets/topologies.ts` | PCIe boxes, SoC clusters, HGX nodes, MI300X xGMI node | `TOPOLOGY_PRESETS`, `pcieBox`, `socCluster`, `hgxCluster` |
-| `presets/setups.ts` | Multi-device setups (device + memory option + topology) the UI offers as one pick | `SYSTEM_PRESETS` |
+| `presets/topologies.ts` | PCIe boxes, SoC clusters (with the inter-node fabric shape), HGX nodes, MI300X xGMI node | `TOPOLOGY_PRESETS`, `pcieBox`, `socCluster`, `hgxCluster`, `nodeTopology`, `fabricIdSuffix` |
+| `presets/catalog.ts` | The setup catalog: what each device composes into (GPUs per machine, machines, local and network links, cabling), validation, `composeTopology`, SKU labels, the popular setups | `setupOptionsFor`, `allowedCablings`, `defaultCabling`, `setupErrors`, `composeTopology`, `setupLabel`, `POPULAR_SETUPS` |
 
 `DEVICE_PRESET_GROUPS` is the display order: consumer / prosumer first (GeForce, Apple, AMD Radeon and Strix
 Halo, Intel Arc, DGX Spark), datacenter last; `DEVICE_PRESETS` is the groups flattened. Within a group: newest
@@ -515,7 +515,8 @@ Conventions every preset follows (each file's header states its own traps):
   `'community'` (forum, GitHub, seller or user measurements). Every source has an `https://` URL and a title,
   and its `note` quotes the table or sentence the numbers come from.
 - **Estimated fields**: numbers no vendor publishes (CTA tiles, CTAs per unit, Apple GPU FLOPS derived as cores ×
-  FLOP/clk × a community-measured clock, Intel FP16 XMX from per-core rates, dense rates derived as ½ a sparse
+  FLOP/clk × a community-measured clock; the M3 Max, a MacBook Pro-only chip with Thunderbolt 4, uses the same
+  1.398 GHz M2 Max DVFS clock estimate as the M3 Ultra; Intel FP16 XMX from per-core rates, dense rates derived as ½ a sparse
   headline) are in `estimated[]` with the derivation as the reason, or in a source whose note shows the
   arithmetic. Peaks are per device at the clock the header names (vendor boost / max clock unless stated).
 - **Single-issue vs dual-issue vector**: AMD's RDNA "FP32 Vector" headline counts dual issue (VOPD / wave64),
@@ -594,14 +595,75 @@ costed in §6
   assumes a non-oversubscribed switch), `hgxCluster` (8-GPU NVLink nodes, one full-rate NIC per GPU), and the
   general `nodeTopology` (`devicesPerNode × nodes`, a link only at the levels that exist; the UI composes it from
   device and node counts and link presets). Device and node counts are user configuration and cite no source.
-  Named presets added for the setups list: `DGX_SPARK_4` (four Sparks through a non-oversubscribed 200GbE
-  switch) and `R9700_PCIE_4` (four R9700s, PCIe 5.0 x16 per AMD's page, host bounce: no cited ROCm Radeon P2P).
-- **Multi-device setups** (`src/sim/hw/presets/setups.ts: SYSTEM_PRESETS`): a device, a memory option and a named
-  topology picked together (RTX 5090 ×2 / ×4 PCIe, RTX 3090 ×2 NVLink bridge, DGX Spark ×2 / ×4, M5 Ultra 256GB ×2
-  TB5, Strix Halo 128GB ×2 USB4 RDMA, R9700 ×4 PCIe). The UI expands one into its hardware choice
-  (`src/ui/state/hardware.ts: systemChoice`, `matchingSystem`).
+  Builders take the inter-node fabric shape (`nodeTopology({ fabric })`, `socCluster(device, n, link, fabric?)`): it
+  is kept only with an inter-node link and omitted when it is the default (a non-blocking switch), so every
+  pre-fabric topology is unchanged; otherwise the id ends in `-mesh` / `-mesh2` / `-ring` / `-chain` and the name
+  carries the shape. Named Spark presets: `DGX_SPARK_PAIR` (one cable), `DGX_SPARK_3` (the triangle: a full mesh),
+  `DGX_SPARK_4` (200GbE switch) and `DGX_SPARK_4_RING` (switchless ring), the last two citing NVIDIA's
+  connect-multiple-Sparks playbook; `R9700_PCIE_4` (four R9700s, PCIe 5.0 x16 per AMD's page, host bounce: no
+  cited ROCm Radeon P2P). Thunderbolt clusters are meshes; four Strix Halo boxes over their two USB4 ports are a
+  ring (the direct all-to-all is no longer assumed there).
+- **Setup catalog** (`src/sim/hw/presets/catalog.ts`): the UI composes hardware as device × GPUs per machine ×
+  machines × link × cabling instead of picking from a flat list. `setupOptionsFor(deviceId)` gives, for every device
+  preset, its SKU-exact short name, the counts offered, the local links it has (`[0]` = default) and the networks
+  the machine has (`NetworkOption`: the per-port link, its USABLE `portsPerNode`, whether a switch exists, how many
+  cables a pair can stripe, and an optional vendor limit on switchless size), each port count citing the machine's
+  spec page. Usable ports: DGX Spark 2 QSFP (sharing the 25 GB/s cap; a switch exists; direct cabling up to 4);
+  M3 Ultra Mac Studio 5 of 6 TB5 ports for RDMA (the port next to Ethernet has none: exo README) and 6 for TCP;
+  M4 Max Studio 3 of 4 (same chassis rule); M5 Max Studio 3 (ESTIMATED: the rule's status on the 2026 Studio is
+  unknown); M5 Ultra Studio 6 (INFERRED from Apple's 4-node mesh with two cables per pair); M3 Max MacBook Pro 3
+  TB4 ports, TCP only (no TB5, so no RDMA); Strix Halo 2 USB4 ports, plus 5GbE / 10GbE through a switch. A
+  `CablingId` (`switched | mesh | mesh2 | ring | chain`, the URL's `fab=`) maps 1:1 to a `FabricShape` (`fabricOf`,
+  `cablingOf`). `allowedCablings(net, nodes, devicesPerNode)` applies `fabricShapeErrors` with the ports and switch:
+  a switch only where one exists (Thunderbolt and USB4 have none), a mesh while (nodes − 1) · cables ≤ ports, `mesh2`
+  only on TB5 RDMA, a ring from 4 machines (at 3 it is the mesh), a chain from 3, a switch only for machines with
+  several GPUs, and nothing switchless beyond the vendor's direct-cabling limit; `defaultCabling` is switch, else
+  mesh, else ring, else chain, so the catalog defaults equal the pre-catalog UI defaults for every device
+  (`catalog.test.ts` pins them) and two Thunderbolt or USB4 machines are a one-cable mesh, which costs exactly a
+  switch. `setupErrors` rejects impossible choices (a 5-Mac mesh on an M4 Max, a 7-Mac mesh on an M3 Ultra, two
+  cables per pair on 4 M3 Ultras, a ring of 2, a switch on Thunderbolt, an 8-Spark ring); `composeTopology` builds
+  the `TopologySpec` (`interNodeFabric` omitted for a switch); `setupLabel` names the exact SKU everywhere:
+  `'M5 Ultra 80-core GPU, 256GB ×2 · TB5 mesh'`, `'DGX Spark 128GB ×4 · ConnectX-7 ring'`,
+  `'RTX 5090 32GB ×2 · PCIe 5.0 x16'`.
+- **Popular setups** (`POPULAR_SETUPS`, ≤ 10, grouped by vendor, each citing who runs it): RTX 5090 32GB ×2 PCIe 5.0
+  x16; RTX 3090 24GB ×2 NVLink bridge; DGX Spark 128GB ×2 (one cable), ×3 (triangle) and ×4 ring (NVIDIA playbooks,
+  SparkRing) and ×4 switch (MikroTik CRS804/812); M3 Ultra 80-core 512GB ×4 TB5 mesh (Geerling, exo #1050);
+  M5 Ultra 80-core 256GB ×2 TB5 (the user's example; weak source); M5 Ultra 80-core 512GB ×4 TB5 mesh with two
+  cables per pair (Apple ML Research, 2026-10-15); Strix Halo 395 128GB ×4 USB4 ring (Level1Techs). Picking one
+  fills in device, memory, counts, link and cabling; the URL stores those components, never a setup id.
+- **Fabric link fields, values**. `forwardingLatencySec` (α_f) is RELAY HANDLING ONLY: the engine charges α for every
+  hop a message crosses (`lat(h) = h·α + (h−1)·α_f`, §6), so α_f holds only what the relaying host adds between the
+  incoming completion and the outgoing send, never the extra hop's wire time. Every α_f is ESTIMATED (no vendor
+  publishes one), with the derivation in the preset. `SPARK_CONNECTX_7`: `allPortsCapPerDirectionBytesPerSec` = 25 GB/s
+  (both QSFP ports share two PCIe Gen5 x4 links: NVIDIA's clustering doc; 185–190 Gb/s measured over both, STH; "two
+  cables will not increase performance", NVIDIA playbook) and α_f = 4.5 µs = (16.9 − 10.9 µs) measured 2-hop vs 1-hop
+  10 KiB one-shot all-reduce on a host-relayed 4-Spark ring − 1.5 µs for the second hop's α (the relay host's
+  completion poll, re-post and PCIe round trip; RoCE cannot route through a Spark in hardware), so a 2-hop path costs
+  2 × 1.5 + 4.5 = 7.5 µs (+6 µs, the measurement) and a 3-hop one 13.5 µs. `TB5_RDMA`: no cap (one Thunderbolt
+  controller per port, TN3205; 1 → 4 cables scale ≈ linearly to ~36.5 GB/s, MLX PR #3900; the SoC ceiling for 5–6
+  concurrent ports is unmeasured) and α_f = 3 µs, the host turnaround of a user-space verbs relay (JACCL's 9–12 µs
+  small 4-way all-reduce minus its ~7 µs one-way transfer, half the 14 µs `ibv_uc_pingpong` round trip; TN3205: "the
+  application is responsible for forwarding"): physically 2 hops = 2 × 7 + 3 = 17 µs and 3 hops = 27 µs; with this
+  preset's 50 µs `latencySec`, kept in this task although ~7 µs was measured (see the latency-audit follow-up), 103
+  and 156 µs. `TB5_TCP` (new: the Thunderbolt bridge on TB5 ports at the 80 Gb/s = 10 GB/s per-direction line rate,
+  Intel's TB5 brief; not an achieved goodput, none is cleanly measured) and `TB4_TCP` (40 Gb/s, the M3 Max): α 70 µs
+  (half the bridge's 142 µs ICMP RTT) and α_f = 20 µs, the user-space receive-to-send turnaround, about a third of the
+  ~48–70 µs one-way TCP time that is itself almost all software (MLX TCP ring ~48 µs per step; TN3205: the bridge
+  forwards in software); 2 hops 160 µs, 3 hops 250 µs. `USB4_HALO_RDMA` α_f = 3 µs (as TB5 RDMA; 2 hops 19 µs, 3 hops
+  30 µs), `USB4_HALO_TCP` 5 µs (the kernel's forwarding turnaround on a tuned stack, half the 10 µs one-way; 25 /
+  40 µs). `presets.test.ts` pins these hop examples. No link was renamed; `LEGACY_LINK_IDS` (empty) is where a rename
+  would be recorded for old URLs, and a TB5 Mac URL naming the TB4 bridge still resolves to that link.
 - **Link ids**: `LinkSpec` has no id; `linkPresetId(link)` slugs the name (`'PCIe 5.0 x16 (host bounce)'` →
   `'pcie-5-0-x16-host-bounce'`), unique over `LINK_PRESETS`. Builder ids and the UI's URL use it.
+- **Multi-port links and fabric shapes** (`src/sim/hw/types.ts: LinkSpec, FabricShape, TopologySpec.interNodeFabric`):
+  on a switchless inter-node shape (full mesh, ring, chain; §6 "Fabric shapes") `bandwidthPerDirectionBytesPerSec`
+  is ONE port (one cable). Two optional link fields serve those shapes only, so no switched result depends on them:
+  `allPortsCapPerDirectionBytesPerSec` (C, B/s: the most one node can send, and separately receive, over all its
+  ports at once, relayed bytes included, e.g. a NIC's host PCIe attachment; absent = the ports add up; must be ≥ the
+  per-port bandwidth) and `forwardingLatencySec` (α_f, s: the extra latency of a node relaying a message to the next
+  hop; absent = 0). Like every number, both are sourced or `estimated`. `TopologySpec.interNodeFabric` absent means
+  a non-blocking switch, the convention of every topology before fabric shapes; shapes other than `'switched'` need
+  one device per node (`validateTopology`).
 
 ---
 
@@ -816,13 +878,22 @@ so TP and EP groups are contiguous. A group of n is intra-node if `n ≤ dpn` an
 partner `r + tp·dp` sit in different nodes. `tp·pp·dp ≤ dpn·nodes`; unused devices are a warning; a missing
 required link is an error.
 
+On an inter-node fabric (§6 "Fabric shapes"), node i of a ring or chain is cabled to node i ± 1 in this order.
+`collectivePath` gives a flat inter-node group its view of the fabric (`groupFabric`: a ring the group does not
+cover is a chain of the group's nodes), and a hierarchical group an oversubscribed switch (the only shape with
+dpn > 1). `ppSendHops`: an inter-node PP send crosses `h = max_r nodeHops(node(r), node(r + tp·dp))` links, 1 on a
+switch or mesh; with dpn = 1 on a ring or chain, h = 1 for pure PP (stages on neighbours) and h = tp·dp otherwise
+(tp 2 × pp 2 on a ring of 4: h = 2). A path carries `fabric` / `sendHops` only when they differ from the
+non-blocking switch / 1, so pre-fabric topologies get exactly their old paths.
+
 ---
 
 ## 6. Collectives
 
 `src/sim/engine/collectives.ts`. S = messageBytes per device (§1 conventions), n group size, B per-direction
 bandwidth, α latency. Each result splits α terms (`latencySec`) from β terms (`bandwidthSec`).
-`collectiveTime` dispatches on kind and path.
+`collectiveTime` dispatches on kind and path; a flat path with a `fabric` goes to `fabricCollectiveTime`
+("Fabric shapes" below).
 
 ### Flat collectives
 
@@ -856,6 +927,100 @@ the group's devices per node, at both levels. PCIe switch / shared-uplink topolo
 
 Also not modeled: NVLS / SHARP in-switch reduction, the memory traffic of collectives, and contention between
 communication and compute for memory.
+
+### Fabric shapes
+
+`src/sim/engine/fabricCollectives.ts: fabricCollectiveTime, fabricLinkParams, pathLatencySec,
+fabricRingAllReduceSec, fabricTreeAllReduceSec, meshDirectAllReduceSec, fabricAllReduceSec,
+fabricAllGatherOrReduceScatterSec, chainReduceScatterSec, chainAllGatherSec, chainAllReduceSec, fabricAllToAllSec,
+fabricSendRecvSec`; geometry in `src/sim/hw/fabric.ts: nodeHops, maxHops, portsNeeded, treeStepHops, groupFabric,
+fabricShapeErrors`. Inter-node only (intra-node links stay switched).
+
+Shapes (`FabricShape`): **switched** (one port per node into a switch, oversubscription o ≥ 1; absent shape = o 1),
+**full_mesh** (every pair cabled with k = `cablesPerPair` cables, striped; N = 2 is "direct cable(s)"), **ring**
+(N ≥ 3, node i to i ± 1; at N = 3 the same cabling as the mesh), **chain** (0 – 1 – … – N−1). Every shape but switched
+needs one device per node, so a node is a device and N = the group's size.
+
+Notation: B_L = per-port per-direction bandwidth, C = `allPortsCapPerDirectionBytesPerSec` (∞ when absent), α =
+per-hop latency, α_f = `forwardingLatencySec` (0 when absent), m = S/N. Named bandwidths: B_P = k·B_L (one mesh
+pair), B_one = min(B_P, C) (one flow), B_two = min(2·B_P, C) (a node streaming on two ports), B_mesh = min((N−1)·B_P,
+C) (a mesh node sending to all peers); k = 1 except on the mesh.
+
+Two rules give every formula:
+
+- **Path latency** of an h-hop message: `lat(h) = h·α + (h−1)·α_f` (exactly α for h = 1). Algorithm steps between
+  neighbours (ring and chain RS / AG) are one hop each; tree steps and all-to-all flows to farther nodes are relayed.
+- **Bandwidth term**: `β = max(L_link / B_L, E_node / C)`, L_link = bytes on the busiest link direction, E_node = the
+  busiest node's egress, its own bytes plus those it relays (ingress is symmetric in every pattern here). Relays go
+  through the host (no switching inside these NICs), so relayed bytes count against C.
+
+| collective | switched, o > 1 | full_mesh (k), N ≥ 3 | ring | chain |
+|---|---|---|---|---|
+| ring-class AR | `2(N−1)α + 2(N−1)/N·S/(B_L/o)` | `2(N−1)α + 2(N−1)/N·S/B_two` | `2(N−1)α + 2(N−1)/N·S/min(2B_L, C)` | `RS_chain + AG_chain` |
+| tree AR | `2⌈log2 N⌉α + 2S/(B_L/o)` | `2⌈log2 N⌉α + 2S/B_one` | `2·Σ_k lat(h_k) + 2S/B_one` | same, chain hops |
+| direct AR | — | `2α + 2(N−1)/N·S/B_mesh` | — | — |
+| AR `'best'` | min(ring, tree) | min(ring, direct, tree) | min(ring, tree) | min(ring, tree) |
+| AG / RS | `(N−1)α + (N−1)/N·S/(B_L/o)` | direct: `α + (N−1)/N·S/B_mesh` | `(N−1)α + (N−1)/N·S/min(2B_L, C)` | RS: `(N−1)α + (N−1)/N·S/min(B_L, C)`; AG: `(N−1)α + max((N−1)/N·S/B_L, (N+1)/N·S/C)` |
+| all-to-all | `α + (N−1)/N·S/(B_L/o)` | `α + (N−1)/N·S/B_mesh` | `lat(⌊N/2⌋) + ⌊N²/4⌋/N·S/min(2B_L, C)` | `lat(N−1) + max(⌊N²/4⌋/N·S/B_L, E_N/N·S/C)` |
+| send/recv (h hops) | `α + S/(B_L/o)` | `α + S/B_one` | `lat(h) + h·S/B_one` | `lat(h) + h·S/B_one` |
+
+h_k = `treeStepHops` (binomial tree, step-k partners 2^k apart): ring `min(2^k, N−2^k)`, chain `2^k`.
+E_N = `(N−1) + 2⌊(N−1)²/4⌋`. **Two nodes** on a mesh or chain are one (striped) link: the switched formulas at
+B_one, so one cable with C ≥ B_L is bit-identical to the switch. A ring needs N ≥ 3. Oversubscription scales only B,
+never α; on a hierarchical path it divides the inter-node bandwidth.
+
+Derivations (backed by a brute-force routing test, `fabricCollectives.test.ts`):
+
+- **Bidirectional ring** (ring-class AR, AG, RS on a ring or a mesh of N ≥ 3, which contains a Hamiltonian cycle): the
+  buffer is split in halves that run the ring algorithm in opposite directions. Per step a node sends S/(2N) on each of
+  two ports, so `β_step = max(S/(2N)/B_P, (S/N)/C) = (S/N)/min(2B_P, C)`. With C = B_L (DGX Spark: both ports share
+  ~25 GB/s) this is exactly the switched ring at B_L: a ring of Sparks runs bandwidth-bound all-reduce at the switch's
+  speed.
+- **Mesh direct**: RS, AG and all-to-all as one-shot all-pairs exchanges, m per pair and (N−1)·m per node, so
+  `β = max(m/B_P, (N−1)·m/C) = (N−1)/N·S/B_mesh` with one α. For N ≥ 3 it beats the ring on both terms.
+- **Chain reduce-scatter** (linear): chunk c is reduced at node c, partials flowing toward c from both sides. Link
+  j→j+1 carries the partials of chunks j+1 … N−1, at most (N−1)·m; node j sends (N−1−j)·m right and j·m left,
+  (N−1)·m in all. N−1 neighbour steps.
+- **Chain all-gather** (linear): each chunk travels from its node to both ends. The end links carry (N−1)·m, but an
+  inner node sends its own chunk both ways and forwards every other chunk once: (N+1)·m. That holds for ANY all-gather
+  on a chain: there are N(N−1) chunk receptions, all neighbour transfers; an end node can only ever send its own chunk
+  to its one neighbour (m), so the N−2 inner nodes send the rest, (N+1)·m each on average. So AG ≠ RS on a chain when
+  C < (N+1)/(N−1)·B_L. Chain AR = linear RS + linear AG; the folded ring is worse on both terms.
+- **Ring all-to-all**: every node sends m to every other node on the shorter way round, a distance-N/2 flow (even N)
+  half each way. The clockwise link crossings sum to N·Σ d over the distances, so every link direction carries
+  `L = ⌊N²/4⌋/2·m` (N²/8·m for even N, (N²−1)/8·m for odd), and each node's egress is 2L over its two ports:
+  `β = max(L/B_L, 2L/C) = ⌊N²/4⌋·m/min(2B_L, C)`. At N = 3 this equals the k = 1 mesh (same cabling).
+- **Chain all-to-all**: link j→j+1 carries the flows from {0 … j} to {j+1 … N−1}, (j+1)(N−1−j)·m ≤ ⌊N²/4⌋·m;
+  inner node j sends its own (N−1)·m plus relays 2j(N−1−j)·m, at most E_N·m.
+- **All-to-all latency**: all flows run at once, so α is the farthest destination's `lat(maxHops)`: ⌊N/2⌋ hops on
+  a ring, N−1 on a chain.
+- **Tree**: step k's message crosses h_k links (relayed, pipelined), one flow per step at B_one; the β term is the
+  switched tree's `2S/B` at B_one.
+- **PP send**: the boundary's flows (rank r → r + tp·dp) all run the same way, so on a ring or chain the busiest
+  link and the busiest relay each carry h of them: `β = h·S/B_one`.
+- **Subgroups**: a TP / EP group covering part of a ring is a chain of its nodes; concurrent groups use disjoint
+  segments.
+
+Worked examples (`fabricCollectives.test.ts`): B_L = 1e10 B/s, α = 2 µs, α_f = 1 µs, S = 8e6 B (S/B_L = 800 µs),
+N = 4; each cell α + β in µs.
+
+| collective | switched | switched o=2 | ring C=∞ | ring C=B_L | chain C=∞ | chain C=B_L | mesh k=1 C=∞ | mesh k=1 C=B_L | mesh k=2 C=∞ |
+|---|---|---|---|---|---|---|---|---|---|
+| ring AR | 12 + 1200 | 12 + 2400 | 12 + 600 | 12 + 1200 (= switched) | 12 + 1200 | 12 + 1600 | 12 + 600 | 12 + 1200 | 12 + 300 |
+| tree AR | 8 + 1600 | 8 + 3200 | 14 + 1600 | 14 + 1600 | 14 + 1600 | 14 + 1600 | 8 + 1600 | 8 + 1600 | 8 + 800 |
+| direct AR | — | — | — | — | — | — | 4 + 400 | 4 + 1200 | 4 + 200 |
+| AG | 6 + 600 | 6 + 1200 | 6 + 300 | 6 + 600 | 6 + 600 | 6 + 1000 | 2 + 200 | 2 + 600 | 2 + 100 |
+| RS | 6 + 600 | 6 + 1200 | 6 + 300 | 6 + 600 | 6 + 600 | 6 + 600 | 2 + 200 | 2 + 600 | 2 + 100 |
+| all-to-all | 2 + 600 | 2 + 1200 | 5 + 400 | 5 + 800 | 8 + 800 | 8 + 1400 | 2 + 200 | 2 + 600 | 2 + 100 |
+| send h=1 | 2 + 800 | 2 + 1600 | 2 + 800 | 2 + 800 | 2 + 800 | 2 + 800 | 2 + 800 | 2 + 800 | 2 + 400 |
+| send h=2 | — | — | 5 + 1600 | 5 + 1600 | 5 + 1600 | 5 + 1600 | — | — | — |
+
+At a decode-sized S = 1e4 B, `'best'` all-reduce picks the tree on the switch (8 + 2 = 10 µs), the ring algorithm on
+the ring (12 + 1.5 = 13.5 µs with C = B_L; the tree's 2-hop step makes it 14 + 2) and direct on the k = 1 mesh (4 +
+0.5 = 4.5 µs). 4 × DGX Spark (B_L = C = 25 GB/s, α 1.5 µs, α_f 5 µs in `simulate.test.ts`; the preset's estimate is 4.5 µs), S = 8e6 B: ring AR 9 + 480 on both
+fabrics (bit-identical); tree 6 + 640 switched vs 19 + 640 on the ring; all-to-all 1.5 + 240 vs 8 + 320; at decode
+size switched takes the tree (6.8 µs), the ring the ring algorithm (9.6 µs): decode is slower on the ring, prefill
+equal.
 
 ---
 
@@ -996,6 +1161,13 @@ Documented approximations (each isolated in one constant or rule):
 - Balanced MoE routing on the busiest device (ceilings).
 - Elementwise FLOP-per-element table (§3) and the fp32-accumulate default.
 - The activation peak in the memory fit is the largest single op.
+- Fabric shapes (§6 "Fabric shapes"): a TP / EP group covering part of a ring is a chain (the long way round is
+  ignored); PP flows on a ring are not split over both directions (conservative by at most 2× on that send's β);
+  relays go through the host and count against the all-ports cap C (no in-NIC switching is assumed: L3-routed RoCE
+  between Sparks is reported not to work and mesh forwarding is unmeasured); tree steps are assumed not to share
+  links; mesh striping over k cables is ideal; every shape but switched needs one device per node; intra-node links
+  stay switched (`XGMI_MI300X_8_GPU` encodes its full mesh as aggregate injection under the switched formulas, which
+  equals the mesh's direct β but keeps the ring's 2(n−1)α; re-modelling it is a follow-up).
 
 Shortlist-model approximations (sub-percent unless noted):
 

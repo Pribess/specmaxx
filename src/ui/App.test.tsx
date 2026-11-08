@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App, type ModelLoader } from './App';
 import { inlineRunner } from './sim/runner';
 import { mapHfModel } from '../sim/models/hf';
@@ -62,7 +62,7 @@ describe('estimator inputs', () => {
     expect(screen.queryByLabelText(/^DP/)).toBeNull();
     expect(screen.queryByLabelText(/^EP/)).toBeNull();
     fireEvent.change(screen.getByLabelText(/^TP/), { target: { value: '2' } });
-    expect(screen.getByRole('spinbutton', { name: /^(GPUs|Devices) in one machine$/ }).getAttribute('aria-invalid')).toBe('true');
+    expect(screen.getByRole('radiogroup', { name: 'Machines' }).getAttribute('aria-invalid')).toBe('true');
     expect(screen.getAllByText(/TP × PP = 2, but the rig has 1 device/).length).toBeGreaterThan(0);
   });
   it('restores the URL and writes canonical state after a change', async () => {
@@ -214,15 +214,68 @@ describe('estimator inputs', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     await waitFor(() => expect(document.title).toMatch(/@ 8k/));
   });
-  it('picking a multi-device setup sets the counts and links in the URL', async () => {
+  it('picking a popular setup sets the counts and links in the URL', async () => {
     mount();
     fireEvent.click(screen.getByRole('combobox', { name: 'Device' }));
-    fireEvent.click(await screen.findByRole('option', { name: /RTX 5090 ×4/ }));
-    expect(screen.getByRole('combobox', { name: 'Device' }).textContent).toMatch(/RTX 5090 ×4/);
-    await waitFor(() => expect(new URLSearchParams(location.search).get('n')).toBe('4'));
+    expect(await screen.findByRole('group', { name: 'Popular setups' })).toBeTruthy();
+    fireEvent.click(await screen.findByRole('option', { name: /RTX 5090 32GB ×2/ }));
+    expect(screen.getByRole('combobox', { name: 'Device' }).textContent).toMatch(/RTX 5090 32GB ×2/);
+    await waitFor(() => expect(new URLSearchParams(location.search).get('n')).toBe('2'));
     expect(new URLSearchParams(location.search).get('il')).toBeTruthy();
   });
-  it.each([['DGX Spark ×4', ''], ['R9700 ×4', '?n=2&tp=2'], ['DGX Spark ×4', '?n=3&pp=3']])(
+  it('picking the DGX Spark ×4 ring writes fab=ring and names the cabling in the hero', async () => {
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B');
+    mount();
+    await screen.findByTestId('prefill-tps');
+    fireEvent.click(screen.getByRole('combobox', { name: 'Device' }));
+    fireEvent.click(await screen.findByRole('option', { name: /DGX Spark.*×4 · ConnectX-7 ring/ }));
+    await waitFor(() => expect(new URLSearchParams(location.search).get('fab')).toBe('ring'));
+    expect(screen.getByRole('combobox', { name: 'Cabling' }).textContent).toBe('Ring');
+    await waitFor(() => expect(document.querySelector('.rig')?.textContent).toMatch(/on 4 × NVIDIA DGX Spark \(GB10\) over ConnectX-7 \(ring\), with/));
+    // Changing the cabling leaves the setup: the trigger shows the device again.
+    fireEvent.click(screen.getByRole('combobox', { name: 'Cabling' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Switch' }));
+    await waitFor(() => expect(new URLSearchParams(location.search).get('fab')).toBeNull());
+    expect(screen.getByRole('combobox', { name: 'Device' }).textContent).toMatch(/×4 · ConnectX-7 switch/);
+    expect(document.querySelector('.rig')?.textContent).not.toMatch(/\(ring\)/);
+  });
+  it('offers only the cablings the ports allow, and one as plain text', async () => {
+    history.replaceState(null, '', '/?d=ryzen-ai-max-plus-395&nodes=3');
+    mount();
+    await screen.findByTestId('setup-row');
+    fireEvent.click(screen.getByRole('combobox', { name: 'Cabling' }));
+    const names = (await screen.findAllByRole('option')).map((o) => o.textContent?.replace('✓', ''));
+    expect(names).toEqual(['Full mesh', 'Daisy chain']);
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Cabling' }), { key: 'Escape' });
+    cleanup();
+    history.replaceState(null, '', '/?d=dgx-spark&nodes=2');
+    mount();
+    await screen.findByTestId('setup-row');
+    expect(screen.queryByRole('combobox', { name: 'Cabling' })).toBeTruthy();
+    cleanup();
+    history.replaceState(null, '', '/?n=2&nodes=2');
+    mount();
+    await screen.findByTestId('setup-row');
+    expect(screen.queryByRole('combobox', { name: 'Cabling' })).toBeNull();
+    expect(screen.getByTestId('cabling').textContent).toBe('Switch');
+  });
+  it('offers the 2-card NVLink bridge only at 2 GPUs, and more GPUs fall back to PCIe', async () => {
+    history.replaceState(null, '', '/?d=rtx-3090&n=2&il=rtx-3090-nvlink-bridge');
+    mount();
+    await screen.findByTestId('setup-row');
+    fireEvent.click(screen.getByRole('combobox', { name: 'Local link' }));
+    expect((await screen.findAllByRole('option')).some((o) => /NVLink bridge/.test(o.textContent ?? ''))).toBe(true);
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Local link' }), { key: 'Escape' });
+    const perMachine = screen.getByRole('radiogroup', { name: 'GPUs in one machine' });
+    fireEvent.click(within(perMachine).getByRole('radio', { name: '4' }));
+    await waitFor(() => expect(new URLSearchParams(location.search).get('il')).toBeNull());
+    expect(new URLSearchParams(location.search).get('n')).toBe('4');
+    fireEvent.click(screen.getByRole('combobox', { name: 'Local link' }));
+    const options = await screen.findAllByRole('option');
+    expect(options.length).toBeGreaterThan(0);
+    expect(options.some((o) => /NVLink bridge/.test(o.textContent ?? ''))).toBe(false);
+  });
+  it.each([['×4 · ConnectX-7 switch', ''], ['×4 · USB4 ring', '?n=2&tp=2'], ['×4 · ConnectX-7 ring', '?n=3&pp=3']])(
     'picking %s from %j chooses TP and PP that use all 4 devices',
     async (name, query) => {
       history.replaceState(null, '', `/${query}${query ? '&' : '?'}m=Qwen/Qwen3.8-27B`);
@@ -239,11 +292,8 @@ describe('estimator inputs', () => {
     },
   );
   it('a huge device count shows validation errors instead of hanging', async () => {
-    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B');
-    const { container } = mount();
-    await screen.findByTestId('prefill-tps');
-    (container.querySelector('details.advanced') as HTMLDetailsElement).open = true;
-    fireEvent.change(screen.getByRole('spinbutton', { name: /^(GPUs|Devices) in one machine$/ }), { target: { value: '18014398509481984' } });
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B&n=1024');
+    mount();
     await waitFor(() => expect(screen.queryByTestId('prefill-tps')).toBeNull());
     expect(screen.getAllByText(/must be equal|TP × PP/).length).toBeGreaterThan(0);
   });
@@ -272,14 +322,14 @@ describe('estimator inputs', () => {
     const advanced = container.querySelector('details.advanced') as HTMLDetailsElement;
     expect(advanced.open).toBe(false);
     advanced.open = true;
-    expect((container.querySelector('details.quick-picks') as HTMLDetailsElement).open).toBe(true);
     expect((container.querySelector('details.spec-editor') as HTMLDetailsElement).open).toBe(true);
   });
   it('labels the counts in plain language with a total', async () => {
     history.replaceState(null, '', '/?n=4');
     mount();
-    expect(screen.getByRole('spinbutton', { name: 'GPUs in one machine' })).toBeTruthy();
-    expect(screen.getByRole('spinbutton', { name: 'Machines' })).toBeTruthy();
+    expect(screen.getByRole('radiogroup', { name: 'GPUs in one machine' })).toBeTruthy();
+    expect((within(screen.getByRole('radiogroup', { name: 'GPUs in one machine' })).getByRole('radio', { name: '4' }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByRole('radiogroup', { name: 'Machines' })).toBeTruthy();
     expect(screen.getByTestId('device-total').textContent).toMatch(/= 4 GPUs total/);
   });
   it('typing a model ID and pressing Enter loads it', async () => {

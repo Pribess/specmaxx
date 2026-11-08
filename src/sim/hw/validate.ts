@@ -7,6 +7,7 @@
 
 import type { MathFormat } from '../ir/dtype';
 import { applyDeviceModifiers, applyLinkModifiers, deviceModifierErrors, linkModifierErrors } from './modifiers';
+import { fabricShapeErrors } from './fabric';
 import type { DeviceModifier, LinkModifier } from './modifiers';
 import type { ComputeEngine, DeviceSpec, EstimatedField, GemmTiling, LinkSpec, SourceRef, TopologySpec } from './types';
 
@@ -160,7 +161,8 @@ export function validateDevice(d: DeviceSpec): string[] {
 
 /**
  * Errors of a link spec; empty = valid. Checks: numbers finite and ≥ 0 and sourced; bandwidth > 0;
- * `hostBounce` present iff `p2p === 'host_bounce'`, with host memory bandwidth > 0.
+ * `hostBounce` present iff `p2p === 'host_bounce'`, with host memory bandwidth > 0; an
+ * `allPortsCapPerDirectionBytesPerSec` at least the per-port bandwidth.
  */
 export function validateLink(l: LinkSpec, label = `link ${l.name}`): string[] {
   const errors = [...leafErrors(l, l.sources, l.estimated, label), ...provenanceRecordErrors(l.sources, l.estimated, label)];
@@ -171,6 +173,10 @@ export function validateLink(l: LinkSpec, label = `link ${l.name}`): string[] {
   if (l.hostBounce !== undefined && !(l.hostBounce.hostMemBandwidthBytesPerSec > 0)) {
     errors.push(`${label}: hostBounce.hostMemBandwidthBytesPerSec must be > 0`);
   }
+  const cap = l.allPortsCapPerDirectionBytesPerSec;
+  if (cap !== undefined && !(cap >= l.bandwidthPerDirectionBytesPerSec)) {
+    errors.push(`${label}: allPortsCapPerDirectionBytesPerSec (${cap}) must be ≥ bandwidthPerDirectionBytesPerSec (${l.bandwidthPerDirectionBytesPerSec}): one port alone reaches its own rate`);
+  }
   return errors;
 }
 
@@ -178,6 +184,10 @@ export function validateLink(l: LinkSpec, label = `link ${l.name}`): string[] {
  * Errors of a topology; empty = valid. `devicesPerNode` and `nodes` must be integers ≥ 1 (they describe the
  * user's configuration, so they need no citation); each present link must pass {@link validateLink}.
  * Whether a link is REQUIRED depends on the parallelism (checked by `engine/placement.ts`).
+ * An `interNodeFabric` needs `interNode` and `nodes > 1`, and must pass the structural rules of
+ * `fabricShapeErrors` (one device per node for every shape but `'switched'`, a ring of ≥ 3 nodes, valid
+ * `cablesPerPair` / `oversubscription`). Port counts are a machine property the topology does not record; the
+ * setup catalog checks them.
  */
 export function validateTopology(t: TopologySpec): string[] {
   const label = `topology ${t.id}`;
@@ -186,6 +196,12 @@ export function validateTopology(t: TopologySpec): string[] {
   if (!Number.isInteger(t.nodes) || t.nodes < 1) errors.push(`${label}: nodes must be an integer ≥ 1`);
   if (t.intraNode !== undefined) errors.push(...validateLink(t.intraNode, `${label}.intraNode`));
   if (t.interNode !== undefined) errors.push(...validateLink(t.interNode, `${label}.interNode`));
+  if (t.interNodeFabric !== undefined) {
+    if (t.interNode === undefined) errors.push(`${label}: interNodeFabric needs an interNode link`);
+    if (t.nodes <= 1) errors.push(`${label}: interNodeFabric needs nodes > 1 (got ${t.nodes})`);
+    const shapeErrors = fabricShapeErrors(t.interNodeFabric, { nodes: t.nodes, devicesPerNode: t.devicesPerNode });
+    errors.push(...shapeErrors.map((e) => `${label}.interNodeFabric: ${e}`));
+  }
   return errors;
 }
 

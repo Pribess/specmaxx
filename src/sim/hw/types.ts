@@ -159,7 +159,10 @@ export interface LinkSpec {
     | 'other';
   /** Display name, e.g. `'PCIe 5.0 x16'`, `'ConnectX-7 200GbE'`. */
   name: string;
-  /** Per-device, per-direction bandwidth. Unit: B/s. */
+  /**
+   * Per-device, per-direction bandwidth. On a multi-port inter-node fabric shape (`full_mesh`, `ring`, `chain` of
+   * {@link FabricShape}) it is the bandwidth of ONE port (one cable), per direction. Unit: B/s.
+   */
   bandwidthPerDirectionBytesPerSec: number;
   /** Per-message (per algorithm step) latency α. Unit: seconds. */
   latencySec: number;
@@ -172,6 +175,19 @@ export interface LinkSpec {
     /** Extra latency per message added by the host copy. Unit: seconds. */
     extraLatencySec: number;
   };
+  /**
+   * Cap on the sum over all ports of this link that one device drives at once, per direction (egress and ingress
+   * each), e.g. the NIC's host PCIe attachment (DGX Spark: two ConnectX-7 ports share ~25 GB/s). Used only by the
+   * multi-port fabric shapes (`full_mesh`, `ring`, `chain` of {@link FabricShape}); bytes a node relays count
+   * against it. Absent = the ports add up (e.g. Apple Thunderbolt 5: one controller per port). Must be ≥
+   * `bandwidthPerDirectionBytesPerSec`. Unit: B/s.
+   */
+  allPortsCapPerDirectionBytesPerSec?: number;
+  /**
+   * Extra latency a node adds when it relays a message to the next hop on a switchless multi-hop path (`ring`,
+   * `chain`), on top of that hop's `latencySec`. Absent = 0 (cut-through relay: the hardware floor). Unit: seconds.
+   */
+  forwardingLatencySec?: number;
   /** Citations covering the numeric fields. */
   sources: SourceRef[];
   /** Numbers no vendor publishes, with reasons. */
@@ -179,6 +195,53 @@ export interface LinkSpec {
   /** Set by `applyLinkModifiers`: the modifiers this link was derived with (provenance). */
   appliedModifiers?: LinkModifier[];
 }
+
+/**
+ * Shape of the network between nodes (docs/simulation-model.md §6 "Fabric shapes"; geometry in `hw/fabric.ts`).
+ *
+ * Notation: N = nodes in the group; B_L = `interNode.bandwidthPerDirectionBytesPerSec` = ONE port / one cable, per
+ * direction; C = `interNode.allPortsCapPerDirectionBytesPerSec` ?? ∞ = the most one node can send (and, separately,
+ * receive) over all its ports at once, relayed bytes included.
+ *
+ * Every shape except `'switched'` needs `devicesPerNode = 1` (`validateTopology`): one SoC or box per node, so a
+ * node is a device.
+ */
+export type FabricShape =
+  /**
+   * Each node has ONE port into a switch. Ports per node: 1. Injection per node: B_L (C does not apply: one port).
+   * Hops between any two nodes: 1 (the switch traversal is inside `latencySec`). An absent
+   * `TopologySpec.interNodeFabric` means this, non-blocking: the convention of every topology before fabric shapes.
+   */
+  | {
+      kind: 'switched';
+      /**
+       * Oversubscription of the switch tier, finite ≥ 1 (absent or 1 = non-blocking). Every inter-node flow gets
+       * B_L / oversubscription (worst case: every flow crosses the oversubscribed tier). Dimensionless.
+       */
+      oversubscription?: number;
+    }
+  /**
+   * Every pair of nodes cabled directly with `cablesPerPair` cables, striped as one link of k·B_L (e.g. JACCL over
+   * Thunderbolt 5). Ports per node: (N−1)·k. Per pair k·B_L; per node min((N−1)·k·B_L, C). Hops: 1. N = 2 is
+   * "direct cable(s)".
+   */
+  | {
+      kind: 'full_mesh';
+      /** Cables between each pair, integer ≥ 1 (absent = 1). Count. */
+      cablesPerPair?: number;
+    }
+  /**
+   * N ≥ 3 nodes, node i cabled to i ± 1 (mod N). Ports per node: 2. Per link B_L; per node min(2·B_L, C). Hops: up
+   * to ⌊N/2⌋ (shortest direction). Each relaying node adds `forwardingLatencySec`, and the bytes it relays count
+   * against its C (store-and-forward through the host: no switching inside these NICs). At N = 3 the cabling equals
+   * a `full_mesh` of 3.
+   */
+  | { kind: 'ring' }
+  /**
+   * Daisy chain 0 – 1 – … – (N−1), the ends not joined. Ports per node: 2 inside, 1 at the ends. Per link B_L; per
+   * node min(2·B_L, C) inside, B_L at the ends. Hops: up to N − 1; relays as for `'ring'`.
+   */
+  | { kind: 'chain' };
 
 /**
  * How devices are connected. A "node" is one scale-up domain (an NVLink island, a PCIe box, one Mac); devices
@@ -197,6 +260,12 @@ export interface TopologySpec {
   intraNode?: LinkSpec;
   /** Link between nodes; required when a parallel group spans > 1 node. */
   interNode?: LinkSpec;
+  /**
+   * Shape of the inter-node network; absent = `{ kind: 'switched' }`, non-blocking (the pre-fabric convention).
+   * Allowed only when `interNode` is present and `nodes > 1`; shapes other than `'switched'` need
+   * `devicesPerNode = 1`.
+   */
+  interNodeFabric?: FabricShape;
   /** Citations for the topology itself. */
   sources: SourceRef[];
 }

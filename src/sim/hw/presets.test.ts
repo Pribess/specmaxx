@@ -12,12 +12,14 @@ import {
   DEVICE_UNLOCKS,
   HOST_BOUNCE_PCIE_LINKS,
   INTEL_DEVICE_PRESETS,
+  LEGACY_LINK_IDS,
   LINK_PRESETS,
   NVIDIA_CONSUMER_DEVICE_PRESETS,
   NVIDIA_DATACENTER_DEVICE_PRESETS,
   RTX_5090,
   TOPOLOGY_PRESETS,
   deviceUnlocks,
+  linkPresetId,
   singleDevice,
 } from './presets';
 import { allUnlockSelections, resolveUnlocks, unlockAxesErrors } from './unlocks';
@@ -150,7 +152,7 @@ describe('preset library: every device preset', () => {
     expect(ids('NVIDIA GeForce')).toEqual(['rtx-5090', 'rtx-4090', 'rtx-3090']);
     expect(ids('Apple silicon')).toEqual([
       'apple-m5-ultra-80c', 'apple-m5-ultra-64c', 'apple-m5-max-40c', 'apple-m5-max-32c',
-      'apple-m4-max-40c', 'apple-m4-max-32c', 'apple-m3-ultra-80c', 'apple-m3-ultra-60c',
+      'apple-m4-max-40c', 'apple-m4-max-32c', 'apple-m3-ultra-80c', 'apple-m3-ultra-60c', 'apple-m3-max-40c', 'apple-m3-max-30c',
     ]);
     expect(ids('AMD Radeon / Ryzen AI')).toEqual(['radeon-ai-pro-r9700', 'radeon-rx-9070-xt', 'ryzen-ai-max-plus-395']);
     expect(ids('Intel Arc')).toEqual(['arc-pro-b70', 'arc-pro-b65', 'arc-pro-b60', 'arc-b580']);
@@ -188,6 +190,12 @@ describe('preset library: every device preset', () => {
       }
     }
   });
+
+  it('device names identify the exact SKU: unique, and Apple names carry the GPU-core binning', () => {
+    const names = DEVICE_PRESETS.map((d) => d.name);
+    expect(new Set(names).size).toBe(names.length);
+    for (const d of DEVICE_PRESETS.filter((x) => x.vendor === 'Apple')) expect(d.name).toMatch(/\(\d+-core GPU\)$/);
+  });
 });
 
 describe('preset library: links and topologies', () => {
@@ -198,6 +206,90 @@ describe('preset library: links and topologies', () => {
 
   it.each(TOPOLOGY_PRESETS.map((t) => [t.id, t] as const))('%s passes validateTopology', (_id, t) => {
     expect(validateTopology(t)).toEqual([]);
+  });
+
+  it('the fabric link fields are set where researched, cited or marked estimated, and change no existing number', () => {
+    const covered = (l: (typeof LINK_PRESETS)[number], field: string) =>
+      l.sources.some((s) => s.fields.includes(field)) || l.estimated.some((e) => e.field === field);
+    for (const l of LINK_PRESETS) {
+      if (l.allPortsCapPerDirectionBytesPerSec !== undefined) expect(covered(l, 'allPortsCapPerDirectionBytesPerSec'), l.name).toBe(true);
+      if (l.forwardingLatencySec !== undefined) {
+        expect(covered(l, 'forwardingLatencySec'), l.name).toBe(true);
+        // Every relay latency is an estimate (no vendor publishes one), and is RELAY HANDLING ONLY: the engine already
+        // charges the per-hop α for every hop crossed, so the reason must say so.
+        expect(l.estimated.find((e) => e.field === 'forwardingLatencySec')?.reason, l.name).toMatch(/^ESTIMATED, relay handling only/);
+      }
+    }
+    const byId = (id: string) => LINK_PRESETS.find((l) => linkPresetId(l) === id)!;
+    // DGX Spark: both QSFP ports share the 25 GB/s host attachment; a host relay adds ~4.5 µs on top of each hop's α.
+    const cx7 = byId('dgx-spark-connectx-7-200gbe-roce');
+    expect(cx7.bandwidthPerDirectionBytesPerSec).toBe(25e9);
+    expect(cx7.allPortsCapPerDirectionBytesPerSec).toBe(25e9);
+    expect(cx7.forwardingLatencySec).toBe(4.5e-6);
+    expect(cx7.latencySec).toBe(1.5e-6);
+    // Thunderbolt 5 RDMA: ports add up (no cap), 3 µs relay handling; the 50 µs α is unchanged in this task.
+    const tb5 = byId('thunderbolt-5-rdma-macos-26-2');
+    expect(tb5.allPortsCapPerDirectionBytesPerSec).toBeUndefined();
+    expect(tb5.forwardingLatencySec).toBe(3e-6);
+    expect(tb5.latencySec).toBe(50e-6);
+    // Thunderbolt bridge over TCP: TB5 at the 80 Gb/s line rate, TB4 at 40 Gb/s, the same software latency and relay.
+    const tb5Tcp = byId('thunderbolt-5-bridge-tcp');
+    const tb4Tcp = byId('thunderbolt-4-bridge-tcp');
+    expect(tb5Tcp.bandwidthPerDirectionBytesPerSec).toBe(10e9);
+    expect(tb4Tcp.bandwidthPerDirectionBytesPerSec).toBe(5e9);
+    expect(tb5Tcp.latencySec).toBe(tb4Tcp.latencySec);
+    expect(tb5Tcp.forwardingLatencySec).toBe(20e-6);
+    expect(tb4Tcp.forwardingLatencySec).toBe(20e-6);
+    expect(byId('strix-halo-usb4-native-rdma-20-gb-s-negotiated').forwardingLatencySec).toBe(3e-6);
+    expect(byId('strix-halo-usb4-tcp-20-gb-s-negotiated').forwardingLatencySec).toBe(5e-6);
+    // Switched-only links carry neither field.
+    for (const id of ['pcie-5-0-x16-host-bounce', 'nvlink5-nvswitch', 'infiniband-ndr400-one-nic-per-gpu', '10gbe-tcp']) {
+      expect(byId(id).allPortsCapPerDirectionBytesPerSec, id).toBeUndefined();
+      expect(byId(id).forwardingLatencySec, id).toBeUndefined();
+    }
+  });
+
+  it('relay latency is additive to the per-hop α: physical 2- and 3-hop examples (lat(h) = h·α + (h−1)·α_f)', () => {
+    const byId = (id: string) => LINK_PRESETS.find((l) => linkPresetId(l) === id)!;
+    const lat = (l: (typeof LINK_PRESETS)[number], hops: number) => hops * l.latencySec + (hops - 1) * (l.forwardingLatencySec ?? 0);
+    const us = (s: number) => Math.round(s * 1e8) / 100;
+    // DGX Spark ring: the opposite Spark is 2 hops away. 2 × 1.5 + 4.5 = 7.5 µs, i.e. +6 µs over the 1-hop 1.5 µs: the
+    // measured 16.9 − 10.9 µs one-shot all-reduce difference (dgx-spark-networking). 3 hops (a chain of 4): 13.5 µs.
+    const cx7 = byId('dgx-spark-connectx-7-200gbe-roce');
+    expect(us(lat(cx7, 1))).toBe(1.5);
+    expect(us(lat(cx7, 2))).toBe(7.5);
+    expect(us(lat(cx7, 2) - lat(cx7, 1))).toBe(6);
+    expect(us(lat(cx7, 3))).toBe(13.5);
+    // Thunderbolt 5 RDMA with this preset's 50 µs α: 2 hops 103 µs, 3 hops 156 µs. With the measured ~7 µs one-way
+    // (half the 14 µs ibv_uc_pingpong RTT) the same relay gives 17 and 27 µs.
+    const tb5 = byId('thunderbolt-5-rdma-macos-26-2');
+    expect(us(lat(tb5, 2))).toBe(103);
+    expect(us(lat(tb5, 3))).toBe(156);
+    const measured = { ...tb5, latencySec: 7e-6 };
+    expect(us(lat(measured, 2))).toBe(17);
+    expect(us(lat(measured, 3))).toBe(27);
+    // Thunderbolt bridge (TCP): 2 hops 160 µs, 3 hops 250 µs. USB4 RDMA: 19 / 30 µs. USB4 TCP: 25 / 40 µs.
+    expect([2, 3].map((h) => us(lat(byId('thunderbolt-5-bridge-tcp'), h)))).toEqual([160, 250]);
+    expect([2, 3].map((h) => us(lat(byId('strix-halo-usb4-native-rdma-20-gb-s-negotiated'), h)))).toEqual([19, 30]);
+    expect([2, 3].map((h) => us(lat(byId('strix-halo-usb4-tcp-20-gb-s-negotiated'), h)))).toEqual([25, 40]);
+    // The relay handling is always smaller than the hop it sits between: it excludes the wire.
+    for (const l of LINK_PRESETS) if (l.forwardingLatencySec !== undefined) expect(l.forwardingLatencySec, l.name).toBeLessThan(l.latencySec * 4);
+  });
+
+  it('no link preset has been renamed (ids are URL state): LEGACY_LINK_IDS is empty and every id is a current one', () => {
+    const ids = new Set(LINK_PRESETS.map(linkPresetId));
+    for (const [from, to] of Object.entries(LEGACY_LINK_IDS)) {
+      expect(ids.has(from), from).toBe(false);
+      expect(ids.has(to), to).toBe(true);
+    }
+    expect(ids).toEqual(new Set([
+      'pcie-4-0-x16-host-bounce', 'pcie-4-0-x8-host-bounce', 'pcie-5-0-x16-host-bounce', 'pcie-5-0-x8-host-bounce',
+      'pcie-4-0-x16-direct-p2p', 'pcie-4-0-x8-direct-p2p', 'pcie-5-0-x16-direct-p2p', 'pcie-5-0-x8-direct-p2p',
+      'rtx-3090-nvlink-bridge', 'nvlink4-nvswitch', 'nvlink5-nvswitch', 'infiniband-ndr400-one-nic-per-gpu',
+      'infiniband-xdr800-one-nic-per-gpu', 'dgx-spark-connectx-7-200gbe-roce', 'mi300x-xgmi-one-peer',
+      'mi300x-xgmi-8-gpu-aggregate-injection', 'thunderbolt-5-rdma-macos-26-2', 'thunderbolt-5-bridge-tcp', 'thunderbolt-4-bridge-tcp',
+      'strix-halo-usb4-native-rdma-20-gb-s-negotiated', 'strix-halo-usb4-tcp-20-gb-s-negotiated', '5gbe-tcp', '10gbe-tcp',
+    ]));
   });
 
   it('every link preset passes validateLink, and every single-device topology validates', () => {

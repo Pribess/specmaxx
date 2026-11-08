@@ -12,7 +12,9 @@ import type { ParallelConfig } from '../../sim/ir/model';
 import type { SimOptions, Workload } from '../../sim/engine/types';
 import type { UnlockSelection } from '../../sim/hw/unlocks';
 import { DEFAULT_SIM_OPTIONS } from '../../sim/engine/simulate';
+import type { CablingId } from '../../sim/hw/presets/catalog';
 import { DEFAULT_MODEL_ID } from './modelShortlist';
+import { devicesPerNodeForLocalLink, nearestCount, normalizeCabling, normalizeLocalLink, setupOptionsOf } from './hardware';
 
 /** Which model to simulate: a Hugging Face repo (the default one is bundled, so it needs no network). */
 export type ModelChoice = {
@@ -58,6 +60,12 @@ export interface HardwareChoice {
   intraLinkId?: string;
   /** `linkPresetId` of the inter-node link; absent = the device's default. */
   interLinkId?: string;
+  /**
+   * How the machines are cabled (`CablingId`: switch, full mesh, full mesh with 2 cables per pair, ring, daisy
+   * chain); absent = the default for the network link and counts (`defaultCabling`). Kept only while the link and
+   * counts allow it and it differs from the default (`normalizeCabling`).
+   */
+  cabling?: CablingId;
   /** Edits on the device spec, applied after the unlocks (the user's number wins). */
   deviceEdits: SpecEdits;
   /** Edits on the intra-node link, applied after the unlock link modifiers. */
@@ -132,9 +140,12 @@ export type AppAction =
   | { type: 'setBpw'; field: 'bpw' | 'headBpw'; value: number }
   /** Clear every quant override. */
   | { type: 'resetQuant' }
-  /** Replace the whole hardware choice (a multi-device setup preset, see `systemChoice`). */
+  /** Replace the whole hardware choice (a popular setup, see `popularSetupChoice`). */
   | { type: 'setHardware'; hw: HardwareChoice }
-  /** Pick a device; resets unlocks, engine, capacity, links and every edit. Counts are kept. */
+  /**
+   * Pick a device; resets unlocks, engine, capacity, links, cabling and every edit. Counts are kept when the device
+   * offers them, else they snap to the nearest offered count (`setupOptionsFor`).
+   */
   | { type: 'setDevice'; deviceId: string }
   /** Choose (optionId) or clear (undefined: stock) one unlock axis; resets the capacity index. */
   | { type: 'setUnlock'; axisId: string; optionId: string | undefined }
@@ -142,10 +153,18 @@ export type AppAction =
   | { type: 'setEngine'; engineId: string | undefined }
   /** Choose a capacity option index. */
   | { type: 'setCapacity'; index: number }
-  /** Change devices per node and/or nodes; re-picks the default links and clears the link edits. */
+  /**
+   * Change devices per node and/or nodes. A level's link and its edits are kept while that level still exists
+   * (count > 1), else dropped; the cabling is kept while still allowed (`normalizeCabling`).
+   */
   | { type: 'setCounts'; devicesPerNode?: number; nodes?: number }
-  /** Pick a link preset for one level (undefined: the device default); clears that level's edits. */
+  /**
+   * Pick a link preset for one level (undefined: the device default); clears that level's edits. The cabling is
+   * kept while the new link allows it.
+   */
   | { type: 'setLink'; level: 'intra' | 'inter'; linkId: string | undefined }
+  /** Choose the cabling between machines (undefined: the default); a default value is stored as absent. */
+  | { type: 'setCabling'; cabling: CablingId | undefined }
   /** Set (value, SI) or clear (undefined) one spec edit. */
   | { type: 'setEdit'; target: EditTarget; path: string; value: number | undefined }
   /** Clear the edits of one target, or of all three when `target` is absent. */
@@ -205,11 +224,19 @@ export function reduce(state: AppState, action: AppAction): AppState {
       return { ...state, quant: {} };
     case 'setHardware':
       return { ...state, hw: action.hw };
-    case 'setDevice':
+    case 'setDevice': {
+      const options = setupOptionsOf({ deviceId: action.deviceId });
+      const snap = (offered: number[], n: number) => (offered.includes(n) ? n : nearestCount(offered, n));
       return {
         ...state,
-        hw: { ...SINGLE_DEVICE_HW, deviceId: action.deviceId, devicesPerNode: hw.devicesPerNode, nodes: hw.nodes },
+        hw: {
+          ...SINGLE_DEVICE_HW,
+          deviceId: action.deviceId,
+          devicesPerNode: snap(options.devicesPerNodeCounts, hw.devicesPerNode),
+          nodes: snap(options.nodeCounts, hw.nodes),
+        },
       };
+    }
     case 'setUnlock': {
       const unlocks =
         action.optionId === undefined ? without(hw.unlocks, action.axisId) : { ...hw.unlocks, [action.axisId]: action.optionId };
@@ -222,24 +249,24 @@ export function reduce(state: AppState, action: AppAction): AppState {
     case 'setCapacity':
       return { ...state, hw: { ...hw, capacityIndex: action.index } };
     case 'setCounts': {
-      const { intraLinkId: _i, interLinkId: _x, ...rest } = hw;
-      void _i;
-      void _x;
-      return {
-        ...state,
-        hw: {
-          ...rest,
-          devicesPerNode: action.devicesPerNode ?? hw.devicesPerNode,
-          nodes: action.nodes ?? hw.nodes,
-          intraEdits: {},
-          interEdits: {},
-        },
-      };
+      const devicesPerNode = action.devicesPerNode ?? hw.devicesPerNode;
+      const nodes = action.nodes ?? hw.nodes;
+      let next: HardwareChoice = { ...hw, devicesPerNode, nodes };
+      if (devicesPerNode <= 1) next = { ...without(next, 'intraLinkId'), intraEdits: {} };
+      if (nodes <= 1) next = { ...without(next, 'interLinkId'), interEdits: {} };
+      return { ...state, hw: normalizeCabling(normalizeLocalLink(next)) };
     }
     case 'setLink': {
       const idKey = action.level === 'intra' ? 'intraLinkId' : 'interLinkId';
       const base = action.linkId === undefined ? without(hw, idKey) : { ...hw, [idKey]: action.linkId };
-      return { ...state, hw: { ...base, [editsKey(action.level)]: {} } };
+      // A local link restricted to other counts (the 2-card NVLink bridge) moves the count to one it joins.
+      const devicesPerNode =
+        action.level === 'intra' && action.linkId !== undefined ? devicesPerNodeForLocalLink(hw, action.linkId) : hw.devicesPerNode;
+      return { ...state, hw: normalizeCabling({ ...base, devicesPerNode, [editsKey(action.level)]: {} }) };
+    }
+    case 'setCabling': {
+      const base = action.cabling === undefined ? without(hw, 'cabling') : { ...hw, cabling: action.cabling };
+      return { ...state, hw: normalizeCabling(base) };
     }
     case 'setEdit': {
       const key = editsKey(action.target);

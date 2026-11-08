@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_STATE, reduce, type AppState } from './appState';
 import { decodeState, encodeNumber, encodeState } from './url';
+import { effectiveCabling, resolveHardware } from './hardware';
 
 /** A state built from the default by reducer actions (so it is in the reducer's canonical form). */
 function state(over: Omit<Partial<AppState>, 'hw'> & { hw?: Partial<AppState['hw']> } = {}): AppState {
@@ -30,6 +31,10 @@ const STATES: [string, AppState][] = [
   ],
   ['parallel + workload', state({ parallel: { tp: 2, pp: 2, dp: 1, ep: 1 }, workload: { batch: 8, promptLen: 4096, decodeContextLen: 32768 } })],
   ['every option', state({ options: { overlap: 'none', elementwiseFusion: 'ideal', collectiveAlgorithm: 'ring' } })],
+  ['DGX Spark ×4 ring', state({ hw: { deviceId: 'dgx-spark', nodes: 4, cabling: 'ring' }, parallel: { tp: 4, pp: 1, dp: 1, ep: 1 } })],
+  ['Strix Halo ×4 daisy chain', state({ hw: { deviceId: 'ryzen-ai-max-plus-395', nodes: 4, cabling: 'chain' } })],
+  ['M5 Ultra ×4 mesh, 2 cables per pair', state({ hw: { deviceId: 'apple-m5-ultra-80c', capacityIndex: 2, nodes: 4, cabling: 'mesh2' } })],
+  ['M3 Ultra ×4 ring (the default is a mesh)', state({ hw: { deviceId: 'apple-m3-ultra-80c', nodes: 4, cabling: 'ring' } })],
 ];
 
 describe('URL codec', () => {
@@ -144,5 +149,68 @@ describe('URL codec', () => {
 
   it('prefill length and decode context default to 8192 and are written only when different', () => {
     expect(encodeState(state({ workload: { batch: 1, promptLen: 8192, decodeContextLen: 32768 } }))).toBe('c=32768');
+  });
+
+  it('writes fab only for a non-default cabling, right after xl', () => {
+    expect(encodeState(state({ hw: { deviceId: 'dgx-spark', nodes: 4, cabling: 'ring' } }))).toBe('d=dgx-spark&nodes=4&fab=ring');
+    expect(encodeState(state({ hw: { deviceId: 'dgx-spark', nodes: 4, interLinkId: 'dgx-spark-connectx-7-200gbe-roce', cabling: 'ring' } }))).toBe(
+      'd=dgx-spark&nodes=4&xl=dgx-spark-connectx-7-200gbe-roce&fab=ring',
+    );
+    // A switch is the default wherever one exists, so it is never written.
+    expect(encodeState(state({ hw: { deviceId: 'dgx-spark', nodes: 4, cabling: 'switched' } }))).toBe('d=dgx-spark&nodes=4');
+    const explicit = decodeState('d=dgx-spark&nodes=4&fab=switched');
+    expect(explicit.dropped).toEqual([]);
+    expect(explicit.state.hw.cabling).toBeUndefined();
+  });
+
+  it('loads an old URL without fab on the default cabling for its link and counts', () => {
+    // Before fabric shapes the 4-Spark URL meant the ConnectX-7 switch; it still does.
+    const spark = decodeState('m=Qwen/Qwen3.8-Flash-Next&d=dgx-spark&nodes=4&xl=dgx-spark-connectx-7-200gbe-roce&tp=4');
+    expect(spark.dropped).toEqual([]);
+    expect(spark.state.hw.cabling).toBeUndefined();
+    expect(effectiveCabling(spark.state.hw)).toBe('switched');
+    expect(encodeState(spark.state)).toBe('m=Qwen/Qwen3.8-Flash-Next&d=dgx-spark&nodes=4&xl=dgx-spark-connectx-7-200gbe-roce&tp=4');
+    // Thunderbolt 5 has no switch: 4 Macs open on the full mesh, 4 Strix Halos (2 USB4 ports) on the ring.
+    expect(effectiveCabling(decodeState('d=apple-m3-ultra-80c&nodes=4').state.hw)).toBe('mesh');
+    expect(effectiveCabling(decodeState('d=ryzen-ai-max-plus-395&nodes=4').state.hw)).toBe('ring');
+  });
+
+  it('drops an unknown fab, and one the device, link and counts do not allow', () => {
+    expect(decodeState('d=dgx-spark&nodes=4&fab=star').dropped).toEqual(['fab=star']);
+    // A full mesh of 5 needs 4 ports; the M4 Max has 3 usable Thunderbolt 5 ports.
+    const mesh5 = decodeState('d=apple-m4-max-40c&nodes=5&fab=mesh');
+    expect(mesh5.dropped).toEqual(['fab=mesh']);
+    expect(mesh5.state.hw.cabling).toBeUndefined();
+    // A ring of three is the full mesh; one machine has no cabling.
+    expect(decodeState('d=dgx-spark&nodes=3&fab=ring').dropped).toEqual(['fab=ring']);
+    expect(decodeState('d=dgx-spark&fab=ring').dropped).toEqual(['fab=ring']);
+    // Several GPUs per machine network through a switch only.
+    expect(decodeState('n=2&nodes=2&fab=mesh').dropped).toEqual(['fab=mesh']);
+  });
+
+  it('loads an xl link the device catalog does not list, as a switch only', () => {
+    const { state: s, dropped } = decodeState('d=ryzen-ai-max-plus-395&nodes=4&xl=infiniband-ndr400-one-nic-per-gpu&fab=ring');
+    expect(s.hw.interLinkId).toBe('infiniband-ndr400-one-nic-per-gpu');
+    expect(dropped).toEqual(['fab=ring']);
+    expect(effectiveCabling(s.hw)).toBe('switched');
+  });
+
+  it('Thunderbolt TCP: TB5 Macs use the TB5 bridge, the M3 Max the TB4 bridge; an old TB4 link on a TB5 Mac still loads', () => {
+    const tb5 = decodeState('d=apple-m3-ultra-80c&nodes=3&xl=thunderbolt-5-bridge-tcp');
+    expect(tb5.dropped).toEqual([]);
+    expect(effectiveCabling(tb5.state.hw)).toBe('mesh');
+    expect(resolveHardware(tb5.state.hw).topology.interNode?.name).toBe('Thunderbolt 5 bridge (TCP)');
+    expect(resolveHardware(decodeState('d=apple-m3-max-40c&nodes=2').state.hw).topology.interNode?.name).toBe('Thunderbolt 4 bridge (TCP)');
+    const old = decodeState('d=apple-m3-ultra-80c&nodes=3&xl=thunderbolt-4-bridge-tcp');
+    expect(old.dropped).toEqual([]);
+    expect(resolveHardware(old.state.hw).topology.interNode?.name).toBe('Thunderbolt 4 bridge (TCP)');
+    expect(effectiveCabling(old.state.hw)).toBe('switched');
+  });
+
+  it('drops the 2-card NVLink bridge at more than 2 GPUs (the default PCIe link applies)', () => {
+    expect(decodeState('d=rtx-3090&n=2&il=rtx-3090-nvlink-bridge').dropped).toEqual([]);
+    const four = decodeState('d=rtx-3090&n=4&il=rtx-3090-nvlink-bridge');
+    expect(four.dropped).toEqual(['il=rtx-3090-nvlink-bridge']);
+    expect(four.state.hw.intraLinkId).toBeUndefined();
   });
 });

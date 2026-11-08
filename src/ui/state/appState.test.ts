@@ -19,19 +19,64 @@ describe('reduce', () => {
     expect(next.hw).toEqual({ ...DEFAULT_STATE.hw, deviceId: 'rtx-4090', devicesPerNode: 2 });
   });
 
-  it('changing the counts re-picks the default links and clears link edits', () => {
+  it('changing the counts keeps a level\'s link and edits while the level exists, and drops them when it goes', () => {
     const s = apply(
       DEFAULT_STATE,
       { type: 'setCounts', devicesPerNode: 2, nodes: 2 },
       { type: 'setLink', level: 'inter', linkId: '10gbe-tcp' },
       { type: 'setEdit', target: 'inter', path: 'latencySec', value: 1e-6 },
       { type: 'setEdit', target: 'device', path: 'memory.bandwidthBytesPerSec', value: 2e12 },
-      { type: 'setCounts', nodes: 3 },
+      { type: 'setCounts', nodes: 4 },
     );
-    expect(s.hw.interLinkId).toBeUndefined();
-    expect(s.hw.interEdits).toEqual({});
+    expect(s.hw.interLinkId).toBe('10gbe-tcp');
+    expect(s.hw.interEdits).toEqual({ latencySec: 1e-6 });
     expect(s.hw.deviceEdits).toEqual({ 'memory.bandwidthBytesPerSec': 2e12 });
-    expect(s.hw).toMatchObject({ devicesPerNode: 2, nodes: 3 });
+    expect(s.hw).toMatchObject({ devicesPerNode: 2, nodes: 4 });
+    const one = reduce(s, { type: 'setCounts', nodes: 1 });
+    expect(one.hw.interLinkId).toBeUndefined();
+    expect(one.hw.interEdits).toEqual({});
+  });
+
+  it('cabling: kept while the counts and link allow it, cleared otherwise; a default cabling is stored as absent', () => {
+    const spark = apply(DEFAULT_STATE, { type: 'setDevice', deviceId: 'dgx-spark' }, { type: 'setCounts', nodes: 4 });
+    const ring = reduce(spark, { type: 'setCabling', cabling: 'ring' });
+    expect(ring.hw.cabling).toBe('ring');
+    // 3 machines: a ring of three is the full mesh, so it is not offered; the default (switch) applies.
+    expect(reduce(ring, { type: 'setCounts', nodes: 3 }).hw.cabling).toBeUndefined();
+    expect(reduce(ring, { type: 'setCabling', cabling: 'switched' }).hw.cabling).toBeUndefined();
+    expect(reduce(ring, { type: 'setCabling', cabling: undefined }).hw.cabling).toBeUndefined();
+    // Another device resets the cabling.
+    expect(reduce(ring, { type: 'setDevice', deviceId: 'ryzen-ai-max-plus-395' }).hw.cabling).toBeUndefined();
+    // A link change keeps an allowed cabling.
+    const halo = apply(DEFAULT_STATE, { type: 'setDevice', deviceId: 'ryzen-ai-max-plus-395' }, { type: 'setCounts', nodes: 4 }, { type: 'setCabling', cabling: 'chain' });
+    expect(halo.hw.cabling).toBe('chain');
+    expect(reduce(halo, { type: 'setLink', level: 'inter', linkId: 'strix-halo-usb4-tcp-20-gb-s-negotiated' }).hw.cabling).toBe('chain');
+  });
+
+  it('another device snaps the counts to the nearest offered ones', () => {
+    const s = apply(DEFAULT_STATE, { type: 'setCounts', devicesPerNode: 4 }, { type: 'setDevice', deviceId: 'dgx-spark' });
+    expect(s.hw.devicesPerNode).toBe(1);
+  });
+
+  it('the 2-card NVLink bridge stays valid: more GPUs fall back to PCIe, picking it snaps to 2', () => {
+    const bridge = apply(
+      DEFAULT_STATE,
+      { type: 'setDevice', deviceId: 'rtx-3090' },
+      { type: 'setCounts', devicesPerNode: 2 },
+      { type: 'setLink', level: 'intra', linkId: 'rtx-3090-nvlink-bridge' },
+      { type: 'setEdit', target: 'intra', path: 'latencySec', value: 1e-6 },
+    );
+    expect(bridge.hw).toMatchObject({ devicesPerNode: 2, intraLinkId: 'rtx-3090-nvlink-bridge' });
+    // 4 GPUs: the bridge (and its edits) is dropped, so the default PCIe link applies.
+    const four = reduce(bridge, { type: 'setCounts', devicesPerNode: 4 });
+    expect(four.hw.devicesPerNode).toBe(4);
+    expect(four.hw.intraLinkId).toBeUndefined();
+    expect(four.hw.intraEdits).toEqual({});
+    // Picking the bridge at 4 GPUs moves the count to 2.
+    const back = reduce(four, { type: 'setLink', level: 'intra', linkId: 'rtx-3090-nvlink-bridge' });
+    expect(back.hw).toMatchObject({ devicesPerNode: 2, intraLinkId: 'rtx-3090-nvlink-bridge' });
+    // An unrestricted link keeps the count.
+    expect(reduce(four, { type: 'setLink', level: 'intra', linkId: 'pcie-4-0-x16-host-bounce' }).hw.devicesPerNode).toBe(4);
   });
 
   it('setLink clears that level edits; setEdit undefined removes one edit; resetEdits clears', () => {

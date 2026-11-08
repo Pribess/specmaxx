@@ -1,7 +1,8 @@
 /**
- * Hardware resolution for the UI: the state's `HardwareChoice` → the effective device and links → the
- * `HardwareStack` the engine simulates. Also the default links per device, the topology quick picks, and
- * the editable spec fields with their display units.
+ * Hardware resolution for the UI: the state's `HardwareChoice` → the effective device, links and cabling → the
+ * `HardwareStack` the engine simulates. Also the default links per device (from the setup catalog,
+ * `presets/catalog.ts`), the setup row's options (counts, links, cablings), the popular setups, and the editable
+ * spec fields with their display units.
  *
  * Order of application (docs/simulation-model.md §4 "Device variants and modifiers", "Unlock axes"):
  * preset → unlock modifiers → user edits. Edits are absolute values at `numericLeafPaths` paths applied
@@ -15,12 +16,24 @@ import type { LinkModifier } from '../../sim/hw/modifiers';
 import { applyDeviceModifiers, applyLinkModifiers, describeDeviceModifier, describeLinkModifier } from '../../sim/hw/modifiers';
 import { resolveUnlocks } from '../../sim/hw/unlocks';
 import { numericLeafPaths } from '../../sim/hw/validate';
-import { DEVICE_PRESETS, SYSTEM_PRESETS, deviceUnlocks, type SystemPreset } from '../../sim/hw/presets/index';
+import { DEVICE_PRESETS, deviceUnlocks } from '../../sim/hw/presets/index';
+import { LEGACY_LINK_IDS, LINK_PRESETS } from '../../sim/hw/presets/links';
+import { linkPresetId, nodeTopology } from '../../sim/hw/presets/topologies';
 import {
-  ETHERNET_10G_TCP, IB_NDR_400, IB_XDR_800, LINK_PRESETS, NVLINK_4, NVLINK_5, PCIE_5_X16, PCIE_5_X16_DIRECT,
-  SPARK_CONNECTX_7, TB5_RDMA, USB4_HALO_RDMA, XGMI_MI300X_8_GPU,
-} from '../../sim/hw/presets/links';
-import { TOPOLOGY_PRESETS, linkPresetId, nodeTopology } from '../../sim/hw/presets/topologies';
+  POPULAR_SETUPS,
+  allowedCablings,
+  allowedLocalLinks,
+  localLinkAllows,
+  defaultCabling,
+  fabricOf,
+  setupOptionsFor,
+  type CablingId,
+  type DeviceSetupOptions,
+  type NetworkOption,
+  type LocalLinkOption,
+  type PopularSetup,
+  type SetupChoice,
+} from '../../sim/hw/presets/catalog';
 import type { HardwareChoice, SpecEdits } from './appState';
 
 /** The reason recorded in `estimated[]` for an edited field. */
@@ -31,9 +44,18 @@ export function findDevice(id: string): DeviceSpec | undefined {
   return DEVICE_PRESETS.find((d) => d.id === id);
 }
 
-/** The link preset with this `linkPresetId`, or undefined. */
+/**
+ * The current `linkPresetId` of a link id from the state or an old URL: renamed links map through
+ * `LEGACY_LINK_IDS` (old id → current id), every other id is itself.
+ */
+export function currentLinkId(id: string): string {
+  return LEGACY_LINK_IDS[id] ?? id;
+}
+
+/** The link preset with this `linkPresetId` (or a legacy id of it, see {@link currentLinkId}), or undefined. */
 export function findLink(id: string): LinkSpec | undefined {
-  return LINK_PRESETS.find((l) => linkPresetId(l) === id);
+  const current = currentLinkId(id);
+  return LINK_PRESETS.find((l) => linkPresetId(l) === current);
 }
 
 /** Default links of a device: the ones the UI picks until the user chooses another preset. */
@@ -45,98 +67,209 @@ export interface DefaultLinks {
 }
 
 /**
- * Hand-picked defaults where the named topologies do not say (or say several things): datacenter scale-up
- * fabrics, the SoC transports. Keyed by device id; `intraNode: null` means "no intra-node link" (one SoC per node).
+ * Default links of `device`: the first local link and the first network of its setup catalog entry
+ * (`setupOptionsFor`). The catalog reproduces the hand-picked defaults the UI had before it (catalog.test.ts).
  */
-const DEFAULT_LINK_TABLE: Record<string, { intraNode: LinkSpec | null; interNode: LinkSpec }> = {
-  'h100-sxm': { intraNode: NVLINK_4, interNode: IB_NDR_400 },
-  'h200-sxm': { intraNode: NVLINK_4, interNode: IB_NDR_400 },
-  b200: { intraNode: NVLINK_5, interNode: IB_NDR_400 },
-  b300: { intraNode: NVLINK_5, interNode: IB_XDR_800 },
-  'instinct-mi300x': { intraNode: XGMI_MI300X_8_GPU, interNode: IB_NDR_400 },
-  'ryzen-ai-max-plus-395': { intraNode: null, interNode: USB4_HALO_RDMA },
-  'dgx-spark': { intraNode: null, interNode: SPARK_CONNECTX_7 },
-};
+export function defaultLinks(device: Pick<DeviceSpec, 'id'>): DefaultLinks {
+  const options = setupOptionsFor(device.id);
+  const intraNode = options.localLinks[0]?.link;
+  return { ...(intraNode !== undefined ? { intraNode } : {}), interNode: options.networks[0].link };
+}
 
 /**
- * Default links of `device`. In order: the hand table above (datacenter fabrics, Strix Halo USB4 RDMA, Spark
- * ConnectX-7); Apple → Thunderbolt 5 RDMA between nodes and no intra-node link; else the links of the first
- * named topology preset whose id contains the device id (GeForce PCIe generation, Arc Pro direct P2P); else
- * PCIe 5.0 x16 (host bounce for GeForce-class cards, direct P2P for datacenter accelerators) inside a node and
- * 10GbE between nodes.
+ * The UI name of a cabling for `nodes` machines: "Switch", "Full mesh", "Full mesh, 2 cables per pair", "Ring",
+ * "Daisy chain"; two machines read "One cable" / "Two cables" (a mesh of two is a direct cable).
  */
-export function defaultLinks(device: DeviceSpec): DefaultLinks {
-  const row = DEFAULT_LINK_TABLE[device.id];
-  if (row !== undefined) return { ...(row.intraNode !== null ? { intraNode: row.intraNode } : {}), interNode: row.interNode };
-  if (device.vendor === 'Apple') return { interNode: TB5_RDMA };
-  const presets = TOPOLOGY_PRESETS.filter((t) => t.id.includes(device.id));
-  const intraNode = presets.find((t) => t.intraNode !== undefined)?.intraNode;
-  const interNode = presets.find((t) => t.interNode !== undefined)?.interNode;
-  const datacenter = device.memory.capacityOptionsBytes[0] >= 64e9 && device.memory.kind === 'dedicated';
+export function cablingName(c: CablingId, nodes: number): string {
+  switch (c) {
+    case 'switched':
+      return 'Switch';
+    case 'mesh':
+      return nodes === 2 ? 'One cable' : 'Full mesh';
+    case 'mesh2':
+      return nodes === 2 ? 'Two cables' : 'Full mesh, 2 cables per pair';
+    case 'ring':
+      return 'Ring';
+    case 'chain':
+      return 'Daisy chain';
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// The setup row: counts, links and cabling the device offers
+
+/** The setup catalog entry of the choice's device. */
+export function setupOptionsOf(hw: Pick<HardwareChoice, 'deviceId'>): DeviceSetupOptions {
+  return setupOptionsFor(hw.deviceId);
+}
+
+/** The offered count nearest to `n` (the smaller one on a tie); `n` itself when nothing is offered. Count. */
+export function nearestCount(offered: number[], n: number): number {
+  let best: number | undefined;
+  for (const c of offered) if (best === undefined || Math.abs(c - n) < Math.abs(best - n) || (Math.abs(c - n) === Math.abs(best - n) && c < best)) best = c;
+  return best ?? n;
+}
+
+/** The effective link ids of a choice, only at the levels that exist: the chosen id, else the device default. */
+export function effectiveLinkIds(hw: HardwareChoice): { intra?: string; inter?: string } {
+  const defaults = defaultLinks({ id: hw.deviceId });
+  const intra = hw.devicesPerNode > 1 ? (hw.intraLinkId !== undefined ? currentLinkId(hw.intraLinkId) : defaults.intraNode && linkPresetId(defaults.intraNode)) : undefined;
+  const inter = hw.nodes > 1 ? (hw.interLinkId !== undefined ? currentLinkId(hw.interLinkId) : linkPresetId(defaults.interNode)) : undefined;
+  return { ...(intra !== undefined ? { intra } : {}), ...(inter !== undefined ? { inter } : {}) };
+}
+
+/**
+ * The catalog network of the choice's inter-node link (chosen or default), or undefined when the device's catalog
+ * entry does not list that link (an old URL): then only a switch is offered (`allowedCablings`).
+ */
+export function networkOptionOf(hw: HardwareChoice): NetworkOption | undefined {
+  const id = hw.interLinkId !== undefined ? currentLinkId(hw.interLinkId) : undefined;
+  const networks = setupOptionsOf(hw).networks;
+  return id === undefined ? networks[0] : networks.find((n) => linkPresetId(n.link) === id);
+}
+
+/** The catalog local link of the choice's intra-node link (chosen or default), or undefined when not listed. */
+export function localLinkOptionOf(hw: HardwareChoice): LocalLinkOption | undefined {
+  const id = hw.intraLinkId !== undefined ? currentLinkId(hw.intraLinkId) : undefined;
+  const locals = setupOptionsOf(hw).localLinks;
+  return id === undefined ? locals[0] : locals.find((l) => linkPresetId(l.link) === id);
+}
+
+/** The catalog local links that join the choice's devices per machine (e.g. the 2-card NVLink bridge only at 2). */
+export function localLinkChoices(hw: Pick<HardwareChoice, 'deviceId' | 'devicesPerNode'>): LocalLinkOption[] {
+  return allowedLocalLinks(setupOptionsOf(hw), hw.devicesPerNode);
+}
+
+/**
+ * The choice with a chosen intra-node link that cannot join its devices per machine (a catalog link restricted to
+ * other counts, e.g. the 2-card NVLink bridge at 4 GPUs) dropped, with its edits, so the default link applies. A link
+ * the catalog does not list (an older URL) is kept.
+ */
+export function normalizeLocalLink(hw: HardwareChoice): HardwareChoice {
+  if (hw.intraLinkId === undefined || hw.devicesPerNode <= 1) return hw;
+  const opt = localLinkOptionOf(hw);
+  if (opt === undefined || localLinkAllows(opt, hw.devicesPerNode)) return hw;
+  const { intraLinkId: _i, ...rest } = hw;
+  void _i;
+  return { ...rest, intraEdits: {} };
+}
+
+/**
+ * Devices per machine for picking the local link `linkId`: the current count when the link joins it, else the
+ * nearest count the link supports (e.g. picking the 2-card NVLink bridge at 4 GPUs gives 2). Count.
+ */
+export function devicesPerNodeForLocalLink(hw: HardwareChoice, linkId: string): number {
+  const id = currentLinkId(linkId);
+  const opt = setupOptionsOf(hw).localLinks.find((l) => linkPresetId(l.link) === id);
+  if (opt === undefined || localLinkAllows(opt, hw.devicesPerNode) || opt.devicesPerNodeCounts === undefined) return hw.devicesPerNode;
+  return nearestCount(opt.devicesPerNodeCounts, hw.devicesPerNode);
+}
+
+/** The cablings the choice's network, machine count and devices per machine allow ([] for one machine). */
+export function cablingOptions(hw: HardwareChoice): CablingId[] {
+  if (hw.nodes <= 1) return [];
+  return allowedCablings(networkOptionOf(hw), hw.nodes, hw.devicesPerNode);
+}
+
+/**
+ * The cabling in effect (undefined for one machine): the chosen one while it is allowed, else the default
+ * (`defaultCabling`: a switch where one exists, else a full mesh where the ports allow, else a ring, else a chain).
+ */
+export function effectiveCabling(hw: HardwareChoice): CablingId | undefined {
+  if (hw.nodes <= 1) return undefined;
+  if (hw.cabling !== undefined && cablingOptions(hw).includes(hw.cabling)) return hw.cabling;
+  return defaultCabling(networkOptionOf(hw), hw.nodes, hw.devicesPerNode) ?? 'switched';
+}
+
+/**
+ * The choice with `cabling` normalized: kept only while it is allowed and differs from the default, so equal
+ * setups are equal states (and the URL omits a default `fab`).
+ */
+export function normalizeCabling(hw: HardwareChoice): HardwareChoice {
+  if (hw.cabling === undefined) return hw;
+  const keep =
+    hw.nodes > 1 &&
+    cablingOptions(hw).includes(hw.cabling) &&
+    hw.cabling !== defaultCabling(networkOptionOf(hw), hw.nodes, hw.devicesPerNode);
+  if (keep) return hw;
+  const { cabling: _c, ...rest } = hw;
+  void _c;
+  return rest;
+}
+
+/**
+ * The catalog's view of a choice (for `setupLabel`): device, memory per device, counts, the effective link ids
+ * and cabling. `memCapacityBytes` is the capacity in use (unlocks may change the options). Unit: bytes.
+ */
+export function setupChoiceOf(hw: HardwareChoice, memCapacityBytes?: number): SetupChoice {
+  const links = effectiveLinkIds(hw);
+  const cabling = effectiveCabling(hw);
   return {
-    intraNode: intraNode ?? (datacenter ? PCIE_5_X16_DIRECT : PCIE_5_X16),
-    interNode: interNode ?? (datacenter ? IB_NDR_400 : ETHERNET_10G_TCP),
+    deviceId: hw.deviceId,
+    ...(memCapacityBytes !== undefined ? { memCapacityBytes } : {}),
+    devicesPerNode: hw.devicesPerNode,
+    nodes: hw.nodes,
+    ...(links.intra !== undefined ? { localLinkId: links.intra } : {}),
+    ...(links.inter !== undefined ? { networkLinkId: links.inter } : {}),
+    ...(cabling !== undefined ? { cabling } : {}),
   };
 }
 
-/** Named topology presets for a device (quick-pick chips): every preset whose id contains the device id. */
-export function topologyPresetsFor(device: Pick<DeviceSpec, 'id'>): TopologySpec[] {
-  const hgx = device.id.match(/^(h100|b200|b300)/)?.[1];
-  return TOPOLOGY_PRESETS.filter(
-    (t) => t.id.includes(device.id) || (hgx !== undefined && t.id.startsWith(`hgx-${hgx}-`)) || (device.id === 'instinct-mi300x' && t.id === 'mi300x-xgmi-8'),
-  );
-}
-
 /**
- * The hardware choice of a multi-device setup: its device (stock, no unlocks, first engine), the index of its memory
- * option (0 when it names none), its device and node counts, and its links as explicit preset ids (only at the
- * levels that exist). No edits.
+ * The hardware choice of a popular setup: its device (stock, no unlocks, first engine), the index of its memory
+ * option (0 when it names none), its counts, its links as explicit preset ids (only at the levels that exist),
+ * and its cabling (normalized: absent when it is the default). No edits.
  */
-export function systemChoice(p: SystemPreset): HardwareChoice {
-  const capacityIndex = p.memCapacityBytes === undefined ? 0 : p.device.memory.capacityOptionsBytes.indexOf(p.memCapacityBytes);
-  if (capacityIndex < 0) throw new Error(`setup '${p.id}': ${p.memCapacityBytes} B is not a memory option of ${p.device.id}`);
-  const { devicesPerNode, nodes, intraNode, interNode } = p.topology;
-  return {
-    deviceId: p.device.id,
+export function popularSetupChoice(p: PopularSetup): HardwareChoice {
+  const c = p.choice;
+  const device = findDevice(c.deviceId);
+  if (device === undefined) throw new Error(`setup '${p.id}': unknown device '${c.deviceId}'`);
+  const capacityIndex = c.memCapacityBytes === undefined ? 0 : device.memory.capacityOptionsBytes.indexOf(c.memCapacityBytes);
+  if (capacityIndex < 0) throw new Error(`setup '${p.id}': ${c.memCapacityBytes} B is not a memory option of ${device.id}`);
+  const defaults = defaultLinks(device);
+  const intra = c.localLinkId ?? (defaults.intraNode && linkPresetId(defaults.intraNode));
+  const inter = c.networkLinkId ?? linkPresetId(defaults.interNode);
+  return normalizeCabling({
+    deviceId: device.id,
     unlocks: {},
     capacityIndex,
-    devicesPerNode,
-    nodes,
-    ...(devicesPerNode > 1 && intraNode !== undefined ? { intraLinkId: linkPresetId(intraNode) } : {}),
-    ...(nodes > 1 && interNode !== undefined ? { interLinkId: linkPresetId(interNode) } : {}),
+    devicesPerNode: c.devicesPerNode,
+    nodes: c.nodes,
+    ...(c.devicesPerNode > 1 && intra !== undefined ? { intraLinkId: intra } : {}),
+    ...(c.nodes > 1 ? { interLinkId: inter } : {}),
+    ...(c.nodes > 1 && c.cabling !== undefined ? { cabling: c.cabling } : {}),
     deviceEdits: {},
     intraEdits: {},
     interEdits: {},
-  };
+  });
 }
 
 /**
- * The multi-device setup a hardware choice is, or undefined: same device, memory option, counts and effective
- * links (an absent link id means the device default, `defaultLinks`), with no unlocks, engine choice or edits.
- * So picking a setup and then changing anything (a count, a link, a spec number) shows the plain device again.
+ * The popular setup a hardware choice is, or undefined: same device, memory option, counts, effective links (an
+ * absent link id means the device default) and effective cabling, with no unlocks, engine choice or edits. So
+ * picking a setup and then changing anything (a count, a link, the cabling, a spec number) shows the plain device.
  */
-export function matchingSystem(hw: HardwareChoice): SystemPreset | undefined {
+export function matchingPopularSetup(hw: HardwareChoice): PopularSetup | undefined {
   const stock =
     Object.keys(hw.unlocks).length === 0 &&
     hw.engineId === undefined &&
     Object.keys(hw.deviceEdits).length === 0 &&
     Object.keys(hw.intraEdits).length === 0 &&
     Object.keys(hw.interEdits).length === 0;
-  if (!stock) return undefined;
-  const device = findDevice(hw.deviceId);
-  if (device === undefined) return undefined;
-  const defaults = defaultLinks(device);
-  const intraId = hw.devicesPerNode > 1 ? (hw.intraLinkId ?? (defaults.intraNode && linkPresetId(defaults.intraNode))) : undefined;
-  const interId = hw.nodes > 1 ? (hw.interLinkId ?? linkPresetId(defaults.interNode)) : undefined;
-  return SYSTEM_PRESETS.find((p) => {
-    const c = systemChoice(p);
+  if (!stock || findDevice(hw.deviceId) === undefined) return undefined;
+  const links = effectiveLinkIds(hw);
+  const cabling = effectiveCabling(hw);
+  return POPULAR_SETUPS.find((p) => {
+    const c = popularSetupChoice(p);
+    const cLinks = effectiveLinkIds(c);
     return (
       c.deviceId === hw.deviceId &&
       c.capacityIndex === hw.capacityIndex &&
       c.devicesPerNode === hw.devicesPerNode &&
       c.nodes === hw.nodes &&
-      c.intraLinkId === intraId &&
-      c.interLinkId === interId
+      cLinks.intra === links.intra &&
+      cLinks.inter === links.inter &&
+      effectiveCabling(c) === cabling
     );
   });
 }
@@ -282,8 +415,12 @@ export interface ResolvedHardware {
   device: ResolvedDevice;
   /** The resolved links. */
   links: ResolvedLinks;
-  /** The topology built from the counts and the resolved links (`nodeTopology`). */
+  /** The topology built from the counts, the resolved links and the cabling (`nodeTopology`). */
   topology: TopologySpec;
+  /** The cabling in effect between machines (`effectiveCabling`); undefined for one machine. */
+  cabling?: CablingId;
+  /** The catalog network of the inter-node link, when there is one and the device's catalog entry lists it. */
+  network?: NetworkOption;
   /** The stack handed to the engine: already-resolved specs, so no modifiers. */
   stack: HardwareStack;
   /** Capacity used, per device: `capacityOptionsBytes[capacityIndex]`, or the default when out of range. Unit: bytes. */
@@ -302,12 +439,17 @@ export interface ResolvedHardware {
 export function resolveHardware(hw: HardwareChoice): ResolvedHardware {
   const device = resolveDevice(hw);
   const links = resolveLinks(hw, device);
+  const cabling = effectiveCabling(hw);
+  const network = hw.nodes > 1 ? networkOptionOf(hw) : undefined;
+  // The fabric is passed for every cabling; nodeTopology omits a non-blocking switch, so the switched
+  // topologies are exactly the ones from before fabric shapes (fabric-identity.test.ts).
   const topology = nodeTopology({
     devicesPerNode: hw.devicesPerNode,
     nodes: hw.nodes,
     device: device.device,
     ...(links.intra !== undefined ? { intraNode: links.intra.link } : {}),
     ...(links.inter !== undefined ? { interNode: links.inter.link } : {}),
+    ...(cabling !== undefined && links.inter !== undefined ? { fabric: fabricOf(cabling) } : {}),
   });
   const capacities = device.device.memory.capacityOptionsBytes;
   const memCapacityBytes = capacities[hw.capacityIndex] ?? capacities[0];
@@ -321,6 +463,8 @@ export function resolveHardware(hw: HardwareChoice): ResolvedHardware {
     device,
     links,
     topology,
+    ...(cabling !== undefined ? { cabling } : {}),
+    ...(network !== undefined ? { network } : {}),
     stack,
     memCapacityBytes,
     edited: device.edited || (links.intra?.edited ?? false) || (links.inter?.edited ?? false),
@@ -410,13 +554,18 @@ export function editableFields(device: DeviceSpec): EditableField[] {
   return fields;
 }
 
-/** The editable numbers of a link: bandwidth (GB/s per direction), latency (µs), host staging. */
+/**
+ * The editable numbers of a link: bandwidth (GB/s per direction), latency (µs), host staging, and for multi-port
+ * links the cap over all ports (GB/s per direction) and the relay latency per hop (µs).
+ */
 export function editableLinkFields(link: LinkSpec): EditableField[] {
   const labels: Record<string, [string, DisplayUnit]> = {
     bandwidthPerDirectionBytesPerSec: ['Bandwidth per direction, per device', UNITS.gbps],
     latencySec: ['Latency per message', UNITS.us],
     'hostBounce.hostMemBandwidthBytesPerSec': ['Host memory bandwidth for staging (shared by the node)', UNITS.gbps],
     'hostBounce.extraLatencySec': ['Extra latency of the host copy', UNITS.us],
+    allPortsCapPerDirectionBytesPerSec: ['Bandwidth cap, all ports', UNITS.gbps],
+    forwardingLatencySec: ['Relay latency per hop', UNITS.us],
   };
   return numericLeafPaths(link).map(({ path, value }) => {
     const [label, unit] = labels[path] ?? [path, UNITS.count];
