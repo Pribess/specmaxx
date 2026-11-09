@@ -70,6 +70,16 @@ describe('T17 input errors', () => {
     expectError(input({ ep: 2 }), /model has no MoE block/);
   });
 
+  it('epImbalance is a finite number ≥ 1 (max/mean load); 1 and above are valid', () => {
+    for (const bad of [0.9, 0, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expectError(input({ ep: 2, dp: 2, epImbalance: bad }, { model: TINY_HYBRID }), /parallel\.epImbalance must be a finite number ≥ 1/);
+    }
+    for (const ok of [1, 1.2, 2.56]) {
+      const workload = { batch: 2, promptLen: 128, decodeContextLen: 256 };
+      expect(validateInput(input({ ep: 2, dp: 2, epImbalance: ok }, { model: TINY_HYBRID, workload }))).toEqual([]);
+    }
+  });
+
   it('unknown engineId', () => {
     expectError(input({}, { hardware: { device: SYNTH_GPU, topology: singleDevice(SYNTH_GPU), engineId: 'npu' } }), /engineId 'npu'/);
   });

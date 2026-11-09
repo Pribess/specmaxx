@@ -892,7 +892,9 @@ export const REPORTS: BenchmarkReport[] = [
     decode: { tokensPerSec: 76, kind: 'perSequence' },
     caveats:
       'Verified. The only DeepSeek-V4.1-Flash data; every record has spec decoding on. DSpark (the in-checkpoint ' +
-      'drafter, k 5 = its block 6 − 1) is simulated at the reported mean accepted length 2.85 (E[τ], bonus token included).',
+      'drafter, k 5 = its block 6 − 1) is simulated at the reported mean accepted length 2.85 (E[τ], bonus token included). ' +
+      'The 6-token verify reads U(6) = 256·(1 − (1 − 6/256)⁶) ≈ 34.0 routed experts per layer (min(E, 6·6) = 36 before ' +
+      'the expected-unique fix: decode 70.4 → 72.2 tok/s, ratio 1.079 → 1.053).',
     input: {
       model: { kind: 'hf', repoId: 'deepseek-ai/DeepSeek-V4.1-Flash' },
       quant: 'native',
@@ -1078,10 +1080,12 @@ export const REPORTS: BenchmarkReport[] = [
       check: {
         mode: 'exception',
         reason:
-          'MoE routing at batch > 1: the sim routes "balanced" (docs §5 "MoE modes A/B"), so 32 × top-4 assignments ' +
-          'touch min(E, T·k) = all 128 experts per layer and decode reads every weight (63 GB/step → 129 tok/s). ' +
-          'Real routing touches fewer distinct experts (uniform random: 128·(1 − (1 − 4/128)³²) ≈ 82; skewed real ' +
-          'routing fewer still): 262 tok/s needs ≤ 33 GB/step at 273 GB/s. A modelling limit, not a preset error.',
+          'MoE routing locality at batch > 1. The sim reads the experts expected under iid-uniform routing (docs §5 ' +
+          '"Expected distinct experts"): 32 × top-4 touch 128·(1 − (1 − 4/128)³²) ≈ 81.7 of 128 experts per layer, ' +
+          '≈ 46 GB/step → 191 tok/s (it read all 128, 63 GB/step → 129 tok/s, before that fix; ratio 2.03 → 1.37). ' +
+          '262 tok/s needs ≤ 33 GB/step at 273 GB/s, so real routing is more concentrated than uniform (≤ ≈ 55 experts ' +
+          'per layer at 0.48 GB per expert over 36 layers): an expectation of the model, not a preset error. ' +
+          'llama-batched-bench feeds random tokens.',
       },
     },
     caveats:

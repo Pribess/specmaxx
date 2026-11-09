@@ -146,6 +146,11 @@ export interface GemmOptions {
   /** Grouped-GEMM batch (distinct weights per entry); default 1. Count. */
   batch?: number;
   /**
+   * Weight matrices read when fewer than `batch` (see `GemmOp.distinctWeightMatrices`; MoE: the expected distinct
+   * experts). Set on the op only when it differs from the batch. Unit: weight matrices (count, real).
+   */
+  distinctWeightMatrices?: number;
+  /**
    * Module class of a linear layer: selects its weight format, GEMM input dtype and sparsity through
    * {@link moduleQuant}. Exclusive with `format`. Neither given: `quant.weights` with `quant.activations` inputs.
    */
@@ -237,6 +242,8 @@ export function linearGemm(
   };
   if (opts.outParts !== undefined) op.outParts = opts.outParts;
   if (opts.sideVectorElems !== undefined) op.sideVectorElems = opts.sideVectorElems;
+  const distinct = opts.distinctWeightMatrices;
+  if (distinct !== undefined && distinct !== op.batch) op.distinctWeightMatrices = distinct;
   if (opts.bias === true) op.biasDtype = highPrecision(ctx);
   return op;
 }

@@ -320,11 +320,13 @@ work of one device on its stage's critical path for one microbatch step. Notatio
 ### GEMM
 
 `metrics.ts: gemmFlops, gemmBytes, gemmWeightBytes`. `out[b] (m×n) = in[b] (m×k) · W[b] (k×n)`; batch entries
-have distinct weights (grouped experts, MLA per-head absorb).
+have distinct weights (grouped experts, MLA per-head absorb). `b_w = GemmOp.distinctWeightMatrices ?? b` is the
+number of weight matrices read: a MoE grouped GEMM computes on a grid of b experts but reads only the `U ≤ b`
+expected distinct ones (§5 "Expected distinct experts"); every other GEMM has `b_w = b`.
 
 - `F = 2·b·m·n·k`
-- weights `b·(n·k·bpe(w) + perDimBits·(n + P·k)/8)` (`perDimBits` = 0 except EXL3; `P` = fused physical matrices, `GemmOp.outParts`); with 2:4 sparsity `b·n·k·(bits/2 + 1)/8` (half the values plus a 2-bit index per kept
-  value); bias `+ b·n·bpe(bias)`
+- weights `b_w·(n·k·bpe(w) + perDimBits·(n + P·k)/8)` (`perDimBits` = 0 except EXL3; `P` = fused physical matrices, `GemmOp.outParts`); with 2:4 sparsity `b_w·n·k·(bits/2 + 1)/8` (half the values plus a 2-bit index per kept
+  value); bias `+ b_w·n·bpe(bias)`
 - read `b·m·k·bpe(in)`, write `b·m·n·bpe(out)`
 
 ### Attended pairs
@@ -652,7 +654,7 @@ costed in §6
   below); `latencySec` is a one-way hardware / verbs-level floor (P2P write, `ib_write_lat`), never an NCCL / RCCL
   software floor. Latencies no vendor publishes are `estimated`.
 - **PCIe payload efficiency** (`src/sim/hw/presets/links.ts: PCIE_PAYLOAD_EFFICIENCY,
-  pcieBandwidthPerDirectionBytesPerSec, pcieLineRateBytesPerSec`): every PCIe link (host bounce, direct P2P, the
+pcieBandwidthPerDirectionBytesPerSec, pcieLineRateBytesPerSec`): every PCIe link (host bounce, direct P2P, the
   device's host link for offload streaming, inter-node PCIe staging, the NVMe slot ceiling) carries payload at
 
   ```
@@ -666,6 +668,7 @@ costed in §6
   (ACK, flow control) and SKP ordered sets are left out, so `B` stays an upper bound: measured pinned copies on
   Gen4 x16 reach 24.8–26.2 GB/s against 28.81. Only PCIe: NVLink, InfiniBand, Ethernet, Thunderbolt and USB4 keep
   their vendor data rates. Source and review: docs/review/practicality-review.md F8.
+
 - **One α definition for every inter-node transport** (`src/sim/hw/types.ts: LinkSpec.latencySec`, the header of
   `src/sim/hw/presets/links.ts`): the one-way small-message floor as a collective library sees it = **half the
   average (or median) round trip of a tuned small-message ping-pong** over that transport (`ib_write_lat` /
@@ -1103,19 +1106,22 @@ gated_rmsnorm (or rmsnorm) over `T·vL·dv` → `out_proj k = vL·dv` → all_re
 ### MoE modes A/B
 
 `lower/moe.ts: lowerMoe, moeLayout, moeRouting, moeParallelErrors, moeResidentWeightBytes, moeExpertWidth,
-moeLatentWeightBytes, expertOutputShards`. Balanced ("uniform") routing. Valid iff `E % ep == 0` and (`tp % ep == 0` → **mode A**, or
+moeLatentWeightBytes, expertOutputShards`. Routing is balanced in load and uniform in expert choice ("Expected
+distinct experts" and "EP load imbalance" below). Valid iff `E % ep == 0` and (`tp % ep == 0` → **mode A**, or
 `ep % tp == 0` and `(tp·dp) % ep == 0` → **mode B**). `Eloc = E/ep`, `etp = max(1, tp/ep)`, `p = max(1, ep/tp)`.
 `l = latentDim ?? h` is the routed experts' width ("Latent MoE" below).
 
-- **Mode A** (includes ep = 1): every TP rank has all T tokens. `A = ceil(T·k/ep)` assignments on the busiest
-  device, `a = min(Eloc, A)` active experts, `mE = ceil(A/a)` tokens each. Router (hp, replicated) → top-k →
-  [`latent_in`] → grouped `gate_up (batch a, m mE, n (gated?2:1)·fe/etp, k l)` → act → `down (n l)` → combine
-  (`a·mE·l`, writes `T·l·reduceBpe`) → [`latent_all_reduce` → `latent_norm`] → [`latent_out`] → shared experts as
-  one dense MLP of `S·fs` sharded by tp → **one** all_reduce(tp) of `T·h`.
+- **Mode A** (includes ep = 1): every TP rank has all T tokens. `A = ceil(T·k/ep)` assignments per device,
+  `A_max` on the busiest one ("EP load imbalance" below; = A at ep = 1), a compute grid of `a = min(Eloc, A_max)` experts with
+  `mE = ceil(A_max/a)` tokens each, and the weights of `U ≤ a` expected distinct experts. Router (hp, replicated) →
+  top-k → [`latent_in`] → grouped `gate_up (batch a, weights U, m mE, n (gated?2:1)·fe/etp, k l)` → act →
+  `down (n l)` → combine (`a·mE·l`, writes `T·l·reduceBpe`) → [`latent_all_reduce` → `latent_norm`] →
+  [`latent_out`] → shared experts as one dense MLP of `S·fs` sharded by tp → **one** all_reduce(tp) of `T·h`.
 - **Mode B**: the EP group spans p replicas; each device routes its slice `Ts = ceil(T/tp)`; `A = Ts·k`,
-  `etp = 1`. Router → top-k → [`latent_in`] → `all_to_all(ep)` dispatch `Ts·k·l·bpe(act)` → experts →
-  `all_to_all(ep)` combine `Ts·k·l·reduceBpe` → combine (`Ts·k·l`) → [`latent_norm`] → [`latent_out`] → shared
-  experts (unsharded) on Ts → `all_gather(tp)` of `T·h·bpe(act)` when tp > 1 (replaces the all-reduce).
+  `A_max` as in mode A, `etp = 1`. Router → top-k → [`latent_in`] → `all_to_all(ep)` dispatch `Ts·k·l·bpe(act)` →
+  experts (grid and weights as in mode A) → `all_to_all(ep)` combine `Ts·k·l·reduceBpe` → combine (`Ts·k·l`) →
+  [`latent_norm`] → [`latent_out`] → shared experts (unsharded) on Ts → `all_gather(tp)` of `T·h·bpe(act)` when
+  tp > 1 (replaces the all-reduce).
 - **Latent MoE** (`MoeBlock.latentDim` = l, Muse Spark `moe_hidden_size`, Nemotron `moe_latent_size`, Kimi K3
   `routed_expert_hidden_size`): `latent_in (m Ts, n l, k h)` after the top-k and `latent_out (m Ts, n h, k l)` after
   the combine (Ts = T in mode A), module `moe_latent`. Both are **replicated** (except a split expert-output norm,
@@ -1151,6 +1157,82 @@ moeLatentWeightBytes, expertOutputShards`. Balanced ("uniform") routing. Valid i
   [+ `l·bpe(hp)` with `latentNorm`] (`moeLatentWeightBytes`, summed per GEMM like the ops; `s = latentOutShards`:
   `expertOutputShards`, or with `latentNorm` tp in mode A and 1 in mode B) + [expertOutputNorm] `(l/s)·bpe(hp)`
   (the γ slice the norm reads) + shared (`/tp` in mode A).
+
+### Expected distinct experts
+
+`lower/moe.ts: moeRouting, neededExperts`; `engine/transfer.ts: uniqueExperts, uniqueLocalExperts` (the one
+rule, shared with the offload transfers of §12 "Expert hit ratio"); `ir/metrics.ts: gemmBytes`
+(`GemmOp.distinctWeightMatrices`). The routed-expert GEMMs read the weights of the experts a step is expected to
+touch when every token picks its k experts independently and uniformly:
+
+```
+U     = E·(1 − (1 − k/E)^T)              ep = 1: expected distinct experts of T routed tokens
+U_dev = E_loc·(1 − (1 − 1/E_loc)^A)       ep > 1: per device, over its balanced share A (with replacement)
+weights read   = U·W_expert                gate_up and down: distinctWeightMatrices = U
+compute (grid) = a experts × mE tokens     a = min(Eloc, A_max), mE = ceil(A_max/a)  (unchanged by U)
+```
+
+- `U(1) = k` exactly (batch-1 decode is unchanged), `U ≤ min(E, T·k)` always, and `U → E` in prefill (T in the
+  thousands). `uniqueExperts` evaluates `E − (E − k)·(1 − k/E)^(T−1)`, the same value with no rounding at T = 1.
+- **An expectation under iid-uniform routing, not a bound.** Real routing is skewed and temporally correlated
+  (consecutive tokens, a speculative verify block) and can touch fewer experts; one batch can also touch more than
+  the mean. A strict optimistic bound (k experts, every token picking the same ones) is far too loose to be useful.
+  The earlier rule, `min(E, T·k)`, is the worst case for bytes: it put batched MoE decode below real runs (web-04)
+  and made a kink where T·k reaches E.
+- The compute keeps the balanced grid: FLOP, tiles and activations of `a·mE` rows. Only the weight bytes use U, so
+  a U a hair below E in prefill (`E − 1e-12`) does not move a tile boundary.
+- The speculative verify (§13) routes `T = b·(k+1)` tokens with the same rule.
+
+Effect (sim aggregate decode, before → after, `docs/review/practicality-review.md` F5):
+
+| batch | Qwen3-30B-A3B Q4_K_M, 1× RTX 4090 (E 128, top-8) | gpt-oss-120b MXFP4, 1× DGX Spark (E 128, top-4) |
+| ----- | ------------------------------------------------ | ----------------------------------------------- |
+| 4     | 660.2 → 705.8 tok/s @ 2048 (+6.9 %)              | 113.6 → 117.9 tok/s @ 2048 (+3.8 %)             |
+| 8     | 711.7 → 837.3 tok/s @ 2048 (+17.6 %)             | 124.3 → 136.4 tok/s @ 2048 (+9.7 %)             |
+| 16    | 737.9 → 1033.9 tok/s @ 2048 (+40.1 %)            | 130.4 → 160.1 tok/s @ 2048 (+22.8 %)            |
+| 32    | 1273.2 → 1396.0 tok/s @ 2048 (+9.6 %)            | 133.7 → 201.9 tok/s @ 2048 (+51.0 %)            |
+| 64    | 1995.1 → 2012.7 tok/s @ 2048 (+0.9 %)            | 256.5 → 290.6 tok/s @ 2048 (+13.3 %)            |
+
+The Qwen3 b16 → b32 step was ×1.73 (a saturating at E); it is ×1.35 now. A Qwen3-30B-A3B verify of 8 tokens (k 7)
+reads `U(8) = 51.6` experts per layer instead of 64 (−19.3 % expert bytes).
+
+### EP load imbalance
+
+`lower/moe.ts: epImbalance, DEFAULT_EP_IMBALANCE, moeRouting`; `ParallelConfig.epImbalance` (engine-level; the UI
+keeps ep = 1). The step waits for the busiest device of the EP group, which gets more than the mean share:
+
+```
+ρ     = max/mean (token, expert) assignments per device     1 at ep = 1; default 1.2 at ep > 1
+T_g   = mode A ? T : ep·Ts                                  distinct tokens routed through the EP group
+A_max = min(T_g·min(k, Eloc), max(A, ceil(ρ·T_g·k/ep)))  the busiest device's assignments (critical path)
+```
+
+- ρ multiplies the **unrounded** mean `T_g·k/ep`, not the already-ceiled share A, so a fractional mean is not
+  rounded up twice. The result is never below A (ρ ≥ 1) and never above `T_g·min(k, Eloc)`, the most one device
+  can receive: each token picks k distinct experts, at most `min(k, Eloc)` of them on one device (this also
+  implies `≤ T_g·k`). A is always within the cap, since `T_g·k/ep ≤ T_g·min(k, Eloc)` for `k ≤ E`. Example:
+  E 8, top-2, T 1, ep 8 (mode A): mean 0.25, `ceil(1.2·0.25) = 1`, cap `1·min(2, 1) = 1`, so A_max = 1 (the plain
+  `ceil(ρ·A)` would give 2 assignments to a device that one token can reach only once). In prefill the cap never
+  binds and `T_g·k/ep` is usually whole, so `A_max = ceil(ρ·A)` there.
+
+- **Scaled by ρ** (through `A_max`): the expert grid rows `a·mE`, i.e. the grouped GEMMs' FLOP and activations,
+  `moe.act`, the expert-output norm and its etp collectives, and the mode A combine.
+- **Not scaled**: the expert weights read (`U` comes from the mean share A: the imbalance comes from hot experts
+  drawing more tokens, so the busiest device runs more rows through the same experts; in prefill `U = Eloc`
+  anyway), the router and top-k, the shared experts, the dispatch and combine all-to-alls (each device sends its
+  own `Ts·k` rows; the busiest device's larger receive is not modelled) and the TP all-reduce / all-gather.
+- **Default 1.2** (`DEFAULT_EP_IMBALANCE`, sources in its comment). Measured max/mean token load per EP rank,
+  DeepSeek-V3/R1: 1.11 at EP32 and 1.12 at EP36 with an expert load balancer
+  ([EPLB](https://github.com/deepseek-ai/EPLB)) and redundant expert slots, 2.56 at EP32 without one
+  ([TensorRT-LLM wide-EP blog, Table 1](https://nvidia.github.io/TensorRT-LLM/1.0.0rc3/blogs/tech_blog/blog4_Scaling_Expert_Parallelism_in_TensorRT-LLM.html));
+  ≈ 1.47 at 8 GPUs without one ([SGLang large-scale EP](https://lmsys.org/blog/2025-05-05-large-scale-ep/),
+  balancedness ≈ 0.68). 1.2 is the balanced case rounded up, because the 1.11 needs redundant expert copies the
+  model does not store. An estimate of the routing, not a hardware constant; set `epImbalance: 1` for the
+  perfectly balanced bound.
+- Effect (`docs/review/practicality-review.md` F12): Qwen3-235B-A22B FP8 on 8× H100 (HGX), batch 64, prefill
+  64×4096: mode B tp 1 dp 8 ep 8 282,617 → 256,117 tok/s @ 4096 (−9.4 %; ρ 1.5: 225,145, −20.3 %); tp 2 dp 4
+  ep 8 274,549 → 255,701 (−6.9 %); mode A tp 8 ep 8 unchanged at 165,859 (that prefill is bound by the TP
+  all-reduce, which hides the extra expert compute). ρ alone moves decode by under 0.1 %.
 
 ### Latent MoE
 
@@ -1735,11 +1817,11 @@ On `kind: 'unified'` devices the OS lets the GPU allocate only part of the pool.
 `cap = f·capacity`, with `f = HardwareStack.gpuUsableFraction ?? MemorySpec.gpuUsableFraction ?? 1` (the override is
 a raised OS limit; dedicated memory always has f = 1). The preset defaults, each cited in its preset:
 
-| device | f | what it is |
-| --- | --- | --- |
-| Apple M3/M4/M5 Max and Ultra (all ≥ 36 GB) | 0.75 | macOS `recommendedMaxWorkingSetSize` (Apple: 48 GB of 64 GB); raised with `sudo sysctl iogpu.wired_limit_mb` |
-| DGX Spark | 119.7 / 128 = 0.935 | what CUDA reports as total global memory on DGX OS |
-| Ryzen AI Max+ 395 (Strix Halo) | 0.5 | Linux default GTT limit (ROCm guide); `ttm.pages_limit` raises it to ~120 GB of 128 GB |
+| device                                     | f                   | what it is                                                                                                   |
+| ------------------------------------------ | ------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Apple M3/M4/M5 Max and Ultra (all ≥ 36 GB) | 0.75                | macOS `recommendedMaxWorkingSetSize` (Apple: 48 GB of 64 GB); raised with `sudo sysctl iogpu.wired_limit_mb` |
+| DGX Spark                                  | 119.7 / 128 = 0.935 | what CUDA reports as total global memory on DGX OS                                                           |
+| Ryzen AI Max+ 395 (Strix Halo)             | 0.5                 | Linux default GTT limit (ROCm guide); `ttm.pages_limit` raises it to ~120 GB of 128 GB                       |
 
 `f` is a ratio of usable to installed bytes, so it holds whatever unit the capacity is recorded in. `DeviceMemory`
 reports both `capacityBytes` (= cap, what the check uses) and `physicalCapacityBytes`; `simulate` warns with the
@@ -1777,9 +1859,9 @@ Excluded on purpose (only hardware and math limits are modeled):
 - Clock throttling beyond an explicit `clockScale` modifier.
 - NVLS / SHARP in-switch reduction; PCIe switch / shared-uplink contention; the memory traffic of collectives
   and comm/compute contention for memory.
-- Sequence parallelism; full-logits gather (small sampling exchange is included); attention sinks; expected-value MoE routing for the grouped expert GEMMs
-  (`E·(1−(1−k/E)^T)` distinct experts is used only for the offload transfers, §12 "Expert hit ratio"; the GEMMs
-  keep balanced routing); the framework / driver memory reserve (0 unless set, §8 "Runtime reserve").
+- Sequence parallelism; full-logits gather (small sampling exchange is included); attention sinks; skewed or
+  correlated MoE routing (expert weights follow the iid-uniform expectation, §5 "Expected distinct experts"); the
+  framework / driver memory reserve (0 unless set, §8 "Runtime reserve").
 
 Documented approximations (each isolated in one constant or rule):
 
@@ -1800,7 +1882,9 @@ Documented approximations (each isolated in one constant or rule):
 - Row-parallel biases are counted on every TP rank.
 - Reductions travel as bf16 when activations are narrower than 16 bits.
 - Prefill computes LM-head logits for one position per sequence (`Tout = seqs`).
-- Balanced MoE routing on the busiest device (ceilings).
+- Balanced MoE routing on the busiest device (ceilings), with the EP load imbalance ρ (`DEFAULT_EP_IMBALANCE`
+  1.2, §5 "EP load imbalance"); the expert weights read are the expected distinct experts under iid-uniform
+  routing, an expectation rather than a bound (§5 "Expected distinct experts").
 - Elementwise FLOP-per-element table (§3) and the fp32-accumulate default.
 - The activation peak in the memory fit is the largest single op.
 - Fabric shapes (§6 "Fabric shapes"): a TP / EP group covering part of a ring is a chain (the long way round is
@@ -2008,7 +2092,8 @@ optimistic schedule). A stage spanning several nodes takes the largest of its no
 ### Expert hit ratio
 
 `src/sim/engine/transfer.ts: uniqueExperts, uniqueLocalExperts, hitRatio, expertHitsMisses`;
-`lower/moe.ts: neededExperts`.
+`lower/moe.ts: neededExperts`. U is the same expected-distinct count the expert GEMMs read their weights for (§5
+"Expected distinct experts"), so the fetched misses are a subset of the experts the GEMMs touch.
 
 ```
 U     = E·(1 − (1 − k/E)^T)                    ep = 1: expected distinct experts of T routed tokens

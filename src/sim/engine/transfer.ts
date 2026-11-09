@@ -34,24 +34,30 @@ export const DEFAULT_PREFETCH_ACCURACY = 0.8;
 
 /**
  * Expected distinct experts touched in one MoE layer by `tokens` tokens under independent uniform top-k routing
- * (the engine's balanced-routing assumption; MoESD, arXiv 2505.19645 Eq. 7–8): `U(T) = E·(1 − (1 − k/E)^T)`.
- * `U(1) = k`, `U(T) → E` as T grows, and `U ≤ min(E, T·k)` always. Unit: experts (expected, real).
+ * (MoESD, arXiv 2505.19645 Eq. 7–8): `U(T) = E·(1 − (1 − k/E)^T)`. The one expected-unique rule of the engine: the
+ * MoE lowering's active experts (the expert weights the grouped GEMMs read, `lower/moe.ts: neededExperts`) and the
+ * offloaded experts' needed set both use it. An EXPECTATION under iid-uniform routing, not a bound: skewed or
+ * correlated real routing touches fewer, and one batch can touch more than the mean.
+ * `U(1) = k` exactly, `U(T) → E` as T grows, and `U ≤ min(E, T·k)` always. Unit: experts (expected, real).
  */
 export function uniqueExperts(experts: number, topK: number, tokens: number): number {
   // Formula: U(T) = E·(1 − (1 − k/E)^T)
-  // See docs/simulation-model.md §12 ("Expert hit ratio")
-  return experts * (1 - (1 - topK / experts) ** tokens);
+  //          evaluated as E − (E − k)·(1 − k/E)^(T−1), the same value, so U(1) = E − (E − k) = k has no rounding
+  // See docs/simulation-model.md §5 ("Expected distinct experts"), §12 ("Expert hit ratio")
+  return experts - (experts - topK) * (1 - topK / experts) ** (tokens - 1);
 }
 
 /**
  * Expected distinct LOCAL experts one device touches at expert parallelism ep > 1 (design doc §2.9): its `E_loc`
  * experts receive `A` (token, expert) assignments, sampled with replacement, so `U_dev = E_loc·(1 − (1 − 1/E_loc)^A)`.
- * An approximation of the exact without-replacement form, which the engine uses at ep = 1. Unit: experts.
+ * An approximation of the exact without-replacement form, which the engine uses at ep = 1. Like {@link uniqueExperts},
+ * shared by the MoE lowering and offload. `U_dev(1) = 1` exactly. Unit: experts.
  */
 export function uniqueLocalExperts(localExperts: number, assignments: number): number {
   // Formula: U_dev = E_loc·(1 − (1 − 1/E_loc)^A)
-  // See docs/simulation-model.md §12 ("Expert hit ratio")
-  return localExperts * (1 - (1 - 1 / localExperts) ** assignments);
+  //          evaluated as E_loc − (E_loc − 1)·(1 − 1/E_loc)^(A−1), the same value, exact at A = 1
+  // See docs/simulation-model.md §5 ("Expected distinct experts"), §12 ("Expert hit ratio")
+  return localExperts - (localExperts - 1) * (1 - 1 / localExperts) ** (assignments - 1);
 }
 
 /** Exponent γ of the skewed hit-ratio fit `h = f^γ` (design doc §5.2): classic MoEs (E ≤ 64) 0.55, fine-grained 0.2. */

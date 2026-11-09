@@ -1,7 +1,12 @@
 /**
  * Deployment identity pin (design/offload-specdec-latency.md §8.2 ID-1/ID-2).
- * Originally generated on 68ae0f4; deliberately regenerated for audit G1/G2/G3/G4/G7/G8, and for the chunked-prefill
- * activation peak of the memory fit (review F11: only W2/batch8's memory leaves changed, 8 × 8192 tokens > the 8192 chunk).
+ * Originally generated on 68ae0f4; deliberately regenerated for audit G1/G2/G3/G4/G7/G8, for the chunked-prefill
+ * activation peak of the memory fit (review F11: only W2/batch8's memory leaves changed, 8 × 8192 tokens > the 8192 chunk),
+ * and for the MoE routing review fixes (docs/review/practicality-review.md F5, F12): only MoE cases moved (178 of 323 keys).
+ * ep = 1: decode +0.02 … +13.1 % (expert weights of U = E·(1 − (1 − k/E)^T) expected distinct experts at batch 4
+ * instead of min(E, T·k); batch 1 unchanged, U(1) = k), prefill 0 … +0.02 % (U a hair below E at 1024 tokens);
+ * ep > 1 (ep2dp2, G-e): prefill −0.1 … −12.4 % (EP load imbalance ρ = 1.2 on the busiest device's expert rows),
+ * decode −0.03 … +8.4 %. Every dense case is unchanged bit for bit.
  * JSON round-trips finite IEEE-754 doubles exactly; every selected leaf uses Object.is, not a tolerance.
  * New result fields intentionally do not enter this projection. Never regenerate to hide a regression.
  * Regenerate deliberately: UPDATE_DEPLOYMENT_IDENTITY=1 bun run test src/sim/engine/identity.test.ts
@@ -311,14 +316,18 @@ const DESIGN_GOLDENS: [string, number, number, number, number, number, number[],
     [10002670592, 10002678784],
     true,
   ],
+  // G-e moved on purpose with the MoE routing review fixes (docs/review/practicality-review.md F5, F12): ep 2 now
+  // applies the EP load imbalance ρ = 1.2 to the busiest device's expert rows (prefill 8,530,004 → 8,485,274 tok/s,
+  // activation peak 2,097,152 → 2,519,040 B, ≈ ×1.2 from the expert GEMM's rows), and decode reads the expected distinct
+  // experts U_dev instead of min(E_loc, A) (188,600.7 → 188,746.5 tok/s). Design §8.3 prints the same numbers.
   [
     'G-e',
-    0.000021208831999999997,
-    188600.67353072535,
-    0.00024009366387548636,
-    0.00024009366387548636,
-    8530004.361389985,
-    [9757120],
+    0.000021192448000000002,
+    188746.48176557987,
+    0.00024135932787548635,
+    0.00024135932787548635,
+    8485273.877861196,
+    [10179008],
     true,
   ],
   [

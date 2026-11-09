@@ -112,18 +112,22 @@ function expectRel(actual: number, expected: number, label: string, rel = 1e-3):
  * Pinned decode rows, all @ 8k context (decodeContextLen = promptLen = 8192 tokens); comm in seconds per decode token.
  * Before this fix: RDMA + DSpark 145.2 tok/s (comm α 9.10 ms), TCP + DSpark 150.1 (8.19 ms); without spec-dec RDMA
  * 63.3 (8.35 ms), TCP 66.8 (7.51 ms). TCP's rows did not move with the α fix (45 µs kept); the copy adds ≈ 0.1 %.
+ * The DSpark rows then moved with the expected-unique MoE routing (docs §5 "Expected distinct experts"): the 6-token
+ * verify reads U(6) = 256·(1 − (1 − 6/256)⁶) = 33.96 routed experts per layer instead of min(E, 6·6) = 36 (−5.7 %
+ * expert bytes): RDMA + DSpark 201.80 → 206.40 tok/s, TCP + DSpark 150.02 → 152.55 (no-copy 150.12 → 152.65); the
+ * batch-1 rows without spec-dec (U(1) = k) and every prefill (U = E) are unchanged.
  */
 const PINNED: Record<keyof ReturnType<typeof rows>, Partial<Row>> = {
   /** TB5 RDMA, α 50 → 7 µs: each of the ≈ 167 (182 with DSpark) TP all-reduce steps per token pays 43 µs less α. */
-  rdmaDspark: { decodeTokPerSec: 201.7964, prefillTokPerSec: 5154.225, commLatencySec: 1.274e-3 },
+  rdmaDspark: { decodeTokPerSec: 206.3956, prefillTokPerSec: 5154.225, commLatencySec: 1.274e-3 },
   tcpDsparkNoCopy: {
-    decodeTokPerSec: 150.1209,
+    decodeTokPerSec: 152.6515,
     prefillTokPerSec: 5133.7273,
     commLatencySec: 8.19e-3,
   },
   /** + the socket copy: +18.3 µs of α per token (DSpark's verify steps carry larger messages). */
   tcpDspark: {
-    decodeTokPerSec: 150.0194,
+    decodeTokPerSec: 152.5465,
     prefillTokPerSec: 5133.6106,
     commLatencySec: 8.208275e-3,
   },

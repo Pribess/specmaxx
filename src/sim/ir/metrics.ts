@@ -287,12 +287,17 @@ function gemmFlops(op: GemmOp): number {
   return 2 * op.batch * op.m * op.n * op.k;
 }
 
-/** Memory traffic of a (grouped) GEMM: weights (+bias) once, input once, output once. Unit: bytes. */
+/**
+ * Memory traffic of a (grouped) GEMM: weights (+bias) once for each of the `b_w` matrices read, input once, output
+ * once. Unit: bytes.
+ */
 function gemmBytes(op: GemmOp): ByteBreakdown {
-  // Formula: W = b·n·k·bpe(w) [2:4: b·n·k·(bits/2+1)/8] + b·n·bpe(bias); read = b·m·k·bpe(in); write = b·m·n·bpe(out)
-  // See docs/simulation-model.md §3 "GEMM"
-  const matrixBytes = gemmWeightBytes(op.batch, op.n, op.k, op.weight, op.sparsity, op.outParts, op.sideVectorElems);
-  const biasBytes = op.biasDtype === undefined ? 0 : op.batch * op.n * bpeOf(op.biasDtype);
+  // Formula: W = b_w·n·k·bpe(w) [2:4: b_w·n·k·(bits/2+1)/8] + b_w·n·bpe(bias); read = b·m·k·bpe(in); write = b·m·n·bpe(out),
+  //          b_w = distinctWeightMatrices ?? b   (MoE: the expected distinct experts U ≤ b)
+  // See docs/simulation-model.md §3 "GEMM", §5 "Expected distinct experts"
+  const weightMatrices = op.distinctWeightMatrices ?? op.batch;
+  const matrixBytes = gemmWeightBytes(weightMatrices, op.n, op.k, op.weight, op.sparsity, op.outParts, op.sideVectorElems);
+  const biasBytes = op.biasDtype === undefined ? 0 : weightMatrices * op.n * bpeOf(op.biasDtype);
   const inputBytes = op.batch * op.m * op.k * bpeOf(op.inputDtype);
   const outputBytes = op.batch * op.m * op.n * bpeOf(op.outputDtype);
   return breakdown({

@@ -17,11 +17,16 @@
  * norm needs them complete), and `l → h` is then row-parallel over `k = l/tp`, its partial sums joined by the one TP
  * all-reduce with the shared experts; in mode B it runs unsharded on Ts.
  *
- * Routing is balanced: the busiest device gets the ceiling of its average share (`A` assignments), spread over
- * `a = min(Eloc, A)` active experts with `mE = ceil(A/a)` tokens each.
+ * Routing is balanced in load and uniform in expert choice. A device gets the ceiling of its average share (`A`
+ * assignments), the busiest device `A_max` (ρ times the unrounded mean, within `[A, T_g·min(k, Eloc)]`; see
+ * {@link moeRouting}) with the EP load imbalance ρ ({@link epImbalance}; 1 at ep = 1). Compute runs on a balanced
+ * grid of `a = min(Eloc, A_max)` experts with `mE = ceil(A_max/a)` tokens each;
+ * weights are read for the `U` expected distinct experts under iid-uniform top-k routing ({@link neededExperts}: an
+ * EXPECTATION, not a bound), `U ≤ a` (`GemmOp.distinctWeightMatrices`).
  *
  * Offloaded experts (deployment `offload.routedExperts`, design doc §2.4–2.5): a `TransferOp` of the expected missed
- * experts goes in front of the block; the grouped GEMMs keep their `a` active experts (device-memory bytes unchanged).
+ * experts among those `U` goes in front of the block; the grouped GEMMs keep their shape and their `U` weight reads
+ * (device-memory bytes unchanged).
  */
 
 import { gemmWeightBytes } from '../ir/metrics';
@@ -89,28 +94,96 @@ export function moeLayout(block: MoeBlock, parallel: ParallelConfig): MoeLayout 
   };
 }
 
-/** Balanced routing on the busiest device: active experts `a` and tokens per active expert `mE`. */
+/**
+ * Routing of one MoE layer on the busiest device: the compute grid (`a` experts × `mE` tokens) and the expected
+ * distinct experts `U` whose weights are read.
+ */
 export interface MoeRouting {
-  /** Expert assignments (token, expert) on this device. Count. */
+  /** Expert assignments (token, expert) of a device's balanced share `A`: mode A `ceil(T·k/ep)`, mode B `Ts·k`. Count. */
   assignments: number;
-  /** Active local experts `a = min(Eloc, A)`. Count. */
+  /** EP load imbalance ρ applied to the busiest device: {@link epImbalance}, 1 at ep = 1. Dimensionless, ≥ 1. */
+  imbalance: number;
+  /**
+   * Assignments on the busiest device: `A_max = clamp(ceil(ρ·T_g·k/ep), A, T_g·min(k, Eloc))` ({@link moeRouting};
+   * = A at ep = 1). Count.
+   */
+  busiestAssignments: number;
+  /** Experts of the balanced compute grid `a = min(Eloc, A_max)` (the grouped GEMMs' batch). Count. */
   activeExperts: number;
-  /** Tokens per active expert `mE = ceil(A/a)`. Unit: tokens. */
+  /** Tokens per grid expert `mE = ceil(A_max/a)` (the grouped GEMMs' m; a ceiling). Unit: tokens. */
   tokensPerExpert: number;
+  /**
+   * Expected distinct local experts `U` the balanced share `A` touches under iid-uniform routing ({@link neededExperts};
+   * real, `U ≤ min(Eloc, A) ≤ a`; at ep = 1, `U = k` for one token and `U → Eloc` in prefill): the expert weight
+   * matrices read. An expectation, not a bound. Unit: experts.
+   */
+  distinctExperts: number;
 }
 
 /**
- * Balanced routing of `tokens` routed tokens (mode A: T; mode B: Ts) on one device.
- * Mode A: `A = ceil(T·k/ep)`; mode B: `A = Ts·k`. Then `a = min(Eloc, A)`, `mE = ceil(A/a)`.
+ * Default EP load imbalance ρ = max/mean routed tokens per device ({@link epImbalance}) when `ParallelConfig.epImbalance`
+ * is not given. Dimensionless.
+ *
+ * Measured max/mean token load per EP rank, DeepSeek-V3/R1 (256 experts, top-8), averaged over layers and steps:
+ * - with an expert-placement load balancer (EPLB, https://github.com/deepseek-ai/EPLB): 1.109 at EP32 and 1.115 at
+ *   EP36, both with redundant expert slots (TensorRT-LLM wide-EP blog, Table 1, reported as (max − mean)/mean
+ *   0.109 / 0.115: https://nvidia.github.io/TensorRT-LLM/1.0.0rc3/blogs/tech_blog/blog4_Scaling_Expert_Parallelism_in_TensorRT-LLM.html);
+ * - without one: 2.56 at EP32 (same table, 1.564); ≈ 1.47 at 8 GPUs, rising with the GPU count (SGLang
+ *   "balancedness" mean/max ≈ 0.68, LMSYS large-scale EP blog, https://lmsys.org/blog/2025-05-05-large-scale-ep/,
+ *   figure values as read in Aleph Alpha's DeepSeek inference model, Fig. 12).
+ * 1.2 takes the balanced case, which the engines that run EP use, rounded up from 1.11 because those figures need
+ * redundant expert copies (+12.5% expert memory) that this model does not store. An estimate, not a constant of the
+ * hardware.
+ */
+export const DEFAULT_EP_IMBALANCE = 1.2;
+
+/**
+ * EP load imbalance ρ of a parallel config: the busiest device's routed (token, expert) assignments over the mean
+ * device's. 1 at ep = 1 (one device holds every expert, nothing to balance); else `parallel.epImbalance`, defaulting
+ * to {@link DEFAULT_EP_IMBALANCE}. Dimensionless, ≥ 1.
+ */
+export function epImbalance(parallel: ParallelConfig): number {
+  return parallel.ep > 1 ? (parallel.epImbalance ?? DEFAULT_EP_IMBALANCE) : 1;
+}
+
+/**
+ * Routing of `tokens` routed tokens (mode A: T; mode B: Ts) on the busiest device.
+ * Mode A: `A = ceil(T·k/ep)`; mode B: `A = Ts·k`. Then `A_max` (below), `a = min(Eloc, A_max)`,
+ * `mE = ceil(A_max/a)`, and `U` = {@link neededExperts} of A.
+ *
+ * `A_max = min(T_g·min(k, Eloc), max(A, ceil(ρ·T_g·k/ep)))`, with `T_g` the distinct tokens routed through the EP
+ * group (mode A: T, every TP rank holds all of them; mode B: `ep·Ts`, the ep devices' slices) and `T_g·k/ep` the
+ * unrounded mean share:
+ * - ρ multiplies the unrounded mean, so a fractional mean (T·k < ep) is not first rounded up and then scaled again;
+ * - never below the balanced share `A` (ρ ≥ 1; A is already the ceiling of the mean);
+ * - never above what the group's tokens can route to one device: each token picks k distinct experts, of which at
+ *   most `min(k, Eloc)` live on this device (this also implies `≤ T_g·k`). E.g. E 8, top-2, T 1, ep 8 (mode A):
+ *   mean 0.25, ρ·mean 0.3 → 1, cap 1·min(2, 1) = 1: one assignment, not 2.
+ * `A ≤` the cap always (`T_g·k/ep ≤ T_g·min(k, Eloc)` since `k ≤ E`), so the clamp is well-formed.
+ *
+ * ρ scales the busiest device's assignments (the grid: compute, activations, combine) but not `U`: EP imbalance
+ * comes from hot experts drawing more tokens (the EPLB motivation), so the busiest device runs more rows through the
+ * same experts rather than reading more distinct expert weights; in prefill `U = Eloc` either way.
  */
 export function moeRouting(block: MoeBlock, layout: MoeLayout, tokens: number, parallel: ParallelConfig): MoeRouting {
-  // Formula: A = mode A ? ceil(T·k/ep) : Ts·k; a = min(Eloc, A); mE = ceil(A/a)
-  // See docs/simulation-model.md §5 "MoE modes A/B"
-  const assignments =
-    layout.mode === 'A' ? Math.ceil((tokens * block.topK) / parallel.ep) : tokens * block.topK;
-  const activeExperts = Math.min(layout.localExperts, assignments);
-  const tokensPerExpert = Math.ceil(assignments / activeExperts);
-  return { assignments, activeExperts, tokensPerExpert };
+  // Formula: A = mode A ? ceil(T·k/ep) : Ts·k;  T_g = mode A ? T : ep·Ts;
+  //          A_max = min(T_g·min(k, Eloc), max(A, ceil(ρ·T_g·k/ep)));  a = min(Eloc, A_max);  mE = ceil(A_max/a);
+  //          U = neededExperts(A)
+  // See docs/simulation-model.md §5 "MoE modes A/B", "Expected distinct experts", "EP load imbalance"
+  const k = block.topK;
+  const { ep } = parallel;
+  const assignments = layout.mode === 'A' ? Math.ceil((tokens * k) / ep) : tokens * k;
+  const imbalance = epImbalance(parallel);
+  const groupTokens = layout.mode === 'A' ? tokens : ep * tokens;
+  const meanAssignments = (groupTokens * k) / ep;
+  const routableCap = groupTokens * Math.min(k, layout.localExperts);
+  // − 1e-9: a float product landing a hair above a whole count (1.1·50 = 55.00000000000001) must not round up a step
+  const scaled = Math.ceil(imbalance * meanAssignments - 1e-9);
+  const busiestAssignments = imbalance === 1 ? assignments : Math.min(routableCap, Math.max(assignments, scaled));
+  const activeExperts = Math.min(layout.localExperts, busiestAssignments);
+  const tokensPerExpert = Math.ceil(busiestAssignments / activeExperts);
+  const distinctExperts = neededExperts(block, layout, assignments, tokens, ep);
+  return { assignments, imbalance, busiestAssignments, activeExperts, tokensPerExpert, distinctExperts };
 }
 
 /** Shared experts of a MoE block as one dense gated MLP of width `S·fs` (no bias). */
@@ -193,30 +266,35 @@ export function expertWeightBytes(block: MoeBlock, ctx: LoweringContext): number
 }
 
 /**
- * Expected needed experts of one MoE layer on one device in a step: at ep = 1 the exact
- * `U = E·(1 − (1 − k/E)^T)` over the T routed tokens; at ep > 1 the per-device form
- * `U_dev = E_loc·(1 − (1 − 1/E_loc)^A)` over its A assignments (design doc §2.9). Unit: experts (real).
+ * Expected distinct experts one device touches in one MoE layer in a step, under iid-uniform top-k routing: what
+ * the grouped expert GEMMs read (`MoeRouting.distinctExperts`) and what an offloaded layer needs on the device
+ * ({@link expertFetchOp}). At ep = 1 the exact `U = E·(1 − (1 − k/E)^T)` over the T routed tokens; at ep > 1 the
+ * per-device form `U_dev = E_loc·(1 − (1 − 1/E_loc)^A)` over its A assignments (design doc §2.9). An EXPECTATION,
+ * not a bound: skewed or correlated real routing can touch fewer experts, and a batch can touch more than the
+ * mean. Unit: experts (real).
  */
-export function neededExperts(block: MoeBlock, layout: MoeLayout, routing: MoeRouting, routedTokens: number, ep: number): number {
+export function neededExperts(block: MoeBlock, layout: MoeLayout, assignments: number, routedTokens: number, ep: number): number {
+  // Formula: ep = 1: U = E·(1 − (1 − k/E)^T);  ep > 1: U_dev = E_loc·(1 − (1 − 1/E_loc)^A)
+  // See docs/simulation-model.md §5 "Expected distinct experts", §12 ("Expert hit ratio")
   return ep === 1
     ? uniqueExperts(block.experts, block.topK, routedTokens)
-    : uniqueLocalExperts(layout.localExperts, routing.assignments);
+    : uniqueLocalExperts(layout.localExperts, assignments);
 }
 
 /**
  * The expert fetch of an offloaded MoE layer (design doc §2.5): `reads [{ M, W_expert }]`, `usefulBytes = M·W_expert`,
- * with `M` the expected misses of {@link expertHitsMisses} over the `E_loc` local experts. Undefined when `M = 0`
- * (every needed expert resident): no op, no latency, no staging.
+ * with `M` the expected misses of {@link expertHitsMisses} among the routing's `U` needed experts
+ * ({@link neededExperts}) over the `E_loc` local experts. Undefined when `M = 0` (every needed expert resident): no
+ * op, no latency, no staging.
  */
 export function expertFetchOp(
   block: MoeBlock,
   layout: MoeLayout,
   routing: MoeRouting,
-  routedTokens: number,
   ctx: LoweringContext,
   placement: NonNullable<OffloadLowering['routedExperts']>,
 ): TransferOp | undefined {
-  const U = neededExperts(block, layout, routing, routedTokens, ctx.parallel.ep);
+  const U = routing.distinctExperts;
   const { misses, residentExperts } = expertHitsMisses(U, placement.hitRatio, placement.residentFraction, layout.localExperts);
   if (!(misses > 0)) return undefined;
   const W_expert = expertWeightBytes(block, ctx);
@@ -266,7 +344,7 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext, layerIndex?: num
   const ops: Op[] = [];
   const placement = expertPlacementAt(ctx, layerIndex);
   if (placement !== undefined) {
-    const fetch = expertFetchOp(block, layout, routing, routedTokens, ctx, placement);
+    const fetch = expertFetchOp(block, layout, routing, ctx, placement);
     if (fetch !== undefined) ops.push(fetch);
   }
 
@@ -301,12 +379,19 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext, layerIndex?: num
     ops.push(epAllToAll('moe.dispatch', routedTokens * block.topK * l * act, ctx.quant.activations, ep));
   }
 
-  // Grouped expert GEMMs over a active experts, mE tokens each.
-  // Formula: gate_up: batch = a, m = mE, n = (gated ? 2 : 1)·fe/etp, k = l; down: batch = a, m = mE, n = l, k = fe/etp
+  // Grouped expert GEMMs on the balanced grid of a experts × mE tokens (FLOP, tiles, activations), reading the
+  // weights of the U ≤ a expected distinct experts only (distinctWeightMatrices).
+  // Formula: gate_up: batch = a, m = mE, n = (gated ? 2 : 1)·fe/etp, k = l; down: batch = a, m = mE, n = l, k = fe/etp;
+  //          weights read for U of the a entries
+  // See docs/simulation-model.md §5 "Expected distinct experts"
+  const U = routing.distinctExperts;
   const upWidth = (block.gated ? 2 : 1) * feLocal;
-  ops.push(linearGemm('moe.gate_up', { m: mE, n: upWidth, k: l }, ctx, { module: 'routed_experts', batch: a, outParts: block.gated ? [feLocal, feLocal] : [feLocal] }));
-  ops.push(activationOp('moe.act', block, a * mE, feLocal, ctx));
-  ops.push(linearGemm('moe.down', { m: mE, n: l, k: feLocal }, ctx, { module: 'routed_experts', batch: a }));
+  const outParts = block.gated ? [feLocal, feLocal] : [feLocal];
+  ops.push(linearGemm('moe.gate_up', { m: mE, n: upWidth, k: l }, ctx, { module: 'routed_experts', batch: a, distinctWeightMatrices: U, outParts }));
+  // Formula: R = a·mE   (token-expert rows of the grid on this device)
+  const expertRows = a * mE;
+  ops.push(activationOp('moe.act', block, expertRows, feLocal, ctx));
+  ops.push(linearGemm('moe.down', { m: mE, n: l, k: feLocal }, ctx, { module: 'routed_experts', batch: a, distinctWeightMatrices: U }));
 
   // Expert-output norm (expertOutputNorm) over the R = a·mE token-expert rows of this device. With etp > 1 the
   // down outputs are partial sums over fe/etp: reduce-scatter them over the etp ranks sharing the experts (each
@@ -318,7 +403,6 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext, layerIndex?: num
   // See docs/simulation-model.md §5 "MoE modes A/B"
   const s = expertOutputShards(block, layout);
   const lShard = shardWidth(l, s, `${block.name} expert output width`);
-  const expertRows = a * mE;
   // Without latentDim (l = h) a split leaves each rank an h/etp column slice of the T·h partial-sum buffer (zero
   // elsewhere), which the closing all-reduce at h sums like any partial sum.
   if (s > 1) {
@@ -348,10 +432,10 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext, layerIndex?: num
     ops.push(epAllToAll('moe.combine_a2a', routedTokens * block.topK * l * reduceBpe(ctx), reduceDtype(ctx), ep));
   }
 
-  // Weighted sum of the expert outputs: mode A over a·mE rows into a T·l_s partial-sum buffer;
+  // Weighted sum of the expert outputs: mode A over the R = a·mE expert rows into a T·l_s partial-sum buffer;
   // mode B over the Ts·k returned rows into Ts·l (l_s = l/s, s = 1 except a split expert-output norm).
-  // Formula: mode A: elems = a·mE·l_s, write T·l_s·reduceBpe; mode B: elems = Ts·k·l, write Ts·l·bpe(act)
-  const combineRows = layout.mode === 'A' ? a * mE : routedTokens * block.topK;
+  // Formula: mode A: elems = R·l_s, write T·l_s·reduceBpe; mode B: elems = Ts·k·l, write Ts·l·bpe(act)
+  const combineRows = layout.mode === 'A' ? expertRows : routedTokens * block.topK;
   const combineElems = combineRows * lShard;
   const combineWrite = layout.mode === 'A' ? T * lShard * reduceBpe(ctx) : routedTokens * lShard * act;
   ops.push(

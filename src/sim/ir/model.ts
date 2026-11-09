@@ -780,4 +780,11 @@ export interface ParallelConfig {
   dp: number;
   /** Expert-parallel degree (devices sharing the routed experts of a MoE layer). Count. */
   ep: number;
+  /**
+   * EP load imbalance ρ: routed (token, expert) assignments on the busiest device of an EP group over the mean
+   * device's, averaged over layers and steps (max/mean, ≥ 1; 1 = perfectly balanced). Scales the busiest device's
+   * expert GEMM rows, not the expert weights it reads (docs §5 "EP load imbalance"). Only read when ep > 1.
+   * Default `DEFAULT_EP_IMBALANCE` (lower/moe.ts, 1.2). Engine-level only: the UI keeps ep = 1. Dimensionless.
+   */
+  epImbalance?: number;
 }

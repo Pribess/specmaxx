@@ -33,7 +33,7 @@ export interface FieldIssue {
 }
 
 /** Label of a parallel degree in messages. */
-const DEGREE_LABEL: Record<keyof ParallelConfig, string> = { tp: 'TP', pp: 'PP', dp: 'DP', ep: 'EP' };
+const DEGREE_LABEL: Record<'tp' | 'pp' | 'dp' | 'ep', string> = { tp: 'TP', pp: 'PP', dp: 'DP', ep: 'EP' };
 
 /** Label of a workload field in messages. */
 const WORKLOAD_LABEL: Record<'batch' | 'promptLen' | 'decodeContextLen', string> = {

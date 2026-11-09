@@ -231,11 +231,24 @@ describe('layer 1: gated MLA and latent MoE (decode, T = 2)', () => {
       activationWriteBytes: 128 * 2,
     });
 
-    // Experts read and write the latent width: gate_up k = L, down n = L; a = min(8, T·k = 4) experts of 1 token.
+    // Experts read and write the latent width: gate_up k = L, down n = L; grid a = min(8, T·k = 4) experts of 1 token.
+    // Weights are read for U(2) = 8·(1 − 0.75²) = 3.5 expected distinct experts (E 8, k 2, T 2), not 4.
     const down = byName<GemmOp>(ops, 'moe.latent_in');
     expect([down.m, down.n, down.k]).toEqual([2, 64, 128]);
-    expect(byName<GemmOp>(ops, 'moe.gate_up')).toMatchObject({ batch: 4, m: 1, n: 128, k: 64 });
-    expect(byName<GemmOp>(ops, 'moe.down')).toMatchObject({ batch: 4, m: 1, n: 64, k: 64 });
+    expect(byName<GemmOp>(ops, 'moe.gate_up')).toMatchObject({
+      batch: 4,
+      distinctWeightMatrices: 3.5,
+      m: 1,
+      n: 128,
+      k: 64,
+    });
+    expect(byName<GemmOp>(ops, 'moe.down')).toMatchObject({
+      batch: 4,
+      distinctWeightMatrices: 3.5,
+      m: 1,
+      n: 64,
+      k: 64,
+    });
     expect(byName<ElementwiseOp>(ops, 'moe.combine').elems).toBe(4 * 1 * 64);
     expect(byName<ElementwiseOp>(ops, 'moe.latent_norm')).toMatchObject({
       fn: 'rmsnorm',

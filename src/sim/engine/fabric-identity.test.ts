@@ -14,6 +14,9 @@
  * of Gen4 x8; Gen5 x16 host bounce is host-memory bound and unchanged); simulate rigs on 4090 / 3090 / B60 PCIe boxes
  * (comm β and PP send × 280/256 = +9.4 %, decode − 0.00 %). 84 keys added for the new
  * `thunderbolt-4-bridge-tcp-20-gb-s-negotiated`. Every other key is unchanged bit for bit.
+ * Regenerated for the MoE routing review fixes (docs/review/practicality-review.md F5, F12): only the 12 `simulate`
+ * keys of the tiny-hybrid MoE at ep > 1 (batch 4) moved: decode −0.01 … +3.7 % (expected distinct experts instead of
+ * min(E_loc, A)), prefill 0 … −4.2 % (EP load imbalance ρ = 1.2). Collectives, UI rigs and every dense key unchanged.
  * Numbers are compared with exact equality (Object.is; JSON round-trips doubles exactly).
  *
  * Three levels:

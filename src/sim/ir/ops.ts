@@ -25,7 +25,8 @@ export type Op =
 /**
  * A (possibly batched/grouped) matrix multiply against weights:
  * `out[b] (m×n) = in[b] (m×k) · W[b] (k×n)` for `b` in `0..batch-1`.
- * Batch entries have DISTINCT weights (grouped GEMM: MoE experts, MLA per-head absorb matrices).
+ * Batch entries have DISTINCT weights (grouped GEMM: MoE experts, MLA per-head absorb matrices), except that a MoE
+ * grouped GEMM reads only `distinctWeightMatrices` of them (the expected distinct experts, docs §5).
  * FLOP = 2·batch·m·n·k (dense-equivalent; 2:4 sparsity does not halve the count). See docs §3 "GEMM".
  */
 export interface GemmOp {
@@ -34,6 +35,13 @@ export interface GemmOp {
   name: string;
   /** Number of independent GEMMs, each with its own weight matrix (1 for a plain linear layer). Count. */
   batch: number;
+  /**
+   * Weight matrices actually read, when fewer than `batch` (≤ batch; real, an expectation): a MoE grouped GEMM's
+   * compute runs on a balanced grid of `batch` experts while only the `U` expected distinct experts under uniform
+   * routing are touched (docs §5 "Expected distinct experts"). Scales the weight (and bias) bytes only; FLOP, tiles
+   * and activations keep `batch`. Absent: `batch`. Unit: weight matrices (count, real).
+   */
+  distinctWeightMatrices?: number;
   /** Rows of the input/output per batch entry: tokens on this device. Unit: elements (= tokens). */
   m: number;
   /** Output features per batch entry (weight columns on this device, after sharding). Unit: elements. */

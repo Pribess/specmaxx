@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { opFlops } from '../ir/metrics';
+import { opBytes, opFlops } from '../ir/metrics';
 import {
+  DEFAULT_EP_IMBALANCE,
+  epImbalance,
   expertWeightBytes,
   lowerMoe,
   moeLatentWeightBytes,
+  moeLayout,
   moeLocalExpertBytes,
   moeParallelErrors,
   moeResidentWeightBytes,
+  moeRouting,
 } from './moe';
 import type { LoweringContext, OffloadLowering } from './lower';
 import type { MoeBlock, ParallelConfig } from '../ir/model';
@@ -50,20 +54,82 @@ describe('T4b MoE (E 8, k 2)', () => {
     expect([up.batch, up.m, up.n, up.k]).toEqual([2, 1, 64, 64]); // A = 1·2; n = 2·32
   });
 
-  it('mode A ep 1 tp 1, T 64 → a 8, mE 16', () => {
-    const up = gemmNamed(lowerMoe(MOE, ctx(64, {})), 'moe.gate_up');
-    expect([up.batch, up.m]).toEqual([8, 16]); // A = 128, a = min(8, 128), mE = 128/8
+  it('mode A ep 1 tp 1, T 4 → grid a 8, mE 1; weights of U(4) = 5.46875 expected distinct experts (not min(E, T·k) = 8)', () => {
+    const up = gemmNamed(lowerMoe(MOE, ctx(4, {})), 'moe.gate_up');
+    // Grid: A = 4·2 = 8, a = min(8, 8) = 8, mE = ceil(8/8) = 1; FLOP = 2·8·1·64·64 as before
+    expect([up.batch, up.m]).toEqual([8, 1]);
+    expect(opFlops(up)).toBe(2 * 8 * 64 * 64);
+    // Formula: U(T) = E·(1 − (1 − k/E)^T) = 8·(1 − 0.75⁴) = 8 − 8·0.31640625 = 5.46875 (exact in binary)
+    expect(up.distinctWeightMatrices).toBe(5.46875);
+    // Weights: U·64·64·2 B = 5.46875·8192 = 44,800 B, 31.6% less than the old 8·8192 = 65,536
+    expect(opBytes(up).weightBytes).toBe(44_800);
   });
 
-  it('mode A ep = tp = 8, T 1 → a 1, mE 1, no all-to-all, one all-reduce', () => {
+  it('mode A ep 1 tp 1, T 64 → a 8, mE 16; U(64) a hair below 8', () => {
+    const up = gemmNamed(lowerMoe(MOE, ctx(64, {})), 'moe.gate_up');
+    expect([up.batch, up.m]).toEqual([8, 16]); // A = 128, a = min(8, 128), mE = 128/8
+    // U(64) = 8 − 6·0.75⁶³ = 8 − 8.07e-8
+    expect(up.distinctWeightMatrices).toBeCloseTo(8 - 6 * 0.75 ** 63, 12);
+  });
+
+  it('mode A ep = tp = 8, T 1 → a 1, mE 1 (ρ cannot create work one token cannot route), no all-to-all, one all-reduce', () => {
     const ops = lowerMoe(MOE, ctx(1, { tp: 8, ep: 8 }));
     const up = gemmNamed(ops, 'moe.gate_up');
-    expect([up.batch, up.m, up.n]).toEqual([1, 1, 64]); // A = ceil(2/8) = 1; Eloc 1; etp 1
+    // A = ceil(2/8) = 1; mean 2/8 = 0.25, ρ·mean = 0.3 → 1; cap T·min(k, Eloc) = 1·1 = 1 → A_max 1; a 1, mE 1;
+    // U_dev(1) = 1 = a (no field); etp 1
+    expect([up.batch, up.m, up.n, up.distinctWeightMatrices]).toEqual([1, 1, 64, undefined]);
     const coll = collectives(ops);
     expect(coll.map((c) => c.collective)).toEqual(['all_reduce']);
-    expect(coll[0].messageBytes).toBe(128); // T 1 · 64 · 2 B
+    expect(coll[0].messageBytes).toBe(128); // T 1 · 64 · 2 B (not scaled by ρ)
     // Shared expert sharded by tp: n = 2·64/8
     expect(gemmNamed(ops, 'moe.shared.gate_up').n).toBe(16);
+    // epImbalance 1 restores the perfectly balanced busiest device: mE = 1
+    expect(gemmNamed(lowerMoe(MOE, ctx(1, { tp: 8, ep: 8, epImbalance: 1 })), 'moe.gate_up').m).toBe(1);
+  });
+
+  it('EP imbalance: default 1.2 only at ep > 1; it scales the rows (FLOP), not the experts read', () => {
+    expect(epImbalance({ tp: 1, pp: 1, dp: 1, ep: 1, epImbalance: 1.5 })).toBe(1); // ep = 1: nothing to balance
+    expect(epImbalance({ tp: 1, pp: 1, dp: 2, ep: 2 })).toBe(DEFAULT_EP_IMBALANCE);
+    expect(DEFAULT_EP_IMBALANCE).toBe(1.2);
+    // T 64, ep 2 mode B (tp 1, dp 2): Ts = 64, A = 128 on Eloc 4; ρ 1: mE 32; ρ 1.5: A_max 192, mE 48
+    const flat = gemmNamed(lowerMoe(MOE, ctx(64, { dp: 2, ep: 2, epImbalance: 1 })), 'moe.gate_up');
+    const skew = gemmNamed(lowerMoe(MOE, ctx(64, { dp: 2, ep: 2, epImbalance: 1.5 })), 'moe.gate_up');
+    expect([flat.batch, flat.m, skew.batch, skew.m]).toEqual([4, 32, 4, 48]);
+    expect(opFlops(skew) / opFlops(flat)).toBe(1.5);
+    // U_dev(A = 128) = 4 − 3·0.75¹²⁷ from the mean share either way: the same weight bytes
+    expect(opBytes(skew).weightBytes).toBe(opBytes(flat).weightBytes);
+    // ceil guard: 1.1·50 evaluates to 55.00000000000001 in floats and must give A_max 55, not 56 (T 25 → A = Ts·k = 50)
+    const p11: ParallelConfig = { tp: 1, pp: 1, dp: 2, ep: 2, epImbalance: 1.1 };
+    expect(moeRouting(MOE, moeLayout(MOE, p11), 25, p11).busiestAssignments).toBe(55);
+  });
+
+  it('A_max: ρ on the unrounded mean, never below A, capped by the work the tokens can route to one device', () => {
+    const route = (block: MoeBlock, T: number, p: Partial<ParallelConfig>) => {
+      const par: ParallelConfig = { tp: 1, pp: 1, dp: 1, ep: 1, ...p };
+      return moeRouting(block, moeLayout(block, par), T, par);
+    };
+    // Sparse decode, E 8, T 1, ep 8 mode A (tp 8): one token, at most min(k, Eloc 1) = 1 assignment on any device,
+    // whatever ρ (the old ceil(ρ·ceil(T·k/ep)) gave 2 for top-2 and top-1).
+    for (const topK of [1, 2]) {
+      for (const epImbalance of [1.2, 2.56]) {
+        const r = route({ ...MOE, topK }, 1, { tp: 8, ep: 8, epImbalance });
+        expect([r.assignments, r.busiestAssignments], `top-${topK} ρ ${epImbalance}`).toEqual([1, 1]);
+      }
+    }
+    // Mode B, T 1 on each of dp 8 × ep 8: the group routes T_g = 8 tokens, so 2 on one expert's device is possible:
+    // mean 8·2/8 = 2, ρ·mean = 2.4 → 3, cap 8·min(2, 1) = 8 → 3
+    expect(route(MOE, 1, { dp: 8, ep: 8 }).busiestAssignments).toBe(3);
+    // Capped: mode A tp 2 ep 2 (Eloc 4), T 1, top-2, ρ 2.56: ρ·mean = 2.56·1 → 3, but one token puts at most
+    // min(2, 4) = 2 assignments on a device → 2
+    expect(route(MOE, 1, { tp: 2, ep: 2, epImbalance: 2.56 }).busiestAssignments).toBe(2);
+    // Capped: mode A tp 8 ep 8 (Eloc 1), T 4, ρ 8: ρ·mean = 8·1 = 8, cap 4·1 = 4 → 4
+    expect(route(MOE, 4, { tp: 8, ep: 8, epImbalance: 8 }).busiestAssignments).toBe(4);
+    // Never below A: ρ 1.01 on mean 0.25 (A = 1) keeps A_max = 1
+    expect(route(MOE, 1, { tp: 8, ep: 8, epImbalance: 1.01 }).busiestAssignments).toBe(1);
+    // Dense prefill unchanged: ep 1, T 4096 → A_max = A = 4096·2 = 8192 (ρ ignored); ep 2 mode B (dp 2), Ts 4096:
+    // mean 8192 is whole, so A_max = ceil(1.2·8192) = 9831 as with the earlier ceil(ρ·A), far below the cap 16384
+    expect(route(MOE, 4096, { epImbalance: 1.5 }).busiestAssignments).toBe(8192);
+    expect(route(MOE, 4096, { dp: 2, ep: 2 }).busiestAssignments).toBe(Math.ceil(1.2 * 8192));
   });
 
   it('mode A ep 1 tp 2 shards each expert 2 ways (etp 2)', () => {
@@ -71,10 +137,10 @@ describe('T4b MoE (E 8, k 2)', () => {
     expect([up.batch, up.n]).toEqual([2, 32]); // all 8 experts local; n = 2·32/2
   });
 
-  it('mode B tp 1 dp 8 ep 8, T 1 → a 1, mE 2, two all-to-alls of 1·2·h·2 B', () => {
+  it('mode B tp 1 dp 8 ep 8, T 1 → a 1, mE 3, two all-to-alls of 1·2·h·2 B', () => {
     const ops = lowerMoe(MOE, ctx(1, { dp: 8, ep: 8 }));
     const up = gemmNamed(ops, 'moe.gate_up');
-    expect([up.batch, up.m]).toEqual([1, 2]); // A = Ts·k = 2, Eloc 1
+    expect([up.batch, up.m]).toEqual([1, 3]); // A = Ts·k = 2, Eloc 1; A_max = ceil(1.2·2 = 2.4) = 3
     const coll = collectives(ops);
     expect(coll.map((c) => [c.collective, c.group, c.groupSize, c.messageBytes])).toEqual([
       ['all_to_all', 'ep', 8, 256], // dispatch 1·2·64·2
@@ -197,7 +263,7 @@ describe('latent MoE (latentDim)', () => {
     ]);
     expect(b1[9].name).toBe('moe.latent_out');
     expect(collectives(b1).map((c) => c.messageBytes)).toEqual([128, 128]); // Ts 1 · k 2 · l 32 · 2 B (h: 256)
-    expect(shape(gemmNamed(b1, 'moe.gate_up'))).toEqual([1, 2, 64, 32]); // a 1, mE 2, n 2·32, k l
+    expect(shape(gemmNamed(b1, 'moe.gate_up'))).toEqual([1, 3, 64, 32]); // a 1, mE = ceil(1.2·2) = 3, n 2·32, k l
     const combine = elementwiseNamed(b1, 'moe.combine');
     expect([combine.elems, combine.activationWriteBytes]).toEqual([64, 64]); // Ts·k·l; Ts·l·2 B
 
@@ -349,10 +415,12 @@ describe('expert-output norm (expertOutputNorm)', () => {
 
   it('mode A tp 4 ep 2 (etp 2): the expert-TP group has 2 ranks', () => {
     const ops = lowerMoe(NRM, ctx(1, { tp: 4, ep: 2 }));
-    // A = ceil(2/2) = 1 → R = 1; reduce-scatter 1·32·2; sum of squares 4 B; closing all-reduce over tp 4
+    // A = ceil(2/2) = 1, A_max = ceil(1.2·1) = 2 → a = min(Eloc 4, 2) = 2, mE 1, R = 2; reduce-scatter 2·32·2 = 128;
+    // sum of squares 2·4 = 8 B;
+    // closing all-reduce over tp 4 (T·h, not scaled by ρ)
     expect(collectives(ops).map((c) => [c.collective, c.groupSize, c.messageBytes])).toEqual([
-      ['reduce_scatter', 2, 64],
-      ['all_reduce', 2, 4],
+      ['reduce_scatter', 2, 128],
+      ['all_reduce', 2, 8],
       ['all_reduce', 4, 128],
     ]);
     expect(gemmNamed(ops, 'moe.latent_out').k).toBe(16);
@@ -361,12 +429,12 @@ describe('expert-output norm (expertOutputNorm)', () => {
   it('etp 1 (mode A ep = tp, mode B): the norm only, over a·mE·l, no extra communication', () => {
     const a = lowerMoe(NRM, ctx(1, { tp: 8, ep: 8 }));
     expect(collectives(a).map((c) => c.name)).toEqual(['moe.tp_all_reduce']);
-    expect(elementwiseNamed(a, 'moe.expert_norm').elems).toBe(32); // a 1 · mE 1 · l 32
+    expect(elementwiseNamed(a, 'moe.expert_norm').elems).toBe(32); // a 1 · mE 1 (A_max capped at T·min(k, Eloc) = 1) · l 32
     expect(gemmNamed(a, 'moe.latent_out').k).toBe(32);
     const b = lowerMoe(NRM, ctx(1, { dp: 8, ep: 8 }));
     expect(b.map((o) => o.name).slice(6, 9)).toEqual(['moe.down', 'moe.expert_norm', 'moe.combine_a2a']);
     expect(collectives(b).map((c) => c.messageBytes)).toEqual([128, 128]); // the a2a only
-    expect(elementwiseNamed(b, 'moe.expert_norm').elems).toBe(64); // a 1 · mE 2 · l 32
+    expect(elementwiseNamed(b, 'moe.expert_norm').elems).toBe(96); // a 1 · mE ceil(1.2·2) = 3 · l 32
   });
 
   it('without latentDim: shards of h, closed by the same all-reduce', () => {

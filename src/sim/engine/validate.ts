@@ -75,6 +75,10 @@ export function validateInput(input: SimInput): string[] {
 
   // Parallel degrees and workload.
   for (const key of ['tp', 'pp', 'dp', 'ep'] as const) errors.push(...positiveIntegerErrors(parallel[key], `parallel.${key}`));
+  const rho = parallel.epImbalance;
+  if (rho !== undefined && !(Number.isFinite(rho) && rho >= 1)) {
+    errors.push(`parallel.epImbalance must be a finite number ≥ 1 (got ${rho})`);
+  }
   errors.push(...positiveIntegerErrors(workload.batch, 'workload.batch'));
   errors.push(...positiveIntegerErrors(workload.promptLen, 'workload.promptLen'));
   errors.push(...positiveIntegerErrors(workload.decodeContextLen, 'workload.decodeContextLen'));
