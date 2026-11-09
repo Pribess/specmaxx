@@ -61,7 +61,7 @@ elements as the field name says.
 
 A model is described by an **architecture spec** (`src/sim/ir/model.ts`: `ModelSpec`, `LayerSpec`,
 `BlockSpec`), with logical (unsharded) dimensions and no tokens or parallelism. Layers are heterogeneous: each
-`LayerSpec` is its own ordered list of blocks (`norm`, `residual`, `gqa_attention`, `mla_attention`,
+`LayerSpec` is its own ordered list of blocks (`norm`, `residual`, `residual_mix`, `gqa_attention`, `mla_attention`,
 `csa_attention`, `linear_attention`, `mlp`, `moe`, `hc_pre`, `hc_post`, `ngram_embedding`, `short_conv`), which
 covers hybrid linear/full attention stacks, dense first layers before MoE, and alternating sliding-window layers.
 The builders (`src/sim/ir/builders.ts`: `decoderLayer`, `decoderModel`, `repeatLayers`, `hyperCollapse`) produce
@@ -71,6 +71,8 @@ pre-norm decoder layers from `MixerParams` + `FfnParams` (+ optional `residual`,
 [post-norm] → residual`;
 - hyper-connections (`residual.kind: 'hyper'`, N streams): each `norm … residual` pair becomes
   `hc_pre → [norm if subNorms] … hc_post`. DeepSeek-V4.1 and GLM-5.3-Flash keep the sub-norms, Qwen4Exp does not.
+- Attention Residuals (`residual.kind: 'attn_res'`, Kimi K3): `[residual_mix] → norm → mixer → residual →
+residual_mix → norm → ffn → residual`, and `attnResCollapse` as `beforeHead` (§5 "Attention Residuals").
 - `decoderModel({ beforeHead })` appends blocks (the final hyper-connection collapse) to the LAST layer, so they are
   lowered and pipeline-staged as part of it. `finalNorm: 'none'` (Qwen4Exp) has no final norm.
 - `ModelSpec.residualStreams` N (default 1): each token carries `N·hidden` residual elements; the PP activation
@@ -101,9 +103,15 @@ New block kinds (lowered in `src/sim/lower/{csa,hyperConnection,ngram,shortConv}
   capacity), `rowsPerToken` rows gathered per token, then `projections`, a gate and an optional dilated conv,
   written into the `outputDim = N·D` residual.
 - `short_conv` (Inkling): `x + conv(x)`, a depthwise causal conv of `kernel` taps on a branch output.
+- `residual_mix` (Kimi K3 Attention Residuals): a softmax-weighted mix of `candidates` residual vectors per token
+  (the running sum and the earlier block summaries), `2·dim` params (score norm γ and `dim → 1` projection).
 - New fields: `IndexerSpec.{keyPoolTokens, keyPoolGate, keyPoolOverlap, keyInputDim, ownsKeys, maxScoredKeys, headWeights}` (GLM
   k-pool, Qwen QSA, MiniMax MSA, DeepSeek CSA indexers); `GqaAttentionBlock.{relativeBias, kvConvKernel}`
-  (Inkling); `LinearAttentionBlock.variant 'kda'` with `gateRank` (GLM-5.3-Flash Kimi Delta Attention).
+  (Inkling); `LinearAttentionBlock.variant 'kda'` with `gateRank` (GLM-5.3-Flash Kimi Delta Attention) and
+  `fullRankOutputGate` (Kimi K3: one `h → vH·dv` output gate instead of the rank-r pair); `MlaAttentionBlock.outputGate`
+  (Kimi K3: a sigmoid gate from its own `h → H·dv` projection); `MoeBlock.latentNorm` (Kimi K3 latent MoE: an
+  RMSNorm over l before the `l → h` projection, see `latentDim` and §5 "Latent MoE"); `FfnActivation 'situ'`
+  (Kimi K3's tanh-bounded SiLU).
 - Mamba-2 fields (Nemotron-H; §5 "Mamba-2"): `LinearAttentionBlock.convBias` (conv1d bias of C elements, default
   false) and `chunkTokens` (chunk length Q of the chunked prefill form, default 64, any variant). Activation
   `'relu2'` (`relu(x)²`, ungated only; `MlpBlock`, `MoeBlock`) for Nemotron-H's non-gated experts.
@@ -137,17 +145,17 @@ parallelism into the ops ONE device runs per stage, with concrete shapes and dty
 - `QuantConfig` fields: `weights` (linear layers), `activations`, `kvCache` (KV, MLA latent, CSA window),
   `recurrentState` (default fp32), `embeddings` / `lmHead` (default `highPrecision`), `highPrecision` (norms,
   router, biases, conv taps; default bf16), `attentionMath`, `accumulate`, `weightSparsity`, and:
-  - `modules` (per `WeightModule` class): `{ weights, gemmInput? }`. Classes: `attention` (GQA q/k/v/o, MLA q path
-    and o_proj, CSA q path, window `wkv` and output), `attention_kv_down` (MLA `kv_a`, CSA compressor),
+  - `modules` (per `WeightModule` class): `{ weights, gemmInput? }`. Classes: `attention` (GQA q/k/v/o, MLA q path,
+    `g_proj` and o\*proj, CSA q path, window `wkv` and output), `attention_kv_down` (MLA `kv_a`, CSA compressor),
     `attention_kv_up` (MLA `kv_b` and its absorbed slices `q_absorb`, `v_absorb`), `linear_attention`, `indexer`
     (query `wq`/`wq_b`), `indexer_key` (`wk`, k-pool gate), `indexer_head_weights` (`weights_proj`), `dense_mlp`,
-    `shared_experts`, `routed_experts`, `moe_latent` (latent-MoE projections `h → l`, `l → h`; no parent),
-    `residual_mixer`, `ngram`.
+    `shared_experts`, `routed_experts`, `moe_latent` (latent-MoE projections `h → l`, `l → h`: Nemotron
+    `fc1/fc2_latent_proj`, Kimi K3 `routed_expert_{down,up}_proj`), `residual_mixer`, `ngram`.
   - Resolution (`WEIGHT_MODULE_FALLBACK`): an absent class uses its parent's entry if listed
-    (`attention_kv_down`, `attention_kv_up` → `attention`; `indexer_key`, `indexer_head_weights` → `indexer`), else
-    `{ weights }`; `residual_mixer` defaults to `{ dtype: highPrecision }`. This expresses e.g. GLM-5.3-Flash FP8
-    (`kv_b_proj` BF16, other MLA projections FP8) and Mistral Large 4 FP8 (`kv_a`, `kv_b`, indexer `wk`,
-    `weights_proj` BF16).
+    (`attention_kv_down`, `attention_kv_up` → `attention`; `indexer_key`, `indexer_head_weights` → `indexer`;
+    `moe_latent` → `shared_experts`), else `{ weights }`; `residual_mixer` defaults to `{ dtype: highPrecision }`.
+    This expresses e.g. GLM-5.3-Flash FP8 (`kv_b_proj` BF16, other MLA projections FP8), Mistral Large 4 FP8
+    (`kv_a`, `kv_b`, indexer `wk`, `weights_proj` BF16) and Kimi K3 (MXFP4 routed experts, everything else BF16).
   - `gemmInput` (W8A8, W4A4) defaults to `activations` and is the GEMM's input dtype, so
     `math = resolveGemmMath(w, gemmInput)`. `weightSparsity` applies to every class but `residual_mixer`; the router
     and the LM head are not modules (`src/sim/lower/common.ts: moduleQuant`, `linearGemm({ module | format })`).
@@ -239,7 +247,8 @@ totals (unsharded), used to sanity-check mappers against published sizes.
   (q/k norm) + indexer; + `h·heads·relDim + relDim·extent` with `relativeBias`; + `2·kvHeads·hd·K` with
   `kvConvKernel`.
 - mla: q path `h·rq + rq + rq·H·(dn+dr)` (or `h·H·(dn+dr)` when rq = 0), kv `h·(rkv+dr) + rkv + rkv·H·(dn+dv)`,
-  o `H·dv·h`, + indexer (q input rq or h). With `kvCacheFromLayer` the `h·(rkv+dr) + rkv` term is dropped.
+  o `H·dv·h`, + `h·H·dv` with `outputGate` (`g_proj`), + indexer (q input rq or h). With `kvCacheFromLayer` the
+  `h·(rkv+dr) + rkv` term is dropped. Kimi K3: 144,115,712 + 88,080,384 (gate) per layer.
 - csa: q `h·rq + rq + rq·H·hd`, kv `h·hd + hd`, out `G·R_o·(H·hd/G) + G·R_o·h`; compressor (owner only)
   `2·h·coff·hd + hd` for r > 1 (coff = 2 with `compressorOverlap`, else 1), `h·hd + hd` for r = 1; + the global
   selection's indexer (q input rq; 0 for `reuse` and `all`). DeepSeek-V4.1: 126.6 M per layer without compressor and
@@ -254,12 +263,16 @@ totals (unsharded), used to sanity-check mappers against published sizes.
   head), conv `(2·G·N + H·P)·K` + [convBias] `2·G·N + H·P`, `3·H` (A_log, D, dt_bias), `H·P` (grouped out-norm
   γ), out_proj `H·P·h`. Nemotron-3.5-Lightning (h 2688, H 64, P 64, G 8, N 128, K 4, bias): 38,742,208 per
   layer; Super (h 4096, H 128): 109,635,968 (both equal the checkpoint headers without the 2688 / 4096 pre-norm).
-- kda: `h·(2·qkH·dk + vH·dv)` (q, k, v) + `h·vH` (β) + `h·r + r·vH·dk` (forget gate) + `h·r + r·vH·dv` (output
-  gate) + conv `(2·qkH·dk + vH·dv)·K` + `vH` (A_log) + `vH·dk` (dt_bias) + `dv` (o_norm) + `vH·dv·h` (o_proj).
-  GLM-5.3-Flash: q, k, v, f, g, b projections 104.07 M per layer.
-- mlp `(gated?3:2)·h·f`; moe `E·(gated?3:2)·l·fe + E·h + [latent] 2·h·l + S·(gated?3:2)·h·fs` with
-  `l = latentDim ?? h` (`params.ts: moeParams`; the router and the shared experts read h, the latent term exists
-  only with `latentDim`); active MoE uses `k` instead of `E` for the routed experts.
+- kda: `h·(2·qkH·dk + vH·dv)` (q, k, v) + `h·vH` (β) + `h·r + r·vH·dk` (forget gate) + output gate `h·r + r·vH·dv`
+  (or `h·vH·dv` with `fullRankOutputGate`) + conv `(2·qkH·dk + vH·dv)·K` + `vH` (A_log) + `vH·dk` (dt_bias) + `dv`
+  (o_norm) + `vH·dv·h` (o_proj). GLM-5.3-Flash: q, k, v, f, g, b projections 104.07 M per layer; Kimi K3 (full-rank
+  gate) 443,740,384 per layer (`A_log` is stored as [128] for 96 heads: 32 not counted).
+- mlp `(gated?3:2)·h·f`; moe `E·(gated?3:2)·l·fe + E·h + [latent] 2·h·l + [latentNorm] l + S·(gated?3:2)·h·fs` with
+  `l = latentDim ?? h` (`params.ts: moeParams`; the router and the shared experts read h, the latent terms exist
+  only with `latentDim`; Kimi K3: 896·3·3584·3072 + 896·7168 + 2·7168·3584 + 3584 + 3·7168·6144 = 29,784,935,936
+  per layer); active MoE uses `k` instead of `E` for the routed experts.
+- residual_mix: `2·dim` (Kimi K3: 4·h per layer for the two mixes, 2·h for the final one; layer 0 keeps an unused
+  mixer-side pair, 2·h, that the IR does not count).
 - hc_pre: [normGamma] `N·D` + `Σ in·out` + `vectorParams`; hc_post 0. Qwen3.8-Flash-Next 6,604,800 per sublayer
   (634 M in 48 layers, final collapse 6.56 M); DeepSeek-V4.1 `24·20480 + 27` per sublayer (39.3 M); GLM-5.3-Flash
   0.79 M per layer.
@@ -287,7 +300,10 @@ totals (unsharded), used to sanity-check mappers against published sizes.
 | n-gram / Engram tables                                                           | block `ngram_embedding` → `EmbeddingOp` gather + GEMMs + `ngram_gate`; `QuantConfig.lookupTables`                                     | no                 |
 | Short convs on branch outputs / K, V (Inkling)                                   | block `short_conv`; `GqaAttentionBlock.kvConvKernel` → `causal_conv1d`                                                                | no                 |
 | Relative-position bias (Inkling)                                                 | `GqaAttentionBlock.relativeBias` → two GEMMs                                                                                          | no                 |
-| KDA (low-rank gates, per-channel decay)                                          | `LinearAttentionBlock.variant 'kda'` + `gateRank` → GEMMs + `RecurrentOp` (`gateElemsPerTokenPerHead`)                                | no                 |
+| KDA (low-rank gates, per-channel decay)                                          | `LinearAttentionBlock.variant 'kda'` + `gateRank` (+ `fullRankOutputGate`) → GEMMs + `RecurrentOp` (`gateElemsPerTokenPerHead`)       | no                 |
+| MLA sigmoid output gate (Kimi K3)                                                | `MlaAttentionBlock.outputGate` → `mla.g_proj` GEMM + `sigmoid_mul`                                                                    | no                 |
+| Latent MoE with a latent norm (Kimi K3)                                          | `MoeBlock.latentNorm` → `moe.latent_all_reduce` + `moe.latent_norm` before a row-parallel `moe.latent_out` (§5 "Latent MoE")          | no                 |
+| Attention Residuals (Kimi K3)                                                    | block `residual_mix` → one `residual_mix` elementwise op per sublayer; `attnResCollapse` before the head                              | no                 |
 | Pooled / gated / foreign-key / bounded indexers                                  | `IndexerSpec` optional fields → `IndexerOp.{keyPoolTokens, maxScoredKeys, keyWriteElemsPerToken, headWeights}` + `kv_pool`            | no                 |
 | Shared top-k (indexer reuse)                                                     | `SparseSelection {kind: 'reuse'}`: `KvSelection {topk}`, no `IndexerOp`                                                               | no                 |
 | Cross-layer KV sharing                                                           | `MlaAttentionBlock.kvCacheFromLayer`, `CsaGlobalSpec.kvCacheFromLayer`: no producer GEMMs, `kvWrite` 0                                | no                 |
@@ -389,21 +405,22 @@ State per sequence = `heads·dk·dv` elements.
 `F = elems·flopsPerElem`; bytes are the op's explicit fields (activation read/write, weights, state, and
 `kvWriteBytes` for a write-only cache op, counted as KV writes).
 
-| fn             | FLOP / elem                                          | fn                         | FLOP / elem                                      |
-| -------------- | ---------------------------------------------------- | -------------------------- | ------------------------------------------------ |
-| rmsnorm        | 4                                                    | layernorm                  | 8                                                |
-| residual_add   | 1                                                    | rope                       | 3                                                |
-| qk_norm        | 4                                                    | silu                       | 4                                                |
-| silu_mul       | 5                                                    | gelu_mul                   | 9                                                |
-| gelu           | 8                                                    | relu                       | 1                                                |
-| relu_mul       | 2                                                    | sigmoid_mul                | 5                                                |
-| gated_rmsnorm  | 9                                                    | causal_conv1d              | 2·kernelWidth                                    |
-| router_topk    | 5 per logit                                          | moe_combine                | 2                                                |
-| hc_collapse    | 2·N per output elem                                  | hc_expand                  | 2N + 2 (mixing), else 2                          |
-| sinkhorn       | 4·iters per T·N² elem                                | ngram_gate                 | 8 (two norm statistics, dot, sigmoid, fused add) |
-| kv_pool        | 4 (softmax weight, multiply, add)                    | causal_conv1d (+ residual) | 2·K + 1                                          |
-| kv_cache_write | 1 (cast to the KV format; §13 "Draft-cache prefill") | candidate_score            | 2 (DFlash 2 selector multiply-add)               |
-| relu2          | 2 (max, square; ungated only)                        |                            |                                                  |
+| fn             | FLOP / elem                                                      | fn                         | FLOP / elem                                      |
+| -------------- | ---------------------------------------------------------------- | -------------------------- | ------------------------------------------------ |
+| rmsnorm        | 4                                                                | layernorm                  | 8                                                |
+| residual_add   | 1                                                                | rope                       | 3                                                |
+| qk_norm        | 4                                                                | silu                       | 4                                                |
+| silu_mul       | 5                                                                | gelu_mul                   | 9                                                |
+| gelu           | 8                                                                | relu                       | 1                                                |
+| relu_mul       | 2                                                                | sigmoid_mul                | 5                                                |
+| gated_rmsnorm  | 9                                                                | causal_conv1d              | 2·kernelWidth                                    |
+| router_topk    | 5 per logit                                                      | moe_combine                | 2                                                |
+| hc_collapse    | 2·N per output elem                                              | hc_expand                  | 2N + 2 (mixing), else 2                          |
+| sinkhorn       | 4·iters per T·N² elem                                            | ngram_gate                 | 8 (two norm statistics, dot, sigmoid, fused add) |
+| kv_pool        | 4 (softmax weight, multiply, add)                                | causal_conv1d (+ residual) | 2·K + 1                                          |
+| kv_cache_write | 1 (cast to the KV format; §13 "Draft-cache prefill")             | candidate_score            | 2 (DFlash 2 selector multiply-add)               |
+| situ           | 9 (β·tanh(x/β) 5, sigmoid 3, multiply)                           | situ_mul                   | 15 (situ + tanh bound on `up` 5 + multiply)      |
+| residual_mix   | 6·C per output elem over C candidates (§5 "Attention Residuals") | relu2                      | 2 (max, square; ungated only)                    |
 
 The DFlash 2 dynamic convs (§13 "Draft ops") are `causal_conv1d` ops with an explicit `flopsPerElem = 4·K` (base
 and dynamic taps, applied in both the prepare and the finish step).
@@ -944,8 +961,9 @@ for `reuse` and `all`).
 
 ### KDA
 
-`lower/linearAttention.ts` (variant `'kda'`, GLM-5.3-Flash). `lin.qkv (n 2·qkL·dk + vL·dv + vL, k h)` (q, k, v and
-β) → `lin.f_a (n r, k h, replicated)` → `lin.f_b (n vL·dk, k r)` → `lin.g_a (n r, k h)` → `lin.g_b (n vL·dv, k r)` →
+`lower/linearAttention.ts` (variant `'kda'`, GLM-5.3-Flash, Kimi K3). `lin.qkv (n 2·qkL·dk + vL·dv + vL, k h)` (q, k,
+v and β) → `lin.f_a (n r, k h, replicated)` → `lin.f_b (n vL·dk, k r)` → output gate: `lin.g_a (n r, k h)` → `lin.g_b
+(n vL·dv, k r)`, or with `fullRankOutputGate` (Kimi K3 `use_full_rank_gate`) the single `lin.g (n vL·dv, k h)` →
 conv, recurrent (`variant 'kda'`, gates `dk + 1` per token and head: per-channel decay plus β), gated_rmsnorm,
 out_proj, all_reduce. Sharding as for GatedDeltaNet (`vL = vHeads/tp` must divide).
 
@@ -973,6 +991,28 @@ Per-head vectors A_log, D, dt_bias (`3·H` params) are not streamed by any op (n
 layer `vL·N·P·bpe(state) + C·(K−1)·bpe(act)`: Nemotron-3.5-Lightning at tp 1, fp32 state, bf16 activations,
 `64·128·64·4 + 6144·3·2 = 2,134,016` B; Super `4,194,304 + 61,440 = 4,255,744` B. At tp 8 Lightning has
 `vL 8, qkL 1, C 768`; past `tp > G` the groups replicate (KV-head rule).
+
+### MLA output gate
+
+`lower/mla.ts` (`MlaAttentionBlock.outputGate`, Kimi K3 `mla_use_output_gate`; `modeling_kimi_linear.py:396-399,
+467-469`). After the q path: `mla.g_proj (m T, n Hl·dv, k h, module attention)`, sharded with the heads; after the
+attention core (either form): `attn.output_gate` = `sigmoid_mul` over `T·Hl·dv` (read the attention output and the
+gate, write the gated output), then `o_proj`. Params `h·H·dv`. Unlike the GQA gate (a wider q projection), MLA's
+gate is its own projection, since q is low-rank.
+
+### Attention Residuals
+
+`lower/norm.ts: lowerResidualMix` (block `residual_mix`, Kimi K3 `attn_res_block_size` B; `modeling_kimi_linear.py:
+975-1047, 1075-1088`). The stack keeps ONE running residual sum and stores a summary of it at the first layer of
+each block of B layers (`i % B == 0`). Before each sublayer the input is `Softmax_j(s_j) · v_j` over the C candidate
+vectors `v_j` (the running sum and the stored summaries), with `s_j = ⟨RMSNorm(v_j), γ ⊙ w⟩` (one shared `h`-wide
+score weight per mix: the norm's γ and the `h → 1` projection). Layer i mixes `C = 1 + ceil(i/B)` candidates before
+its mixer (none at layer 0) and `C = 2 + floor(i/B)` before its FFN (`builders.ts: attnResSummariesBefore`); the final
+mix before the final norm has `C = 1 + ceil(n/B)` (`attnResCollapse`, Kimi K3: 9). The add after each sublayer stays
+a plain `residual_add`. One elementwise op per mix: `elems = T·h`, `6·C` FLOP per element (per candidate: RMS
+statistic 2, normalize-and-score 2, weighted sum 2), read `C·T·h·bpe(act)`, write `T·h·bpe(act)`, weights
+`2·h·bpe(hp)`. Replicated on every TP rank, like norms; no sequence state (the summaries live only within one
+forward pass, like activations). A PP boundary carries the running sum AND the stored summaries (§5 "PP split").
 
 ### Hyper-connections
 
@@ -1043,17 +1083,18 @@ moeLatentWeightBytes, expertOutputShards`. Balanced ("uniform") routing. Valid i
 - **Mode A** (includes ep = 1): every TP rank has all T tokens. `A = ceil(T·k/ep)` assignments on the busiest
   device, `a = min(Eloc, A)` active experts, `mE = ceil(A/a)` tokens each. Router (hp, replicated) → top-k →
   [`latent_in`] → grouped `gate_up (batch a, m mE, n (gated?2:1)·fe/etp, k l)` → act → `down (n l)` → combine
-  (`a·mE·l`, writes `T·l·reduceBpe`) → [`latent_out`] → shared experts as one dense MLP of `S·fs` sharded by tp →
-  **one** all_reduce(tp) of `T·h`.
+  (`a·mE·l`, writes `T·l·reduceBpe`) → [`latent_all_reduce` → `latent_norm`] → [`latent_out`] → shared experts as
+  one dense MLP of `S·fs` sharded by tp → **one** all_reduce(tp) of `T·h`.
 - **Mode B**: the EP group spans p replicas; each device routes its slice `Ts = ceil(T/tp)`; `A = Ts·k`,
   `etp = 1`. Router → top-k → [`latent_in`] → `all_to_all(ep)` dispatch `Ts·k·l·bpe(act)` → experts →
-  `all_to_all(ep)` combine `Ts·k·l·reduceBpe` → combine (`Ts·k·l`) → [`latent_out`] → shared experts
-  (unsharded) on Ts → `all_gather(tp)` of `T·h·bpe(act)` when tp > 1 (replaces the all-reduce).
-- **Latent MoE** (`MoeBlock.latentDim` = l, Muse Spark `moe_hidden_size`, Nemotron `moe_latent_size`):
-  `latent_in (m Ts, n l, k h)` after the top-k and `latent_out (m Ts, n h, k l)` after the combine (Ts = T in
-  mode A), module `moe_latent`. Both are **replicated** (except a split expert-output norm, below): every TP rank computes them whole and stores both
-  matrices, `2·h·l·bpe(w_latent)` per device per layer at any tp (vLLM `ReplicatedLinear`; Muse Spark bf16: 8.3 GB
-  over its 62 layers). In mode A `latent_out` maps each rank's `T·l` partial sum to a `T·h` partial sum, valid by linearity
+  `all_to_all(ep)` combine `Ts·k·l·reduceBpe` → combine (`Ts·k·l`) → [`latent_norm`] → [`latent_out`] → shared
+  experts (unsharded) on Ts → `all_gather(tp)` of `T·h·bpe(act)` when tp > 1 (replaces the all-reduce).
+- **Latent MoE** (`MoeBlock.latentDim` = l, Muse Spark `moe_hidden_size`, Nemotron `moe_latent_size`, Kimi K3
+  `routed_expert_hidden_size`): `latent_in (m Ts, n l, k h)` after the top-k and `latent_out (m Ts, n h, k l)` after
+  the combine (Ts = T in mode A), module `moe_latent`. Both are **replicated** (except a split expert-output norm,
+  below, and `latentNorm`, "Latent MoE" below): every TP rank computes them whole and stores both matrices,
+  `2·h·l·bpe(w_latent)` per device per layer at any tp (vLLM `ReplicatedLinear`; Muse Spark bf16: 8.3 GB over its
+  62 layers). In mode A `latent_out` maps each rank's `T·l` partial sum to a `T·h` partial sum, valid by linearity
   (`Σ_r W·p_r = W·Σ_r p_r`), so the one all-reduce stays at h; TP-sharding them would need an extra collective
   at width l. The router reads h; shared experts stay at h. Without `latentDim`, `l = h` and both GEMMs are absent:
   every op is the same as before.
@@ -1080,14 +1121,46 @@ moeLatentWeightBytes, expertOutputShards`. Balanced ("uniform") routing. Valid i
   op and every op as before.
 
 - Resident: `Eloc·(gated?3:2)·l·fe/etp·bpe(w)` + router `E·h·bpe(hp)` + [latent] `W_latent = (1 + 1/s)·h·l·bpe(w_latent)`
-  (`moeLatentWeightBytes`, summed per GEMM like the ops) + [expertOutputNorm] `(l/s)·bpe(hp)` (the γ slice the norm
-  reads) + shared (`/tp` in mode A).
+  [+ `l·bpe(hp)` with `latentNorm`] (`moeLatentWeightBytes`, summed per GEMM like the ops; `s = latentOutShards`:
+  `expertOutputShards`, or with `latentNorm` tp in mode A and 1 in mode B) + [expertOutputNorm] `(l/s)·bpe(hp)`
+  (the γ slice the norm reads) + shared (`/tp` in mode A).
+
+### Latent MoE
+
+`lower/moe.ts` (`MoeBlock.latentNorm`, Kimi K3 `routed_expert_hidden_size` l = 3584, `latent_moe_use_norm`;
+`modeling_kimi_linear.py:762-831`). A latent MoE (`latentDim`, above) with an RMSNorm over l between the combine
+and `latent_out` (`latentOutShards`; not combinable with `expertOutputNorm`, `modelSpecErrors` rejects both).
+`latent_in` is as above: mode A replicated on every TP rank (like MLA's `q_a`; every rank needs the full latent for
+its experts), mode B on the device's own slice Ts. Replication costs each rank the full `h·l` weight read per step
+(Kimi K3 at tp 8: 4.1 GB more per step than a column-parallel down-projection followed by an all-gather of `T·l`;
+that alternative trades the bytes for 92 small collectives and is not modeled). After the combine:
+
+- Mode A: `moe.latent_all_reduce` of `T·l·reduceBpe` when tp > 1 (each rank holds only its experts' and
+  fe-shard's partial sums, and the norm is nonlinear, so the linearity rule above no longer applies); then
+  `moe.latent_norm` (rmsnorm over `T·l`, γ `l·bpe(hp)`); then `moe.latent_out (m T, n h, k l/tp)`: row-parallel,
+  so its partial sums ride the one `moe.tp_all_reduce` with the shared experts.
+- Mode B: `moe.latent_norm` over `Ts·l` (the rows are complete after the combine a2a), then
+  `moe.latent_out (m Ts, n h, k l)` unsharded.
+- Resident: `h·l·bpe(w_latent)` (`latent_in`) + `h·l/(mode A ? tp : 1)·bpe(w_latent)` (`latent_out`) +
+  `l·bpe(hp)` (norm).
+- Module class `moe_latent` (falls back to `shared_experts`). Kimi K3 stores these BF16 next to MXFP4 experts; K3's
+  compressed-tensors `ignore` list misses them, so their probes carry `nativeHighPrecision` (`quant/moduleClass.ts`).
 
 ### PP split
 
-`lower/lower.ts: lowerModel, stageLayerRange`. Stage s holds layers `[floor(s·L/pp), floor((s+1)·L/pp))`;
-stage 0 adds the embedding, the last stage the head. Every stage but the last sends `T·N·h·bpe(act)` to the next
-(`send_recv`, group pp; N = `residualStreams`, default 1). A cross-layer source (shared KV cache, reused top-k,
+`lower/lower.ts: lowerModel, stageLayerRange, ppBoundaryResidualVectors`. Stage s holds layers
+`[floor(s·L/pp), floor((s+1)·L/pp))`; stage 0 adds the embedding, the last stage the head. Every stage but the
+last sends `S = T·N_live·h·bpe(act)` to the next (`send_recv`, group pp), where `N_live` is the residual
+vectors per token that the layers after the boundary still read (`ppBoundaryResidualVectors(model, i)`, i the next
+stage's first layer):
+
+- plain residual: `N_live = 1`; hyper-connections: `N_live = residualStreams` N;
+- Attention Residuals (§5 "Attention Residuals", block size B): the running sum plus the `ceil(i/B)` summaries
+  stored before layer i, `N_live = 1 + ceil(i/B)`, read off layer i's pre-mixer `residual_mix` (whose `C` is
+  exactly those vectors). Kimi K3 at pp 2: i = 46, `N_live = 1 + 4 = 5`, `S/T = 5·7168·2 B = 71,680 B` per token
+  in BF16 (a plain residual would send 14,336 B).
+
+A cross-layer source (shared KV cache, reused top-k,
 shared indexer keys) on an earlier stage than its consumer produces a `simulate` warning
 (`engine/simulate.ts: crossStageWarnings`); its transfer is not costed (§9).
 
@@ -1645,6 +1718,9 @@ Documented approximations (each isolated in one constant or rule):
   head), the dt softplus and the D skip (vector work, a few FLOP per element).
 - MLA form by phase (absorbed for decode and sparse prefill, MHA for dense prefill).
 - The indexer is replicated on every TP rank; its key norm is counted as a LayerNorm.
+- Kimi K3: the `mla_use_nope` RoPE slice is cached but not rotated; the IR keeps it as `qkRopeDim`, so one small
+  `rope` elementwise op per MLA layer is an over-count. The `residual_mix` FLOP constant `6·C`, the `situ`
+  activation constants, and the latent all-reduce emitted also without a latent norm (§5 "Latent MoE").
 - conv1d and recurrent state reads are 0 on the first prefill step (no prior state).
 - A sliding-window cache holds `min(ctx, W)` tokens.
 - Row-parallel biases are counted on every TP rank.

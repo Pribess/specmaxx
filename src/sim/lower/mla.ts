@@ -36,10 +36,11 @@ export function mlaForm(block: MlaAttentionBlock, ctx: LoweringContext): 'absorb
 }
 
 /**
- * MLA ops, in order: q path (q_a → q_a_norm → q_b, or q) → [own latent: kv_a → kv_a_norm] → [rope] →
- * [indexer ops] → absorbed (q_absorb → attention → v_absorb) or MHA (kv_b → attention) → o_proj → [TP all-reduce].
- * A layer with `kvCacheFromLayer` reads an earlier layer's latent: no kv_a, no kv_a_norm, no k-rope, no cache write.
- * `qkRopeDim` 0 (NoPE) emits no rope op.
+ * MLA ops, in order: q path (q_a → q_a_norm → q_b, or q) → [g_proj] → [own latent: kv_a → kv_a_norm] → [rope] →
+ * [indexer ops] → absorbed (q_absorb → attention → v_absorb) or MHA (kv_b → attention) → [sigmoid_mul gate] →
+ * o_proj → [TP all-reduce]. A layer with `kvCacheFromLayer` reads an earlier layer's latent: no kv_a, no kv_a_norm,
+ * no k-rope, no cache write. `qkRopeDim` 0 (NoPE) emits no rope op. With `outputGate` (Kimi K3) the gate projection
+ * `g_proj` reads the layer input and its sigmoid multiplies the attention output before `o_proj`.
  */
 export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
   const T = stepTokens(ctx);
@@ -62,6 +63,11 @@ export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
     ops.push(linearGemm('mla.q_b', { m: T, n: Hl * (dn + dr), k: rq }, ctx, { module: 'attention' }));
   } else {
     ops.push(linearGemm('mla.q', { m: T, n: Hl * (dn + dr), k: h }, ctx, { module: 'attention' }));
+  }
+  if (block.outputGate === true) {
+    // Formula: g_proj: m = T, n = Hl·dv, k = h (the gate, sharded with the heads)
+    // See docs/simulation-model.md §5 "MLA output gate"
+    ops.push(linearGemm('mla.g_proj', { m: T, n: Hl * dv, k: h }, ctx, { module: 'attention' }));
   }
 
   // Latent path. Formula: [own latent] kv_a (n = rkv + dr, k = h, replicated) → rmsnorm(T·rkv);
@@ -149,6 +155,24 @@ export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
       const _never: never = form;
       throw new Error(`unknown MLA form ${String(_never)}`);
     }
+  }
+
+  if (block.outputGate === true) {
+    const gateElems = T * Hl * dv;
+    // Formula: sigmoid_mul over T·Hl·dv: read 2·elems (out, gate), write elems
+    // See docs/simulation-model.md §5 "MLA output gate"
+    ops.push(
+      elementwise(
+        'attn.output_gate',
+        'sigmoid_mul',
+        {
+          elems: gateElems,
+          activationReadBytes: 2 * gateElems * act,
+          activationWriteBytes: gateElems * act,
+        },
+        ctx,
+      ),
+    );
   }
 
   // Formula: o_proj: m = T, n = h, k = Hl·dv

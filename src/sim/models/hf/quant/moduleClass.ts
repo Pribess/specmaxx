@@ -19,6 +19,7 @@ import type { ModuleClass, Probe, ProbeKind } from './common';
 import { numAt, numListAt, objAt, strListAt } from './common';
 import { nemotronBlockTypes } from '../nemotronHPattern';
 import type { JsonObject } from '../types';
+import { layerListOffset } from '../layerLists';
 
 /**
  * Where in the layer stack a leaf exists: every layer, full- / linear-attention layers, dense / MoE layers,
@@ -136,6 +137,45 @@ const QWEN_LINEAR_ATTN: LeafSpec[] = [
   ...leaves('linear_attn', ['in_proj_a', 'in_proj_b'], 'linear_attention', { where: 'linear', weight: 0.1 }),
 ];
 
+/** Kimi K3 (`kimi_linear`) KDA projections: q/k/v/o and the full-rank output gate `g_proj`, plus the small ones. */
+const KIMI_KDA: LeafSpec[] = [
+  ...leaves('self_attn', ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'g_proj'], 'linear_attention', {
+    where: 'linear',
+  }),
+  ...leaves(
+    'self_attn',
+    ['b_proj', 'f_a_proj', 'f_b_proj', 'g_a_proj', 'g_b_proj'],
+    'linear_attention',
+    {
+      where: 'linear',
+      weight: 0.1,
+    },
+  ),
+];
+
+/**
+ * Kimi K3 MoE in its `block_sparse_moe` naming: `w1/w2/w3` experts, HF-named shared experts, and the latent-MoE
+ * `routed_expert_{down,up}_proj`, which the checkpoint stores BF16 (safetensors headers) although K3's
+ * compressed-tensors `ignore` list does not name them (K3.1-Pro's does): `nativeHighPrecision`.
+ */
+const KIMI_MOE: LeafSpec[] = [
+  ...leaves('block_sparse_moe.experts.0', ['w1', 'w2', 'w3'], 'routed_experts', { where: 'moe' }),
+  ...leaves(
+    'block_sparse_moe.shared_experts',
+    ['gate_proj', 'up_proj', 'down_proj'],
+    'shared_experts',
+    { where: 'moe' },
+  ),
+  ...leaves(
+    'block_sparse_moe',
+    ['routed_expert_down_proj', 'routed_expert_up_proj'],
+    'moe_latent',
+    {
+      where: 'moe',
+      nativeHighPrecision: true,
+    },
+  ),
+];
 /** Naming variants per family key (see {@link familyKey}). */
 const FAMILY_NAMING: Record<string, NamingVariant[]> = {
   qwen3_5: ['model.language_model.', 'model.'].map((prefix) => ({
@@ -255,6 +295,24 @@ const FAMILY_NAMING: Record<string, NamingVariant[]> = {
       groups: [{ leaves: [...HF_MLA, ...HF_INDEXER, ...HF_DENSE, ...HF_EXPERTS, ...HF_SHARED] }],
     },
   ],
+  // Kimi K3 / K3.1-Pro: `language_model.model.layers.<i>.*` with `language_model.lm_head` (safetensors headers).
+  kimi_linear: ['language_model.model.', 'model.'].map((prefix) => ({
+    prefix,
+    top: hfTop(prefix, prefix === 'model.' ? 'lm_head' : 'language_model.lm_head'),
+    groups: [
+      {
+        leaves: [
+          ...HF_MLA,
+          // The MLA sigmoid output gate (`mla_use_output_gate`) shares its name with the KDA gate; split by layer kind.
+          { leaf: 'self_attn.g_proj', cls: 'attention', where: 'full' },
+          ...HF_INDEXER,
+          ...KIMI_KDA,
+          ...HF_DENSE,
+          ...KIMI_MOE,
+        ],
+      },
+    ],
+  })),
   mistral_large4: [
     {
       // Consolidated (params.json) naming, used by the safetensors and by most quant exports.
@@ -386,6 +444,7 @@ export function familyKey(top: JsonObject, text: JsonObject): string {
     if (t.startsWith('inkling')) return 'inkling';
     if (t.startsWith('nemotron_h')) return 'nemotron_h';
     if (t.startsWith('muse_spark')) return 'muse_spark';
+    if (t === 'kimi_linear' || t.startsWith('kimi_k3')) return 'kimi_linear';
   }
   return 'generic';
 }
@@ -430,11 +489,16 @@ export function layerLayout(text: JsonObject, paramsJson?: unknown, family?: str
   }
   const numLayers = firstNum(text, ['num_hidden_layers', 'n_layers']) ?? numAt(params, 'n_layers') ?? 0;
   const layerTypes = strListAt(text, 'layer_types');
-  const kdaLayers = numListAt(objAt(text, 'linear_attn_config'), 'kda_layers') ?? [];
+  const linCfg = objAt(text, 'linear_attn_config');
+  const kdaLayers = numListAt(linCfg, 'kda_layers') ?? [];
+  // GLM-5.3-Flash lists `kda_layers` 0-based; Kimi K3 1-based (`configuration_kimi_k3.py: is_kda_layer` tests
+  // `layer_idx + 1`). Decided from BOTH lists, by the rule the Kimi family uses (the last layer may be MLA).
+  const kdaOffset = layerListOffset([kdaLayers, numListAt(linCfg, 'full_attn_layers')], numLayers);
   const attention = Array.from({ length: numLayers }, (_, i) => {
     const t = layerTypes[i];
-    if (t !== undefined) return /linear|kda|mamba|delta|ssm/i.test(t) ? ('linear' as const) : ('full' as const);
-    return kdaLayers.includes(i) ? ('linear' as const) : ('full' as const);
+    if (t !== undefined)
+      return /linear|kda|mamba|delta|ssm/i.test(t) ? ('linear' as const) : ('full' as const);
+    return kdaLayers.includes(i + kdaOffset) ? ('linear' as const) : ('full' as const);
   });
 
   const mlpTypes = strListAt(text, 'mlp_layer_types');

@@ -13,7 +13,10 @@
  * - `input_activations` present (dynamic or static) → the GEMM input is quantized too (W8A8, W4A4).
  * Matching: `ignore` wins; then the group whose target matches most specifically (an exact name or `re:` regex
  * before a class name other than `Linear`, before `Linear`), the first group on a tie; unmatched modules keep
- * the native format. See docs/simulation-model.md §2 (quant overheads).
+ * the native format. A probe the native checkpoint keeps in high precision although its config does not say so
+ * (`Probe.nativeHighPrecision`, per the safetensors headers: Kimi K3's latent-MoE projections are BF16 next to its
+ * MXFP4 experts while its `ignore` list misses them) also keeps the native format. See docs/simulation-model.md §2
+ * (quant overheads).
  */
 
 import type { Dtype, TensorFormat } from '../../../ir/dtype';
@@ -185,7 +188,7 @@ export function readCompressedTensors(
   if (sparsity && Object.keys(sparsity).length > 0) notes.push('sparsity_config present but not modeled (dense weights assumed)');
 
   const resolve = (p: Probe): ModuleQuant => {
-    if (anyMatch(ignore, p)) return ctx.native;
+    if (anyMatch(ignore, p) || p.nativeHighPrecision) return ctx.native;
     return matchCtGroup(groups, p)?.format ?? ctx.native;
   };
   const provider = strAt(qc, 'provider');

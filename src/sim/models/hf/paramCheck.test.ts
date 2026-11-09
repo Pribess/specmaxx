@@ -51,8 +51,10 @@ describe('checkParams', () => {
     const close = checkParams(REF_DENSE_8B, EXCL, api({ BF16: ACTUAL * (1 + 5e-5) }, ACTUAL));
     expect([close.expected, close.relError]).toEqual([ACTUAL, 0]);
     expect(checkParams(REF_DENSE_8B, EXCL, api({ BF16: 1 }, ACTUAL)).expected).toBe(ACTUAL);
-    // The packed rule runs first.
-    expect(checkParams(REF_DENSE_8B, EXCL, api({ U8: ACTUAL * 2 }, ACTUAL)).status).toBe('packed');
+    // The packed rule runs before the sum rule (a U8 sum above the total counts packed words, not params)...
+    expect(checkParams(REF_DENSE_8B, EXCL, api({ U8: ACTUAL * 2 }, ACTUAL / 2)).status).toBe('packed');
+    // ...but after the tolerance check: a total that matches the IR is a parameter count whatever its keys.
+    expect(checkParams(REF_DENSE_8B, EXCL, api({ U8: ACTUAL * 2 }, ACTUAL)).status).toBe('ok');
   });
 
   it('Nemotron-3.5 fixtures: Lightning uses the sum (MTP left out of total), Super-VL is packed', () => {

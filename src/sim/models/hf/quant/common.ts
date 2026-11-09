@@ -46,8 +46,9 @@ export interface Probe {
   leaf: string;
   /**
    * True when the native (unconverted) checkpoint keeps this module in the high-precision dtype even though
-   * its quant config does not say so (DeepSeek-V4.1 compressor and indexer `wk` / `weights_proj`, per the
-   * safetensors headers). Only the native-fp8 reader uses it.
+   * its quant config does not say so (DeepSeek-V4.1 compressor and indexer `wk` / `weights_proj`; Kimi K3's
+   * latent-MoE `routed_expert_{down,up}_proj`, which K3's compressed-tensors `ignore` list misses; per the
+   * safetensors headers). The native-fp8 and compressed-tensors readers honor it.
    */
   nativeHighPrecision?: boolean;
   /**

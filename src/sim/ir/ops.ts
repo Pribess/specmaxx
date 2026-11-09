@@ -277,9 +277,11 @@ export interface ElementwiseOp {
   /**
    * Function computed; its FLOP-per-element approximation is in the docs §3 table (`ELEMENTWISE_FLOPS_PER_ELEM` in
    * lower/common.ts). `silu`, `relu` and `relu_mul` cover the ungated-SiLU, ungated-ReLU and gated-ReLU MLPs; `relu2`
-   * is the ungated squared ReLU `relu(x)²` (Nemotron-H experts). Hyper-connections:
-   * `hc_collapse` (N streams → 1), `hc_expand` (1 → N, with or without stream mixing), `sinkhorn` (per N×N matrix
-   * element); `ngram_gate` (n-gram value gated against the stream); `kv_pool` (softmax-weighted pooling of tokens).
+   * is the ungated squared ReLU `relu(x)²` (Nemotron-H experts); `situ` / `situ_mul` Kimi K3's tanh-bounded SiLU.
+   * Hyper-connections: `hc_collapse` (N streams → 1), `hc_expand` (1 → N, with or without stream mixing), `sinkhorn`
+   * (per N×N matrix element); `ngram_gate` (n-gram value gated against the stream); `kv_pool` (softmax-weighted
+   * pooling of tokens); `residual_mix` (Attention Residuals: a softmax-weighted mix of `candidates` residual vectors
+   * per output element, docs §5 "Attention Residuals").
    * Speculative decoding (design doc §3.3–3.4): `kv_cache_write` (a write-only cache op: a block drafter's context
    * K/V cast into the KV format and stored, its bytes in `kvWriteBytes`); `candidate_score` (the DFlash 2 selector's
    * rank-r dot products, one multiply-add per element).
@@ -297,6 +299,8 @@ export interface ElementwiseOp {
     | 'relu'
     | 'relu_mul'
     | 'relu2'
+    | 'situ'
+    | 'situ_mul'
     | 'sigmoid_mul'
     | 'gated_rmsnorm'
     | 'causal_conv1d'
@@ -307,6 +311,7 @@ export interface ElementwiseOp {
     | 'sinkhorn'
     | 'ngram_gate'
     | 'kv_pool'
+    | 'residual_mix'
     | 'kv_cache_write'
     | 'candidate_score';
   /** Output elements computed on this device. Unit: elements. */

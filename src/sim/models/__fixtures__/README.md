@@ -54,6 +54,8 @@ Copied from the research of the HF-loader task (base repos only; quantized repos
 | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16` | config, api | `nemotron_h`, flat; `layers_block_type` (Mamba-2 / MoE / attention); `safetensors.total` leaves out MTP (per-dtype sum includes it) |
 | `nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4` | config (trimmed), api | `nemotron_h_omni` with `llm_config`; latent MoE; `modelopt_mixed` (FP8 + NVFP4), `U8` storage so `packed` |
 | `unsloth/Muse-Spark-Open-816B-A42B` | config, api | `muse_spark`; the ungated mirror of the gated `meta-models/Muse-Spark-Open-816B-A42B` (`src/hf/mirrors.ts`); BF16, router F32 |
+| `moonshotai/Kimi-K3` | config, api | `kimi_k3` → `kimi_linear`; compressed-tensors MXFP4 experts listed under `U8` with their logical count (param check `ok`) |
+| `moonshotai/Kimi-K3.1-Pro` | config, api | `kimi_k31` → `kimi_linear`; sibling with a DSA indexer (`dsa_config`) |
 
 The Super-VL config.json (8.6 MB as fetched) is trimmed to ~85 KB: from `quantization_config.quantized_layers`
 and from each `config_groups.*.targets`, the entries naming routed experts 2 and up (`.mixer.experts.<n>.`, n ≥ 2)

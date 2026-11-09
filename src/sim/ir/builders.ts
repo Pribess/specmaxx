@@ -13,6 +13,10 @@
  *
  * A one-sublayer layer ({@link singleBlockLayer}, Nemotron-H: each layer is ONE Mamba-2, attention or MoE block)
  * is `norm → mixer|ffn → residual`.
+ * With Attention Residuals (`residual.kind: 'attn_res'`, Kimi K3), each sublayer's input is a `residual_mix` of the
+ * running sum and the earlier block summaries, and the add after it stays plain:
+ *
+ *   [ngram] → [residual_mix] → norm → mixer → residual → residual_mix → norm → ffn → residual
  *
  * Defaults (when a field is omitted): activation `'silu'`, gated `true`, norm `'rmsnorm'`, rope `true`,
  * convKernel 4, outputGate `false`, residual `{ kind: 'plain' }`, finalNorm `'rmsnorm'`, residualStreams 1;
@@ -23,6 +27,7 @@
 import type {
   BlockSpec,
   CsaAttentionBlock,
+  FfnActivation,
   GqaAttentionBlock,
   HcPreBlock,
   LayerSpec,
@@ -32,6 +37,7 @@ import type {
   ModelSpec,
   MoeBlock,
   NgramEmbeddingBlock,
+  ResidualMixBlock,
   SparseSelection,
 } from './model';
 
@@ -84,6 +90,8 @@ export type MixerParams =
       sparse?: SparseSelection;
       /** Earlier layer whose latent cache this layer reads (see {@link MlaAttentionBlock.kvCacheFromLayer}). Index. */
       kvCacheFromLayer?: number;
+      /** Sigmoid output gate from its own `h → heads·dv` projection (see {@link MlaAttentionBlock.outputGate}); default false. */
+      outputGate?: boolean;
     }
   /**
    * DeepSeek-V4.1 compressed sparse attention: every field of a {@link CsaAttentionBlock} except kind, name and
@@ -113,6 +121,8 @@ export type MixerParams =
       chunkTokens?: number;
       /** Low-rank gate rank r, set iff variant is 'kda'. Unit: elements. */
       gateRank?: number;
+      /** One full-rank KDA output gate instead of the rank-r pair (see {@link LinearAttentionBlock.fullRankOutputGate}); default false. */
+      fullRankOutputGate?: boolean;
     };
 
 /** Feed-forward parameters of one decoder layer (dims are logical, unsharded). */
@@ -123,7 +133,7 @@ export type FfnParams =
       /** Intermediate width. Unit: elements. */
       intermediate: number;
       /** Activation (default 'silu'; 'relu2' only with gated: false). */
-      activation?: 'silu' | 'gelu' | 'relu' | 'relu2';
+      activation?: FfnActivation;
       /** GLU-style (default true). */
       gated?: boolean;
       /** Projection biases (default false). */
@@ -142,12 +152,14 @@ export type FfnParams =
       latentDim?: number;
       /** RMSNorm on each routed expert's output before the combine (see {@link MoeBlock.expertOutputNorm}); default false. */
       expertOutputNorm?: boolean;
+      /** RMSNorm over l before the `l → h` projection (see {@link MoeBlock.latentNorm}); default false. Only with latentDim. */
+      latentNorm?: boolean;
       /** Shared experts (default 0). Count. */
       sharedExperts?: number;
       /** Intermediate width of EACH shared expert (default 0). Unit: elements. */
       sharedIntermediate?: number;
       /** Activation (default 'silu'; 'relu2' only with gated: false). */
-      activation?: 'silu' | 'gelu' | 'relu' | 'relu2';
+      activation?: FfnActivation;
       /** GLU-style experts (default true). */
       gated?: boolean;
     };
@@ -170,7 +182,28 @@ export type ResidualParams =
       mixesStreams: boolean;
       /** True if each sublayer still has its own pre-norm after `hc_pre` (DeepSeek, GLM); false: none (Qwen). */
       subNorms: boolean;
+    }
+  /**
+   * Attention Residuals (Kimi K3 `attn_res_block_size`): one stream whose running sum is kept, but each sublayer
+   * reads a `residual_mix` of that sum and the summaries of the earlier blocks (see {@link ResidualMixBlock});
+   * the add after the sublayer is plain. The summary count depends on the layer's position, hence `layerIndex`.
+   */
+  | {
+      kind: 'attn_res';
+      /** Layers per block B (`attn_res_block_size` 12): layer i stores a summary iff `i % B == 0`. Count. */
+      blockSize: number;
+      /** Index of this layer in the stack, 0-based. */
+      layerIndex: number;
     };
+
+/**
+ * Block summaries stored before layer `i` runs: one per earlier layer `j < i` with `j % B == 0`
+ * (`modeling_kimi_linear.py:995`: the summary is pushed at the start of each block's first layer). Count.
+ */
+export function attnResSummariesBefore(i: number, blockSize: number): number {
+  // Formula: S(i) = ceil(i / B)
+  return Math.ceil(i / blockSize);
+}
 
 /** Parameters of one pre-norm decoder layer. */
 export interface DecoderLayerParams {
@@ -240,6 +273,7 @@ function mixerBlock(hidden: number, m: MixerParams): BlockSpec {
         vHeadDim: m.vHeadDim,
         ...(m.sparse !== undefined ? { sparse: m.sparse } : {}),
         ...(m.kvCacheFromLayer !== undefined ? { kvCacheFromLayer: m.kvCacheFromLayer } : {}),
+        ...(m.outputGate === true ? { outputGate: true } : {}),
       };
       return block;
     }
@@ -264,6 +298,7 @@ function mixerBlock(hidden: number, m: MixerParams): BlockSpec {
         ...(m.gateRank !== undefined ? { gateRank: m.gateRank } : {}),
         ...(m.convBias !== undefined ? { convBias: m.convBias } : {}),
         ...(m.chunkTokens !== undefined ? { chunkTokens: m.chunkTokens } : {}),
+        ...(m.fullRankOutputGate === true ? { fullRankOutputGate: true } : {}),
       };
       return block;
     }
@@ -301,9 +336,10 @@ function ffnBlock(hidden: number, f: FfnParams): BlockSpec {
         activation: f.activation ?? 'silu',
         sharedExperts: f.sharedExperts ?? 0,
         sharedIntermediate: f.sharedIntermediate ?? 0,
-        // Only when given, so a block without it is deep-equal to one built before the field existed.
+        // Only when given, so a block without them is deep-equal to one built before the fields existed.
         ...(f.latentDim === undefined ? {} : { latentDim: f.latentDim }),
         ...(f.expertOutputNorm === true ? { expertOutputNorm: true } : {}),
+        ...(f.latentNorm === true ? { latentNorm: true } : {}),
       };
       return block;
     }
@@ -316,7 +352,8 @@ function ffnBlock(hidden: number, f: FfnParams): BlockSpec {
 
 /**
  * One sublayer (`prefix` 'mixer' or 'ffn') with its residual handling: plain `norm → branch → [short_conv] →
- * [post-norm] → residual`, or hyper `hc_pre → [norm] → branch → [short_conv] → [post-norm] → hc_post`.
+ * [post-norm] → residual`, hyper `hc_pre → [norm] → branch → [short_conv] → [post-norm] → hc_post`, or
+ * attn_res `[residual_mix] → norm → branch → [short_conv] → [post-norm] → residual`.
  */
 function sublayerBlocks(
   p: Pick<DecoderLayerParams, 'hidden' | 'norm' | 'residual' | 'shortConv' | 'postNorms'>,
@@ -332,6 +369,23 @@ function sublayerBlocks(
     blocks.push({ kind: 'hc_pre', name: `${prefix}_hc_pre`, streams: residual.streams, dim: h, ...residual.pre });
     if (residual.subNorms) blocks.push({ kind: 'norm', name: preNormName, norm, dim: h });
   } else {
+    if (residual.kind === 'attn_res') {
+      // Candidates = the running sum + the stored block summaries (`modeling_kimi_linear.py:985-1030`). The mixer
+      // reads the S(i) summaries stored before layer i and mixes only when there is one (i ≥ 1); layer i then pushes
+      // its own summary iff i % B == 0, so the ffn reads floor(i/B) + 1 summaries.
+      // Formula: mixer: 1 + ceil(i/B) (skipped when ceil(i/B) = 0); ffn: 2 + floor(i/B)
+      const { blockSize: B, layerIndex: i } = residual;
+      const summaries = prefix === 'mixer' ? attnResSummariesBefore(i, B) : Math.floor(i / B) + 1;
+      if (summaries > 0) {
+        const mix: ResidualMixBlock = {
+          kind: 'residual_mix',
+          name: `${prefix}_residual_mix`,
+          dim: h,
+          candidates: 1 + summaries,
+        };
+        blocks.push(mix);
+      }
+    }
     blocks.push({ kind: 'norm', name: preNormName, norm, dim: h });
   }
   blocks.push(branch);
@@ -404,6 +458,27 @@ export function hyperCollapse(p: {
   pre: HcPreParams;
 }): HcPreBlock {
   return { kind: 'hc_pre', name: 'final_hc_pre', streams: p.streams, dim: p.dim, ...p.pre };
+}
+
+/**
+ * The final Attention-Residuals mix before the final norm (Kimi K3 `output_attn_res_proj` / `output_attn_res_norm`),
+ * for `decoderModel`'s `beforeHead`: the running sum mixed with every stored block summary.
+ */
+export function attnResCollapse(p: {
+  /** Layers per block B (`attn_res_block_size`). Count. */
+  blockSize: number;
+  /** Decoder layers n: the summaries stored are those of layers `j < n` with `j % B == 0`. Count. */
+  layers: number;
+  /** Residual width h. Unit: elements. */
+  dim: number;
+}): ResidualMixBlock {
+  // Formula: candidates = 1 + ceil(n / B)
+  return {
+    kind: 'residual_mix',
+    name: 'final_residual_mix',
+    dim: p.dim,
+    candidates: 1 + attnResSummariesBefore(p.layers, p.blockSize),
+  };
 }
 
 /** A decoder-only model from its layers (finalNorm default 'rmsnorm', residualStreams default 1). */

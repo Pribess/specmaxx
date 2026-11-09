@@ -107,6 +107,9 @@ function blockErrors(model: ModelSpec, i: number, block: BlockSpec): string[] {
         errors.push(`${at}: gateRank must be set exactly when variant is 'kda'`);
       }
       if (block.variant === 'kda' && !block.outputGate) errors.push(`${at}: kda needs outputGate true`);
+      if (block.fullRankOutputGate === true && block.variant !== 'kda') {
+        errors.push(`${at}: fullRankOutputGate is only for variant 'kda'`);
+      }
       if (block.chunkTokens !== undefined && !(Number.isInteger(block.chunkTokens) && block.chunkTokens > 0)) {
         errors.push(`${at}: chunkTokens ${block.chunkTokens} must be a positive integer`);
       }
@@ -126,6 +129,10 @@ function blockErrors(model: ModelSpec, i: number, block: BlockSpec): string[] {
     case 'moe':
       if (block.latentDim !== undefined && !(Number.isInteger(block.latentDim) && block.latentDim > 0)) {
         return [`${at}: latentDim ${block.latentDim} must be a positive integer`];
+      }
+      if (block.latentNorm === true && block.latentDim === undefined) return [`${at}: latentNorm needs latentDim`];
+      if (block.latentNorm === true && block.expertOutputNorm === true) {
+        return [`${at}: latentNorm and expertOutputNorm cannot both be set`];
       }
       return [];
     default:
@@ -148,11 +155,12 @@ function activationErrors(i: number, block: BlockSpec): string[] {
  * - a `'reuse'` selection's nearest earlier indexer-running layer exists and has the same attention kind (and csa
  *   compress ratio);
  * - an indexer with `ownsKeys: false` has an earlier key-owning indexer of the same headDim and keyPoolTokens;
- * - `gateRank` is set iff the linear-attention variant is `'kda'` (which also needs `outputGate`);
+ * - `gateRank` is set iff the linear-attention variant is `'kda'` (which also needs `outputGate`), and only `'kda'`
+ *   may set `fullRankOutputGate`;
  * - every `hc_pre` / `hc_post` has `residualStreams` streams of width `hidden`, and every n-gram block writes
  *   `residualStreams · hidden` elements;
  * - a linear-attention `chunkTokens`, when set, is a positive integer, and a `relu2` activation is ungated;
- * - a MoE `latentDim`, when set, is a positive integer.
+ * - a MoE `latentDim`, when set, is a positive integer; `latentNorm` needs `latentDim` and excludes `expertOutputNorm`.
  * Messages name the layer index.
  */
 export function modelSpecErrors(model: ModelSpec): string[] {

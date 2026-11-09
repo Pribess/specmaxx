@@ -26,6 +26,8 @@ describe('model shortlist', () => {
       'Qwen3.8-27B',
       'DeepSeek-V4.1-Flash',
       'DeepSeek-V4-Flash-0731',
+      'Kimi K3',
+      'Kimi K3.1-Pro',
       'GLM-5.3 Flash',
       'GLM-5.3',
       'Mistral Large 4',
@@ -34,7 +36,7 @@ describe('model shortlist', () => {
       'Nemotron 3.5 Lightning',
       'Nemotron 3.5 Super VL',
     ]);
-    expect(new Set(MODEL_SHORTLIST.map((m) => m.id)).size).toBe(11);
+    expect(new Set(MODEL_SHORTLIST.map((m) => m.id)).size).toBe(13);
     expect(MODEL_SHORTLIST.some((m) => m.id.startsWith('thinkingmachines/'))).toBe(false);
     expect(MODEL_SHORTLIST.some((m) => m.id === DEFAULT_MODEL_ID)).toBe(true);
   });

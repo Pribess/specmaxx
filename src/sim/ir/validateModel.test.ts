@@ -171,6 +171,31 @@ describe('modelSpecErrors', () => {
     expect(moeBlock(moeModel(64))).toHaveProperty('latentDim', 64);
   });
 
+  it('MoE latentNorm needs latentDim and excludes expertOutputNorm; the builder adds it only when true', () => {
+    const moeModel = (extra: { latentDim?: number; latentNorm?: boolean; expertOutputNorm?: boolean }): ModelSpec =>
+      decoderModel({
+        name: 'moe',
+        hidden: 128,
+        vocab: 10,
+        tieEmbeddings: true,
+        layers: [
+          decoderLayer({
+            hidden: 128,
+            mixer: { kind: 'gqa', heads: 4, kvHeads: 2, headDim: 32 },
+            ffn: { kind: 'moe', experts: 4, topK: 2, expertIntermediate: 64, ...extra },
+          }),
+        ],
+      });
+    expect(modelSpecErrors(moeModel({ latentDim: 64, latentNorm: true }))).toEqual([]);
+    expect(modelSpecErrors(moeModel({ latentNorm: true }))[0]).toMatch(/latentNorm needs latentDim/);
+    expect(modelSpecErrors(moeModel({ latentDim: 64, latentNorm: true, expertOutputNorm: true }))[0]).toMatch(
+      /latentNorm and expertOutputNorm cannot both be set/,
+    );
+    const moeBlock = (m: ModelSpec) => m.layers[0].blocks.find((b) => b.kind === 'moe');
+    expect(moeBlock(moeModel({ latentDim: 64, latentNorm: false }))).not.toHaveProperty('latentNorm');
+    expect(moeBlock(moeModel({ latentDim: 64, latentNorm: true }))).toHaveProperty('latentNorm', true);
+  });
+
   it('hc blocks and n-gram width must match residualStreams · hidden', () => {
     const pre: HcPreParams = { normGamma: false, projections: [], sinkhornIters: 20, vectorParams: 0 };
     const layer = decoderLayer({

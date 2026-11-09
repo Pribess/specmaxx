@@ -79,6 +79,24 @@ const SHORTLIST: ShortlistCase[] = [
     kvCache: 'fp8_e4m3',
   },
   {
+    id: 'moonshotai/Kimi-K3',
+    family: 'kimi_linear',
+    paramCheck: 'ok',
+    layers: 93,
+    mix: { 'linear:kda': 69, 'mla:dense': 24, mlp: 1, moe: 92 },
+    weights: 'mxfp4',
+    kvCache: 'bf16',
+  },
+  {
+    id: 'moonshotai/Kimi-K3.1-Pro',
+    family: 'kimi_linear',
+    paramCheck: 'ok',
+    layers: 93,
+    mix: { 'linear:kda': 69, 'mla:indexer': 24, mlp: 1, moe: 92 },
+    weights: 'mxfp4',
+    kvCache: 'bf16',
+  },
+  {
     id: 'zai-org/GLM-5.3-Flash',
     family: 'glm5_next',
     paramCheck: 'ok',
@@ -169,7 +187,7 @@ const EIGHT_5090_TOPOLOGY: TopologySpec = {
 };
 const EIGHT_5090: HardwareStack = { device: RTX_5090, topology: EIGHT_5090_TOPOLOGY };
 
-/** A short label for the blocks the mix counts (norms, residuals and hyper-connections are skipped). */
+/** A short label for the blocks the mix counts (norms, residuals, residual mixes and hyper-connections are skipped). */
 function mixLabel(b: BlockSpec): string | undefined {
   switch (b.kind) {
     case 'gqa_attention':
@@ -182,6 +200,7 @@ function mixLabel(b: BlockSpec): string | undefined {
       return `linear:${b.variant}`;
     case 'norm':
     case 'residual':
+    case 'residual_mix':
     case 'hc_pre':
     case 'hc_post':
       return undefined;
@@ -292,6 +311,16 @@ describe('sequence-state growth per token, by hand', () => {
     const q = r.quant.quant;
     const expected = 78 * 576 * bytesPerElement(q.kvCache) + 21 * 128 * bytesPerElement(q.indexerKeyCache ?? q.kvCache);
     expect(stateGrowthPerToken(r.model, q)).toBe(expected);
+  });
+
+  it('Kimi K3: 24 MLA latents of 576 elements per token (the KDA state is constant)', () => {
+    const r = mapOk('moonshotai/Kimi-K3');
+    expect(stateGrowthPerToken(r.model, r.quant.quant)).toBe(24 * 576 * 2);
+  });
+
+  it('Kimi K3.1-Pro: the same plus 24 indexer keys of 128 elements', () => {
+    const r = mapOk('moonshotai/Kimi-K3.1-Pro');
+    expect(stateGrowthPerToken(r.model, r.quant.quant)).toBe(24 * 576 * 2 + 24 * 128 * 2);
   });
 });
 

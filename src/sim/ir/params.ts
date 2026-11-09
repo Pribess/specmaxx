@@ -85,17 +85,18 @@ function mlpParams(hidden: number, f: number, gated: boolean, bias: boolean): nu
 /**
  * Weights of a MoE block counting `routedExperts` of its routed experts (E for the total, k for the active
  * params), with l = `latentDim ?? h` the routed experts' width. The router reads h, the shared experts are at h,
- * and a latent block adds its two projections `h → l` and `l → h`. Unit: params.
+ * and a latent block adds its two projections `h → l` and `l → h`, plus the RMSNorm γ over l with `latentNorm`.
+ * Unit: params.
  */
 function moeParams(block: MoeBlock, routedExperts: number): number {
   const h = block.hidden;
   const l = block.latentDim ?? h;
-  // Formula: P = n·(gated ? 3 : 2)·l·fe (routed) + E·h (router) + [latent] 2·h·l + S·(gated ? 3 : 2)·h·fs
-  //   with n = E (total) or k (active), l = latentDim ?? h
+  // Formula: P = n·(gated ? 3 : 2)·l·fe (routed) + E·h (router) + [latent] 2·h·l + [latentNorm] l
+  //            + S·(gated ? 3 : 2)·h·fs,   with n = E (total) or k (active), l = latentDim ?? h
   // See docs/simulation-model.md §2 "Parameter counts"
   const routed = routedExperts * mlpParams(l, block.expertIntermediate, block.gated, false);
   const router = block.experts * h;
-  const latent = block.latentDim === undefined ? 0 : 2 * h * l;
+  const latent = block.latentDim === undefined ? 0 : 2 * h * l + (block.latentNorm === true ? l : 0);
   const shared = block.sharedExperts * mlpParams(h, block.sharedIntermediate, block.gated, false);
   return routed + router + latent + shared;
 }
@@ -111,6 +112,10 @@ export function blockParams(block: BlockSpec): number {
       return block.norm === 'layernorm' ? 2 * block.dim : block.dim;
     case 'residual':
       return 0;
+    case 'residual_mix':
+      // Formula: P_mix = 2·dim (the score RMSNorm γ and the dim → 1 score projection; Kimi K3 `*_res_norm`, `*_res_proj`)
+      // See docs/simulation-model.md §2 "Parameter counts"
+      return 2 * block.dim;
     case 'gqa_attention': {
       const h = block.hidden;
       const hd = block.headDim;
@@ -140,13 +145,15 @@ export function blockParams(block: BlockSpec): number {
       const H = block.heads;
       // Formula: q = rq > 0 ? h·rq + rq + rq·H·(dn+dr) : h·H·(dn+dr)
       // Formula: kv = [own latent] (h·(rkv+dr) + rkv) + rkv·H·(dn+dv); o = H·dv·h; + P_idx (q input rq or h)
+      // Formula: + [outputGate] h·H·dv (g_proj)
       // See docs/simulation-model.md §2 "Parameter counts"
       const q = rq > 0 ? h * rq + rq + rq * H * (dn + dr) : h * H * (dn + dr);
       const kvA = block.kvCacheFromLayer === undefined ? h * (rkv + dr) + rkv : 0;
       const kvB = rkv * H * (dn + dv);
       const o = H * dv * h;
+      const gate = block.outputGate === true ? h * H * dv : 0;
       const indexer = sparseParams(block.sparse, h, rq > 0 ? rq : h);
-      return q + kvA + kvB + o + indexer;
+      return q + kvA + kvB + o + gate + indexer;
     }
     case 'csa_attention': {
       const h = block.hidden;
@@ -184,13 +191,13 @@ export function blockParams(block: BlockSpec): number {
       if (block.variant === 'kda') {
         const r = block.gateRank ?? 0;
         // Formula: KDA = h·(2·qkH·dk + vH·dv) (q, k, v) + h·vH (β) + h·r + r·vH·dk (forget gate)
-        // Formula:     + h·r + r·vH·dv (output gate) + (2·qkH·dk + vH·dv)·K (convs) + vH (A_log)
-        // Formula:     + vH·dk (dt_bias) + dv (o_norm) + vH·dv·h (o_proj)
+        // Formula:     + output gate: fullRankOutputGate ? h·vH·dv (g) : h·r + r·vH·dv (g_a, g_b)
+        // Formula:     + (2·qkH·dk + vH·dv)·K (convs) + vH (A_log) + vH·dk (dt_bias) + dv (o_norm) + vH·dv·h (o_proj)
         // See docs/simulation-model.md §2 "Parameter counts"
         const qkv = h * (qkDims + vDims);
         const beta = h * block.vHeads;
         const forgetGate = h * r + r * block.vHeads * block.keyDim;
-        const outGate = h * r + r * vDims;
+        const outGate = block.fullRankOutputGate === true ? h * vDims : h * r + r * vDims;
         const aLog = block.vHeads;
         const dtBias = block.vHeads * block.keyDim;
         return qkv + beta + forgetGate + outGate + conv + aLog + dtBias + outNorm + outProj;
@@ -217,7 +224,7 @@ export function blockParams(block: BlockSpec): number {
     case 'mlp':
       return mlpParams(block.hidden, block.intermediate, block.gated, block.bias);
     case 'moe':
-      // Formula: P = E·(gated ? 3 : 2)·l·fe + E·h (router) + [latent] 2·h·l + S·(gated ? 3 : 2)·h·fs
+      // Formula: P = E·(gated ? 3 : 2)·l·fe + E·h (router) + [latent] 2·h·l + [latentNorm] l + S·(gated ? 3 : 2)·h·fs
       return moeParams(block, block.experts);
     case 'hc_pre': {
       // Formula: P_hc_pre = [normGamma] N·D + Σ in·out + vectorParams
@@ -252,7 +259,7 @@ export function blockParams(block: BlockSpec): number {
 export function activeBlockParams(block: BlockSpec): number {
   switch (block.kind) {
     case 'moe':
-      // Formula: P_active = k·(gated ? 3 : 2)·l·fe + E·h (router) + [latent] 2·h·l + S·(gated ? 3 : 2)·h·fs
+      // Formula: P_active = k·(gated ? 3 : 2)·l·fe + E·h (router) + [latent] 2·h·l + [latentNorm] l + S·(gated ? 3 : 2)·h·fs
       return moeParams(block, block.topK);
     case 'ngram_embedding':
       // Formula: P_active = P_ngram − tableRows·rowDim + rowsPerToken·rowDim

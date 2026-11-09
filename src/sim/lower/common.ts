@@ -18,19 +18,32 @@ import type { CollectiveOp, ElementwiseOp, GemmOp } from '../ir/ops';
 import type { LoweringContext } from './lower';
 
 /** Elementwise functions whose FLOP per element depend on their shape: their lowering sets `flopsPerElem`. */
-export type ShapeDependentFn = 'causal_conv1d' | 'hc_collapse' | 'hc_expand' | 'sinkhorn';
+export type ShapeDependentFn =
+  | 'causal_conv1d'
+  | 'hc_collapse'
+  | 'hc_expand'
+  | 'sinkhorn'
+  | 'residual_mix';
 
 /** The elementwise functions whose FLOP per element depend on their shape (set by their lowering). */
-export const SHAPE_DEPENDENT_FNS: readonly ShapeDependentFn[] = ['causal_conv1d', 'hc_collapse', 'hc_expand', 'sinkhorn'];
+export const SHAPE_DEPENDENT_FNS: readonly ShapeDependentFn[] = [
+  'causal_conv1d',
+  'hc_collapse',
+  'hc_expand',
+  'sinkhorn',
+  'residual_mix',
+];
 
 /**
  * Vector FLOP per output element of each elementwise function (documented approximations; they only feed the
  * vector-compute time). Functions whose cost depends on their shape take an explicit `flopsPerElem` from their
  * lowering ({@link SHAPE_DEPENDENT_FNS}): `causal_conv1d` 2·K, `hc_collapse` 2·N, `hc_expand` 2N+2 (mixing) or 2,
- * `sinkhorn` 4·iters per N×N element. `router_topk` is per logit. `ngram_gate` ≈ 8 (two norm statistics, a dot
- * product, a sigmoid and the fused add); `kv_pool` ≈ 4 (softmax weight, multiply, add); `kv_cache_write` 1 (the cast
- * of each stored K/V element into the cache format); `candidate_score` 2 (one multiply-add per rank element); `relu2`
- * 2 (max, square).
+ * `sinkhorn` 4·iters per N×N element, `residual_mix` 6·C per output element over C candidates (per candidate: RMS
+ * statistic 2, normalize-and-score 2, weighted sum 2; the C-way softmax is per token, not per element). `router_topk`
+ * is per logit. `situ` ≈ 9 (β·tanh(x/β) 5, sigmoid 3, multiply 1), `situ_mul` ≈ 15 (situ + the tanh bound on `up` 5 +
+ * the multiply); `ngram_gate` ≈ 8 (two norm statistics, a dot product, a sigmoid and the fused add); `kv_pool` ≈ 4
+ * (softmax weight, multiply, add); `kv_cache_write` 1 (the cast of each stored K/V element into the cache format);
+ * `candidate_score` 2 (one multiply-add per rank element); `relu2` 2 (max, square).
  * Unit: FLOP/element. See docs/simulation-model.md §3 "Elementwise".
  */
 export const ELEMENTWISE_FLOPS_PER_ELEM: Record<Exclude<ElementwiseOp['fn'], ShapeDependentFn>, number> = {
@@ -46,6 +59,8 @@ export const ELEMENTWISE_FLOPS_PER_ELEM: Record<Exclude<ElementwiseOp['fn'], Sha
   relu: 1,
   relu_mul: 2,
   relu2: 2,
+  situ: 9,
+  situ_mul: 15,
   sigmoid_mul: 5,
   gated_rmsnorm: 9,
   router_topk: 5,

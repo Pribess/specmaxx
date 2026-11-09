@@ -93,7 +93,7 @@ export interface BlockDraftSpec {
   /** True for a GLU-style (gate and up) drafter MLP. */
   gated: boolean;
   /** Drafter MLP activation function. */
-  activation: 'silu' | 'gelu' | 'relu';
+  activation: FfnActivation;
   /**
    * Sliding window of the drafter's attention over its context K/V (`sliding_window` when `layer_types` are
    * sliding); absent = full attention. Unit: tokens.
@@ -127,6 +127,7 @@ export interface LayerSpec {
 export type BlockSpec =
   | NormBlock
   | ResidualBlock
+  | ResidualMixBlock
   | GqaAttentionBlock
   | MlaAttentionBlock
   | CsaAttentionBlock
@@ -137,6 +138,12 @@ export type BlockSpec =
   | HcPostBlock
   | NgramEmbeddingBlock
   | ShortConvBlock;
+
+/**
+ * Activation function of a feed-forward block (`relu2`: squared ReLU, ungated only; `situ`: Kimi K3's tanh-bounded
+ * SiLU; see {@link MlpBlock.activation}).
+ */
+export type FfnActivation = 'silu' | 'gelu' | 'relu' | 'relu2' | 'situ';
 
 /** A normalization over the last dimension (per token). */
 export interface NormBlock {
@@ -156,6 +163,24 @@ export interface ResidualBlock {
   name: string;
   /** Residual width. Unit: elements. */
   dim: number;
+}
+
+/**
+ * Attention Residuals (Kimi K3 `attn_res_block_size`, `modeling_kimi_linear.py: _apply_attn_res`): the input of a
+ * sublayer is a softmax-weighted mix of `candidates` vectors per token (the running residual sum and the summaries
+ * of the earlier blocks of `attn_res_block_size` layers) instead of the running sum itself. Per token: each
+ * candidate is RMS-normalized and scored against one shared `dim`-wide weight (the RMSNorm γ times the
+ * `dim → 1` score projection), softmax over the scores, weighted sum. The residual add after the sublayer stays a
+ * plain {@link ResidualBlock}. No cross-token state; the candidates are activations of the same forward pass.
+ */
+export interface ResidualMixBlock {
+  kind: 'residual_mix';
+  /** Display name, e.g. `'attn_residual_mix'`. */
+  name: string;
+  /** Residual width h. Unit: elements. */
+  dim: number;
+  /** Vectors mixed per token: the running sum plus the earlier block summaries (Kimi K3: 2 … 9). Count. */
+  candidates: number;
 }
 
 /** A dense projection with its own weight matrix `inputDim → outputDim` (k = inputDim, n = outputDim), no bias. */
@@ -299,7 +324,7 @@ export interface GqaAttentionBlock {
 /**
  * Multi-head latent attention (DeepSeek-V2/V3): K/V are compressed to a low-rank latent; the KV cache holds
  * `kvLoraRank + qkRopeDim` elements per token per layer (shared by all heads). `qkRopeDim: 0` is legal (NoPE
- * layers: GLM-5.3-Flash, Mistral Large 4 every 4th layer).
+ * layers: GLM-5.3-Flash, Mistral Large 4 every 4th layer). Kimi K3 adds a sigmoid output gate (`outputGate`).
  */
 export interface MlaAttentionBlock {
   kind: 'mla_attention';
@@ -327,6 +352,12 @@ export interface MlaAttentionBlock {
    * cache write and no cache memory, but keeps its own `kv_b` up-projection and its own query path.
    */
   kvCacheFromLayer?: number;
+  /**
+   * Gated attention output (Kimi K3 `mla_use_output_gate`): `sigmoid(g_proj(x)) ⊙ attn_out` before `o_proj`, the
+   * gate from its own projection `g_proj: h → heads·vHeadDim` of the layer input (unlike GQA's gate, which is a
+   * wider q projection; MLA's q is low-rank). Default false.
+   */
+  outputGate?: boolean;
 }
 
 /**
@@ -404,8 +435,9 @@ export interface LinearAttentionBlock {
   /** Display name, e.g. `'linear_attn'`. */
   name: string;
   /**
-   * Recurrence variant. `'kda'` (Kimi Delta Attention, GLM-5.3-Flash): separate full q/k/v projections with their
-   * own convs, a per-channel forget gate and an output gate, both low-rank (`gateRank`), and a β projection.
+   * Recurrence variant. `'kda'` (Kimi Delta Attention, GLM-5.3-Flash, Kimi K3): separate full q/k/v projections
+   * with their own convs, a per-channel forget gate and an output gate, both low-rank (`gateRank`) unless
+   * `fullRankOutputGate`, and a β projection.
    * `'mamba2'` (Mamba-2 SSD, Nemotron-H): one fused in_proj `h → (z, x, B, C, dt)` with ONE dt per head (not two
    * gates); per-head vectors A_log, D and dt_bias (3 per head); the conv runs over x, B and C; the output norm is a
    * grouped RMSNorm after `y·silu(z)` with γ over all `vHeads·valueDim` channels; in the chunked form C·Bᵀ is
@@ -439,9 +471,14 @@ export interface LinearAttentionBlock {
   outputGate: boolean;
   /**
    * Rank r of the low-rank forget gate (`f_a: h → r`, `f_b: r → vH·dk`) and output gate (`g_a: h → r`,
-   * `g_b: r → vH·dv`); set iff `variant` is `'kda'` (GLM: r = head_dim 128). Unit: elements.
+   * `g_b: r → vH·dv`); set iff `variant` is `'kda'` (GLM-5.3-Flash and Kimi K3: r = head_dim 128). Unit: elements.
    */
   gateRank?: number;
+  /**
+   * True if the KDA output gate is ONE full-rank projection `g: h → vH·dv` (Kimi K3 `use_full_rank_gate`) instead
+   * of the rank-`gateRank` pair `g_a → g_b`; the forget gate stays low-rank. Only with `variant 'kda'`. Default false.
+   */
+  fullRankOutputGate?: boolean;
 }
 
 /** Dense feed-forward block: `down(act(gate(x)) ⊙ up(x))` if gated, else `down(act(up(x)))`. */
@@ -455,8 +492,12 @@ export interface MlpBlock {
   intermediate: number;
   /** True for GLU-style (gate and up projections, e.g. SwiGLU). */
   gated: boolean;
-  /** Activation function (`relu2`: `relu(x)²`, ungated only). */
-  activation: 'silu' | 'gelu' | 'relu' | 'relu2';
+  /**
+   * Activation function. `relu2`: `relu(x)²`, ungated only (Nemotron-H). `situ` (Kimi K3 `hidden_act`):
+   * `β·tanh(gate/β)·sigmoid(gate) ⊙ β'·tanh(up/β')`, a tanh-bounded SiLU on the gate and a tanh bound on the up
+   * branch (elementwise; the bounds β, β' are constants).
+   */
+  activation: FfnActivation;
   /** True if the projections have biases. */
   bias: boolean;
 }
@@ -479,19 +520,20 @@ export interface MoeBlock {
   expertIntermediate: number;
   /** True for GLU-style experts. */
   gated: boolean;
-  /** Expert activation function (`relu2`: `relu(x)²`, ungated only, e.g. Nemotron-H experts). */
-  activation: 'silu' | 'gelu' | 'relu' | 'relu2';
+  /** Expert activation function (see {@link MlpBlock.activation}; Nemotron-H experts use `relu2`). */
+  activation: FfnActivation;
   /** Shared experts applied to every token (0 = none). Count. */
   sharedExperts: number;
   /** Intermediate width of EACH shared expert. Unit: elements. */
   sharedIntermediate: number;
   /**
-   * Width l the routed experts run at (latent MoE: Muse Spark `moe_hidden_size`, Nemotron `moe_latent_size`);
-   * absent = `hidden` with no projections. When set, a projection `h → l` runs before the expert dispatch and
-   * `l → h` after the combine (both module `'moe_latent'`, replicated across TP; `l → h` is row-split instead when
-   * `expertOutputNorm` splits the expert outputs); the routed experts'
+   * Width l the routed experts run at (latent MoE: Muse Spark `moe_hidden_size`, Nemotron `moe_latent_size`,
+   * Kimi K3 `routed_expert_hidden_size`); absent = `hidden` with no projections. When set, a projection `h → l`
+   * runs before the expert dispatch and `l → h` after the combine (both module `'moe_latent'`; `l → h` is row-split
+   * when `expertOutputNorm` splits the expert outputs or with {@link MoeBlock.latentNorm}); the routed experts'
    * input/output width, the EP dispatch/combine messages and the combine are at l. The router reads h and the
-   * shared experts stay at h. Must be a positive integer. Unit: elements.
+   * shared experts stay at h. Otherwise both projections are replicated across TP. Must be a positive integer.
+   * Unit: elements.
    */
   latentDim?: number;
   /**
@@ -502,6 +544,14 @@ export interface MoeBlock {
    * rank then works on an `l/etp` shard. Absent = false (no norm, no extra communication).
    */
   expertOutputNorm?: boolean;
+  /**
+   * True if an RMSNorm over l (γ: l params) follows the combine, before the `l → h` projection (Kimi K3
+   * `latent_moe_use_norm`). Only with `latentDim`, and not with `expertOutputNorm`. The norm needs the complete
+   * expert sum, so in mode A the TP ranks' partial sums are all-reduced at l first; the `l → h` projection is then
+   * row-parallel over tp (its partial h sums join the block's one TP all-reduce). Default false (absent). Unit: none
+   * (flag).
+   */
+  latentNorm?: boolean;
 }
 
 /**
@@ -621,7 +671,8 @@ export interface ShortConvBlock {
  * Linear-layer module classes that quantized checkpoints treat differently (e.g. NVFP4 routed experts with FP8
  * attention and BF16 hyper-connections). Each linear GEMM belongs to exactly one class. Sub-classes fall back to
  * their parent when `QuantConfig.modules` does not list them ({@link WEIGHT_MODULE_FALLBACK}): `attention_kv_down`
- * and `attention_kv_up` → `attention`; `indexer_key` and `indexer_head_weights` → `indexer`.
+ * and `attention_kv_up` → `attention`; `indexer_key` and `indexer_head_weights` → `indexer`; `moe_latent` →
+ * `shared_experts`.
  */
 export type WeightModule =
   /** GQA q/k/v/o, MLA q path and o_proj, CSA q path, window `wkv` and output projections. */
@@ -651,8 +702,9 @@ export type WeightModule =
   /** MoE routed-expert projections. */
   | 'routed_experts'
   /**
-   * Latent-MoE projections around the routed experts, `h → l` and `l → h` ({@link MoeBlock.latentDim}); no
-   * fallback (absent: `QuantConfig.weights`). (Nemotron NVFP4 keeps `fc1/fc2_latent_proj` BF16.)
+   * Latent-MoE projections around the routed experts, `h → l` and `l → h` ({@link MoeBlock.latentDim}): dense
+   * per-token GEMMs like the shared experts, which they fall back to. (Nemotron NVFP4 keeps `fc1/fc2_latent_proj`
+   * BF16; Kimi K3 stores `routed_expert_{down,up}_proj` BF16 next to MXFP4 experts.)
    */
   | 'moe_latent'
   /** Hyper-connection projections; default `{ dtype: highPrecision }` (not `weights`), never structured-sparse. */
@@ -666,6 +718,7 @@ export const WEIGHT_MODULE_FALLBACK: Partial<Record<WeightModule, WeightModule>>
   attention_kv_up: 'attention',
   indexer_key: 'indexer',
   indexer_head_weights: 'indexer',
+  moe_latent: 'shared_experts',
 };
 
 /** Numeric format of one {@link WeightModule} class. */

@@ -14,7 +14,14 @@
 
 import type { FfnParams, MixerParams, ResidualParams } from '../../../ir/builders';
 import { hyperCollapse } from '../../../ir/builders';
-import type { HcPreBlock, IndexerSpec, LayerSpec, ModelSpec, SparseSelection } from '../../../ir/model';
+import type {
+  FfnActivation,
+  HcPreBlock,
+  IndexerSpec,
+  LayerSpec,
+  ModelSpec,
+  SparseSelection,
+} from '../../../ir/model';
 import { blockParams } from '../../../ir/params';
 import { modelSpecErrors } from '../../../ir/validateModel';
 import type { ConfigReader } from '../reader';
@@ -23,18 +30,19 @@ import type { ConfigReader } from '../reader';
 export type MlaMixerParams = Extract<MixerParams, { kind: 'mla' }>;
 
 /** Activation of an FFN, as the IR names it. */
-export type FfnActivation = 'silu' | 'gelu' | 'relu';
+export type { FfnActivation };
 
 /**
  * The FFN activation from `hidden_act` (default `'silu'` when absent). `silu`/`swish`/`swiglu` → silu, any
- * `gelu*` → gelu, `relu` → relu; anything else records an error. A `swiglu_limit` clamp is elementwise and
- * not modeled.
+ * `gelu*` → gelu, `relu` → relu, `situ` (Kimi K3) → situ; anything else records an error. A `swiglu_limit` clamp is
+ * elementwise and not modeled.
  */
 export function readActivation(r: ConfigReader, key = 'hidden_act'): FfnActivation {
   const act = r.optStr(key);
   if (act === undefined || act === 'silu' || act === 'swish' || act === 'swiglu') return 'silu';
   if (act.startsWith('gelu')) return 'gelu';
   if (act === 'relu') return 'relu';
+  if (act === 'situ') return 'situ';
   r.errors.push(`${r.path ? `${r.path}.` : ''}${key}: unsupported activation '${act}'`);
   return 'silu';
 }

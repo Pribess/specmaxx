@@ -366,6 +366,30 @@ const CASES: Case[] = [
       indexer_key: ['bf16'],
     },
   },
+  // Kimi K3: MXFP4 (g32 e8m0, `mxfp4-pack-quantized`) on `Linear` with everything but the experts in `ignore`. K3's
+  // ignore list misses the latent-MoE projections (K3.1-Pro's names them); the headers store them BF16, which the
+  // `nativeHighPrecision` probes carry. Activations `null`: weight-only (W4A16).
+  ...['moonshotai/Kimi-K3', 'moonshotai/Kimi-K3.1-Pro'].map(
+    (repo): Case => ({
+      repo,
+      dir: '',
+      scheme: /^compressed-tensors mxfp4-pack-quantized \(group_0: mxfp4\)$/,
+      source: 'quantization_config',
+      modules: {
+        routed_experts: ['mxfp4'],
+        moe_latent: ['bf16'],
+        shared_experts: ['bf16'],
+        dense_mlp: ['bf16'],
+        attention: ['bf16'],
+        attention_kv_down: ['bf16'],
+        attention_kv_up: ['bf16'],
+        linear_attention: ['bf16'],
+        indexer: ['bf16'],
+      },
+      explicit: ['modules'],
+      noNotes: [/ignore:/, /moe_latent/],
+    }),
+  ),
 
   // --- Quark ----------------------------------------------------------------------------------------------------
   {
@@ -638,5 +662,42 @@ describe('deriveQuantDefaults: edge cases', () => {
     expect(d.source).toBe('params.json');
     expect(effective(d.quant, 'attention')).toEqual({ dtype: 'fp8_e4m3', extra: FP8_128_UE8M0, input: 'fp8_e4m3' });
     expect(effective(d.quant, 'attention_kv_down').dtype).toBe('bf16');
+  });
+
+  it('compressed-tensors keeps a nativeHighPrecision probe native (Kimi latent-MoE projections) even with no ignore list', () => {
+    // Two layers: layer 1 KDA (1-based list), layer 2 MLA; both MoE with a latent width, no `ignore` at all.
+    const kimiText = {
+      model_type: 'kimi_linear',
+      num_hidden_layers: 2,
+      linear_attn_config: { kda_layers: [1], full_attn_layers: [2] },
+      num_experts: 4,
+      routed_expert_hidden_size: 64,
+      dtype: 'bfloat16',
+    };
+    const d = deriveQuantDefaults({
+      top: { model_type: 'kimi_k3', text_config: kimiText },
+      text: kimiText,
+    });
+    expect(d.quant.weights).toEqual({ dtype: 'bf16' }); // no quantization_config at all: unquantized
+    const quantized = {
+      ...kimiText,
+      quantization_config: {
+        quant_method: 'compressed-tensors',
+        format: 'mxfp4-pack-quantized',
+        config_groups: {
+          g: {
+            targets: ['Linear'],
+            weights: { num_bits: 4, type: 'float', strategy: 'group', group_size: 32 },
+          },
+        },
+      },
+    };
+    const q = deriveQuantDefaults({
+      top: { model_type: 'kimi_k3', text_config: quantized },
+      text: quantized,
+    });
+    expect(effective(q.quant, 'shared_experts').dtype).toBe('mxfp4'); // `Linear` catches the shared experts
+    expect(effective(q.quant, 'moe_latent').dtype).toBe('bf16'); // but not the header-BF16 latent projections
+    expect(effective(q.quant, 'linear_attention').dtype).toBe('mxfp4'); // KDA at layer 0 (1-based list read right)
   });
 });

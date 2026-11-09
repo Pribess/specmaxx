@@ -3,10 +3,17 @@
  * `REF_DENSE_8B` copies Qwen3-8B's published shape so its size can be sanity-checked; the `TINY_*` fixtures have
  * made-up dims that exercise every block kind (hybrid linear attention, MoE with shared experts, dense first
  * layers, gated attention, MLA with a sparse indexer, DeepSeek-V4.1 CSA, hyper-connections and n-gram tables, KDA,
- * cross-layer KV and top-k sharing, Inkling relative bias and short convs).
+ * cross-layer KV and top-k sharing, Inkling relative bias and short convs, Kimi K3 latent MoE, gated MLA and
+ * Attention Residuals).
  */
 
-import { decoderLayer, decoderModel, hyperCollapse, repeatLayers } from '../ir/builders';
+import {
+  attnResCollapse,
+  decoderLayer,
+  decoderModel,
+  hyperCollapse,
+  repeatLayers,
+} from '../ir/builders';
 import type { FfnParams, MixerParams } from '../ir/builders';
 import type { ModelSpec } from '../ir/model';
 
@@ -384,4 +391,66 @@ export const TINY_INKLING: ModelSpec = decoderModel({
       shortConv: { kernel: 4 },
     }),
   ),
+});
+
+/**
+ * Tiny Kimi-K3-style hybrid (made-up dims): h 128, 2 layers with Attention Residuals of block size 1 (layer 0 pushes
+ * a summary, so its ffn mixes 2 candidates; layer 1 mixes 2 before its mixer and 3 before its ffn; the final mix 3).
+ * Layer 0: KDA (2 q/k heads, 2 value heads, dk = dv = 32, conv 4, forget-gate rank 16, FULL-RANK output gate) and a
+ * dense `situ` ffn of 256. Layer 1: MLA (4 heads, rq 32, rkv 32, dn 16, dr 8, dv 16) with a sigmoid output gate and
+ * a latent MoE (E 8, top-2, fe 64, latent width L 64 with norm, one shared expert of 128). Vocab 1000.
+ */
+export const TINY_KIMI: ModelSpec = decoderModel({
+  name: 'TINY_KIMI',
+  hidden: 128,
+  vocab: 1000,
+  tieEmbeddings: false,
+  source: 'made-up test fixture (Kimi K3-style)',
+  layers: [
+    decoderLayer({
+      name: 'layer.0',
+      hidden: 128,
+      mixer: {
+        kind: 'linear',
+        variant: 'kda',
+        qkHeads: 2,
+        vHeads: 2,
+        keyDim: 32,
+        valueDim: 32,
+        convKernel: 4,
+        outputGate: true,
+        gateRank: 16,
+        fullRankOutputGate: true,
+      },
+      ffn: { kind: 'dense', intermediate: 256, activation: 'situ' },
+      residual: { kind: 'attn_res', blockSize: 1, layerIndex: 0 },
+    }),
+    decoderLayer({
+      name: 'layer.1',
+      hidden: 128,
+      mixer: {
+        kind: 'mla',
+        heads: 4,
+        qLoraRank: 32,
+        kvLoraRank: 32,
+        qkNopeDim: 16,
+        qkRopeDim: 8,
+        vHeadDim: 16,
+        outputGate: true,
+      },
+      ffn: {
+        kind: 'moe',
+        experts: 8,
+        topK: 2,
+        expertIntermediate: 64,
+        sharedExperts: 1,
+        sharedIntermediate: 128,
+        activation: 'situ',
+        latentDim: 64,
+        latentNorm: true,
+      },
+      residual: { kind: 'attn_res', blockSize: 1, layerIndex: 1 },
+    }),
+  ],
+  beforeHead: [attnResCollapse({ blockSize: 1, layers: 2, dim: 128 })],
 });

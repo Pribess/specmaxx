@@ -85,9 +85,10 @@ function linearShard(block: LinearAttentionBlock, tp: number): LinearShard {
 /**
  * Linear-attention ops, in order: input projections → [causal_conv1d] → recurrent → gated_rmsnorm (or rmsnorm) →
  * out_proj → [TP all-reduce of T·h]. Input projections: `lin.in_proj` (one fused GEMM), or for KDA `lin.qkv`
- * (q, k, v and β) plus the low-rank gates `lin.f_a → lin.f_b` (forget) and `lin.g_a → lin.g_b` (output); the
- * rank-r down-projections are replicated on every TP rank. In a speculative verify the conv and recurrent states
- * are written once per position (`stateSnapshots = k + 1`, design doc §3.3); otherwise once.
+ * (q, k, v and β) plus the low-rank gates `lin.f_a → lin.f_b` (forget) and `lin.g_a → lin.g_b` (output), or one
+ * full-rank `lin.g` output gate (`fullRankOutputGate`, Kimi K3); the rank-r down-projections are replicated on every
+ * TP rank. In a speculative verify the conv and recurrent states are written once per position (`stateSnapshots =
+ * k + 1`, design doc §3.3); otherwise once.
  */
 export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringContext): Op[] {
   const T = stepTokens(ctx);
@@ -106,14 +107,18 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
   if (block.variant === 'kda') {
     const r = block.gateRank ?? 0;
     // Formula: lin.qkv: n = 2·qkL·dk + vL·dv + vL (β), k = h; f_a: n = r, k = h; f_b: n = vL·dk, k = r;
-    //          g_a: n = r, k = h; g_b: n = vL·dv, k = r
+    //          output gate: fullRankOutputGate ? g: n = vL·dv, k = h : (g_a: n = r, k = h; g_b: n = vL·dv, k = r)
     // See docs/simulation-model.md §5 "KDA"
     const m = { module: 'linear_attention' } as const;
     ops.push(linearGemm('lin.qkv', { m: T, n: 2 * qkL * dk + vL * dv + vL, k: h }, ctx, { ...m, outParts: [qkL * dk, qkL * dk, vL * dv, vL] }));
     ops.push(linearGemm('lin.f_a', { m: T, n: r, k: h }, ctx, m));
     ops.push(linearGemm('lin.f_b', { m: T, n: vL * dk, k: r }, ctx, m));
-    ops.push(linearGemm('lin.g_a', { m: T, n: r, k: h }, ctx, m));
-    ops.push(linearGemm('lin.g_b', { m: T, n: vL * dv, k: r }, ctx, m));
+    if (block.fullRankOutputGate === true) {
+      ops.push(linearGemm('lin.g', { m: T, n: vL * dv, k: h }, ctx, m));
+    } else {
+      ops.push(linearGemm('lin.g_a', { m: T, n: r, k: h }, ctx, m));
+      ops.push(linearGemm('lin.g_b', { m: T, n: vL * dv, k: r }, ctx, m));
+    }
   } else {
     // g: scalar gate outputs per value head (GatedDeltaNet / linear 2: a, b; Mamba2 1: dt)
     const g = linearVariantConstants(block.variant).gateOutputsPerHead;

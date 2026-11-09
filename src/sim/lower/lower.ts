@@ -27,7 +27,7 @@ import { lowerMla, mlaSequenceStateBytes } from './mla';
 import { lowerMlp } from './mlp';
 import { lowerMoe, moeResidentWeightBytes } from './moe';
 import { lowerNgram, ngramResidentWeightBytes, ngramSequenceStateBytes } from './ngram';
-import { lowerNorm, lowerResidual } from './norm';
+import { lowerNorm, lowerResidual, lowerResidualMix } from './norm';
 import { denseLayerPlacementAt, prefetchedFraction } from './offload';
 import { lowerShortConv, shortConvSequenceStateBytes } from './shortConv';
 
@@ -181,21 +181,41 @@ export function lowerModel(model: ModelSpec, ctx: LoweringContext): LoweredModel
         };
       }
     } else {
-      // Formula: send_recv S = T·(N·h)·bpe(act), N = residualStreams (default 1)
+      // Formula: send_recv S = T·(N_live·h)·bpe(act), N_live = ppBoundaryResidualVectors(model, end)
       // See docs/simulation-model.md §5 "PP split"
+      const vectors = ppBoundaryResidualVectors(model, end);
       stage.sendToNext = {
         kind: 'collective',
         name: 'pp.send_recv',
         collective: 'send_recv',
         group: 'pp',
         groupSize: 2,
-        messageBytes: stepTokens(ctx) * (model.residualStreams ?? 1) * model.hidden * actBpe(ctx),
+        messageBytes: stepTokens(ctx) * vectors * model.hidden * actBpe(ctx),
         dtype: ctx.quant.activations,
       };
     }
     stages.push(stage);
   }
   return { stages };
+}
+
+/**
+ * Residual vectors per token, each `hidden` wide, that a PP stage boundary before layer `layerIndex` must carry: the
+ * activations the layers from `layerIndex` on still read. Count (multiply by `T·h·bpe(act)` for bytes).
+ *
+ * - Plain residual: 1 (the running sum). Hyper-connections: `residualStreams` N.
+ * - Attention Residuals (Kimi K3): the running sum plus every block summary stored so far, `1 + ceil(i/B)`
+ *   (`builders.ts: attnResSummariesBefore`); later layers and the final mix read all of them. This equals the
+ *   `candidates` of layer i's first `residual_mix` (its pre-mixer mix, which mixes exactly those vectors), so it is
+ *   read from there rather than recomputed. Kimi K3 at pp 2 (boundary before layer 46, B 12): 1 + 4 = 5.
+ *
+ * Formula: N_live = C(first residual_mix of layer i) if it has one, else residualStreams (default 1).
+ * See docs/simulation-model.md §5 "PP split".
+ */
+export function ppBoundaryResidualVectors(model: ModelSpec, layerIndex: number): number {
+  const mix = model.layers[layerIndex]?.blocks.find((b) => b.kind === 'residual_mix');
+  if (mix !== undefined && mix.kind === 'residual_mix') return mix.candidates;
+  return model.residualStreams ?? 1;
 }
 
 /**
@@ -247,6 +267,8 @@ export function lowerBlock(block: BlockSpec, ctx: LoweringContext, layerIndex?: 
       return lowerNorm(block, ctx);
     case 'residual':
       return lowerResidual(block, ctx);
+    case 'residual_mix':
+      return lowerResidualMix(block, ctx);
     case 'gqa_attention':
       return lowerGqa(block, ctx);
     case 'mla_attention':
@@ -297,6 +319,7 @@ export function blockResidentWeightBytes(
       return ngramResidentWeightBytes(block, ctx, layerIndex);
     case 'norm':
     case 'residual':
+    case 'residual_mix':
     case 'gqa_attention':
     case 'mla_attention':
     case 'linear_attention':
@@ -342,6 +365,7 @@ export function blockSequenceStateBytes(
       return shortConvSequenceStateBytes(block, ctx);
     case 'norm':
     case 'residual':
+    case 'residual_mix':
     case 'mlp':
     case 'moe':
     case 'hc_pre':

@@ -2,20 +2,23 @@
  * Check the IR's parameter count against the checkpoint's, and a generic vision-tower estimate.
  *
  * Expected = the Hub's `safetensors.total` (normally the sum of the safetensors header element counts; it includes
- * MTP layers and vision/audio towers), unless rule 3 replaces it. Actual = `countParams(model) +
+ * MTP layers and vision/audio towers), unless rule 4 replaces it. Actual = `countParams(model) +
  * mtpParamsEstimate + visionParamsEstimate`. Rules, in order:
  * 1. No `safetensors` in the api info (e.g. Mistral consolidated repos) → `unavailable`.
- * 2. Packed quantized storage → `packed`: the Hub counts each packed word (`U8`, `U32`, `I32`, …) as ONE
+ * 2. `|actual − expected| / expected ≤ PARAM_CHECK_TOLERANCE` (2%) → `ok`, whatever the dtype keys: a total that
+ *    matches the IR counts weights, not packed words (Kimi K3's MXFP4 experts are listed under `U8` with their
+ *    logical count, 2,722,740,830,208 = Σ E·3·L·fe over its 92 MoE layers).
+ * 3. Packed quantized storage → `packed`: the Hub counts each packed word (`U8`, `U32`, `I32`, …) as ONE
  *    element although it holds several weights, so the total is not a parameter count. Packed when
  *    `parameters` has a `U8`, `U16`, `U32`, `I32` or `I16` key, or an `I8` key while the repo's
  *    `quant_method` is not DeepSeek's native `fp8` (DeepSeek-V4.1 stores its fp4 experts as `I8` with one
  *    element per weight, and its total matches the IR).
- * 3. Per-dtype sum above the total: `sum = Σ safetensors.parameters`. When `(sum − total) / total >
+ * 4. Per-dtype sum above the total: `sum = Σ safetensors.parameters`. When `(sum − total) / total >
  *    PARAM_SUM_TOLERANCE` (1e-4), expected = sum. The Hub's total can come from the index's `total_parameters`,
  *    which leaves out MTP tensors (Nemotron-3.5-Lightning: total 31,577,937,344, sum 32,913,266,240, the
  *    difference being its MTP layer), while the per-dtype counts are read from the headers. A sum below the
- *    total is not used (incomplete counts).
- * 4. `|actual − expected| / expected ≤ PARAM_CHECK_TOLERANCE` (2%) → `ok`, else `mismatch` (a warning).
+ *    total is not used (incomplete counts). `|actual − sum| / sum ≤ PARAM_CHECK_TOLERANCE` → `ok`, else `mismatch`.
+ * 5. Otherwise `mismatch` (a warning).
  */
 
 import { countParams } from '../../ir/params';
@@ -28,12 +31,12 @@ const PACKED_KEYS = ['U8', 'U16', 'U32', 'I16', 'I32'];
 
 /**
  * Relative excess of the per-dtype sum over `safetensors.total` above which the sum is the expected count
- * (rule 3). Unit: dimensionless fraction.
+ * (rule 4). Unit: dimensionless fraction.
  */
 export const PARAM_SUM_TOLERANCE = 1e-4;
 
 /**
- * Compare `model` (+ excluded estimates) with `api.safetensors.total`, or its per-dtype sum (rule 3 above).
+ * Compare `model` (+ excluded estimates) with `api.safetensors.total`, or its per-dtype sum (rule 4 above).
  * `quantMethod` is the config's `quantization_config.quant_method`, used to tell packed `I8` storage
  * from DeepSeek's unpacked one.
  */
@@ -54,6 +57,16 @@ export function checkParams(
   const expected = st.total;
   // Formula: relError = (actual − expected) / expected
   const relError = (actual - expected) / expected;
+  const pct = (relError * 100).toFixed(2);
+  if (Math.abs(relError) <= PARAM_CHECK_TOLERANCE) {
+    return {
+      status: 'ok',
+      expected,
+      actual,
+      relError,
+      note: `IR + excluded parts match safetensors.total (${pct}%)`,
+    };
+  }
 
   const keys = Object.keys(st.parameters ?? {});
   const packedKey = keys.find((k) => PACKED_KEYS.includes(k));
@@ -89,11 +102,6 @@ export function checkParams(
       relError: sumRelError,
       note: `IR + excluded parts differ by ${sumPct}% (tolerance ±${PARAM_CHECK_TOLERANCE * 100}%); ${why}`,
     };
-  }
-
-  const pct = (relError * 100).toFixed(2);
-  if (Math.abs(relError) <= PARAM_CHECK_TOLERANCE) {
-    return { status: 'ok', expected, actual, relError, note: `IR + excluded parts match safetensors.total (${pct}%)` };
   }
   return {
     status: 'mismatch',

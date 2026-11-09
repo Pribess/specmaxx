@@ -4,7 +4,7 @@
  */
 
 import type { ElementwiseOp, Op } from '../ir/ops';
-import type { MlpBlock } from '../ir/model';
+import type { FfnActivation, MlpBlock } from '../ir/model';
 import { actBpe, elementwise, linearGemm, shardWidth, stepTokens, tpAllReduce } from './common';
 import type { LoweringContext } from './lower';
 
@@ -17,7 +17,7 @@ export interface DenseFfnShape {
   /** GLU-style (gate and up). */
   gated: boolean;
   /** Activation function (`relu2` = `relu(x)²`, ungated only). */
-  activation: 'silu' | 'gelu' | 'relu' | 'relu2';
+  activation: FfnActivation;
   /** Projection biases. */
   bias: boolean;
 }
@@ -26,7 +26,7 @@ export interface DenseFfnShape {
  * The elementwise function of an activation, fused with the gate multiply when gated. `relu2` exists only ungated
  * (Nemotron-H experts); a gated `relu2` throws, since no model uses it and its FLOP count is not defined.
  */
-export function activationFn(activation: 'silu' | 'gelu' | 'relu' | 'relu2', gated: boolean): ElementwiseOp['fn'] {
+export function activationFn(activation: FfnActivation, gated: boolean): ElementwiseOp['fn'] {
   switch (activation) {
     case 'silu':
       return gated ? 'silu_mul' : 'silu';
@@ -37,6 +37,8 @@ export function activationFn(activation: 'silu' | 'gelu' | 'relu' | 'relu2', gat
     case 'relu2':
       if (gated) throw new Error('activation relu2 is supported only ungated (gated: false)');
       return 'relu2';
+    case 'situ':
+      return gated ? 'situ_mul' : 'situ';
     default: {
       const _never: never = activation;
       throw new Error(`unknown activation ${String(_never)}`);

@@ -10,6 +10,7 @@ import { deepseekV41Family, deepseekV4Family } from './families/deepseekV41';
 import { glm5NextFamily } from './families/glm5Next';
 import { glmMoeDsaFamily } from './families/glmMoeDsa';
 import { inklingFamily } from './families/inkling';
+import { kimiLinearFamily } from './families/kimiLinear';
 import { minimaxFamily } from './families/minimax';
 import { mistralLarge4Family } from './families/mistralLarge4';
 import { nemotronHFamily } from './families/nemotronH';
@@ -29,4 +30,5 @@ export const FAMILIES: readonly FamilyEntry[] = [
   mistralLarge4Family,
   nemotronHFamily,
   museSparkFamily,
+  kimiLinearFamily,
 ];

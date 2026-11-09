@@ -12,6 +12,7 @@ import {
   TINY_HYBRID,
   TINY_INKLING,
   TINY_KDA,
+  TINY_KIMI,
   TINY_MLA_SHARED,
   TINY_MLA_SPARSE,
 } from '../models/reference';
@@ -265,7 +266,7 @@ describe('defaults', () => {
 });
 
 describe('shortlist block kinds end to end (TINY fixtures on the synthetic cluster, tp 2, pp 2)', () => {
-  const models = [TINY_CSA, TINY_HC_NGRAM, TINY_KDA, TINY_MLA_SHARED, TINY_INKLING];
+  const models = [TINY_CSA, TINY_HC_NGRAM, TINY_KDA, TINY_MLA_SHARED, TINY_INKLING, TINY_KIMI];
   it.each(models.map((m) => [m.name, m] as const))('%s simulates with positive rates and memory', (_name, model) => {
     const r = simulate(
       input({

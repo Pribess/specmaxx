@@ -7,7 +7,14 @@ import type { ParallelConfig, QuantConfig } from '../ir/model';
 import type { AttentionOp, CollectiveOp, GemmOp, IndexerOp, Op, RecurrentOp } from '../ir/ops';
 import { blockParams } from '../ir/params';
 import { modelSpecErrors } from '../ir/validateModel';
-import { TINY_CSA, TINY_HC_NGRAM, TINY_INKLING, TINY_KDA, TINY_MLA_SHARED } from '../models/reference';
+import {
+  TINY_CSA,
+  TINY_HC_NGRAM,
+  TINY_INKLING,
+  TINY_KDA,
+  TINY_KIMI,
+  TINY_MLA_SHARED,
+} from '../models/reference';
 import { crossStageWarnings } from '../engine/simulate';
 import { blockResidentWeightBytes, blockSequenceStateBytes, lowerModel, type LoweringContext } from './lower';
 import type { ModelSpec } from '../ir/model';
@@ -34,7 +41,7 @@ const byName = (ops: Op[], name: string): Op => {
 const names = (ops: Op[]): string[] => ops.map((o) => o.name);
 
 describe('fixtures are valid and their resident weights equal params · 2 B at tp 1', () => {
-  const models = [TINY_CSA, TINY_HC_NGRAM, TINY_KDA, TINY_MLA_SHARED, TINY_INKLING];
+  const models = [TINY_CSA, TINY_HC_NGRAM, TINY_KDA, TINY_MLA_SHARED, TINY_INKLING, TINY_KIMI];
   it.each(models.map((m) => [m.name, m] as const))('%s', (_name, model) => {
     expect(modelSpecErrors(model)).toEqual([]);
     for (const layer of model.layers) {
