@@ -18,6 +18,7 @@ import { CustomSpecEditor } from './CustomSpecEditor';
 import { SetupRow } from './SetupRow';
 import { OffloadAdvancedFields, OffloadSection } from './OffloadSection';
 import { MemoryFitFields } from './MemoryFitFields';
+import { PerOpCostFields } from './PerOpCostFields';
 import type { PanelProps as Props } from './types';
 
 /** The group of the curated multi-device setups, at the top of the device picker. */
@@ -104,6 +105,7 @@ export function HardwarePanel(props: Props) {
         <summary>Advanced</summary>
         <OffloadAdvancedFields {...props} />
         <MemoryFitFields {...props} />
+        <PerOpCostFields {...props} />
         {device &&
           deviceUnlocks(device.base).map((axis) => (
             <fieldset className="unlock" key={axis.id}>

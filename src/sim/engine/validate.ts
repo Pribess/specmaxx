@@ -93,6 +93,14 @@ export function validateInput(input: SimInput): string[] {
   if (reserve !== undefined && !(Number.isFinite(reserve) && reserve >= 0)) {
     errors.push(`hardware.runtimeReserveBytes (${reserve}) must be a finite number ≥ 0`);
   }
+  const floor = input.options?.perOpLatencyFloorSec;
+  if (floor !== undefined && !(Number.isFinite(floor) && floor >= 0)) {
+    errors.push(`options.perOpLatencyFloorSec (${floor}) must be a finite number ≥ 0`);
+  }
+  const dispatchSec = input.overlays?.engineDispatch?.perKernelSec;
+  if (dispatchSec !== undefined && !(Number.isFinite(dispatchSec) && dispatchSec >= 0)) {
+    errors.push(`overlays.engineDispatch.perKernelSec (${dispatchSec}) must be a finite number ≥ 0`);
+  }
   if (errors.length > 0) return errors;
   if (workload.batch % parallel.dp !== 0) {
     errors.push(`workload.batch (${workload.batch}) must be divisible by dp (${parallel.dp})`);

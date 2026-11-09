@@ -59,6 +59,22 @@ export interface PhaseSummary {
     expectedTokensPerStep: number;
     speedup: number;
   };
+  /**
+   * Prefill only: the same prefill without communication/compute overlap (`SimResult.prefillWithoutOverlap`), a
+   * labelled what-if; absent without inter-device communication. Rates in tokens/s.
+   */
+  withoutOverlap?: { tokensPerSec: number; perSequenceTokensPerSec: number };
+  /**
+   * Decode only: the rates with the engine dispatch overlay on (`SimResult.decodeWithDispatch`), engine overhead
+   * outside the theoretical maximum; absent when the overlay is off. Rates in tokens/s; `kernelsPerStep` count;
+   * `perKernelSec` seconds.
+   */
+  withDispatch?: {
+    tokensPerSec: number;
+    perSequenceTokensPerSec: number;
+    kernelsPerStep: number;
+    perKernelSec: number;
+  };
 }
 
 /** Memory of one device of one stage. Unit: bytes. */
@@ -409,8 +425,26 @@ function roofline(result: SimResult, input: SimInput): RooflineSummary {
 /** Reduces a result for the UI. `notes` (loader notes, unlock descriptions) are appended to the warnings. */
 export function summarize(result: SimResult, input: SimInput, notes: string[] = []): ResultSummary {
   return {
-    prefill: phaseSummary(result.prefill, input.workload.promptLen),
-    decode: phaseSummary(result.decode, input.workload.decodeContextLen),
+    prefill: {
+      ...phaseSummary(result.prefill, input.workload.promptLen),
+      ...(result.prefillWithoutOverlap && {
+        withoutOverlap: {
+          tokensPerSec: result.prefillWithoutOverlap.tokensPerSec,
+          perSequenceTokensPerSec: result.prefillWithoutOverlap.perSequenceTokensPerSec,
+        },
+      }),
+    },
+    decode: {
+      ...phaseSummary(result.decode, input.workload.decodeContextLen),
+      ...(result.decodeWithDispatch && {
+        withDispatch: {
+          tokensPerSec: result.decodeWithDispatch.tokensPerSec,
+          perSequenceTokensPerSec: result.decodeWithDispatch.perSequenceTokensPerSec,
+          kernelsPerStep: result.decodeWithDispatch.kernelsPerStep,
+          perKernelSec: result.decodeWithDispatch.perKernelSec,
+        },
+      }),
+    },
     memory: {
       kind: result.memory.kind,
       fits: memoryFits({ stages: result.memory.perStage, tiers: result.memory.tiers }),

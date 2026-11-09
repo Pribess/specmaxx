@@ -144,6 +144,40 @@ export function ResultHero({
                       </span>
                     )}
                   </div>
+                  {phase === 'prefill' && result.prefill.withoutOverlap && (
+                    <div className="what-if" data-testid="prefill-no-overlap">
+                      <span>Without overlap: </span>
+                      <span className="what-if-value">
+                        <span>
+                          <Num>
+                            {formatTokensPerSec(result.prefill.withoutOverlap.tokensPerSec)}
+                          </Num>
+                        </span>
+                        <HelpIcon term="Prefill without overlap">
+                          {helpLines([
+                            'Prefill when sending data between devices does not overlap with compute.',
+                            'The headline assumes it fully overlaps; most engines do not.',
+                          ])}
+                        </HelpIcon>
+                      </span>
+                    </div>
+                  )}
+                  {phase === 'decode' && result.decode.withDispatch && (
+                    <div className="what-if" data-testid="decode-dispatch">
+                      <span>With engine dispatch: </span>
+                      <span className="what-if-value">
+                        <span>
+                          <Num>{formatTokensPerSec(result.decode.withDispatch.tokensPerSec)}</Num>
+                        </span>
+                        <HelpIcon term="With engine dispatch">
+                          {helpLines([
+                            `Decode if the engine spends ${formatSeconds(result.decode.withDispatch.perKernelSec)} launching each GPU kernel: ${result.decode.withDispatch.kernelsPerStep} per step, one per operation.`,
+                            'That is engine overhead, not a hardware limit, so the headline leaves it out.',
+                          ])}
+                        </HelpIcon>
+                      </span>
+                    </div>
+                  )}
                   <small
                     aria-hidden={state.workload.batch === 1}
                     style={{

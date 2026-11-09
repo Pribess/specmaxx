@@ -9,6 +9,9 @@
  * 3. Resolve the offload placement and the host side, if any (docs §12); `hardware.host` is read only then.
  * 4. For each phase: lower the model (`seqs = b_mb`) → per-op times (transfer ops on their stage's tier paths) →
  *    per-stage times → pipeline + DP.
+ * 4b. Labelled what-if figures next to the headline (docs §7): prefill under `overlap 'none'` when there is
+ *    inter-device communication, and decode with the engine dispatch overlay when it is on. Neither changes the
+ *    headline phases.
  * 5. Memory fit (device and the off-device tiers).
  */
 
@@ -51,7 +54,8 @@ import {
 import { resolveSpeculative } from './specdec';
 import { resolveHostStaging, type HostStaging } from './staging';
 import { stageNStream, type TransferPath } from './transfer';
-import type { OffloadTier, PhaseResult, SimInput, SimOptions, SimResult } from './types';
+import type { OffloadTier, PhaseRates, PhaseResult, SimInput, SimOptions, SimResult } from './types';
+import { DEFAULT_DISPATCH_SEC_PER_KERNEL, stageKernelCount, withDispatch } from './dispatch';
 import { validateInput } from './validate';
 
 /**
@@ -62,6 +66,7 @@ export const DEFAULT_SIM_OPTIONS: SimOptions = {
   overlap: 'ideal',
   elementwiseFusion: 'none',
   collectiveAlgorithm: 'best',
+  perOpLatencyFloorSec: 0,
 };
 
 /** The hardware after modifiers: the device and topology the engine actually simulates, plus info lines. */
@@ -160,7 +165,11 @@ function stageTransferPaths(
   return paths;
 }
 
-/** Lowers and costs one phase (prefill or decode) for one microbatch, then applies the pipeline and DP rules. */
+/**
+ * Lowers and costs one phase (prefill or decode) for one microbatch, then applies the pipeline and DP rules. With
+ * `dispatchSecPerKernel` (the engine dispatch overlay's τ, seconds) each stage time first gets its kernels' dispatch
+ * cost added (`dispatch.ts: withDispatch`); absent = the theoretical stage times.
+ */
 function simulatePhase(
   lowered: LoweredModel,
   phase: 'prefill' | 'decode',
@@ -176,6 +185,7 @@ function simulatePhase(
   shape: { sequencesPerReplica: number; microbatches: number; microbatchSize: number },
   offload: PhaseOffload | undefined,
   tokensPerStep?: number,
+  dispatchSecPerKernel?: number,
 ): PhaseResult {
   let loopBack: ReturnType<typeof opTime> | undefined;
   // Expert-TP collectives (MoE expertOutputNorm with etp > 1) get their own strided-group path (placement.ts:
@@ -198,6 +208,7 @@ function simulatePhase(
       collectiveAlgorithm: base.collectiveAlgorithm,
       elementwiseFusion: base.elementwiseFusion,
       warnings: base.warnings,
+      ...(base.perOpLatencyFloorSec === undefined ? {} : { perOpLatencyFloorSec: base.perOpLatencyFloorSec }),
     };
     if (offload !== undefined) {
       ctx.transferPaths = stageTransferPaths(
@@ -274,7 +285,11 @@ function simulatePhase(
   };
   if (tokensPerStep !== undefined) phaseShape.tokensPerStep = tokensPerStep;
   if (loopBack !== undefined) phaseShape.loopBack = loopBack;
-  return phaseResult(stages, phaseShape);
+  if (dispatchSecPerKernel === undefined) return phaseResult(stages, phaseShape);
+  return phaseResult(
+    stages.map((st) => withDispatch(st, dispatchSecPerKernel)),
+    phaseShape,
+  );
 }
 
 /**
@@ -316,6 +331,16 @@ function speculativeSummary(
     verifySec,
     expectedTokensPerStep,
     speedup: decode.tokensPerSec / offTokensPerSec,
+  };
+}
+
+/** The rates of a phase result, for a what-if figure (tokens/s, seconds). */
+function phaseRates(p: PhaseResult): PhaseRates {
+  return {
+    tokensPerSec: p.tokensPerSec,
+    perSequenceTokensPerSec: p.perSequenceTokensPerSec,
+    latencySec: p.latencySec,
+    cycleSec: p.cycleSec,
   };
 }
 
@@ -362,6 +387,8 @@ export function simulate(input: SimInput): SimResult {
     tpPath: collectivePath(groupSpan(parallel.tp, hw.topology), hw.topology, interStaging),
     epPath: collectivePath(groupSpan(parallel.ep, hw.topology), hw.topology, interStaging),
     ...(interStaging === undefined ? {} : { interStaging }),
+    // The per-op latency floor only when set: with 0 the op contexts are exactly as before.
+    ...(options.perOpLatencyFloorSec > 0 ? { perOpLatencyFloorSec: options.perOpLatencyFloorSec } : {}),
   };
 
   // 3. Offload placement and host (docs §12). Nothing off-device ⇒ offload undefined, hardware.host never read.
@@ -474,6 +501,45 @@ export function simulate(input: SimInput): SimResult {
     );
     decode.speculative = speculativeSummary(decode, spec.expectedTokensPerStep, off.tokensPerSec);
   }
+  // 5b. Labelled what-if figures next to the headline; neither changes `prefill` or `decode`.
+  // Prefill without overlap (review F7): the same prefill under overlap 'none', when it has inter-device comm.
+  let prefillWithoutOverlap: PhaseRates | undefined;
+  if (options.overlap === 'ideal' && (prefill.comm.latencySec > 0 || prefill.comm.bandwidthSec > 0)) {
+    const none = simulatePhase(
+      prefillLowered,
+      'prefill',
+      base,
+      input,
+      hw.topology,
+      { ...options, overlap: 'none' },
+      shape,
+      phaseOffload,
+    );
+    prefillWithoutOverlap = phaseRates(none);
+  }
+  // Engine dispatch overlay (review F1b; docs §7 "Engine dispatch overlay"): t_s' = t_s + n_s·τ per decode stage.
+  let decodeWithDispatch: SimResult['decodeWithDispatch'];
+  const dispatch = input.overlays?.engineDispatch;
+  if (dispatch !== undefined) {
+    const perKernelSec = dispatch.perKernelSec ?? DEFAULT_DISPATCH_SEC_PER_KERNEL;
+    const withEngine = simulatePhase(
+      decodeLowered,
+      'decode',
+      base,
+      input,
+      hw.topology,
+      options,
+      shape,
+      phaseOffload,
+      spec?.expectedTokensPerStep,
+      perKernelSec,
+    );
+    decodeWithDispatch = {
+      ...phaseRates(withEngine),
+      perKernelSec,
+      kernelsPerStep: decode.stages.reduce((n, st) => n + stageKernelCount(st), 0),
+    };
+  }
 
   // 6. Memory fit. The activation peak counts the decode step and the LAST prefill chunk (chunked prefill, docs §8
   // "Activation peak"); the prefill rate above is unaffected. A microbatch within the budget reuses the prefill lowering.
@@ -516,5 +582,7 @@ export function simulate(input: SimInput): SimResult {
     devicesUsed: parallel.tp * parallel.pp * parallel.dp,
     effectiveDevice: device,
     warnings: [...new Set(warnings)],
+    ...(prefillWithoutOverlap === undefined ? {} : { prefillWithoutOverlap }),
+    ...(decodeWithDispatch === undefined ? {} : { decodeWithDispatch }),
   };
 }

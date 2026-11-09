@@ -35,7 +35,9 @@ If compute is longer the op is *compute bound*, otherwise *bandwidth bound*. The
 
 Attention also pays for its softmax: one exponential per score on the special-function units, plus a few vector operations, overlapped with its matrix multiplies. This only shows on long prompts on fast datacenter GPUs, where the exponentials can take longer than the matrix work.
 
-More: [per-op time](simulation-model.md#per-op-time), [attention softmax](simulation-model.md#attention-softmax), [stage time and overlap](simulation-model.md#stage-time-and-overlap).
+Two what-if settings sit next to this. With several devices, prefill is also shown **without overlap**, as if no communication hid behind compute, since most engines do not overlap it fully. An optional **per-op latency floor** (0 by default) makes every operation take at least that long; it shows how much tiny operations could cost, but no measurement fixes its size yet.
+
+More: [per-op time](simulation-model.md#per-op-time), [attention softmax](simulation-model.md#attention-softmax), [stage time and overlap](simulation-model.md#stage-time-and-overlap), [prefill without overlap](simulation-model.md#prefill-without-overlap), [per-op latency floor](simulation-model.md#per-op-latency-floor).
 
 ## Prefill and decode
 
@@ -105,6 +107,8 @@ More: [dtypes](simulation-model.md#dtypes-math-and-accumulate), [EXL3](simulatio
 ## What is not modelled
 
 Anything that depends on a particular inference engine: paged attention, continuous batching, chunked prefill (except its effect on the memory fit), scheduling and kernel-launch overhead, CUDA graphs. Also left out: dequantization arithmetic, exponentials computed on the ordinary arithmetic units instead of the special-function units (a trick some newer attention kernels use), cache reuse beyond reading each operand once, clock throttling, in-network reduction, link contention, and framework memory unless you set a runtime reserve.
+
+The one exception for engine overhead is the **engine dispatch overlay**, opt-in only and off by default. Turned on, it adds about 2 µs for launching each kernel (one per operation, nothing fused) to a decode step and shows the result as a second, labelled decode figure. The headline figure never includes it. More: [engine dispatch overlay](simulation-model.md#engine-dispatch-overlay).
 
 The reference lists every exclusion and each approximation that remains.
 

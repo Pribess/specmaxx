@@ -104,6 +104,24 @@
 }
 .hero-memory-warning .memory-warning-icon { width: 16px; height: 16px; }
 .answer .answer-line > span.spec-dec { order: 3; }
+/* A labelled what-if figure under the headline (prefill without overlap, decode with engine dispatch). */
+.answer .what-if {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 0.3em;
+  row-gap: 0;
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: var(--type-label);
+}
+/* The value and its "?" stay on one line together. */
+.answer .what-if-value {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-label-icon);
+  white-space: nowrap;
+}
 /* Phone and narrow output panes: the two figures side by side. */
 .hero-grid.no-roofline .answers { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
 @container output (max-width: 760px) {

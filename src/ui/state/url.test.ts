@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_STATE, reduce, type AppState } from './appState';
-import { decodeState, encodeNumber, encodeState } from './url';
+import { decodeState, encodeNumber, encodeState, latencyFloorSecFromMicros } from './url';
 import { effectiveCabling, resolveHardware } from './hardware';
 
 /** A state built from the default by reducer actions (so it is in the reducer's canonical form). */
@@ -57,9 +57,30 @@ const STATES: [string, AppState][] = [
   ['M3 Ultra ×4 ring (the default is a mesh)', state({ hw: { deviceId: 'apple-m3-ultra-80c', nodes: 4, cabling: 'ring' } })],
   ['raised GPU limit and runtime reserve on a Mac', state({ hw: { deviceId: 'apple-m4-max-40c', gpuUsableFraction: 0.9, runtimeReserveBytes: 1.5e9 } })],
   ['runtime reserve and prefill chunk on a GPU', state({ hw: { runtimeReserveBytes: 1e9 }, workload: { ...DEFAULT_STATE.workload, prefillChunkTokens: 2048 } })],
+  ['per-op latency floor and engine dispatch overlay', state({ options: { perOpLatencyFloorSec: latencyFloorSecFromMicros(0.6) }, engineDispatchOverlay: true })],
 ];
 
 describe('URL codec', () => {
+  it('per-op costs: lf (µs, 0 = off), ed=1 (dispatch overlay); invalid values dropped', () => {
+    const on = reduce(
+      reduce(DEFAULT_STATE, { type: 'setOptions', options: { perOpLatencyFloorSec: latencyFloorSecFromMicros(0.6) } }),
+      { type: 'setEngineDispatchOverlay', on: true },
+    );
+    expect(encodeState(on)).toBe('lf=0.6&ed=1');
+    expect(decodeState('lf=0.6&ed=1')).toEqual({ state: on, dropped: [] });
+    expect(decodeState('lf=1.5').state.options.perOpLatencyFloorSec).toBe(1.5e-6);
+    // 0 is the default: accepted, not stored.
+    expect(decodeState('lf=0')).toEqual({ state: DEFAULT_STATE, dropped: [] });
+    expect(decodeState('lf=-1&ed=yes').dropped).toEqual(['lf=-1', 'ed=yes']);
+    expect(decodeState('lf=1001').dropped).toEqual(['lf=1001']);
+    // Off again: the default state, nothing in the URL.
+    const off = reduce(
+      reduce(on, { type: 'setOptions', options: { perOpLatencyFloorSec: undefined } }),
+      { type: 'setEngineDispatchOverlay', on: false },
+    );
+    expect(off).toEqual(DEFAULT_STATE);
+    expect(encodeState(off)).toBe('');
+  });
   it('memory-fit knobs: gpu (percent, unified only), rr (GB), pc (tokens)', () => {
     expect(encodeState(state({ hw: { deviceId: 'apple-m4-max-40c', gpuUsableFraction: 0.9, runtimeReserveBytes: 1.5e9 } }))).toBe(
       'd=apple-m4-max-40c&gpu=90&rr=1.5',

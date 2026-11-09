@@ -112,6 +112,8 @@ export function buildSimInput(state: AppState, loaded: LoadedModel | null, draft
     ...(Object.keys(state.options).length > 0 ? { options: state.options } : {}),
     // Only when a knob is on: with every knob off the input is exactly the one from before deployment knobs.
     ...(deployment.config !== undefined ? { deployment: deployment.config } : {}),
+    // The dispatch overlay adds a labelled figure only; off, the input has no `overlays` at all.
+    ...(state.engineDispatchOverlay ? { overlays: { engineDispatch: {} } } : {}),
   };
   const engineErrors = validateInput(input);
   if (engineErrors.length > 0) {

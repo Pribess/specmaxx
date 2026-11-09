@@ -357,6 +357,23 @@ describe('estimator inputs', () => {
     fireEvent.change(screen.getByLabelText('Prefetch accuracy %'), { target: { value: '80' } });
     await waitFor(() => expect(location.search).not.toContain('opf='));
   });
+  it('per-op costs in Advanced: the latency floor writes lf, the dispatch overlay ed=1 and its hero figure', async () => {
+    mount();
+    await screen.findByTestId('decode-tps');
+    const section = screen.getByTestId('per-op-costs-advanced');
+    const floor = within(section).getByLabelText('Per-op latency floor µs') as HTMLInputElement;
+    expect(floor.value).toBe('0');
+    fireEvent.change(floor, { target: { value: '1' } });
+    await waitFor(() => expect(location.search).toContain('lf=1'));
+    fireEvent.change(floor, { target: { value: '0' } });
+    await waitFor(() => expect(location.search).not.toContain('lf='));
+    expect(screen.queryByTestId('decode-dispatch')).toBeNull();
+    fireEvent.click(within(section).getByLabelText('on'));
+    await waitFor(() => expect(location.search).toContain('ed=1'));
+    await screen.findByTestId('decode-dispatch');
+    fireEvent.click(within(section).getByLabelText('off'));
+    await waitFor(() => expect(location.search).not.toContain('ed='));
+  });
   it('keeps Advanced closed until opened, then its subsections are open', async () => {
     const { container } = mount();
     await screen.findByTestId('decode-tps');

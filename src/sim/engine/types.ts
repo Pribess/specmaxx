@@ -53,6 +53,36 @@ export interface SimOptions {
   elementwiseFusion: 'none' | 'ideal';
   /** All-reduce algorithm: `'best'` (default; min of ring and tree), `'ring'` or `'tree'`. */
   collectiveAlgorithm: 'best' | 'ring' | 'tree';
+  /**
+   * Per-op latency floor L (a what-if sensitivity setting, docs/simulation-model.md §7 "Per-op latency floor"):
+   * every IR op (on-device ops, collectives incl. PP sends, off-device transfers) costs at least L on the critical
+   * path, `t_op = max(t_op, L)`; a collective's or transfer's lift goes to its latency term. `0` (default) = no
+   * floor, results bit-identical to before. There is no measured default: the hardware floor (DRAM load-to-use
+   * latency of a dependent op) is unmeasured (review F1). Finite, ≥ 0. Unit: seconds.
+   */
+  perOpLatencyFloorSec: number;
+}
+
+/**
+ * Informational overlays: figures computed NEXT TO the theoretical maximum, never folded into it. The headline
+ * rates of a result are identical with or without them. Absent or `{}` = none.
+ */
+export interface OverlayConfig {
+  /**
+   * Engine dispatch overlay (docs/simulation-model.md §7 "Engine dispatch overlay"): an inference-engine overhead,
+   * the one engine-overhead exception of the project, opt-in only. Adds a fixed CPU/driver dispatch cost per kernel
+   * to decode and reports the result as {@link SimResult.decodeWithDispatch}. Absent = off.
+   */
+  engineDispatch?: EngineDispatchOverlay;
+}
+
+/** Parameters of the engine dispatch overlay. */
+export interface EngineDispatchOverlay {
+  /**
+   * Dispatch cost τ per kernel: CPU launch, command-processor and graph-node dispatch. Absent =
+   * `DEFAULT_DISPATCH_SEC_PER_KERNEL` (2 µs, `engine/dispatch.ts`, sourced there). Finite, ≥ 0. Unit: seconds.
+   */
+  perKernelSec?: number;
 }
 
 /**
@@ -188,6 +218,8 @@ export interface SimInput {
   options?: Partial<SimOptions>;
   /** Deployment-scenario knobs (offload, speculative decoding); absent or `{}` = off, identical results. */
   deployment?: DeploymentConfig;
+  /** Informational overlays (engine dispatch); absent or `{}` = none. Never change the headline rates. */
+  overlays?: OverlayConfig;
 }
 
 /**
@@ -244,6 +276,12 @@ export interface OpResult {
    * the MMA path.
    */
   computePath?: 'gemv';
+  /**
+   * Ops with `SimOptions.perOpLatencyFloorSec` > 0 whose own time was below it: the floor L that set `sec` (then
+   * `sec = L`; a collective's `commLatencySec` / a transfer's `transferLatencySec` carries the lift; `bound` stays the
+   * op's own). Absent otherwise. Unit: seconds.
+   */
+  latencyFloorSec?: number;
   /** Collectives only: which link level carried it. */
   linkLevel?: 'intra' | 'inter' | 'hierarchical';
 }
@@ -464,4 +502,39 @@ export interface SimResult {
   effectiveDevice: DeviceSpec;
   /** Peak fallbacks, unused devices, applied modifiers, unified-memory notes (human-readable lines). */
   warnings: string[];
+  /**
+   * Prefill with the communication/compute overlap removed (the same input under `overlap: 'none'`), a labelled
+   * what-if next to the `'ideal'` headline (review F7; docs/simulation-model.md §7 "Prefill without overlap").
+   * Present only when the run uses `overlap: 'ideal'` and its prefill has inter-device communication (any collective
+   * or PP send with a nonzero time); absent otherwise.
+   */
+  prefillWithoutOverlap?: PhaseRates;
+  /**
+   * Decode with the engine dispatch overlay (`SimInput.overlays.engineDispatch`); absent when the overlay is off.
+   * An engine overhead, outside the theoretical maximum: informational only, `decode` is unchanged.
+   */
+  decodeWithDispatch?: DispatchOverlayResult;
+}
+
+/** The rates of one phase, without the per-op detail (a what-if figure next to a headline). */
+export interface PhaseRates {
+  /** Aggregate rate over all DP replicas. Unit: tokens/s. */
+  tokensPerSec: number;
+  /** Rate seen by one sequence. Unit: tokens/s. */
+  perSequenceTokensPerSec: number;
+  /** Prefill: time to first token of a replica batch; decode: time per output token. Unit: seconds. */
+  latencySec: number;
+  /** Pipeline cycle. Unit: seconds. */
+  cycleSec: number;
+}
+
+/** Decode rates with the engine dispatch overlay (docs/simulation-model.md §7 "Engine dispatch overlay"). */
+export interface DispatchOverlayResult extends PhaseRates {
+  /** Dispatch cost τ per kernel used. Unit: seconds. */
+  perKernelSec: number;
+  /**
+   * Kernels per decode step: the IR ops of every stage's layers for one microbatch (one kernel per op, no fusion;
+   * PP sends and the token return not counted). Count.
+   */
+  kernelsPerStep: number;
 }

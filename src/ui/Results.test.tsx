@@ -453,3 +453,55 @@ it('names the chosen memory size in the rig line for Apple and multi-capacity de
   });
   expect(rigText(edited)).toContain('(64-core GPU, 300GB memory) (edited)');
 });
+it('shows no what-if figures on one device with the overlay off', async () => {
+  const { built, summary } = await defaultResult();
+  render(
+    <ResultHero
+      state={DEFAULT_STATE}
+      loaded={BUNDLED_DEFAULT_MODEL}
+      built={built}
+      result={summary}
+      pending={false}
+    />,
+  );
+  expect(summary.prefill.withoutOverlap).toBeUndefined();
+  expect(screen.queryByTestId('prefill-no-overlap')).toBeNull();
+  expect(screen.queryByTestId('decode-dispatch')).toBeNull();
+});
+it('shows prefill without overlap and decode with engine dispatch as labelled second figures, headline unchanged', async () => {
+  let state = reduce(DEFAULT_STATE, { type: 'setCounts', devicesPerNode: 2 });
+  state = reduce(state, { type: 'setParallel', parallel: { tp: 2 } });
+  const plain = buildSimInput(state, BUNDLED_DEFAULT_MODEL);
+  state = reduce(state, { type: 'setEngineDispatchOverlay', on: true });
+  const built = buildSimInput(state, BUNDLED_DEFAULT_MODEL);
+  if (built.kind !== 'ok' || plain.kind !== 'ok') throw new Error('invalid test state');
+  const { summary } = await inlineRunner.run(built.input, built.notes);
+  const { summary: off } = await inlineRunner.run(plain.input, plain.notes);
+  expect(summary.prefill.tokensPerSec).toBe(off.prefill.tokensPerSec);
+  expect(summary.decode.tokensPerSec).toBe(off.decode.tokensPerSec);
+  render(
+    <ResultHero
+      state={state}
+      loaded={BUNDLED_DEFAULT_MODEL}
+      built={built}
+      result={summary}
+      pending={false}
+    />,
+  );
+  const prefill = screen.getByTestId('prefill-no-overlap');
+  expect(prefill.textContent).toContain(
+    `Without overlap: ${formatTokensPerSec(summary.prefill.withoutOverlap!.tokensPerSec)}`,
+  );
+  expect(summary.prefill.withoutOverlap!.tokensPerSec).toBeLessThan(summary.prefill.tokensPerSec);
+  expect(within(prefill).getByRole('button')).toBeTruthy();
+  const decode = screen.getByTestId('decode-dispatch');
+  expect(decode.textContent).toContain(
+    `With engine dispatch: ${formatTokensPerSec(summary.decode.withDispatch!.tokensPerSec)}`,
+  );
+  expect(summary.decode.withDispatch!.tokensPerSec).toBeLessThan(summary.decode.tokensPerSec);
+  expect(within(decode).getByRole('button')).toBeTruthy();
+  // The headline figures are the theoretical ones.
+  expect(screen.getByTestId('decode-tps').textContent).toBe(
+    formatTokensPerSec(off.decode.tokensPerSec),
+  );
+});

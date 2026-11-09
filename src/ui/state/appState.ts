@@ -113,6 +113,11 @@ export interface AppState {
   options: Partial<SimOptions>;
   /** Deployment-scenario knobs (offload, speculative decoding); `{}` = all off (normalized, `normalizeDeployment`). */
   deployment: DeploymentChoice;
+  /**
+   * The engine dispatch overlay (`SimInput.overlays.engineDispatch`, Hardware → Advanced): a labelled decode figure
+   * with a per-kernel dispatch cost, next to the unchanged headline. Absent = off (never stored as `false`).
+   */
+  engineDispatchOverlay?: true;
 }
 
 /** Device of the default state. */
@@ -215,7 +220,9 @@ export type AppAction =
   /** Replace the host choice (normalized; `{}` = defaults). */
   | { type: 'setHost'; host: HostChoice }
   /** Set (value) or clear (undefined: the default) one memory-fit knob of the hardware (Hardware → Advanced). */
-  | { type: 'setMemoryFit'; field: 'gpuUsableFraction' | 'runtimeReserveBytes'; value: number | undefined };
+  | { type: 'setMemoryFit'; field: 'gpuUsableFraction' | 'runtimeReserveBytes'; value: number | undefined }
+  /** Turn the engine dispatch overlay on or off (Hardware → Advanced). */
+  | { type: 'setEngineDispatchOverlay'; on: boolean };
 
 /** The `HardwareChoice` field holding the edits of `target`. */
 export function editsKey(target: EditTarget): 'deviceEdits' | 'intraEdits' | 'interEdits' {
@@ -338,6 +345,8 @@ export function reduce(state: AppState, action: AppAction): AppState {
       return { ...state, parallel: { ...state.parallel, ...action.parallel, dp: 1, ep: 1 } };
     case 'setWorkload':
       return { ...state, workload: { ...state.workload, ...action.workload } };
+    case 'setEngineDispatchOverlay':
+      return action.on ? { ...state, engineDispatchOverlay: true } : without(state, 'engineDispatchOverlay');
     case 'setOptions':
       return { ...state, options: normalizeOptions({ ...state.options, ...action.options }) };
     case 'setOffload': {

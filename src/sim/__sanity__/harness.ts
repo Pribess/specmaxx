@@ -27,7 +27,15 @@
  */
 
 import { simulate } from '../engine/simulate';
-import type { Bound, DeploymentConfig, OffloadConfig, SimOptions, SimResult, SpecDecodeConfig } from '../engine/types';
+import type {
+  Bound,
+  DeploymentConfig,
+  OffloadConfig,
+  OverlayConfig,
+  SimOptions,
+  SimResult,
+  SpecDecodeConfig,
+} from '../engine/types';
 import { applyDeviceModifiers } from '../hw/modifiers';
 import { DEVICE_PRESETS, TOPOLOGY_PRESETS, deviceUnlocks, singleDevice } from '../hw/presets/index';
 import type { DeviceSpec, HardwareStack, HostSpec, TopologySpec } from '../hw/types';
@@ -412,6 +420,8 @@ export interface SanityInput {
   options?: Partial<SimOptions>;
   /** Deployment-scenario knobs the report ran with (offload, speculative decoding); absent = off. */
   deployment?: SanityDeployment;
+  /** Informational overlays (engine dispatch, `SimInput.overlays`); absent = none. */
+  overlays?: OverlayConfig;
 }
 
 /**
@@ -515,6 +525,7 @@ export function simulateReport(input: SanityInput): SanityResult {
     workload: { batch: w.batch ?? 1, promptLen: w.promptLen, decodeContextLen },
     hardware,
     ...(input.options ? { options: input.options } : {}),
+    ...(input.overlays ? { overlays: input.overlays } : {}),
     ...(input.deployment ? { deployment: resolveDeployment(input.deployment, spec) } : {}),
   });
   return {

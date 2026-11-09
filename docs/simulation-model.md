@@ -34,7 +34,8 @@ what the hardware and the math allow, not what a particular inference engine ach
   stage are symmetric and one device stands for all of them.
 - Communication uses the alpha-beta model (§6). Under the default overlap assumption, bandwidth terms hide
   behind compute and latency terms do not (§7 "Stage time and overlap").
-- No inference-engine knobs (§9).
+- No inference-engine knobs (§9). The one engine-overhead exception, the engine dispatch overlay, is opt-in and a
+  labelled figure next to the headline, never in it (§7 "Engine dispatch overlay").
 - Speculative decoding and weight / expert / lookup-table offloading are **opt-in deployment-scenario knobs, off by
   default** (`SimInput.deployment`; [§12](#12-offloading), [§13](#13-speculative-decoding)). Off, the results are
   bit-identical to the model without them (`engine/identity.test.ts`). On, a result is still the hardware/math upper
@@ -1731,6 +1732,43 @@ elementwise op its activation read and write; `'ideal'` sets them to 0 (fused in
 keeping weight and state bytes. The default is the conservative one; for REF_DENSE_8B prefill the difference is
 ≈ 5% (§10).
 
+### Per-op latency floor
+
+`src/sim/engine/opTime.ts: opTime, withLatencyFloor`; `SimOptions.perOpLatencyFloorSec`. UI: Hardware → Advanced →
+"Per-op latency floor µs" (URL `lf`). Tests: `engine/whatIf.test.ts`.
+
+A sensitivity setting for review F1 (`docs/review/practicality-review.md`): no op finishes faster than a fixed latency
+L. A small kernel cannot ramp up to full bandwidth on a few KB, and a dependent op pays at least the DRAM load-to-use
+latency before its first bytes arrive. Default **L = 0**: off, and the op contexts carry no floor at all, so results are
+bit-identical.
+
+```
+t_op = max(t_op, L)          every IR op: on-device ops, collectives (incl. PP sends), off-device transfers
+Δ    = L − t_op  (when > 0)   booked where the stage puts the op on its critical path:
+  on-device op:   sec = L                       → compute_s
+  collective:     α′ = α + Δ, β unchanged       → lat_s (never hidden); α′ + β = L
+  transfer:       α_xfer′ = α_xfer + Δ          → xfer_s
+```
+
+- **max, not additive.** A large op hides its first-byte latency: once it keeps enough bytes in flight (Little's law),
+  the latency overlaps the stream, and its roofline time stands. Only ops shorter than L are raised. An additive
+  `t_roofline + L` would also charge the large ops that hide it, double-counting. The max form is the review's
+  "hardware floor" `Σ max(t_op, L)`; the additive form `t_op + τ` belongs to host-side kernel launches, which run
+  before the kernel and are not hidden ("Engine dispatch overlay" below).
+- **Every IR op**, collectives and transfers included: a 100 µs floor lifts each TP all-reduce to 100 µs too. A
+  collective's lift goes to its latency term α, which is on the dependency chain under both overlap modes ("Stage
+  time and overlap"), so it is never hidden behind compute; its bandwidth term β is link occupancy and stays as it
+  is (so the pipeline's link bottleneck `βp2p` is unchanged). A transfer's lift goes to its latency term likewise.
+  Below the floor, the op's own α is already part of its time, so the lift tops it up rather than adding to it.
+- A floored op keeps its own `bound`; `OpResult.latencyFloorSec = L` marks it.
+- Every op counts as on the dependency chain (the stage time sums them, "Stage time and overlap"). Engines
+  fuse elementwise ops and overlap independent ones, so the IR op count overstates the real chain (review F1).
+- **No default value until a microbenchmark exists.** No measurement isolates a per-dependent-op hardware floor; the
+  review's 0.5–1 µs is an assumption. The setting stays a what-if at 0 until a microbenchmark measures it.
+- Review probes (decode @ 64, batch 1; `whatIf.test.ts`), L = 0.6 / 1 µs: Llama-3-8B Q4_K_M on an RTX 4090 −2.5% /
+  −4.3%; Qwen3-30B-A3B Q4_K_M on an RTX 4090 −12.0% / −18.9%; gpt-oss-120b on a DGX Spark −1.1% / −2.1% (the
+  review: −2.5 / −4.3%, −12 / −19%, −1.1 / −2.1%).
+
 ### Attention softmax
 
 `src/sim/engine/opTime.ts: attentionOpTime, attentionSoftmaxSec`; `src/sim/ir/metrics.ts: attentionScores,
@@ -1840,6 +1878,23 @@ ties preserve the original assignment. With β hidden this prefers exposed α, r
 not a search over every mixed ring/tree assignment. It cannot worsen the candidate core time; it does not
 optimize algorithm assignment against the independent offload-transfer overlap floor.
 
+### Prefill without overlap
+
+`src/sim/engine/simulate.ts: simulate` → `SimResult.prefillWithoutOverlap`. UI: a compact second figure next to the
+prefill headline ("Without overlap: 2,530" under "4,210 tok/s @ 8k"). Tests: `engine/whatIf.test.ts`.
+
+The default `overlap 'ideal'` hides every collective's bandwidth term behind compute, which vLLM, SGLang and llama.cpp
+do not achieve by default (review F7). When the run uses `'ideal'` and its prefill has inter-device communication
+(`comm.latencySec + comm.bandwidthSec > 0`: a TP/EP collective or a PP send over a link), the engine also costs the
+same lowered prefill under `overlap 'none'` (`t_core,s = compute_s + lat_s + bw_s + p2p_s`, above) and reports its
+rates, a labelled what-if; the headline stays `'ideal'`. Absent on one device, and when the run already uses `'none'`
+(then the headline is that figure). It equals a separate run with `overlap: 'none'`, bit for bit.
+
+Review probes (`whatIf.test.ts`; the review's exact workloads are not recorded, and the PCIe payload efficiency and
+the softmax cost landed since): 4× RTX 4090 TP4 (direct P2P), Llama-3-70B Q4_K_M, prefill @ 8k: −38.3% (review
+−40%); 2 × DGX Spark TP2, Llama-3-70B NVFP4, @ 2k: −31.5% (review −31.5%); 2× RTX 3090 TP2 (direct P2P),
+Qwen3-30B-A3B Q4_K_M with fp16 GEMMs, @ 512: −21.5% (review −24%).
+
 ### Comm latency vs bandwidth split
 
 `src/sim/engine/pipeline.ts: phaseComm, phaseTransfer` → `PhaseResult.comm`, `PhaseResult.transfer`. Display only:
@@ -1890,6 +1945,40 @@ sums of numbers the engine already computes, so no rate depends on them (design 
     (`2·seqs·heads·(N + 1)·(qk + v)`) and KV reads (`seqs·(N + 1)·elemsPerToken·bpe(kv)`) grow linearly in N
     (full attention; a window or top-k selection caps both, §3 "Attended pairs").
     Decode tok/s @ N = `1/cycle` per sequence (`dp·B_r/cycle` aggregate). Test: `simulate.test.ts`.
+
+### Engine dispatch overlay
+
+`src/sim/engine/dispatch.ts: DEFAULT_DISPATCH_SEC_PER_KERNEL, stageKernelCount, withDispatch`;
+`SimInput.overlays.engineDispatch` → `SimResult.decodeWithDispatch`. UI: Hardware → Advanced → "Engine dispatch
+overlay" (off by default, URL `ed=1`), shown as "With engine dispatch: …" under the decode headline. Tests:
+`engine/whatIf.test.ts`.
+
+**Engine overhead, informational only.** This is the project's one engine-overhead exception (§9), and it is opt-in:
+it never replaces the headline, which stays the theoretical maximum. Every launched kernel costs the host (CPU launch,
+command processor, graph-node dispatch) a fixed time τ before the device runs it.
+
+```
+n_s  = Σ over the stage's layers of the IR ops        kernels per stage per microbatch step
+t_s' = t_s + n_s·τ                                    then the pipeline rule ("Pipeline and DP") on t_s'
+```
+
+- **Kernel count = IR ops, no fusion.** One kernel per IR op of the decode step (GEMM, attention, norm, activation,
+  collective, transfer, …; the draft layers too with speculative decoding). Engines fuse elementwise ops and capture
+  CUDA graphs, so a real engine launches fewer kernels; this is the unfused count. The PP sends and the sampled-token
+  return are not counted.
+- **τ = 2 µs** by default, inside the measured 1.3–2.9 µs of review F1 (`docs/review/practicality-review.md`):
+  Hazy Research, ["Look Ma, No Bubbles!"](https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles), launch
+  ≈ 2.1 µs with CUDA streams and ≈ 1.3 µs with CUDA graphs;
+  [mpk-apple notes](https://github.com/jiazhihao/mpk-apple/blob/main/docs/research/apple-inference-systems.md), MLX
+  ≈ 2.75 µs per tiny dependent kernel. `EngineDispatchOverlay.perKernelSec` overrides it.
+- **Additive**, unlike the per-op latency floor: it is the review's "dispatch floor" `N_ops·τ`. It fits batch 1,
+  where most decode kernels are shorter than τ and the device waits for each launch. Where kernels are longer than τ
+  (large batches), an engine's asynchronous launches overlap them, so the overlay overstates the cost there.
+- Decode only. Prefill runs the same number of kernels per step for many more tokens, so its dispatch share is small.
+- Review probes (decode @ 64, batch 1, τ = 1 / 2 / 3 µs; `whatIf.test.ts`): Llama-3-8B Q4_K_M on an RTX 4090 (355
+  kernels): −7.1% / −13.3% / −18.7%; Qwen3-30B-A3B Q4_K_M on an RTX 4090 (723): −26.7% / −42.1% / −52.2%;
+  gpt-oss-120b on a DGX Spark (507): −3.7% / −7.1% / −10.3%. The review: −7 / −13 / −19%, −27 / −42 / −52%,
+  −4 / — / −10%.
 
 ---
 
@@ -1992,7 +2081,8 @@ Excluded on purpose (only hardware and math limits are modeled):
   [§13](#13-speculative-decoding); design `docs/design/offload-specdec-latency.md`). Off, results are bit-identical;
   on, they are the hardware/math bound given the stated acceptance, hit ratio and placement. Draft trees, the DSpark
   confidence scheduler, predictor accuracy and the CPU-compute offload mode (a hook validation rejects) are not
-  modelled.
+  modelled. The **engine dispatch overlay** (§7) is the one engine-overhead exception: opt-in only, off by default, a
+  per-kernel launch cost added to decode and shown as a labelled second figure; the headline never includes it.
 - Dequantization compute of weight-only quantized GEMMs (they run at the wider format's peak, §2).
 - Split-K / stream-K; L2 / cache reuse beyond compulsory traffic.
 - Clock throttling beyond an explicit `clockScale` modifier.

@@ -3,7 +3,8 @@
  * elementwise ops and recurrent steps, memory only for embedding gathers, the alpha-beta model for
  * collectives, and the tier/link read rule for off-device transfers (`TransferOp`, design doc §2.3). One
  * exhaustive `switch (op.kind)`. Attention adds its softmax (exp on the SFU, overlapped with the MMAs); a GEMM of
- * few rows may take the engine's GEMV path.
+ * few rows may take the engine's GEMV path. An optional per-op latency floor (`SimOptions.perOpLatencyFloorSec`, 0 = off)
+ * raises every op below it to it, `t = max(t_op, L)` (docs §7 "Per-op latency floor").
  * See docs/simulation-model.md §7 ("Per-op time", "Attention softmax"), §4 ("GEMV path") and §12 ("Transfer path").
  *
  * Inputs are plain specs: device and link modifiers were already applied by `simulate` (docs §4 "Device
@@ -63,6 +64,11 @@ export interface OpTimeContext {
   transferPaths?: Partial<Record<OffloadTier, TransferPath>>;
   /** Peak-fallback warnings are appended here (human-readable lines; `simulate` de-duplicates them). */
   warnings: string[];
+  /**
+   * Per-op latency floor L of on-device ops (`SimOptions.perOpLatencyFloorSec`); absent or 0 = no floor (the
+   * roofline time is returned as is). Unit: seconds.
+   */
+  perOpLatencyFloorSec?: number;
 }
 
 /** Memory-effective bandwidth of `engine` on a device with peak memory bandwidth `deviceMemBandwidthBytesPerSec` (B/s). */
@@ -82,8 +88,47 @@ export function roofline(computeSec: number, memorySec: number): { sec: number; 
   return computeSec >= memorySec ? { sec: computeSec, bound: 'compute' } : { sec: memorySec, bound: 'memory' };
 }
 
-/** Cost of one op on one device (see the module doc for the rule per op kind). */
+/**
+ * Cost of one op on one device (see the module doc for the rule per op kind), then the per-op latency floor
+ * ({@link withLatencyFloor}) when the context sets one.
+ */
 export function opTime(op: Op, ctx: OpTimeContext): OpResult {
+  const result = opTimeByKind(op, ctx);
+  const floorSec = ctx.perOpLatencyFloorSec;
+  return floorSec === undefined || floorSec <= 0 ? result : withLatencyFloor(result, floorSec);
+}
+
+/**
+ * The per-op latency floor L (docs/simulation-model.md §7 "Per-op latency floor"): EVERY IR op whose time is below L
+ * costs L, `t_op = max(t_op, L)`, and records `latencyFloorSec = L`. The lift `Δ = L − t_op` is booked where the stage
+ * puts the op on its critical path:
+ * - on-device ops: `sec` (it enters compute_s);
+ * - collectives (incl. PP sends): the latency term, `commLatencySec += Δ` (α is never hidden, `lat_s`); the
+ *   bandwidth term, a link-occupancy time, is unchanged;
+ * - off-device transfers: the latency term, `transferLatencySec += Δ` (`sec` enters xfer_s).
+ * The op's `bound` stays its own. `floorSec` in seconds.
+ */
+export function withLatencyFloor(result: OpResult, floorSec: number): OpResult {
+  if (result.sec >= floorSec) return result;
+  // Formula: t_op = max(t_op, L);  Δ = L − t_op
+  // See docs/simulation-model.md §7 ("Per-op latency floor")
+  const liftSec = floorSec - result.sec;
+  const floored: OpResult = { ...result, sec: floorSec, latencyFloorSec: floorSec };
+  switch (result.op.kind) {
+    case 'collective':
+      // Formula: α' = α + Δ   (so α' + β = L)
+      floored.commLatencySec = result.commLatencySec + liftSec;
+      return floored;
+    case 'transfer':
+      floored.transferLatencySec = result.transferLatencySec + liftSec;
+      return floored;
+    default:
+      return floored;
+  }
+}
+
+/** The cost of one op by its kind, without the latency floor. */
+function opTimeByKind(op: Op, ctx: OpTimeContext): OpResult {
   switch (op.kind) {
     case 'gemm':
       return gemmOpTime(op, ctx);

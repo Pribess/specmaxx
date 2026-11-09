@@ -19,6 +19,8 @@
  * | `b`, `p`, `c` | batch, prefill length (default 8192), decode context (default 8192) | `b=8` |
  * | `pc` | prefill chunk of the memory fit, tokens (default 8192) | `pc=2048` |
  * | `ov`, `fu`, `ar` | overlap, elementwise fusion, all-reduce algorithm | `ov=none` |
+ * | `lf` | per-op latency floor in µs, 0–1000 (default 0: off) | `lf=1` |
+ * | `ed` | engine dispatch overlay on: `1` (absent: off) | `ed=1` |
  * | `hr`, `hrc` | host-RAM preset id (default `ddr5-6000-2ch`), its capacity in GB (1e9 B) | `hr=ddr5-6400-8ch&hrc=512` |
  * | `ssd` | SSD preset id (default: the device's own SSD on unified memory, else `nvme-990-pro-2tb`) | `ssd=nvme-t705-2tb` |
  * | `hl` | host-link override, `<PCIe gen>x<lanes>` (default: the device's host interface) | `hl=4x16` |
@@ -76,10 +78,21 @@ const OPTION_KEYS: [string, keyof SimOptions, readonly string[]][] = [
   ['ar', 'collectiveAlgorithm', ['best', 'ring', 'tree']],
 ];
 
+/** Largest per-op latency floor the URL and the UI accept. Unit: µs. */
+export const MAX_LATENCY_FLOOR_US = 1000;
+
+/**
+ * A per-op latency floor typed in µs as the state stores it: seconds rounded to whole ns, so the URL's 3-decimal µs
+ * (`lf`) round-trips exactly. Unit: µs in, seconds out.
+ */
+export function latencyFloorSecFromMicros(us: number): number {
+  return Math.round(us * 1e3) / 1e9;
+}
+
 /** Every key the codec knows, in encoding order (`oo` is a legacy key: read, never written). */
 export const URL_KEYS = [
   'm', 'rev', 'w', 'bpw', 'hbpw', 'a', 'kv', 'lt', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'fab', 'x', 'xi', 'xe',
-  'hr', 'hrc', 'ssd', 'hl', 'gpu', 'rr', 'tp', 'pp', 'dp', 'ep', 'b', 'p', 'c', 'pc', 'ov', 'fu', 'ar', 'oo',
+  'hr', 'hrc', 'ssd', 'hl', 'gpu', 'rr', 'tp', 'pp', 'dp', 'ep', 'b', 'p', 'c', 'pc', 'ov', 'fu', 'ar', 'lf', 'ed', 'oo',
   'ox', 'oxl', 'oxf', 'oxh', 'odl', 'odt', 'olt', 'ols', 'oqd', 'osr', 'opf', 'sd', 'sdr', 'sdk', 'sdu', 'sda',
 ] as const;
 
@@ -193,6 +206,9 @@ export function encodeState(s: AppState): string {
   if (w.prefillChunkTokens !== undefined) put('pc', w.prefillChunkTokens);
   const options = normalizeOptions(s.options);
   for (const [key, field] of OPTION_KEYS) put(key, options[field]);
+  // µs with at most 3 decimals (ns), so 0.6 µs encodes as 0.6 (not 0.6000000000000001).
+  if (options.perOpLatencyFloorSec !== undefined) put('lf', Math.round(options.perOpLatencyFloorSec * 1e9) / 1e3);
+  if (s.engineDispatchOverlay) put('ed', '1');
   const deployment = normalizeDeployment(s.deployment);
   const o = deployment.offload ?? {};
   if (o.experts !== undefined) {
@@ -485,6 +501,16 @@ export function decodeState(search: string): DecodedState {
     if (values.includes(v)) Object.assign(options, { [field]: v });
     else drop(key, v);
   }
+  // Per-op latency floor in µs (0 = off, the default, so it stays absent from the state).
+  const lf = get('lf');
+  if (lf !== undefined) {
+    const us = parseNumberIn(lf, 0, MAX_LATENCY_FLOOR_US);
+    if (us === undefined) drop('lf', lf);
+    else if (us > 0) options.perOpLatencyFloorSec = latencyFloorSecFromMicros(us);
+  }
+  const ed = get('ed');
+  const engineDispatchOverlay = ed === '1';
+  if (ed !== undefined && !engineDispatchOverlay) drop('ed', ed);
 
   const host = normalizeHost(decodeHost(get, drop));
   if (Object.keys(host).length > 0) hw.host = host;
@@ -503,5 +529,7 @@ export function decodeState(search: string): DecodedState {
   }
   const deployment = decodeDeployment(get, drop);
 
-  return { state: { model, quant, hw, parallel, workload, options: normalizeOptions(options), deployment }, dropped };
+  const state: AppState = { model, quant, hw, parallel, workload, options: normalizeOptions(options), deployment };
+  if (engineDispatchOverlay) state.engineDispatchOverlay = true;
+  return { state, dropped };
 }
