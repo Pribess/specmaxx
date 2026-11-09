@@ -40,6 +40,24 @@ const EPYC_9654_URL =
 const EPYC_9575F_URL =
   'https://www.amd.com/en/products/processors/server/epyc/9005-series/amd-epyc-9575f.html';
 
+/** JEDEC DDR4 SDRAM standard JESD79-4: 64-bit data bus per channel, transfer rates 1600 to 3200 MT/s (higher bins are vendor XMP/DOCP overclocks). */
+const JEDEC_DDR4_URL = 'https://www.jedec.org/standards-documents/docs/jesd79-4a';
+/** AMD Ryzen 9 5950X spec page (AM4, Zen 3): 2 memory channels, max memory speed DDR4-3200. */
+const RYZEN_5950X_URL =
+  'https://www.amd.com/en/products/processors/desktops/ryzen/5000-series/amd-ryzen-9-5950x.html';
+/** AMD Ryzen Threadripper 3970X specifications (TRX40): 4 memory channels, up to 3200 MT/s. */
+const TR_3970X_URL =
+  'https://www.amd.com/en/support/downloads/drivers.html/processors/ryzen-threadripper/ryzen-threadripper-3000-series/amd-ryzen-threadripper-3970x.html';
+/** AMD EPYC 7763 spec page (Milan): 8 channels, DDR4-3200, "Per Socket Mem BW 204.8 GB/s". */
+const EPYC_7763_URL =
+  'https://www.amd.com/en/products/processors/server/epyc/7003-series/amd-epyc-7763.html';
+/** Intel ark, Xeon Gold 6248 (Cascade Lake-SP): DDR4-2933, 6 memory channels. */
+const ARK_GOLD_6248_URL =
+  'https://www.intel.com/content/www/us/en/products/sku/192446/intel-xeon-gold-6248-processor-27-5m-cache-2-50-ghz/specifications.html';
+/** Intel ark, Xeon E5-2680 v4 (Broadwell-EP): DDR4 up to 2400, 4 memory channels, "76.8 GB/s". */
+const ARK_E5_2680_V4_URL =
+  'https://www.intel.com/content/www/us/en/products/sku/91754/intel-xeon-processor-e52680-v4-35m-cache-2-40-ghz/specifications.html';
+
 /** Samsung 990 PRO datasheet Rev 1.0 (1 TB / 2 TB). */
 const SAMSUNG_990_PRO_URL =
   'https://download.semiconductor.samsung.com/resources/data-sheet/Samsung_NVMe_SSD_990_PRO_Datasheet_Rev.1.0.pdf';
@@ -320,7 +338,228 @@ export const DDR5_6000_12CH: HostMemorySpec = ddr5({
   ],
 });
 
-/** Every host-RAM preset, desktop first, then by bandwidth. */
+// ---------------------------------------------------------------------------------------------------------
+// Host RAM: DDR4
+//
+// Platform PCIe is NOT carried by a host-RAM preset (`HostMemorySpec` has no PCIe field; the GPU-host link is
+// chosen separately, see links.ts). Pair these presets with a PCIe 3.0/4.0 link, not the PCIe 5.0 default:
+// AM4 is PCIe 4.0 on X570/B550 and 3.0 on older boards; Threadripper 3000 and EPYC 7002/7003 are PCIe 4.0;
+// Xeon Scalable 2nd gen and Xeon E5 v4 are PCIe 3.0.
+// ---------------------------------------------------------------------------------------------------------
+
+/** Bytes one DDR4 channel moves per transfer (64-bit data bus, ECC bits excluded). Unit: bytes. */
+const DDR4_BYTES_PER_TRANSFER_PER_CHANNEL = 8;
+
+/**
+ * Theoretical DDR4 bandwidth of a node, read + write combined. Unit: B/s.
+ *
+ * Formula: B = MT/s × 1e6 × 8 B × channels. E.g. DDR4-3200 × 2 channels = 3200e6 × 8 × 2 = 51.2e9 B/s.
+ */
+export function ddr4BandwidthBytesPerSec(megaTransfersPerSec: number, channels: number): number {
+  const transfersPerSec = megaTransfersPerSec * 1e6;
+  return transfersPerSec * DDR4_BYTES_PER_TRANSFER_PER_CHANNEL * channels;
+}
+
+/** A DDR4 host-RAM preset `ddr4-<MT/s>-<channels>ch`; same parameters and conventions as {@link ddr5}. */
+function ddr4(p: Ddr5Params): HostMemorySpec {
+  return {
+    kind: 'host_ram',
+    id: `ddr4-${p.megaTransfersPerSec}-${p.channels}ch`,
+    name: `DDR4-${p.megaTransfersPerSec}, ${p.channels} channels (${p.platform})`,
+    capacityBytes: p.capacityBytes,
+    bandwidthBytesPerSec: ddr4BandwidthBytesPerSec(p.megaTransfersPerSec, p.channels),
+    latencySec: p.latencySec,
+    channels: p.channels,
+    readGranularityBytes: 64,
+    maxOutstanding: 64,
+    sources: p.sources,
+    estimated: [...p.estimated, CACHE_LINE_ESTIMATE, HOST_MLP_ESTIMATE],
+  };
+}
+
+/** Latency estimate shared by the DDR4 presets: an assumption (no vendor number, no cited measurement). */
+function ddr4LatencyEstimate(ns: number, platform: string): EstimatedField {
+  return {
+    field: 'latencySec',
+    reason:
+      `No vendor latency and no measurement cited: ${ns} ns unloaded load-to-use is an ASSUMED figure for ` +
+      `${platform} (typical of DDR4 platforms; real values vary with timings and fabric clock).`,
+  };
+}
+
+/** The DDR4 data-rate source every preset shares (the transfer rate itself is a JEDEC / XMP number). */
+const JEDEC_DDR4_SOURCE: SourceRef = {
+  url: JEDEC_DDR4_URL,
+  title: 'JEDEC JESD79-4 DDR4 SDRAM standard',
+  fields: ['bandwidthBytesPerSec'],
+  note: 'Per-device standard: 64-bit data bus per channel ⇒ 8 B per transfer; bandwidth = MT/s × 1e6 × 8 B × channels. It does not specify how many channels a platform has.',
+};
+
+/**
+ * Desktop dual-channel DDR4-2666 (the rated speed of Intel 8th/9th gen and Ryzen 2000-class platforms):
+ * 2666e6 × 8 × 2 = 42.656e9 B/s. PCIe 3.0 on these boards.
+ */
+export const DDR4_2666_2CH: HostMemorySpec = ddr4({
+  megaTransfersPerSec: 2666,
+  channels: 2,
+  capacityBytes: gb(32),
+  latencySec: 80e-9,
+  platform: 'desktop',
+  sources: [JEDEC_DDR4_SOURCE],
+  estimated: [
+    capacityEstimate('2 × 16 GB DIMMs'),
+    {
+      field: 'channels',
+      reason:
+        'Configuration assumption: a mainstream desktop platform with two memory channels (dual-channel is the ' +
+        'standard layout of Intel Core 8th/9th gen and AMD Ryzen 2000 desktops); no platform page is cited.',
+    },
+    ddr4LatencyEstimate(80, 'a dual-channel desktop at 2666 MT/s'),
+  ],
+});
+
+/**
+ * Desktop dual-channel DDR4-3200 (AM4 Ryzen 5000 rated speed, JEDEC top bin): 3200e6 × 8 × 2 = 51.2e9 B/s. PCIe 4.0
+ * on X570/B550, 3.0 on older AM4 boards.
+ */
+export const DDR4_3200_2CH: HostMemorySpec = ddr4({
+  megaTransfersPerSec: 3200,
+  channels: 2,
+  capacityBytes: gb(64),
+  latencySec: 75e-9,
+  platform: 'AM4 desktop',
+  sources: [
+    {
+      url: RYZEN_5950X_URL,
+      title: 'AMD Ryzen 9 5950X specifications',
+      fields: ['bandwidthBytesPerSec', 'channels'],
+      note: '"Memory Channels 2"; "Max Memory Speed 2x1R DDR4-3200". Bandwidth = 3200e6 × 8 B × 2 = 51.2e9.',
+    },
+  ],
+  estimated: [
+    capacityEstimate('2 × 32 GB DIMMs'),
+    ddr4LatencyEstimate(75, 'AM4 Zen 3 at 3200 MT/s'),
+  ],
+});
+
+/**
+ * Desktop dual-channel DDR4-3600 (the AM4 sweet spot: 1:1 with the 1800 MHz fabric clock): 3600e6 × 8 × 2 = 57.6e9 B/s.
+ * PCIe 4.0 on X570/B550.
+ */
+export const DDR4_3600_2CH: HostMemorySpec = ddr4({
+  megaTransfersPerSec: 3600,
+  channels: 2,
+  capacityBytes: gb(64),
+  latencySec: 70e-9,
+  platform: 'AM4 desktop',
+  sources: [
+    {
+      url: RYZEN_5950X_URL,
+      title: 'AMD Ryzen 9 5950X specifications',
+      fields: ['channels'],
+      note: 'Rated DDR4-3200; 3600 MT/s is an XMP/DOCP overclock that most Zen 3 chips run at FCLK 1800 MHz (1:1).',
+    },
+    JEDEC_DDR4_SOURCE,
+  ],
+  estimated: [
+    capacityEstimate('2 × 32 GB DIMMs'),
+    {
+      field: 'bandwidthBytesPerSec',
+      reason:
+        'Overclock speed, above the 3200 MT/s AMD rates: 3600e6 × 8 B × 2 = 57.6e9 B/s theoretical.',
+    },
+    ddr4LatencyEstimate(70, 'AM4 Zen 3 at 3600 MT/s, CL16'),
+  ],
+});
+
+/**
+ * HEDT / workstation quad-channel DDR4-3200 (Threadripper 3000 on TRX40; X299 and Xeon W run DDR4-2933 on 4-6 channels):
+ * 3200e6 × 8 × 4 = 102.4e9 B/s. PCIe 4.0 on TRX40.
+ */
+export const DDR4_3200_4CH: HostMemorySpec = ddr4({
+  megaTransfersPerSec: 3200,
+  channels: 4,
+  capacityBytes: gb(128),
+  latencySec: 90e-9,
+  platform: 'HEDT',
+  sources: [
+    {
+      url: TR_3970X_URL,
+      title: 'AMD Ryzen Threadripper 3970X specifications',
+      fields: ['bandwidthBytesPerSec', 'channels'],
+      note: '"4 memory channels"; "Up to 3200 MT/s". Bandwidth = 3200e6 × 8 B × 4 = 102.4e9.',
+    },
+  ],
+  estimated: [
+    capacityEstimate('4 × 32 GB DIMMs'),
+    ddr4LatencyEstimate(90, 'Threadripper 3000 (chiplet IO die)'),
+  ],
+});
+
+/** Server 8-channel DDR4-3200 (EPYC 7002/7003, Threadripper PRO 3000WX): 3200e6 × 8 × 8 = 204.8e9 B/s. PCIe 4.0. */
+export const DDR4_3200_8CH: HostMemorySpec = ddr4({
+  megaTransfersPerSec: 3200,
+  channels: 8,
+  capacityBytes: gb(256),
+  latencySec: 115e-9,
+  platform: 'server, EPYC Rome/Milan',
+  sources: [
+    {
+      url: EPYC_7763_URL,
+      title: 'AMD EPYC 7763 specifications',
+      fields: ['bandwidthBytesPerSec', 'channels'],
+      note: '"Memory Channels 8"; "DDR4-3200"; "Per Socket Mem BW 204.8 GB/s" (= 3200e6 × 8 B × 8).',
+    },
+  ],
+  estimated: [
+    capacityEstimate('8 × 32 GB RDIMMs, one socket'),
+    ddr4LatencyEstimate(115, 'EPYC 7002/7003 with RDIMMs'),
+  ],
+});
+
+/** Server 6-channel DDR4-2933 (Xeon Scalable 2nd gen, Cascade Lake-SP): 2933e6 × 8 × 6 = 140.784e9 B/s. PCIe 3.0. */
+export const DDR4_2933_6CH: HostMemorySpec = ddr4({
+  megaTransfersPerSec: 2933,
+  channels: 6,
+  capacityBytes: gb(192),
+  latencySec: 95e-9,
+  platform: 'server, Xeon Scalable 2nd gen',
+  sources: [
+    {
+      url: ARK_GOLD_6248_URL,
+      title: 'Intel ark: Intel Xeon Gold 6248 specifications',
+      fields: ['bandwidthBytesPerSec', 'channels'],
+      note: '"DDR4-2933"; "Max # of Memory Channels 6". Bandwidth = 2933e6 × 8 B × 6.',
+    },
+  ],
+  estimated: [
+    capacityEstimate('6 × 32 GB RDIMMs, one socket'),
+    ddr4LatencyEstimate(95, 'Xeon Scalable 2nd gen RDIMMs'),
+  ],
+});
+
+/** Server 4-channel DDR4-2400 (Xeon E5 v4, e.g. E5-2680 v4; E5 v3 tops out at DDR4-2133): 2400e6 × 8 × 4 = 76.8e9 B/s, as Intel quotes it. PCIe 3.0. */
+export const DDR4_2400_4CH: HostMemorySpec = ddr4({
+  megaTransfersPerSec: 2400,
+  channels: 4,
+  capacityBytes: gb(128),
+  latencySec: 85e-9,
+  platform: 'server, Xeon E5 v4',
+  sources: [
+    {
+      url: ARK_E5_2680_V4_URL,
+      title: 'Intel ark: Intel Xeon E5-2680 v4 specifications',
+      fields: ['bandwidthBytesPerSec', 'channels'],
+      note: '"Max # of Memory Channels 4"; "Max Memory Bandwidth 76.8 GB/s" (= 2400e6 × 8 B × 4); DDR4 up to 2400.',
+    },
+  ],
+  estimated: [
+    capacityEstimate('4 × 32 GB RDIMMs, one socket'),
+    ddr4LatencyEstimate(85, 'Xeon E5 v4 RDIMMs'),
+  ],
+});
+
+/** Every host-RAM preset: DDR5 first, then DDR4; desktop first, then by bandwidth. */
 export const HOST_RAM_PRESETS: HostMemorySpec[] = [
   DDR5_5600_2CH,
   DDR5_6000_2CH,
@@ -328,6 +567,13 @@ export const HOST_RAM_PRESETS: HostMemorySpec[] = [
   DDR5_6400_8CH,
   DDR5_4800_12CH,
   DDR5_6000_12CH,
+  DDR4_2666_2CH,
+  DDR4_3200_2CH,
+  DDR4_3600_2CH,
+  DDR4_3200_4CH,
+  DDR4_3200_8CH,
+  DDR4_2933_6CH,
+  DDR4_2400_4CH,
 ];
 
 /** The default host RAM when the stack names none: desktop DDR5-6000, 2 channels. */

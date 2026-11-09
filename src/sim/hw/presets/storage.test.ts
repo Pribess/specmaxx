@@ -20,6 +20,13 @@ import {
 } from './links';
 import {
   APPLE_SSD_M3_M4_MAX_1TB,
+  DDR4_2400_4CH,
+  DDR4_2666_2CH,
+  DDR4_2933_6CH,
+  DDR4_3200_2CH,
+  DDR4_3200_4CH,
+  DDR4_3200_8CH,
+  DDR4_3600_2CH,
   DDR5_4800_12CH,
   DDR5_5600_2CH,
   DDR5_6000_12CH,
@@ -36,6 +43,7 @@ import {
   NVME_SN850X_2TB,
   NVME_T705_2TB,
   SSD_PRESETS,
+  ddr4BandwidthBytesPerSec,
   ddr5BandwidthBytesPerSec,
 } from './storage';
 
@@ -47,7 +55,7 @@ function covers(t: { sources: { fields: string[] }[]; estimated: { field: string
 }
 
 describe('storage-tier presets', () => {
-  it('lists the 6 host-RAM and 8 SSD rows of design §2.2, with unique ids', () => {
+  it('lists the 13 host-RAM and 8 SSD rows of design §2.2, with unique ids', () => {
     expect(HOST_RAM_PRESETS.map((t) => t.id)).toEqual([
       'ddr5-5600-2ch',
       'ddr5-6000-2ch',
@@ -55,6 +63,13 @@ describe('storage-tier presets', () => {
       'ddr5-6400-8ch',
       'ddr5-4800-12ch',
       'ddr5-6000-12ch',
+      'ddr4-2666-2ch',
+      'ddr4-3200-2ch',
+      'ddr4-3600-2ch',
+      'ddr4-3200-4ch',
+      'ddr4-3200-8ch',
+      'ddr4-2933-6ch',
+      'ddr4-2400-4ch',
     ]);
     expect(SSD_PRESETS.map((t) => t.id)).toEqual([
       'nvme-990-pro-2tb',
@@ -107,6 +122,32 @@ describe('storage-tier presets', () => {
     for (const t of HOST_RAM_PRESETS) {
       expect(t.readGranularityBytes).toBe(64);
       expect(t.maxOutstanding).toBe(64);
+    }
+  });
+
+  it('DDR4 bandwidth = MT/s × 8 B × channels, ids name the data rate and channels, sources are present', () => {
+    expect(ddr4BandwidthBytesPerSec(3200, 2)).toBe(51.2e9);
+    expect(DDR4_3200_2CH.bandwidthBytesPerSec).toBe(51.2e9);
+    expect(DDR4_3200_4CH.bandwidthBytesPerSec).toBe(102.4e9);
+    expect(DDR4_3200_8CH.bandwidthBytesPerSec).toBe(204.8e9); // AMD: "Per Socket Mem BW 204.8 GB/s"
+    expect(DDR4_2400_4CH.bandwidthBytesPerSec).toBe(76.8e9); // Intel ark: "76.8 GB/s"
+    for (const t of [
+      DDR4_2666_2CH,
+      DDR4_3200_2CH,
+      DDR4_3600_2CH,
+      DDR4_3200_4CH,
+      DDR4_3200_8CH,
+      DDR4_2933_6CH,
+      DDR4_2400_4CH,
+    ]) {
+      const [gen, mts, ch] = t.id.split('-');
+      expect(gen).toBe('ddr4');
+      expect(t.bandwidthBytesPerSec).toBe(ddr4BandwidthBytesPerSec(Number(mts), t.channels ?? 0));
+      expect(ch).toBe(`${t.channels}ch`);
+      expect(t.sources.length).toBeGreaterThan(0);
+      expect(covers(t)).toContain('latencySec');
+      expect(covers(t)).toContain('capacityBytes');
+      expect(covers(t)).toContain('bandwidthBytesPerSec');
     }
   });
 

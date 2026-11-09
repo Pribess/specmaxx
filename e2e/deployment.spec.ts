@@ -124,3 +124,27 @@ test('a legacy offload-overlap URL is rewritten to the equivalent prefetch accur
   await page.getByTestId('offload-section').getByText('Advanced', { exact: true }).click();
   await expect(page.getByLabel('Prefetch accuracy %', { exact: true })).toHaveValue('0');
 });
+
+test('Host RAM picker groups DDR5 before DDR4, searches, and a DDR4 id round-trips in the URL', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await mockHf(page);
+  await page.goto('/?m=Qwen/Qwen3.8-Flash-Next&ox=ram');
+  await page.getByRole('combobox', { name: 'Host RAM', exact: true }).click();
+  const groups = page.getByRole('listbox').getByRole('group');
+  await expect(groups.nth(0)).toContainText('DDR5');
+  await expect(groups.nth(1)).toContainText('DDR4');
+  await page.screenshot({ path: 'test-results/host-ram-picker.png' });
+  await page.getByRole('combobox', { name: 'Host RAM', exact: true }).press('Escape');
+  await page.getByRole('combobox', { name: 'Host RAM', exact: true }).click();
+  await page.keyboard.type('ddr4 3200 8');
+  await page.getByRole('option', { name: /DDR4-3200, 8 channels/ }).click();
+  await expect(page).toHaveURL(/hr=ddr4-3200-8ch/);
+  await page.reload();
+  await expect(page.getByRole('combobox', { name: 'Host RAM', exact: true })).toHaveText(
+    /DDR4-3200, 8 channels/,
+  );
+  expect(errors).toEqual([]);
+});

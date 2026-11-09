@@ -77,6 +77,21 @@ function linkLabel(link: { name: string; bandwidthPerDirectionBytesPerSec: numbe
  * layers and n-gram tables live, the expert cache, the queue depth, and the host's RAM, SSD and PCIe link. On
  * unified memory host RAM is the device pool, so only the SSD is a tier and there is no host link.
  */
+/** Host-RAM picker rows: grouped by DDR generation (DDR5 first, then DDR4), fastest first within a group. */
+const HOST_RAM_OPTIONS: PickerOption[] = [...HOST_RAM_PRESETS]
+  .map((r) => ({ r, generation: r.id.split('-')[0].toUpperCase() }))
+  .sort(
+    (a, b) =>
+      (a.generation < b.generation ? 1 : a.generation > b.generation ? -1 : 0) ||
+      b.r.bandwidthBytesPerSec - a.r.bandwidthBytesPerSec,
+  )
+  .map(({ r, generation }) => ({
+    value: r.id,
+    label: r.name,
+    group: generation,
+    description: `${(r.bandwidthBytesPerSec / 1e9).toFixed(1)} GB/s`,
+  }));
+
 export function OffloadSection({ state, dispatch, loaded, built }: PanelProps) {
   const model = loaded?.model;
   const device = built.hardware?.device.device;
@@ -245,7 +260,7 @@ export function OffloadSection({ state, dispatch, loaded, built }: PanelProps) {
           <Picker
             label="Host RAM"
             value={resolvedHost.ram.id}
-            options={HOST_RAM_PRESETS.map((r) => ({ value: r.id, label: r.name }))}
+            options={HOST_RAM_OPTIONS}
             searchThreshold={4}
             onChange={(v) => setHost({ ramId: v, ramCapacityBytes: undefined })}
             help="Host memory: theoretical channel bandwidth and capacity (datasheet values); shared by every GPU of the node."
