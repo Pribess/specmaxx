@@ -9,6 +9,7 @@
  */
 
 import type { HostMemorySpec, NvmeSpec, StorageTierSpec } from '../hw/types';
+import type { TransferOp } from '../ir/ops';
 import type { HitRatioModel } from './types';
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -28,6 +29,22 @@ import type { HitRatioModel } from './types';
  * Learned predictors reach 0.85–0.95, and 0.97–0.99 only by fetching extra experts.
  */
 export const DEFAULT_PREFETCH_ACCURACY = 0.8;
+
+/**
+ * True iff a stage's transfer ops prefetch from BOTH off-device tiers: some op with a prefetched share q > 0 reads
+ * host RAM and some op with q > 0 reads the SSD. Only then may the prefetched shares of the two streams overlap
+ * within the device (docs/simulation-model.md §12 "Overlap across tiers"); every other stage keeps the serial
+ * transfer sum. The one condition shared by the stage time (`pipeline.ts: stageTransfer`) and the staging buffers
+ * (`memory.ts: stageStagingBytes`), so the two cannot drift apart. Keyed on `source` only, whatever the group.
+ */
+export function prefetchesFromBothTiers(
+  ops: readonly Pick<TransferOp, 'source' | 'prefetchedFraction'>[],
+): boolean {
+  // Formula: overlapped_s ⇔ ∃ op: source = host_ram ∧ q > 0  and  ∃ op: source = nvme ∧ q > 0
+  const ram = ops.some((o) => o.source === 'host_ram' && o.prefetchedFraction > 0);
+  const ssd = ops.some((o) => o.source === 'nvme' && o.prefetchedFraction > 0);
+  return ram && ssd;
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // Expert hit ratio and misses (design doc §2.4)
@@ -217,6 +234,24 @@ export interface TransferTime {
   serviceSec: number;
   /** `t_path = α_path + service`. Unit: seconds. */
   sec: number;
+  /**
+   * Bytes this op puts on the device's host link (PCIe), per device and step: `usefulBytes` when the path has a link,
+   * 0 on unified memory. With {@link linkSec}, the op's use of the link for the overlapped stage transfer of
+   * docs/simulation-model.md §12 ("Overlap across tiers"). Unit: bytes.
+   */
+  linkBytes: number;
+  /**
+   * Bytes this op moves through the node's host RAM, per device and step: the host-RAM tier's `tierBytes` (read once),
+   * an NVMe read with staging `2·tierBytes` (written once, read once), 0 otherwise (unified memory, no staging).
+   * Unit: bytes.
+   */
+  hostRamBytes: number;
+  /**
+   * Time this op occupies the node's host RAM bandwidth, on that resource alone, with B_ram shared by n_host: the
+   * host-RAM tier's `tierSec` (`bytes_tier / (B_ram / n_host)`, its n_stream is n_host), an NVMe read with staging
+   * its `hostSec` (`bytes_tier / (B_ram / (2·n_host))`), 0 otherwise. No latency term. Unit: seconds.
+   */
+  hostRamSec: number;
 }
 
 /**
@@ -281,6 +316,13 @@ export function transferTime(
   const B_ram = path.hostStagingBandwidthBytesPerSec;
   const n_host = path.hostStagingNStream ?? n;
   const hostSec = B_ram === undefined ? undefined : tierBytes / (B_ram / (2 * n_host));
+  // Formula: linkBytes = link ? usefulBytes : 0
+  //          hostRamBytes = host_ram: bytes_tier;  NVMe with staging: 2·bytes_tier;  else 0
+  //          hostRamSec   = host_ram: tier (= bytes_tier/(B_ram/n_host));  NVMe with staging: host;  else 0
+  // See docs/simulation-model.md §12 ("Overlap across tiers")
+  const linkBytes = link === undefined ? 0 : usefulBytes;
+  const hostRamBytes = tier.kind === 'host_ram' ? tierBytes : hostSec === undefined ? 0 : 2 * tierBytes;
+  const hostRamSec = tier.kind === 'host_ram' ? tierSec : (hostSec ?? 0);
   const serviceSec = Math.max(littleSec, iopsSec ?? 0, tierSec, linkSec, hostSec ?? 0);
   const result: TransferTime = {
     requests,
@@ -293,6 +335,9 @@ export function transferTime(
     serviceSec,
     // Formula: t_path = α_path + service
     sec: latencySec + serviceSec,
+    linkBytes,
+    hostRamBytes,
+    hostRamSec,
   };
   if (iopsSec !== undefined) result.iopsSec = iopsSec;
   if (hostSec !== undefined) result.hostSec = hostSec;

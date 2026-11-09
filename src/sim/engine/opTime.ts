@@ -408,7 +408,9 @@ function collectiveOpTime(op: CollectiveOp, ctx: OpTimeContext): OpResult {
 
 /**
  * An off-device read: `t = α_path + service` of {@link transferTime} on the stage's path for the op's source tier
- * (design doc §2.3). No FLOP, no device-memory bytes (the DMA write into device memory is not charged).
+ * (design doc §2.3). No FLOP, no device-memory bytes (the DMA write into device memory is not charged). Also records
+ * the op's use of the shared host link and host RAM (`transferResources`) for the overlapped stage transfer
+ * (`pipeline.ts: stageTransfer`); the latency floor ({@link withLatencyFloor}) lifts α only and keeps them.
  */
 function transferOpTime(op: TransferOp, ctx: OpTimeContext): OpResult {
   const path = ctx.transferPaths?.[op.source];
@@ -426,6 +428,12 @@ function transferOpTime(op: TransferOp, ctx: OpTimeContext): OpResult {
     commBandwidthSec: 0,
     transferLatencySec: t.latencySec,
     transferBandwidthSec: t.serviceSec,
+    transferResources: {
+      linkBytes: t.linkBytes,
+      linkSec: t.linkSec,
+      hostRamBytes: t.hostRamBytes,
+      hostRamSec: t.hostRamSec,
+    },
     sec: t.sec,
     bound: 'transfer',
   };

@@ -86,9 +86,11 @@ Two parameters shape the result:
 
 With both set, the result is still an upper bound given those numbers.
 
+When one GPU reads from both host RAM and the SSD, the prefetched part of the two streams runs at the same time, limited by the PCIe link, host RAM and the SSD; experts that are only known after the router are fetched one after another.
+
 **SSD read rate** defaults to the unchanged datasheet ceiling; the optional sustained scenario uses measured low-queue large-read fractions for expert reads, not small lookup rows. These workload-specific measurements are not a tighter proven upper bound.
 
-More: [offloading](simulation-model.md#12-offloading), [expert hit ratio](simulation-model.md#expert-hit-ratio), [expert prefetch](simulation-model.md#expert-prefetch), [host and storage tiers](simulation-model.md#host-and-storage-tiers).
+More: [offloading](simulation-model.md#12-offloading), [expert hit ratio](simulation-model.md#expert-hit-ratio), [expert prefetch](simulation-model.md#expert-prefetch), [overlap across tiers](simulation-model.md#overlap-across-tiers), [host and storage tiers](simulation-model.md#host-and-storage-tiers).
 
 ## Speculative decoding
 

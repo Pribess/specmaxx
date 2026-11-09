@@ -5,16 +5,105 @@
  *
  * Notation: per stage s and microbatch, compute_s = Σ compute-op times (every op but collectives and off-device
  * transfers), lat_s = Σ collective α terms, bw_s = Σ collective β terms, p2p_s = the activation send to stage s+1,
- * xfer_s = Σ transfer-op times (design doc §2.6); m = microbatches in flight per replica, B_r = sequences per DP
- * replica.
+ * xfer_s = the stage's transfer time ({@link stageTransfer}: Σ transfer-op times, design doc §2.6, or the overlapped
+ * time of docs §12 "Overlap across tiers" when the stage prefetches from both host RAM and the SSD); m = microbatches
+ * in flight per replica, B_r = sequences per DP replica.
  */
 
+import type { TransferOp } from '../ir/ops';
+import { prefetchesFromBothTiers } from './transfer';
 import type { LayerResult, OpResult, PhaseResult, SimOptions, StageResult } from './types';
 
 /** Sums a layer's op times (no overlap): `sec = Σ op.sec`. */
 export function layerResult(name: string, layerIndex: number | null, ops: OpResult[]): LayerResult {
   // Formula: t_layer = Σ_ops t_op
   return { name, layerIndex, ops, sec: ops.reduce((s, o) => s + o.sec, 0) };
+}
+
+/** The off-device transfer terms of one stage for one microbatch ({@link stageTransfer}). Times in seconds. */
+export interface StageTransfer {
+  /** `xfer_s`: the stage's transfer time (serial sum, or `D_s + P_s` when overlapped). Unit: seconds. */
+  transferSec: number;
+  /**
+   * `P_s`: the prefetched part of `xfer_s`, which may hide behind the stage's core time (`pbar_s = P_s / xfer_s`):
+   * `Σ q·t_op` (serial) or the overlapped bound. Unit: seconds.
+   */
+  prefetchedSec: number;
+  /** True if every transfer op has q = 1 (also when there is none). */
+  allPrefetched: boolean;
+  /** True if every transfer op has q = 0 (also when there is none). */
+  nonePrefetched: boolean;
+  /** True if the stage prefetches from both host RAM and the SSD, so the overlapped formula applies. */
+  overlapped: boolean;
+}
+
+/**
+ * The transfer time of one stage (one device, one microbatch) and its prefetched part, from the stage's op results.
+ * Each transfer op has its time t_op (`OpResult.sec`, α and latency floor included), its prefetched share q and its
+ * source tier. See docs/simulation-model.md §12 ("Overlap across tiers").
+ *
+ * A stage that does not prefetch from both tiers (one source, or q = 0 on one of them) keeps the serial rule, with the
+ * same expressions and floating-point order as before (bit-identical):
+ *   xfer_s = Σ_ops t_op;   P_s = Σ_ops q·t_op
+ * A stage that prefetches from both host RAM and the SSD ({@link prefetchesFromBothTiers}) overlaps the prefetched
+ * shares of the two streams; the demand share (fetched after the router) stays serial:
+ *   D_s    = Σ_ops (1 − q)·t_op
+ *   P_s    = max( Σ_ram q·t_op,  Σ_ssd q·t_op,  Σ_ops q·linkSec_op,  Σ_ops q·hostRamSec_op )
+ *   xfer_s = D_s + P_s
+ * Each tier's own stream runs its ops one after another (α each); the device's PCIe link and the node's host RAM
+ * bandwidth (shared by n_host) are throughput limits on both streams together. Always P_s ≤ Σ q·t_op, so the overlapped
+ * xfer_s is at most the serial sum.
+ */
+export function stageTransfer(ops: readonly OpResult[]): StageTransfer {
+  const transferOps: TransferOp[] = [];
+  for (const o of ops) if (o.op.kind === 'transfer') transferOps.push(o.op);
+  if (!prefetchesFromBothTiers(transferOps)) {
+    // Formula: xfer_s = Σ transfer op sec   (design doc §2.6)
+    const transferSec = ops.filter((o) => o.op.kind === 'transfer').reduce((s, o) => s + o.sec, 0);
+    // Formula: Σ q·t_xfer over the stage's transfer ops (pbar_s = this / xfer_s)
+    let prefetchedSec = 0;
+    let allPrefetched = true;
+    let nonePrefetched = true;
+    for (const o of ops) {
+      if (o.op.kind !== 'transfer') continue;
+      const q = o.op.prefetchedFraction;
+      prefetchedSec += q * o.sec;
+      if (q !== 1) allPrefetched = false;
+      if (q !== 0) nonePrefetched = false;
+    }
+    return { transferSec, prefetchedSec, allPrefetched, nonePrefetched, overlapped: false };
+  }
+  // Formula: D_s = Σ (1 − q)·t_op
+  //          P_s = max(Σ_ram q·t_op, Σ_ssd q·t_op, Σ q·linkSec_op, Σ q·hostRamSec_op)
+  //          xfer_s = D_s + P_s
+  // See docs/simulation-model.md §12 ("Overlap across tiers")
+  let demandSec = 0;
+  let ramStreamSec = 0;
+  let ssdStreamSec = 0;
+  let linkSec = 0;
+  let hostRamSec = 0;
+  let allPrefetched = true;
+  for (const o of ops) {
+    if (o.op.kind !== 'transfer') continue;
+    const res = o.transferResources;
+    if (res === undefined) throw new Error(`transfer op '${o.op.name}': no transferResources`);
+    const q = o.op.prefetchedFraction;
+    demandSec += (1 - q) * o.sec;
+    if (o.op.source === 'host_ram') ramStreamSec += q * o.sec;
+    else ssdStreamSec += q * o.sec;
+    linkSec += q * res.linkSec;
+    hostRamSec += q * res.hostRamSec;
+    if (q !== 1) allPrefetched = false;
+  }
+  const prefetchedSec = Math.max(ramStreamSec, ssdStreamSec, linkSec, hostRamSec);
+  // Overlapped implies some q > 0, so nonePrefetched is false.
+  return {
+    transferSec: demandSec + prefetchedSec,
+    prefetchedSec,
+    allPrefetched,
+    nonePrefetched: false,
+    overlapped: true,
+  };
 }
 
 /**
@@ -24,8 +113,10 @@ export function layerResult(name: string, layerIndex: number | null, ops: OpResu
  *   chain; the PP send is not in t_s: it lengthens the latency path and, as a link resource, bounds the cycle;
  *   see {@link phaseResult})
  * Then the off-device transfers, by how much of them is prefetched (docs §12 "Expert prefetch"; each transfer op
- * carries its prefetched share q, set by lowering from the prefetch accuracy p):
- *   pbar_s = Σ_ops q·t_xfer / xfer_s                     (time-weighted mean of q over the stage's transfer ops)
+ * carries its prefetched share q, set by lowering from the prefetch accuracy p). xfer_s and its prefetched part P_s
+ * come from {@link stageTransfer}: the serial sum, or the overlapped time for a stage that prefetches from both host
+ * RAM and the SSD (docs §12 "Overlap across tiers"):
+ *   pbar_s = P_s / xfer_s                                (serial: Σ_ops q·t_xfer / xfer_s, the time-weighted mean of q)
  *   t_s    = lat_s + core_s + xfer_s − pbar_s · min(core_s, xfer_s)
  * with core_s = max(compute_s, bw_s) under `overlap 'ideal'`, compute_s + bw_s + p2p_s under `'none'`. The
  * prefetched share hides behind the stage's core time, the rest is serialized after it. The window is the whole
@@ -44,19 +135,8 @@ export function stageResult(
   const computeSec = ops
     .filter((o) => o.op.kind !== 'collective' && o.op.kind !== 'transfer')
     .reduce((s, o) => s + o.sec, 0);
-  // Formula: xfer_s = Σ transfer op sec   (design doc §2.6)
-  const transferSec = ops.filter((o) => o.op.kind === 'transfer').reduce((s, o) => s + o.sec, 0);
-  // Formula: Σ q·t_xfer over the stage's transfer ops (pbar_s = this / xfer_s)
-  let prefetchedSec = 0;
-  let allPrefetched = true;
-  let nonePrefetched = true;
-  for (const o of ops) {
-    if (o.op.kind !== 'transfer') continue;
-    const q = o.op.prefetchedFraction;
-    prefetchedSec += q * o.sec;
-    if (q !== 1) allPrefetched = false;
-    if (q !== 0) nonePrefetched = false;
-  }
+  // Formula: xfer_s, P_s = stageTransfer(ops)   (serial Σ, or overlapped across tiers: docs §12)
+  const { transferSec, prefetchedSec, allPrefetched, nonePrefetched } = stageTransfer(ops);
   const commLatencySec = ops.reduce((s, o) => s + o.commLatencySec, 0);
   const commBandwidthSec = ops.reduce((s, o) => s + o.commBandwidthSec, 0);
   const p2pSec = sendToNext?.sec ?? 0;
@@ -92,7 +172,7 @@ export function stageResult(
     // Formula: t_s = t_core,s + xfer_s   (pbar_s = 0: the former offloadOverlap 'none')
     sec = coreSec + transferSec;
   } else {
-    // Formula: pbar_s = Σ q·t_xfer / xfer_s;  t_s = lat_s + core_s + xfer_s − pbar_s·min(core_s, xfer_s)
+    // Formula: pbar_s = P_s / xfer_s;  t_s = lat_s + core_s + xfer_s − pbar_s·min(core_s, xfer_s)
     // See docs/simulation-model.md §7 ("Stage time and overlap"), §12 ("Expert prefetch")
     const meanPrefetched = prefetchedSec / transferSec;
     const hiddenSec = meanPrefetched * Math.min(coreTermSec, transferSec);

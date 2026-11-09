@@ -96,11 +96,12 @@ async function decodeAt8k(page: Page): Promise<number> {
  * (2.36 GB over the 48 layers). One layer's fetch costs (engine numbers when this was written):
  * - host RAM: ≈ 0.85 ms, mostly the PCIe 5.0 x16 link (≈ 63 GB/s; the RAM's 89.6 GB/s is higher) plus request latency;
  * - SSD: ≈ 6.64 ms, bounded by the drive's ≈ 7.45 GB/s sequential read (the host staging copy is faster).
- * Fetches on one device run one after another, so the step's transfer time is the sum over layers:
- * all RAM 48 × 0.85 ≈ 41 ms, all SSD 48 × 6.64 ≈ 319 ms, and the 24/24 split exactly their mean, ≈ 180 ms.
- * Prefetch (p = 0.8) hides part of each fetch under the GPU work, so each step is only ≈ 1 ms longer than its
- * transfer time: ≈ 23.7, 5.52 and 3.12 tok/s @ 8k. The split sits strictly between the extremes, on the harmonic
- * side (its time per token, not its rate, is the mean).
+ * Without overlap the step's transfer time would be the sum over layers: all RAM 48 × 0.85 ≈ 41 ms, all SSD
+ * 48 × 6.64 ≈ 319 ms, and the 24/24 split their mean, ≈ 180 ms. The split reads from both host RAM and the SSD, so
+ * the prefetched 80% of the two streams overlaps (only the experts known after the router stay serial): ≈ 164 ms per
+ * token instead of the 180 ms mean. Prefetch (p = 0.8) also hides part of each fetch under the GPU work:
+ * ≈ 23.8, 6.07 and 3.12 tok/s @ 8k. The split sits strictly between the extremes, and its time per token is below
+ * the mean of the two.
  * Fit: all experts (≈ 121 GB) overflow the 96 GB of host RAM; the split puts ≈ 60 GB in RAM and ≈ 60 GB on the SSD.
  */
 test('a 50/50 host-RAM + SSD expert split decodes between all-RAM and all-SSD', async ({
@@ -127,8 +128,8 @@ test('a 50/50 host-RAM + SSD expert split decodes between all-RAM and all-SSD', 
   const ssd = await decodeAt8k(page);
   expect(ram).toBeGreaterThan(split);
   expect(split).toBeGreaterThan(ssd);
-  // Time per token of the split ≈ the mean of the two (the shared rest of the step is in all three); 2% for rounding.
-  expect(Math.abs(1 / split - (1 / ram + 1 / ssd) / 2) / (1 / split)).toBeLessThan(0.02);
+  // Overlap across tiers beats the serial mean: the split's time per token is below the mean of the two.
+  expect(1 / split).toBeLessThan((1 / ram + 1 / ssd) / 2);
   expect(errors).toEqual([]);
 });
 

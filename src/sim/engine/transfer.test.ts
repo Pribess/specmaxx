@@ -13,6 +13,7 @@ import {
   expertHitsMisses,
   hitRatio,
   nStream,
+  prefetchesFromBothTiers,
   stageNStream,
   transferTime,
   uniqueExperts,
@@ -137,6 +138,45 @@ describe('U-4 transferTime: t = α_tier + α_link + max(Little, IOPS/n, tier/n, 
     expectClose(t.latencySec, 45e-6);
     expect(t.linkSec).toBe(0);
     expect(t.hostSec).toBeUndefined();
+  });
+});
+
+describe('transferTime resource use (link bytes, host RAM bytes and time) for the overlapped stage transfer', () => {
+  it('host RAM path: link = usefulBytes, host RAM = bytes_tier at its tier time', () => {
+    const t = transferTime([{ count: 8, bytesEach: 2_654_208 }], 21_233_664, ramPath());
+    expect(t.linkBytes).toBe(21_233_664);
+    expect(t.hostRamBytes).toBe(t.tierBytes); // 64 B lines: 2,654,208 is a multiple of 64
+    expect(t.hostRamBytes).toBe(21_233_664);
+    expect(t.hostRamSec).toBe(t.tierSec);
+    expectClose(t.hostRamSec, 21_233_664 / 96e9);
+  });
+  it('NVMe on a dedicated device: host RAM moves 2·bytes_tier (written, read) at the staging time', () => {
+    const t = transferTime([{ count: 16, bytesEach: 320 }], 5_120, ssdPath());
+    expect(t.linkBytes).toBe(5_120);
+    expect(t.hostRamBytes).toBe(2 * 65_536);
+    expect(t.hostRamSec).toBe(t.hostSec);
+    expectClose(t.hostRamSec, 65_536 / 48e9);
+  });
+  it('NVMe on unified memory (no link, no staging): no link and no host RAM use', () => {
+    const t = transferTime([{ count: 16, bytesEach: 320 }], 5_120, { tier: SSD_45US, queueDepth: 512, nStream: 1 });
+    expect([t.linkBytes, t.hostRamBytes, t.hostRamSec]).toEqual([0, 0, 0]);
+  });
+});
+
+describe('prefetchesFromBothTiers: some host_ram op and some nvme op with q > 0', () => {
+  const op = (source: 'host_ram' | 'nvme', prefetchedFraction: number) => ({ source, prefetchedFraction });
+  it('both tiers with q > 0 ⇒ true', () => {
+    expect(prefetchesFromBothTiers([op('host_ram', 0.8), op('nvme', 1)])).toBe(true);
+    expect(prefetchesFromBothTiers([op('nvme', 0), op('nvme', 0.3), op('host_ram', 0.8)])).toBe(true);
+  });
+  it('one tier, any q ⇒ false', () => {
+    expect(prefetchesFromBothTiers([op('host_ram', 0.8), op('host_ram', 1)])).toBe(false);
+    expect(prefetchesFromBothTiers([op('nvme', 1), op('nvme', 0)])).toBe(false);
+    expect(prefetchesFromBothTiers([])).toBe(false);
+  });
+  it('both tiers, but one (or both) only at q = 0 ⇒ false', () => {
+    expect(prefetchesFromBothTiers([op('host_ram', 0), op('nvme', 0)])).toBe(false);
+    expect(prefetchesFromBothTiers([op('host_ram', 0.8), op('nvme', 0)])).toBe(false);
   });
 });
 

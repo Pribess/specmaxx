@@ -34,6 +34,57 @@ const B_LINK = ((32e9 * 16 * 128) / 130 / 8) * (256 / 280);
 const GPU = { device: RTX_5090, topology: singleDevice(RTX_5090) };
 const UNIFORM_F0 = { residentFraction: 0, hitRatio: { kind: 'uniform' } } as const;
 
+/** The overlapped stage terms of docs §12 "Overlap across tiers", recomputed from a stage's op results. Seconds. */
+function overlapTerms(st: SimResult['decode']['stages'][number]) {
+  let demandSec = 0;
+  let ramStreamSec = 0;
+  let ssdStreamSec = 0;
+  let linkSec = 0;
+  let hostRamSec = 0;
+  for (const o of st.layers.flatMap((l) => l.ops)) {
+    if (o.op.kind !== 'transfer') continue;
+    const res = o.transferResources;
+    if (res === undefined) throw new Error('no transferResources');
+    const q = o.op.prefetchedFraction;
+    demandSec += (1 - q) * o.sec;
+    if (o.op.source === 'host_ram') ramStreamSec += q * o.sec;
+    else ssdStreamSec += q * o.sec;
+    linkSec += q * res.linkSec;
+    hostRamSec += q * res.hostRamSec;
+  }
+  const prefetchedSec = Math.max(ramStreamSec, ssdStreamSec, linkSec, hostRamSec);
+  return { demandSec, ramStreamSec, ssdStreamSec, linkSec, hostRamSec, prefetchedSec };
+}
+
+/**
+ * A config with one source per device is untouched by the overlap across tiers: every stage's transferSec is the
+ * plain Σ of its transfer op times (same float order, `toBe`), and the staging buffer is the old rule
+ * `max_{phase, transfer} (q > 0 ? 2 : 1)·buffer`, recomputed here from the op results.
+ */
+function expectOneSourceUnchanged(r: SimResult): void {
+  const stagesCount = r.decode.stages.length;
+  for (let s = 0; s < stagesCount; s++) {
+    let staging = 0;
+    for (const phase of [r.prefill, r.decode]) {
+      const st = phase.stages[s];
+      const ops = st.layers.flatMap((l) => l.ops);
+      expect(st.transferSec).toBe(
+        ops.filter((o) => o.op.kind === 'transfer').reduce((x, o) => x + o.sec, 0),
+      );
+      for (const o of ops) {
+        if (o.op.kind !== 'transfer') continue;
+        const op = o.op;
+        const buffer =
+          op.group === 'lookup_table'
+            ? op.usefulBytes
+            : op.reads.reduce((x, rd) => x + Math.ceil(rd.count) * rd.bytesEach, 0);
+        staging = Math.max(staging, (op.prefetchedFraction > 0 ? 2 : 1) * buffer);
+      }
+    }
+    expect(r.memory.perStage[s].stagingBytes).toBe(staging);
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // The task's check: Qwen3.8-Flash-Next on one RTX 5090 + DDR5-5600 ×2 (96 GB) + 990 PRO, decode @ 8k, b 1
 
@@ -50,10 +101,20 @@ const UNIFORM_F0 = { residentFraction: 0, hitRatio: { kind: 'uniform' } } as con
  * - SSD layer: t_ssd = α_ssd + α_link + max(little, IOPS = 10/1.4e6, tier = 49.152e6/7.45e9 = 6.5976 ms,
  *   link 0.8531 ms, staging = 49.152e6/(89.6e9/2) = 1.0971 ms) ⇒ drive-bound: 46.45 µs + 6.5976 ms = 6.6441 ms.
  * - the PLE table rows (layer 0, SSD): t_table = α_ssd + α_link + 16/1.4e6 (IOPS-bound), the same in each config.
- * transfer.sec = Σ ops: all-RAM 48·t_ram + t_table ≈ 41.06 ms; all-SSD 48·t_ssd + t_table ≈ 318.97 ms;
- * 24/24 = 24·t_ram + 24·t_ssd + t_table = (all-RAM + all-SSD)/2 ≈ 180.02 ms (the table term cancels in the mean).
- * One device, so n_host = n_tier = 1: the two tiers never share anything but the serial per-device stream.
- * Decode @ 8k: all-RAM 23.73 tok/s > 24/24 5.522 tok/s > all-SSD 3.124 tok/s.
+ * Serial sum (p = 0, or one source per device): transfer.sec = Σ ops: all-RAM 48·t_ram + t_table ≈ 41.06 ms; all-SSD
+ * 48·t_ssd + t_table ≈ 318.97 ms; 24/24 = 24·t_ram + 24·t_ssd + t_table = (all-RAM + all-SSD)/2 ≈ 180.02 ms (the table
+ * term cancels in the mean).
+ * Overlap across tiers (docs/simulation-model.md §12, `pipeline.ts: stageTransfer`): at p > 0 a device that prefetches
+ * from both host RAM and the SSD (24/24; and all-RAM, whose PLE table is on the SSD) keeps the demand share serial and
+ * overlaps the prefetched shares, bounded by the busiest stream, the PCIe link or host RAM:
+ *   D = Σ (1 − q)·t_op;  P = max(Σ_ram q·t_op, Σ_ssd q·t_op, Σ q·link_op, Σ q·hostRam_op);  xfer = D + P;
+ *   t_s = lat + core + xfer − (P/xfer)·min(core, xfer)
+ * Experts q = 0.8 (p > M/E = 10/512), table q = 1. 24/24 at p 0.8: D = 0.2·(24·t_ram + 24·t_ssd) = 35.99 ms,
+ * P = 0.8·24·t_ssd + t_table = 127.62 ms (the SSD stream; link 32.76 ms, host RAM 31.60 ms) ⇒ xfer 163.61 ms
+ * (serial 180.02 ms). At p 1: xfer = P = 24·t_ssd + t_table = 159.51 ms.
+ * One device, so n_host = n_tier = 1.
+ * Decode @ 8k, serial → overlapped (p 0.8): all-RAM 23.7309 → 23.7627 tok/s; 24/24 5.5219 → 6.0678 tok/s (design
+ * estimate 6.07); all-SSD 3.12448 tok/s (one source, unchanged).
  */
 const QWEN = 'Qwen/Qwen3.8-Flash-Next';
 const QWEN_LAYERS = 48;
@@ -62,7 +123,7 @@ const W_EXPERT_FP8 = 4_915_200;
 const LAYER_EXPERT_BYTES = 512 * W_EXPERT_FP8;
 const PLE_TABLE_BYTES = 102_400_000_000;
 
-function qwen(experts: OffloadConfig['routedExperts'], device = GPU): SimResult {
+function qwen(experts: OffloadConfig['routedExperts'], prefetchAccuracy?: number): SimResult {
   const { model, quant } = hf(QWEN);
   const fp8: QuantConfig = { ...quant, weights: { dtype: 'fp8_e4m3' } };
   return simulate({
@@ -70,8 +131,14 @@ function qwen(experts: OffloadConfig['routedExperts'], device = GPU): SimResult 
     quant: fp8,
     parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
     workload: { batch: 1, promptLen: 8192, decodeContextLen: 8192 },
-    hardware: { ...device, host: { ram: DDR5_5600_2CH, ssd: NVME_990_PRO_2TB } },
-    deployment: { offload: { routedExperts: experts, lookupTables: { tier: 'nvme' } } },
+    hardware: { ...GPU, host: { ram: DDR5_5600_2CH, ssd: NVME_990_PRO_2TB } },
+    deployment: {
+      offload: {
+        routedExperts: experts,
+        lookupTables: { tier: 'nvme' },
+        ...(prefetchAccuracy === undefined ? {} : { prefetchAccuracy }),
+      },
+    },
   });
 }
 const allRam: RoutedExpertRule = { tier: 'host_ram', ...UNIFORM_F0 };
@@ -96,24 +163,70 @@ describe(`${QWEN} fp8 on one RTX 5090 + DDR5-5600 ×2 + 990 PRO: experts all in 
     }
   });
 
-  it('decode @ 8k sits between the extremes: all-RAM 23.73 > 24/24 5.522 > all-SSD 3.124 tok/s', () => {
+  it('decode @ 8k sits between the extremes: all-RAM 23.763 > 24/24 6.0678 > all-SSD 3.124 tok/s (p 0.8, overlapped)', () => {
     expect(ram.decode.tokensPerSec).toBeGreaterThan(mixed.decode.tokensPerSec);
     expect(mixed.decode.tokensPerSec).toBeGreaterThan(ssd.decode.tokensPerSec);
-    expectClose(ram.decode.tokensPerSec, 23.7309, 1e-4);
-    expectClose(mixed.decode.tokensPerSec, 5.52192, 1e-4);
+    expectClose(ram.decode.tokensPerSec, 23.7627, 1e-4); // serial 23.7309
+    expectClose(mixed.decode.tokensPerSec, 6.0678, 1e-4); // serial 5.52192; design estimate 6.07
     expectClose(ssd.decode.tokensPerSec, 3.12448, 1e-4);
   });
 
-  it('transfer per step: 24/24 = (all-RAM + all-SSD)/2 exactly; each extreme is 48 layers of its tier plus the table', () => {
-    const t = (r: SimResult) => r.decode.transfer?.sec ?? 0;
-    expectClose(t(mixed), (t(ram) + t(ssd)) / 2, 1e-12);
-    const alphaSsd = 1 / 22_000 + 1e-6;
-    const tTable = alphaSsd + 16 / 1.4e6;
-    const tRam = 70e-9 + 1e-6 + (10 * W_EXPERT_FP8) / B_LINK;
-    const tSsd = alphaSsd + (10 * W_EXPERT_FP8) / 7.45e9;
-    expectClose(t(ram), QWEN_LAYERS * tRam + tTable);
-    expectClose(t(ssd), QWEN_LAYERS * tSsd + tTable);
-    expectClose(t(mixed), 24 * tRam + 24 * tSsd + tTable);
+  const alphaSsd = 1 / 22_000 + 1e-6;
+  const tTable = alphaSsd + 16 / 1.4e6;
+  const tRam = 70e-9 + 1e-6 + (10 * W_EXPERT_FP8) / B_LINK;
+  const tSsd = alphaSsd + (10 * W_EXPERT_FP8) / 7.45e9;
+  const t = (r: SimResult) => r.decode.transfer?.sec ?? 0;
+
+  it('p 0 (serial): transfer per step 24/24 = (all-RAM + all-SSD)/2 exactly; each extreme is 48 layers of its tier plus the table', () => {
+    const [ram0, mixed0, ssd0] = [qwen(allRam, 0), qwen(split(24), 0), qwen(allSsd, 0)];
+    expectClose(t(mixed0), (t(ram0) + t(ssd0)) / 2, 1e-12);
+    expectClose(t(ram0), QWEN_LAYERS * tRam + tTable);
+    expectClose(t(ssd0), QWEN_LAYERS * tSsd + tTable);
+    expectClose(t(mixed0), 24 * tRam + 24 * tSsd + tTable);
+    expectClose(mixed0.decode.tokensPerSec, 5.39309, 1e-4);
+  });
+
+  it('p 0.8, 24/24: D = 0.2·24·(t_ram + t_ssd), P = the SSD stream 0.8·24·t_ssd + t_table, t_s = lat + core + xfer − (P/xfer)·min(core, xfer)', () => {
+    const st = mixed.decode.stages[0];
+    const terms = overlapTerms(st);
+    expectClose(terms.demandSec, 0.2 * 24 * (tRam + tSsd));
+    expectClose(terms.ssdStreamSec, 0.8 * 24 * tSsd + tTable);
+    expect(terms.prefetchedSec).toBe(terms.ssdStreamSec); // link 32.76 ms, host 31.60 ms, RAM 16.40 ms are below
+    const xfer = terms.demandSec + terms.prefetchedSec;
+    expectClose(st.transferSec, xfer, 1e-12);
+    expectClose(t(mixed), xfer, 1e-12); // 163.61 ms (serial 180.02 ms)
+    expectClose(xfer, 0.16361494, 1e-6);
+    const lat = st.commLatencySec;
+    const core = st.sec - st.exposedTransferSec - lat;
+    // The core term does not depend on the transfers: the same in the serial (p 0) run.
+    const st0 = qwen(split(24), 0).decode.stages[0];
+    expectClose(st0.sec - st0.exposedTransferSec - st0.commLatencySec, core, 1e-12);
+    // Formula: t_s = lat + core + xfer − (P/xfer)·min(core, xfer);  tokens/s = 1/t_s (pp 1, b 1)
+    const tStep = lat + core + xfer - (terms.prefetchedSec / xfer) * Math.min(core, xfer);
+    expectClose(mixed.decode.perSequenceTokensPerSec, 1 / tStep, 1e-12);
+    // 6.0678 tok/s @ 8k vs the design estimate 6.07: the table (q 1) is all on the SSD stream, and pbar = P/xfer =
+    // 0.78 leaves 0.22·core exposed (the estimate's 163.6 ms is the transfer alone).
+    expectClose(1 / tStep, 6.0678, 1e-4);
+  });
+
+  it('p 1, 24/24: xfer = P = 24·t_ssd + t_table and t_s = lat + max(core, xfer) (the overlapped bound)', () => {
+    const st = qwen(split(24), 1).decode.stages[0];
+    expectClose(st.transferSec, 24 * tSsd + tTable);
+    const lat = st.commLatencySec;
+    const core = st.sec - st.exposedTransferSec - lat;
+    expectClose(st.sec, lat + Math.max(core, 24 * tSsd + tTable), 1e-9);
+    expectClose(1 / st.sec, 6.26901, 1e-4); // serial 5.55508
+  });
+
+  it('staging: 24/24 at p 0.8 keeps one read buffer + one fill buffer per source = 3 layers of experts (prefill); p 0: one', () => {
+    expect(mixed.memory.perStage[0].stagingBytes).toBe(3 * LAYER_EXPERT_BYTES);
+    expect(qwen(split(24), 0).memory.perStage[0].stagingBytes).toBe(LAYER_EXPERT_BYTES);
+    // all-SSD, one source: today's double buffer.
+    expect(ssd.memory.perStage[0].stagingBytes).toBe(2 * LAYER_EXPERT_BYTES);
+  });
+
+  it('one source per device is unchanged: all-SSD transfer = Σ op sec, staging = the old rule', () => {
+    expectOneSourceUnchanged(ssd);
   });
 
   it("per layer, each op reads from its rule's tier", () => {
@@ -206,6 +319,10 @@ describe('single-tier configs are unchanged: object ≡ [object], same-tier spli
   it('[] ≡ absent, for both groups', () => {
     const none = base(undefined);
     expect(base({ routedExperts: [], lookupTables: [] })).toEqual(none);
+  });
+
+  it('one source per device is unchanged (pp 2, tp 2, experts on the SSD): transfer = Σ op sec, staging = the old rule', () => {
+    expectOneSourceUnchanged(base({ routedExperts: experts }));
   });
 });
 
@@ -302,13 +419,13 @@ describe("the drafter's experts follow the rule with includeDraft (DeepSeek-V4.1
 const ENGRAM = 'deepseek-ai/DeepSeek-V4.1-Flash';
 const ENGRAM_LAYERS = hf(ENGRAM).model.layers.length;
 
-function engram(lookupTables: OffloadConfig['lookupTables']): SimResult {
+function engram(lookupTables: OffloadConfig['lookupTables'], prefetchAccuracy = 0): SimResult {
   return simulate({
     ...hf(ENGRAM),
     parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
     workload: { batch: 1, promptLen: 8192, decodeContextLen: 8192 },
     hardware: { ...GPU, host: { ram: DDR5_5600_2CH, ssd: NVME_990_PRO_2TB } },
-    deployment: { offload: { prefetchAccuracy: 0, lookupTables } },
+    deployment: { offload: { prefetchAccuracy, lookupTables } },
   });
 }
 
@@ -370,6 +487,25 @@ describe(`${ENGRAM} tables: both in RAM / layer 1 in RAM + layer 14 on SSD / bot
     ).toEqual(mixed);
     expect(engram([])).toEqual(engram(undefined));
   });
+
+  it('p 0.8: the split prefetches from both tiers, so its tables overlap: transfer below the mean of both-RAM and both-SSD', () => {
+    const split = [
+      { tier: 'host_ram', layers: { from: 0, to: 2 } },
+      { tier: 'nvme', layers: { from: 2, to: ENGRAM_LAYERS } },
+    ] as const;
+    const t = (r: SimResult) => r.decode.transfer?.sec ?? 0;
+    const [ram8, mixed8, ssd8] = [
+      engram({ tier: 'host_ram' }, 0.8),
+      engram([...split], 0.8),
+      engram({ tier: 'nvme' }, 0.8),
+    ];
+    expect(t(mixed8)).toBeLessThan((t(ram8) + t(ssd8)) / 2);
+    // Tables only, q = 1: xfer = P = max(RAM table, SSD table, link, host RAM).
+    expect(t(mixed8)).toBe(overlapTerms(mixed8.decode.stages[0]).prefetchedSec);
+    // Both-RAM and both-SSD are one source each: unchanged rules.
+    expectOneSourceUnchanged(ram8);
+    expectOneSourceUnchanged(ssd8);
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -422,5 +558,9 @@ describe('legacy object config with RAM and SSD on different stages: moved by n_
     );
     // Formula: staging = bytes_tier / (B_ram / (2·n_host)), n_host = 2 (stage 0 reads RAM, stage 1 stages SSD reads)
     expectClose(fetch.transferBandwidthSec, tierBytes / (89.6e9 / 4));
+  });
+
+  it('one source per device (stage 0 RAM, stage 1 SSD) is unchanged: transfer = Σ op sec, staging = the old rule', () => {
+    expectOneSourceUnchanged(run());
   });
 });

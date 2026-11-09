@@ -9,6 +9,7 @@
 import { matrixStoredBytes, type TensorFormat } from '../ir/dtype';
 import { opBytes } from '../ir/metrics';
 import type { DraftSpec, LayerSpec, ModelSpec } from '../ir/model';
+import type { TransferOp } from '../ir/ops';
 import { draftResidentWeightBytes, draftSequenceStateBytes } from '../lower/draft';
 import { embeddingFormat, embeddingResidentWeightBytes } from '../lower/embedding';
 import { lmHeadFormat, lmHeadResidentWeightBytes } from '../lower/head';
@@ -22,6 +23,7 @@ import {
 import { moeLocalExpertBytes } from '../lower/moe';
 import { lookupTableFormat, ngramTableShardBytes, tableRowBytes } from '../lower/ngram';
 import { draftExpertPlacement, expertPlacementAt, tablePlacementAt } from '../lower/offload';
+import { prefetchesFromBothTiers } from './transfer';
 import type { ResolvedHost } from './host';
 import type { DeviceMemory, MemoryReport, OffloadTier, TierBytes, TierMemory } from './types';
 
@@ -224,29 +226,50 @@ export function stageLookupTableBytes(model: ModelSpec, ctx: LoweringContext, s:
  * Staging buffer of stage `s` for streamed weight groups (design doc §2.7): the largest single transfer of the stage
  * over the given phases, double-buffered when it is prefetched (`prefetchedFraction > 0`: one buffer fills while the
  * other is read), single otherwise.
+ * A phase whose transfers prefetch from both host RAM and the SSD ({@link prefetchesFromBothTiers}) has two streams
+ * in flight (docs/simulation-model.md §12 "Overlap across tiers"): one buffer being read by the device plus one being
+ * filled per source, `max_all + max_ram,q>0 + max_ssd,q>0`. With one source this is today's 2·max.
  * A transfer's buffer is `Σ ceil(count)·bytesEach` for experts (capacity is not an average, so
  * expected misses round up) and its `usefulBytes` for table rows (the gathered rows, not the tier's pages).
  * 0 when nothing streams. Unit: bytes.
  */
 export function stageStagingBytes(lowered: LoweredModel[], s: number): number {
+  // Formula: buffer = lookup table: usefulBytes; else Σ ceil(count_i)·bytes_i
+  const bufferBytes = (op: TransferOp): number =>
+    op.group === 'lookup_table'
+      ? op.usefulBytes
+      : op.reads.reduce((sum, r) => sum + Math.ceil(r.count) * r.bytesEach, 0);
   let largest = 0;
   for (const model of lowered) {
+    const transfers: TransferOp[] = [];
     for (const layer of model.stages[s].layers) {
       for (const op of layer.ops) {
         if (op.kind !== 'transfer') continue;
-        // Formula: buffer = lookup table: usefulBytes; else Σ ceil(count_i)·bytes_i
-        const buffer =
-          op.group === 'lookup_table'
-            ? op.usefulBytes
-            : op.reads.reduce((sum, r) => sum + Math.ceil(r.count) * r.bytesEach, 0);
+        transfers.push(op);
+        const buffer = bufferBytes(op);
         // Formula: slots = q > 0 ? 2 : 1   (double buffer for a prefetched transfer)
         const slots = op.prefetchedFraction > 0 ? 2 : 1;
         largest = Math.max(largest, slots * buffer);
       }
     }
+    if (prefetchesFromBothTiers(transfers)) {
+      // Formula: staging = max_all buffer + max_{ram,q>0} buffer + max_{ssd,q>0} buffer   (1 read + 1 fill per source)
+      let maxAll = 0;
+      let maxRamPrefetched = 0;
+      let maxNvmePrefetched = 0;
+      for (const op of transfers) {
+        const buffer = bufferBytes(op);
+        maxAll = Math.max(maxAll, buffer);
+        if (op.prefetchedFraction <= 0) continue;
+        if (op.source === 'host_ram') maxRamPrefetched = Math.max(maxRamPrefetched, buffer);
+        else maxNvmePrefetched = Math.max(maxNvmePrefetched, buffer);
+      }
+      largest = Math.max(largest, maxAll + maxRamPrefetched + maxNvmePrefetched);
+    }
   }
-  // Formula: staging_s = max_{phase, transfer} (q > 0 ? 2 : 1)·buffer
-  // See docs/simulation-model.md §12 ("Memory tiers")
+  // Formula: staging_s = max_phase ( both tiers prefetched ? max_all + max_ram + max_ssd
+  //                                                       : max_transfer (q > 0 ? 2 : 1)·buffer )
+  // See docs/simulation-model.md §12 ("Memory tiers", "Overlap across tiers")
   return largest;
 }
 

@@ -316,6 +316,11 @@ tier_bytes[host_ram | nvme] = Σ groups placed there (the FULL group: all expert
 fits = fits_device ∧ ∀ tiers (tier_bytes ≤ capacity_tier)
 ```
 
+**As built (§2.11):** a stage that prefetches from both host RAM and the SSD keeps one buffer being read plus one
+being filled per source, `staging = max_all buffer + max_{ram, q>0} buffer + max_{nvme, q>0} buffer` per phase
+(`memory.ts: stageStagingBytes`, docs/simulation-model.md §12 "Overlap across tiers"); with one source it is the
+double buffer `max (q > 0 ? 2 : 1)·buffer` (the prefetch rule that replaced `offloadOverlap`).
+
 `MemoryReport.tiers: TierMemory[]` (§7.4); `maxSequencesPerReplica` uses `W_s + staging`. On unified memory
 `host_ram` groups count in the device pool: no `host_ram` tier exists (an invariant in `stageTierBreakdown`).
 
@@ -460,22 +465,25 @@ on the SSD on stage 1) moves, because the double grant is gone. Pinned: Qwen3.8-
 fetch is bound by host-RAM staging, bytes/(B_ram/4) instead of bytes/(B_ram/2) (`e2e-mixed-offload.test.ts`, "moved by
 n_host"). The PCIe link is per device and never shared.
 
-**Within one device the transfer ops stay serial** (`xfer_s = Σ op sec`, the rule that already applies to experts in
-RAM next to tables on the SSD). Reason: in decode, a layer's needed experts are known only after that layer's router
-runs, so the demand fetch of layer j cannot start while layer i < j is still streaming; both tiers' streams are
-consumed in layer order, so the per-device transfer time is their sum. The link is never double-granted, the staging
-buffer rule stays valid, and `pipeline.ts` is untouched. The prefetched share could overlap (follow-up 1).
+**Within one device the demand share stays serial; the prefetched share overlaps across tiers** (follow-up 1, built).
+In decode, a layer's needed experts are known only after that layer's router runs, so the demand fetch (1 − q) of
+layer j cannot start while layer i < j is still streaming: that share is summed in layer order. The prefetched share
+q of a device that prefetches from both tiers overlaps across the two streams, bounded by the busiest stream, its
+PCIe link and host RAM (`pipeline.ts: stageTransfer`). A device with one source, or at p = 0, keeps `xfer_s = Σ op
+sec`, bit for bit.
 
 **Worked example** (`engine/e2e-mixed-offload.test.ts`): Qwen3.8-Flash-Next fp8 (48 identical MoE layers, 512
 experts, top-10, W_expert = 4.9152 MB), one RTX 5090, DDR5-5600 ×2 (89.6 GB/s, 96 GB), 990 PRO, PLE table on the
 SSD, f = 0, b 1, decode @ 8k. Per layer M = 10 misses = 49.15 MB: a RAM layer is link-bound, 1.07 µs + 49.15 MB /
 57.6 GB/s = 0.854 ms; an SSD layer drive-bound, 46.5 µs + 49.15 MB / 7.45 GB/s = 6.644 ms (staging 1.10 ms below it).
-Transfer per step: all-RAM 41.06 ms, 24/24 180.02 ms (exactly the mean), all-SSD 318.97 ms. Decode:
-**23.73 tok/s @ 8k** (all-RAM; host RAM 120.8 GB > 96 GB, does not fit), **5.52 tok/s @ 8k** (24/24; 60.4 GB in RAM,
-fits), **3.12 tok/s @ 8k** (all-SSD). Tables split the same way: DeepSeek-V4.1-Flash with Engram layer 1 in RAM and
-layer 14 on the SSD sits between both-in-RAM and both-on-SSD, its transfer exactly their mean.
+Transfer per step at p = 0 (serial): all-RAM 41.06 ms, 24/24 180.02 ms (exactly the mean), all-SSD 318.97 ms; at the
+default p = 0.8 the 24/24 split overlaps to 163.61 ms (follow-up 1). Decode at p 0.8: **23.76 tok/s @ 8k** (all-RAM,
+whose PLE table on the SSD also overlaps; host RAM 120.8 GB > 96 GB, does not fit), **6.07 tok/s @ 8k** (24/24; 60.4
+GB in RAM, fits; serial 5.52), **3.12 tok/s @ 8k** (all-SSD). Tables split the same way: DeepSeek-V4.1-Flash with
+Engram layer 1 in RAM and layer 14 on the SSD sits between both-in-RAM and both-on-SSD, its transfer exactly their
+mean at p = 0 and below it at p > 0.
 
-**Follow-up 1: overlap the prefetched share across tiers (tighter bound, not built).** Only the prefetched share q
+**Follow-up 1: overlap the prefetched share across tiers (done, as built).** Only the prefetched share q
 (default p = 0.8 at b 1), fetched during the previous layer's compute, can overlap: an SSD → host RAM read of one
 layer can run while another layer's host RAM → GPU copy is in flight, so only the final PCIe hop and host RAM
 bandwidth are shared. The demand share (1 − q) stays serial (router-bound, above). Per device and stage:
@@ -487,14 +495,32 @@ xfer_s = Σ_ops (1 − q)·t_op
               (Σ_ram q·bytes + 2·Σ_ssd q·bytes) / (B_ram / n_host) ) host RAM: RAM reads + SSD staging (written, read)
 ```
 
-What it needs: per-op link bytes, host-RAM bytes and per-source tier time on `OpResult` (filled by
-`opTime.ts`/`transferTime`); a new `xfer_s` in `pipeline.ts: stageResult`, whose hiding term `pbar·min(core, xfer)` and
-exact-endpoint branches change with it; and a staging buffer per tier in flight (two buffers, one per source, instead
-of the largest one). Single-tier configs could stay bit-identical only behind an explicit one-source branch (the
-q-weighted re-summation changes the float order). Configs that would move: any device streaming from both tiers,
-including the existing experts-in-RAM + tables-on-SSD mixes (Qwen PLE, Engram with experts offloaded). Estimate for
-the worked example: 0.2·180.0 + 0.8·159.5 ≈ 163.6 ms per step, ≈ 6.07 vs 5.52 tok/s @ 8k (≈ +10%). Deferred because it
-changes `stageResult` broadly.
+What it needed (the original sketch): per-op link bytes, host-RAM bytes and per-source tier time on `OpResult`; a new
+`xfer_s` in `pipeline.ts: stageResult`; a staging buffer per tier in flight; a one-source branch for bit-identity.
+Estimate for the worked example: 0.2·180.0 + 0.8·159.5 ≈ 163.6 ms per step, ≈ 6.07 vs 5.52 tok/s @ 8k (≈ +10%).
+
+**As built** (docs/simulation-model.md §12 "Overlap across tiers"; `engine/pipeline.ts: stageTransfer`,
+`engine/transfer.ts: prefetchesFromBothTiers`, `TransferTime.linkBytes / hostRamBytes / hostRamSec` passed up as
+`OpResult.transferResources`, `engine/memory.ts: stageStagingBytes`). Settled points:
+
+- The overlapped branch applies only when a stage has an op with q > 0 from host RAM AND one from the SSD; every other
+  stage runs the former expressions in the same float order, so one-source and p = 0 configs are bit-identical.
+- `P_s = max(Σ_ram q·t_op, Σ_ssd q·t_op, Σ q·linkSec_op, Σ q·hostRamSec_op)`, `xfer_s = Σ (1 − q)·t_op + P_s`. The
+  per-source sums use the full t_op (α included: one tier's ops stay serial). The host RAM term sums each op's time
+  on host RAM: tier bytes (rounded to the granularity) / (B_ram / n_host) for a RAM read, / (B_ram / (2·n_host)) for
+  SSD staging, the same terms `transferTime` charges.
+- The hiding term keeps its form with `pbar_s = P_s / xfer_s`; p = 1 gives `t_s = lat + max(core, P_s)`. Since
+  `P_s ≤ Σ q·t_op`, overlapped results are never slower than serial.
+- `StageResult.transferSec` reports the effective `xfer_s`.
+- Staging: one buffer being read + one being filled per source, `max_all + max_ram + max_ssd` (§2.7 note); with
+  one source it reduces to the double buffer.
+
+Computed for the worked example (p 0.8): D = 35.99 ms, P = the SSD stream 0.8·24·t_ssd + t_table = 127.62 ms (link
+32.76 ms, host RAM 31.60 ms) ⇒ **163.61 ms per step** (estimate 163.6) and **6.068 tok/s @ 8k** (estimate 6.07,
+serial 5.522). The rate differs slightly from 1/163.6 ms because the stage's compute (≈ 5.4 ms) is hidden only by
+`pbar = P/xfer = 0.78`, and the PLE table (q = 1) adds its whole time to the SSD stream. At p 1: 159.51 ms,
+6.269 tok/s @ 8k. Staging of 24/24 grows from 2 to 3 layers of experts (prefill: 7.55 GB), still fitting the 32 GB
+device.
 
 **Follow-up 2: host RAM as a cache over the SSD (three-level VRAM → RAM → SSD, design only).** Hot experts of
 SSD-resident layers kept in RAM. What it needs:

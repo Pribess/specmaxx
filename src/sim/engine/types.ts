@@ -260,6 +260,30 @@ export interface SimInput {
  */
 export type Bound = 'compute' | 'memory' | 'comm' | 'transfer';
 
+/**
+ * How much of the shared transfer resources one off-device transfer op uses, per device and microbatch step: the
+ * device's host link (PCIe, per direction) and the node's host RAM bandwidth (docs/simulation-model.md §12 "Overlap
+ * across tiers"). Each time is the op's occupancy of THAT resource alone (bytes / bandwidth, no latency term); the
+ * op's own source-tier time, α included, is `OpResult.sec`. Host RAM bandwidth is shared by the node's n_host
+ * consumers (host-RAM readers and NVMe stagers, each device once), as in `transferTime`.
+ */
+export interface TransferResourceUse {
+  /** Bytes over this device's host link: the op's `usefulBytes`, 0 on unified memory. Unit: bytes. */
+  linkBytes: number;
+  /** Time on this device's host link, `linkBytes / B_link` (0 on unified memory). Unit: seconds. */
+  linkSec: number;
+  /**
+   * Bytes through host RAM: host-RAM tier `bytes_tier` (read once); NVMe with staging `2·bytes_tier` (written, then
+   * read); 0 otherwise. Unit: bytes.
+   */
+  hostRamBytes: number;
+  /**
+   * Time on host RAM bandwidth, B_ram shared by n_host: host-RAM tier `bytes_tier / (B_ram / n_host)`; NVMe with
+   * staging `bytes_tier / (B_ram / (2·n_host))`; 0 otherwise. Unit: seconds.
+   */
+  hostRamSec: number;
+}
+
 /** The cost of one op on one device. */
 export interface OpResult {
   /** The op costed. */
@@ -283,6 +307,11 @@ export interface OpResult {
    * terms, design doc §2.3); 0 for other ops. Unit: seconds.
    */
   transferBandwidthSec: number;
+  /**
+   * Transfer ops only: the op's use of the shared link and host RAM, for the overlapped stage transfer
+   * (`pipeline.ts: stageTransfer`); absent on other ops.
+   */
+  transferResources?: TransferResourceUse;
   /** Op time: the roofline max(computeSec, memorySec), the collective time, or the transfer time. Unit: seconds. */
   sec: number;
   /** Which term set `sec`. */
@@ -352,7 +381,12 @@ export interface StageResult {
    * + p2p) extended by the transfers not hidden by prefetching (docs §12 "Expert prefetch"). Unit: seconds.
    */
   sec: number;
-  /** Σ transfer op times (latency + service) of the stage, `xfer_s`. Unit: seconds. */
+  /**
+   * The stage's effective transfer time `xfer_s` (`pipeline.ts: stageTransfer`): Σ transfer op times (latency +
+   * service); for a stage that prefetches from both host RAM and the SSD, the overlapped `D_s + P_s` (the demand share
+   * serial, the prefetched share bounded by the busiest stream or shared resource; docs §12 "Overlap across tiers"),
+   * which can be less than Σ op sec. Unit: seconds.
+   */
   transferSec: number;
   /** Transfer time not hidden by prefetching: `t_s − t_core,s` (0 when nothing is offloaded). Unit: seconds. */
   exposedTransferSec: number;
@@ -430,7 +464,8 @@ export interface DeviceMemory {
   activationPeakBytes: number;
   /**
    * Staging buffer(s) for streamed weight groups (double-buffered for prefetched transfers, `q > 0`; design doc §2.7);
-   * 0 when nothing streams. Unit: bytes.
+   * a stage that prefetches from both host RAM and the SSD keeps one buffer being read plus one being filled per
+   * source (`memory.ts: stageStagingBytes`). 0 when nothing streams. Unit: bytes.
    */
   stagingBytes: number;
   /** Draft weights and draft KV/state (speculative decoding on; last stage); 0 otherwise. Unit: bytes. */

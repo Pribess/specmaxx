@@ -12,9 +12,10 @@ import {
   phaseResult,
   phaseTransfer,
   stageResult,
+  stageTransfer,
 } from './pipeline';
 import { simulate } from './simulate';
-import type { OpResult, SimInput, StageResult } from './types';
+import type { LayerResult, OpResult, SimInput, StageResult } from './types';
 
 function expectClose(actual: number, expected: number, rel = 1e-9): void {
   expect(Math.abs(actual - expected)).toBeLessThanOrEqual(rel * Math.abs(expected));
@@ -185,10 +186,21 @@ describe('PP link bandwidth bounds the cycle (review P1): TINY_DENSE pp 2, batch
 // ---------------------------------------------------------------------------------------------------------------
 // Off-device transfers in the stage formula (design doc §2.6, U-5) and the comm split (§4.2).
 
-/** A bare OpResult with the given times (other fields zero); `sec` follows the op kind's rule. */
+/**
+ * A bare OpResult with the given times (other fields zero); `sec` follows the op kind's rule. Transfer ops get
+ * `transferResources` with the given link and host-RAM times (default 0).
+ */
 function result(
   op: ElementwiseOp | CollectiveOp | TransferOp,
-  t: { sec: number; lat?: number; bw?: number; xferLat?: number; xferBw?: number },
+  t: {
+    sec: number;
+    lat?: number;
+    bw?: number;
+    xferLat?: number;
+    xferBw?: number;
+    link?: number;
+    host?: number;
+  },
 ): OpResult {
   const bytes = {
     weightBytes: 0,
@@ -201,7 +213,7 @@ function result(
     totalBytes: 0,
   };
   const bound = op.kind === 'collective' ? 'comm' : op.kind === 'transfer' ? 'transfer' : 'compute';
-  return {
+  const r: OpResult = {
     op,
     flops: 0,
     bytes,
@@ -214,6 +226,15 @@ function result(
     sec: t.sec,
     bound,
   };
+  if (op.kind === 'transfer') {
+    r.transferResources = {
+      linkBytes: 0,
+      linkSec: t.link ?? 0,
+      hostRamBytes: 0,
+      hostRamSec: t.host ?? 0,
+    };
+  }
+  return r;
 }
 const ELEMENTWISE: ElementwiseOp = {
   kind: 'elementwise',
@@ -356,6 +377,138 @@ describe('U-5 stage formula with transfers: compute 2, bw 1, lat 0.5, xfer 3, p2
       overlap: 'ideal',
     });
     expect(phase.transfer?.bytes).toBe(42_467_328);
+  });
+});
+
+/**
+ * Local copy of the stage time before the overlap across tiers (xfer_s = Σ op sec, P_s = Σ q·t_op), for the
+ * bit-identity and t ≤ t_serial checks below. Same expressions and float order as the former `stageResult`.
+ */
+function serialStageSec(layers: LayerResult[], overlap: 'ideal' | 'none', sendSec = 0): number {
+  const ops = layers.flatMap((l) => l.ops);
+  const computeSec = ops
+    .filter((o) => o.op.kind !== 'collective' && o.op.kind !== 'transfer')
+    .reduce((s, o) => s + o.sec, 0);
+  const transferSec = ops.filter((o) => o.op.kind === 'transfer').reduce((s, o) => s + o.sec, 0);
+  let prefetchedSec = 0;
+  let allPrefetched = true;
+  let nonePrefetched = true;
+  for (const o of ops) {
+    if (o.op.kind !== 'transfer') continue;
+    const q = o.op.prefetchedFraction;
+    prefetchedSec += q * o.sec;
+    if (q !== 1) allPrefetched = false;
+    if (q !== 0) nonePrefetched = false;
+  }
+  const lat = ops.reduce((s, o) => s + o.commLatencySec, 0);
+  const bw = ops.reduce((s, o) => s + o.commBandwidthSec, 0);
+  const coreSec =
+    overlap === 'none' ? computeSec + lat + bw + sendSec : lat + Math.max(computeSec, bw);
+  const coreTermSec = overlap === 'none' ? computeSec + bw + sendSec : Math.max(computeSec, bw);
+  if (transferSec === 0) return coreSec;
+  if (allPrefetched) return lat + Math.max(coreTermSec, transferSec);
+  if (nonePrefetched) return coreSec + transferSec;
+  return (
+    lat +
+    coreTermSec +
+    transferSec -
+    (prefetchedSec / transferSec) * Math.min(coreTermSec, transferSec)
+  );
+}
+
+describe('overlap across tiers (docs §12): a stage prefetching from host RAM and the SSD; core 2, lat 0.5 (seconds)', () => {
+  const SSD_FETCH: TransferOp = { ...FETCH, source: 'nvme' };
+  /** compute `core`, a collective (lat 0.5, bw 1) and the given transfer results. */
+  const stage = (transfers: OpResult[], core = 2) => [
+    layerResult('layer.0', 0, [
+      result(ELEMENTWISE, { sec: core }),
+      result(ALL_REDUCE, { sec: 1.5, lat: 0.5, bw: 1 }),
+      ...transfers,
+    ]),
+  ];
+  const ram = (q: number, sec = 1, link = 0.9, host = 0.5) =>
+    result({ ...FETCH, prefetchedFraction: q }, { sec, link, host });
+  const ssd = (q: number, sec = 3, link = 0.9, host = 1.2) =>
+    result({ ...SSD_FETCH, prefetchedFraction: q }, { sec, link, host });
+
+  it('p = 1, SSD-stream bound: RAM {1 s, link 0.9, host 0.5} + SSD {3 s, link 0.9, host 1.2} ⇒ P = 3, t = 3.5 (serial 4.5)', () => {
+    const layers = stage([ram(1), ssd(1)]);
+    const st = stageTransfer(layers[0].ops);
+    expect(st).toEqual({
+      transferSec: 3,
+      prefetchedSec: 3,
+      allPrefetched: true,
+      nonePrefetched: false,
+      overlapped: true,
+    });
+    const s = stageResult(0, layers, undefined, 'ideal');
+    expect(s.transferSec).toBe(3);
+    expect(s.sec).toBe(3.5); // lat + max(core, P)
+    expect(serialStageSec(layers, 'ideal')).toBe(4.5);
+  });
+  it('p = 1, link bound: SSD 1.2 s ⇒ P = Σ link = 1.8', () => {
+    const layers = stage([ram(1), ssd(1, 1.2)]);
+    expect(stageTransfer(layers[0].ops).transferSec).toBe(1.8);
+    expect(stageResult(0, layers, undefined, 'ideal').sec).toBe(2.5); // 0.5 + max(2, 1.8)
+  });
+  it('p = 1, host RAM bound: host 0.8 + 1.1, link 0.1 each ⇒ P = 1.9', () => {
+    const layers = stage([ram(1, 1, 0.1, 0.8), ssd(1, 1.2, 0.1, 1.1)]);
+    expect(stageTransfer(layers[0].ops).transferSec).toBeCloseTo(1.9, 12);
+  });
+  it('q 0.8 both: D = 0.8, P = 2.4, xfer 3.2, pbar 0.75 ⇒ t = 0.5 + 2 + 3.2 − 0.75·2 = 4.2 (serial 4.9)', () => {
+    const layers = stage([ram(0.8), ssd(0.8)]);
+    const st = stageTransfer(layers[0].ops);
+    expect(st.overlapped).toBe(true);
+    expect(st.allPrefetched || st.nonePrefetched).toBe(false);
+    expect(st.transferSec).toBeCloseTo(3.2, 12);
+    expect(st.prefetchedSec).toBeCloseTo(2.4, 12);
+    expect(stageResult(0, layers, undefined, 'ideal').sec).toBeCloseTo(4.2, 12);
+    expect(serialStageSec(layers, 'ideal')).toBeCloseTo(4.9, 12);
+  });
+  it('p = 0 with both tiers ≡ the serial formula, bit for bit', () => {
+    for (const overlap of ['ideal', 'none'] as const) {
+      const layers = stage([ram(0), ssd(0), ram(0, 0.37)]);
+      const s = stageResult(0, layers, undefined, overlap);
+      expect(stageTransfer(layers[0].ops).overlapped).toBe(false);
+      expect(s.sec).toBe(serialStageSec(layers, overlap));
+      expect(s.transferSec).toBe(1 + 3 + 0.37);
+    }
+  });
+  it('one source (3 RAM ops at mixed q) ≡ the serial formula, bit for bit; SSD q > 0 with RAM q = 0 too', () => {
+    for (const overlap of ['ideal', 'none'] as const) {
+      for (const layers of [
+        stage([ram(0.8, 0.3), ram(1, 0.7), ram(0.25, 1.9)]),
+        stage([ram(0), ssd(0.8)]),
+      ]) {
+        expect(stageTransfer(layers[0].ops).overlapped).toBe(false);
+        expect(stageResult(0, layers, undefined, overlap).sec).toBe(
+          serialStageSec(layers, overlap),
+        );
+      }
+    }
+  });
+  it('every core and q: lat + max(core, xfer) ≤ t ≤ t_core + xfer, and t ≤ t_serial', () => {
+    for (const overlap of ['ideal', 'none'] as const) {
+      for (const compute of [0.5, 2, 10]) {
+        // ideal: core = max(compute, bw 1); none: compute + bw (no send)
+        const core = overlap === 'ideal' ? Math.max(compute, 1) : compute + 1;
+        const tCore = 0.5 + core;
+        for (const q of [0, 0.3, 0.8, 1]) {
+          for (const qSsd of [q, 1]) {
+            const layers = stage([ram(q), ssd(qSsd), ram(q, 0.4, 0.3, 0.2)], compute);
+            const s = stageResult(0, layers, undefined, overlap);
+            expect(s.sec).toBeGreaterThanOrEqual(0.5 + Math.max(core, s.transferSec) - 1e-12);
+            expect(s.sec).toBeLessThanOrEqual(tCore + s.transferSec + 1e-12);
+            expect(s.sec).toBeLessThanOrEqual(serialStageSec(layers, overlap) + 1e-12);
+          }
+        }
+      }
+    }
+  });
+  it('a transfer result without transferResources is an error in an overlapped stage', () => {
+    const bare = ssd(0.8);
+    delete bare.transferResources;
+    expect(() => stageTransfer(stage([ram(0.8), bare])[0].ops)).toThrow(/no transferResources/);
   });
 });
 
