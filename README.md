@@ -5,7 +5,8 @@ A frontend-only estimator of the theoretical maximum prefill and decode tokens/s
 ## Development
 
 Requires Node.js 22.12+ on the 22 line, 24.x, or 26+ (`^22.12.0 || ^24.0.0 || >=26.0.0`, the intersection of
-what Vitest 5, Vite 8 and @vitejs/plugin-react 6 support; Node 20 and 23 are not supported).
+what Vitest 5, Vite 8 and @vitejs/plugin-react 6 support; Node 20 and 23 are not supported). CI pins the version in
+`.node-version` (24.22.1); use the same locally.
 
 ```sh
 bun install --frozen-lockfile  # install the locked dependencies (Bun; see bun.lock)

@@ -7,7 +7,9 @@
  * instead of min(E, T·k); batch 1 unchanged, U(1) = k), prefill 0 … +0.02 % (U a hair below E at 1024 tokens);
  * ep > 1 (ep2dp2, G-e): prefill −0.1 … −12.4 % (EP load imbalance ρ = 1.2 on the busiest device's expert rows),
  * decode −0.03 … +8.4 %. Every dense case is unchanged bit for bit.
- * JSON round-trips finite IEEE-754 doubles exactly; every selected leaf uses Object.is, not a tolerance.
+ * JSON round-trips finite IEEE-754 doubles exactly. Numeric leaves match within MAX_ULPS units in the last place (32),
+ * not a relative tolerance: V8's Math.pow / exp / log differ in the last bits across Node majors and CPU architectures
+ * (CI runs x64 Linux, the pin was made on arm64 macOS). Strings, booleans, zeros and signs match exactly.
  * New result fields intentionally do not enter this projection. Never regenerate to hide a regression.
  * Regenerate deliberately: UPDATE_DEPLOYMENT_IDENTITY=1 bun run test src/sim/engine/identity.test.ts
  */
@@ -266,9 +268,37 @@ function pin(r: SimResult): Pin {
   return out;
 }
 
+/**
+ * Most units in the last place (ULP) a numeric leaf may move and still match the pin (see the file header). V8's `**`
+ * (Math.pow), exp and log are not correctly rounded and differ in the last bits between Node majors (22 vs 24) and
+ * between arm64 and x64 builds of one Node; summed over the layers that reached up to 18 ULP (≈ 2e-15 relative, Node
+ * 22 vs the Node 24 arm64 pin). 32 ULP is ≈ 7e-15 relative, far below what any intended model change moves.
+ */
+const MAX_ULPS = 32;
+const BITS = new DataView(new ArrayBuffer(8));
+
+/** IEEE-754 bit pattern of |x| as an integer: adjacent doubles of one sign differ by exactly 1. */
+function magnitudeBits(x: number): bigint {
+  BITS.setFloat64(0, Math.abs(x));
+  return BITS.getBigUint64(0);
+}
+
+/**
+ * True if two leaves match: strings and booleans exactly; numbers bit for bit (Object.is, so +0 ≠ −0 and NaN = NaN),
+ * or both finite and non-zero with the same sign and at most {@link MAX_ULPS} representable doubles apart.
+ */
+function leavesMatch(expected: Leaf | undefined, actual: Leaf | undefined): boolean {
+  if (Object.is(expected, actual)) return true;
+  if (typeof expected !== 'number' || typeof actual !== 'number') return false;
+  if (!Number.isFinite(expected) || !Number.isFinite(actual)) return false;
+  if (expected === 0 || actual === 0 || Math.sign(expected) !== Math.sign(actual)) return false;
+  const ulps = magnitudeBits(expected) - magnitudeBits(actual);
+  return (ulps < 0n ? -ulps : ulps) <= BigInt(MAX_ULPS);
+}
+
 function mismatches(expected: Pin, actual: Pin): string[] {
   return [...new Set([...Object.keys(expected), ...Object.keys(actual)])]
-    .filter((key) => !Object.is(expected[key], actual[key]))
+    .filter((key) => !leavesMatch(expected[key], actual[key]))
     .map((key) => `${key}: expected ${String(expected[key])}, got ${String(actual[key])}`);
 }
 
@@ -409,12 +439,28 @@ describe('deployment identity, knobs absent (after latency audit G1–G8, G6 exc
   const fixture = JSON.parse(raw) as Fixture;
   it('pins the exact case set', () =>
     expect(Object.keys(inputs).sort()).toEqual(Object.keys(fixture).sort()));
-  it('checks Object.is rather than a tolerance (including signed zero)', () => {
-    expect(mismatches({ x: 1 }, { x: 1 + Number.EPSILON })).toHaveLength(1);
+  it('allows only a few ULP on numbers, nothing on signs, zeros, strings or booleans', () => {
+    const ulpsAway = (x: number, n: number): number => {
+      BITS.setFloat64(0, x);
+      BITS.setBigUint64(0, BITS.getBigUint64(0) + BigInt(n));
+      return BITS.getFloat64(0);
+    };
+    expect(mismatches({ x: 1 }, { x: 1 + Number.EPSILON })).toEqual([]);
+    expect(mismatches({ x: 0.0175 }, { x: ulpsAway(0.0175, MAX_ULPS) })).toEqual([]);
+    expect(mismatches({ x: -227.7 }, { x: ulpsAway(-227.7, -MAX_ULPS) })).toEqual([]);
+    expect(mismatches({ x: 0.0175 }, { x: ulpsAway(0.0175, MAX_ULPS + 1) })).toHaveLength(1);
+    expect(mismatches({ x: 227.7 }, { x: 227.7 * (1 + 1e-12) })).toHaveLength(1);
     expect(mismatches({ x: 0 }, { x: -0 })).toHaveLength(1);
+    expect(mismatches({ x: 0 }, { x: Number.MIN_VALUE })).toHaveLength(1);
+    expect(mismatches({ x: 1 }, { x: -1 })).toHaveLength(1);
+    expect(mismatches({ x: 4096 }, { x: 4097 })).toHaveLength(1);
+    expect(mismatches({ x: 'Infinity' }, { x: Infinity })).toHaveLength(1);
+    expect(mismatches({ x: true }, { x: 1 })).toHaveLength(1);
+    expect(mismatches({ x: '[]' }, { x: '[] ' })).toHaveLength(1);
+    expect(mismatches({ x: 1 }, {})).toHaveLength(1);
   });
   it.each(Object.entries(inputs))(
-    '%s: original numeric fields and warnings are bit-identical',
+    '%s: original numeric fields (within a few ULP) and warnings (exactly) match the pin',
     (key, value) => {
       expect(mismatches(fixture[key], pin(simulate(value)))).toEqual([]);
     },
