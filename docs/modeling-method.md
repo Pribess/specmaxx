@@ -84,7 +84,9 @@ Optional, off by default. A small draft produces several candidate tokens and th
 
 How many tokens a step yields on average follows from the **acceptance rate** you set per drafted position. The result is the tokens per step divided by the step time, and the speedup against plain decode.
 
-More: [speculative decoding](simulation-model.md#13-speculative-decoding), [accepted tokens](simulation-model.md#accepted-tokens).
+The default acceptance per method and use case is fitted to published measurements, at the draft lengths they were taken at. At any other draft length the app marks the default with ⚠, because the real acceptance per position need not stay constant as the draft grows.
+
+More: [speculative decoding](simulation-model.md#13-speculative-decoding), [accepted tokens](simulation-model.md#accepted-tokens), [acceptance defaults](simulation-model.md#acceptance-defaults).
 
 ## Quantization
 

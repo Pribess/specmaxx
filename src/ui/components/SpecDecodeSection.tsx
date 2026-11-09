@@ -1,5 +1,11 @@
 import { useState } from 'react';
-import { ACCEPTANCE_PRESETS, presetMethod } from '../../sim/engine/specdec';
+import {
+  ACCEPTANCE_PRESETS,
+  pooledDraftLengths,
+  presetDraftLengthExtrapolation,
+  presetMethod,
+  type AcceptancePreset,
+} from '../../sim/engine/specdec';
 import { knownDrafters } from '../../sim/models/hf/drafter';
 import {
   HYPOTHETICAL_DRAFTER,
@@ -89,10 +95,23 @@ export function SpecDecodeSection({
       ? Math.min(MAX_DRAFT_LENGTH, draft.blockSize - 1)
       : MAX_DRAFT_LENGTH;
   const useCase = spec?.alpha !== undefined ? CUSTOM : (spec?.useCase ?? 'prose');
-  const interpolated =
+  const preset =
     spec && spec.alpha === undefined
-      ? ACCEPTANCE_PRESETS[presetMethod(spec.method, draft)][spec.useCase ?? 'prose'].interpolated
-      : false;
+      ? ACCEPTANCE_PRESETS[presetMethod(spec.method, draft)][spec.useCase ?? 'prose']
+      : undefined;
+  const extrapolatedFrom = spec
+    ? presetDraftLengthExtrapolation(spec.method, spec.useCase ?? 'prose', k, draft, spec.alpha)
+    : undefined;
+  // A pooled preset names the k of its runs once ("pooled from k = 7, 15"), with ⚠ when k is none of them.
+  const alphaHint =
+    preset?.basis === 'pooled'
+      ? `${extrapolatedFrom ? '⚠ ' : ''}${basisHint(preset)}`
+      : [
+          preset ? basisHint(preset) : undefined,
+          extrapolatedFrom ? `⚠ fitted at k = ${extrapolatedFrom.join(', ')}` : undefined,
+        ]
+          .filter(Boolean)
+          .join(' · ');
   return (
     <div className="deployment-section" data-testid="specdec-section">
       <Picker
@@ -163,7 +182,7 @@ export function SpecDecodeSection({
                 alpha: Number.isFinite(v) ? Math.min(MAX_ACCEPTANCE, Math.max(0, v)) : undefined,
               })
             }
-            hint={interpolated ? 'interpolated' : undefined}
+            hint={alphaHint || undefined}
             help={helpLines([
               'Chance that each drafted token is accepted.',
               'Higher means more tokens per step and faster decode.',
@@ -185,6 +204,23 @@ export function SpecDecodeSection({
   );
 }
 
+/** Short label for a preset whose α reproduces no run of this method × use case; undefined for a measured one. */
+function basisHint(preset: AcceptancePreset): string | undefined {
+  switch (preset.basis) {
+    case 'measured':
+      return undefined;
+    case 'pooled':
+      return `pooled from k = ${pooledDraftLengths(preset).join(', ')}`;
+    case 'carried_over':
+      return 'interpolated';
+    case 'borrowed':
+      return `from ${preset.measurements[0].methodVersion}`;
+    default: {
+      const _never: never = preset.basis;
+      throw new Error(`unknown acceptance basis ${String(_never)}`);
+    }
+  }
+}
 /**
  * The drafter of a block method: a Hub repo id typed or picked from the known drafters of the target, or the
  * hypothetical stand-in. An empty commit returns to the default (`chosen` undefined).

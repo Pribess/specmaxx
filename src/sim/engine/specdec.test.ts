@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MtpDraftSpec } from '../ir/model';
 import { REF_DENSE_8B_MTP } from '../models/referenceDraft';
+import type { AcceptanceModel } from './types';
 import {
   ACCEPTANCE_PRESETS,
   DEFAULT_DRAFT_LENGTH,
@@ -12,6 +13,12 @@ import {
   perPositionAlphas,
   presetAcceptance,
   presetMethod,
+  fittedDraftLengths,
+  iidAlphaForTokens,
+  presetDraftLengthExtrapolation,
+  pooledDraftLengths,
+  acceptanceRuns,
+  FIT_TOLERANCE_ALPHA,
 } from './specdec';
 
 /** |actual − expected| ≤ rel·|expected|. */
@@ -72,21 +79,123 @@ describe('acceptance presets (design doc §5.1)', () => {
     expect(ACCEPTANCE_PRESETS.dspark.code.alpha).toBe(0.84);
     expect(ACCEPTANCE_PRESETS.dspark.math.alpha).toBe(0.88);
   });
-  it('extras: MTP reasoning 0.70, DFlash 2 agentic 0.65; missing pairs are the prose value (+0.02 for block reasoning), marked interpolated', () => {
-    expect(ACCEPTANCE_PRESETS.mtp_multi_step.reasoning).toEqual({
-      alpha: 0.7,
-      interpolated: false,
+  it('extras: MTP reasoning 0.68, DFlash 2 agentic 0.65 (borrowed v1); missing pairs carry the prose value over (+0.02 for block reasoning)', () => {
+    expect(ACCEPTANCE_PRESETS.mtp_multi_step.reasoning).toMatchObject({
+      alpha: 0.68,
+      basis: 'measured',
     });
-    expect(ACCEPTANCE_PRESETS.dflash2.agentic).toEqual({ alpha: 0.65, interpolated: false });
-    expect(ACCEPTANCE_PRESETS.mtp_multi_step.agentic).toEqual({ alpha: 0.75, interpolated: true });
-    expect(ACCEPTANCE_PRESETS.mtp_single_step.reasoning).toEqual({
-      alpha: 0.85,
-      interpolated: true,
+    expect(ACCEPTANCE_PRESETS.dflash2.agentic).toMatchObject({ alpha: 0.65, basis: 'borrowed' });
+    expect(ACCEPTANCE_PRESETS.dflash2.agentic.measurements[0]).toMatchObject({
+      methodVersion: 'DFlash v1',
+      draftLength: 15,
+      meanAcceptedTokens: 2.82,
     });
-    expect(ACCEPTANCE_PRESETS.mtp_single_step.agentic).toEqual({ alpha: 0.85, interpolated: true });
-    expect(ACCEPTANCE_PRESETS.dflash2.reasoning).toEqual({ alpha: 0.81, interpolated: true });
-    expect(ACCEPTANCE_PRESETS.dspark.reasoning).toEqual({ alpha: 0.78, interpolated: true });
-    expect(ACCEPTANCE_PRESETS.dspark.agentic).toEqual({ alpha: 0.76, interpolated: true });
+    const carried = [
+      ['mtp_multi_step', 'agentic', 0],
+      ['mtp_single_step', 'code', 0],
+      ['mtp_single_step', 'math', 0.02],
+      ['mtp_single_step', 'reasoning', 0],
+      ['mtp_single_step', 'agentic', 0],
+      ['dflash2', 'reasoning', 0.02],
+      ['dspark', 'reasoning', 0.02],
+      ['dspark', 'agentic', 0],
+    ] as const;
+    for (const [method, useCase, offset] of carried) {
+      expect(ACCEPTANCE_PRESETS[method][useCase]).toMatchObject({
+        basis: 'carried_over',
+        carriedFrom: { useCase: 'prose', alphaOffset: offset },
+      });
+    }
+  });
+  it('every preset names its sources, method version, target, benchmark, k and τ', () => {
+    for (const row of Object.values(ACCEPTANCE_PRESETS)) {
+      for (const useCase of SPEC_USE_CASES) {
+        const preset = row[useCase];
+        expect(preset.measurements.length).toBeGreaterThan(0);
+        // every preset has a fitted k, except pooled ones (fitted at none, by definition)
+        expect(fittedDraftLengths(preset).length > 0).toBe(preset.basis !== 'pooled');
+        for (const m of [...preset.measurements, ...(preset.otherReports ?? [])]) {
+          expect(m.url).toMatch(/^https:\/\//);
+          expect(m.location).not.toBe('');
+          expect(m.methodVersion).not.toBe('');
+          expect(m.target).not.toBe('');
+          expect(m.benchmark).not.toBe('');
+          expect(Number.isInteger(m.draftLength) && m.draftLength >= 1).toBe(true);
+          expect(m.meanAcceptedTokens).toBeGreaterThanOrEqual(1);
+          expect(m.meanAcceptedTokens).toBeLessThan(m.draftLength + 1);
+        }
+      }
+    }
+  });
+  it('measured and borrowed α reproduce every fitted run (± FIT_TOLERANCE_ALPHA); pooled α lies between its runs and reproduces none', () => {
+    for (const row of Object.values(ACCEPTANCE_PRESETS)) {
+      for (const useCase of SPEC_USE_CASES) {
+        const preset = row[useCase];
+        if (preset.basis === 'carried_over') continue;
+        const runs = acceptanceRuns(preset.measurements).map((r) => r.alphaIid);
+        if (preset.basis === 'pooled') {
+          expect(runs.length).toBeGreaterThan(1);
+          expect(preset.alpha).toBeGreaterThan(Math.min(...runs));
+          expect(preset.alpha).toBeLessThan(Math.max(...runs));
+          for (const a of runs)
+            expect(Math.abs(preset.alpha - a)).toBeGreaterThan(FIT_TOLERANCE_ALPHA);
+        } else {
+          for (const a of runs)
+            expect(Math.abs(preset.alpha - a)).toBeLessThanOrEqual(FIT_TOLERANCE_ALPHA);
+        }
+      }
+    }
+  });
+  it('no cited report would reproduce α (else it belongs in the fitted runs)', () => {
+    for (const row of Object.values(ACCEPTANCE_PRESETS)) {
+      for (const useCase of SPEC_USE_CASES) {
+        const preset = row[useCase];
+        if (preset.basis === 'carried_over') continue;
+        for (const run of acceptanceRuns(preset.otherReports ?? [])) {
+          expect(Math.abs(preset.alpha - run.alphaIid)).toBeGreaterThan(FIT_TOLERANCE_ALPHA);
+        }
+      }
+    }
+  });
+  it('acceptanceRuns averages a source table’s benchmarks and targets: DSpark paper MT-Bench 3.64/3.72/3.70 → 3.687, α .7585', () => {
+    const [run] = acceptanceRuns(ACCEPTANCE_PRESETS.dspark.prose.measurements);
+    expect(run.draftLength).toBe(7);
+    expectClose(run.meanAcceptedTokens, (3.64 + 3.72 + 3.7) / 3, 1e-12);
+    expect(run.alphaIid).toBeCloseTo(0.7585, 4);
+    // DFlash 2 code: Qwen3.8 card (k 7) and Muse card (k 15) are two runs
+    expect(
+      acceptanceRuns(ACCEPTANCE_PRESETS.dflash2.code.measurements).map((r) => r.draftLength),
+    ).toEqual([7, 15]);
+  });
+  it('carried-over α is the source use case α plus its offset, with that use case’s measurements', () => {
+    for (const row of Object.values(ACCEPTANCE_PRESETS)) {
+      for (const useCase of SPEC_USE_CASES) {
+        const preset = row[useCase];
+        if (preset.basis !== 'carried_over') {
+          expect(preset.carriedFrom).toBeUndefined();
+          continue;
+        }
+        const from = row[preset.carriedFrom!.useCase];
+        expectClose(preset.alpha, from.alpha + preset.carriedFrom!.alphaOffset, 1e-12);
+        expect(preset.measurements).toBe(from.measurements);
+      }
+    }
+  });
+  it('single-source fits reproduce their τ: DFlash v1 SWE-bench Lite 2.82 @ k 15 → α 0.65 gives 2.854', () => {
+    expect(iidAlphaForTokens(2.82, 15)).toBeCloseTo(0.6457, 4);
+    expect(expectedTokens({ kind: 'iid', alpha: 0.65 }, 15)).toBeCloseTo(2.854, 3);
+    // DSpark paper MT-Bench τ 3.70 @ k 7 (Qwen3-14B) → α_iid .7597; the 0.76 preset gives 3.703
+    expect(iidAlphaForTokens(3.7, 7)).toBeCloseTo(0.7597, 4);
+    expect(expectedTokens({ kind: 'iid', alpha: 0.76 }, 7)).toBeCloseTo(3.703, 3);
+    // llama.cpp PR 27210 reasoning τ 2.47 @ k 3 → α_iid .6835 (preset 0.68)
+    expect(iidAlphaForTokens(2.47, 3)).toBeCloseTo(0.6835, 4);
+  });
+  it('iidAlphaForTokens inverts expectedTokens and rejects τ outside [1, k + 1)', () => {
+    expectClose(iidAlphaForTokens(expectedTokens({ kind: 'iid', alpha: 0.8 }, 7), 7), 0.8, 1e-9);
+    expect(iidAlphaForTokens(1, 3)).toBeCloseTo(0, 9);
+    expect(() => iidAlphaForTokens(4, 3)).toThrow(/\[1, k \+ 1\)/);
+    expect(() => iidAlphaForTokens(0.5, 3)).toThrow();
+    expect(() => iidAlphaForTokens(2, 0)).toThrow();
   });
   it('every method × use case is a legal iid α', () => {
     for (const row of Object.values(ACCEPTANCE_PRESETS)) {
@@ -137,6 +246,63 @@ describe('single-step MTP tail (design doc §3.5)', () => {
   });
   it('multi-step heads keep iid at any k', () =>
     expect(presetAcceptance('mtp', 'code', 3, MULTI_STEP)).toEqual({ kind: 'iid', alpha: 0.82 }));
+});
+
+describe('k extrapolation of a preset α (practicality review F10)', () => {
+  it('fitted k per preset: only the runs α reproduces count; pooled presets have none', () => {
+    const fitted = Object.fromEntries(
+      Object.entries(ACCEPTANCE_PRESETS).map(([method, row]) => [
+        method,
+        Object.fromEntries(SPEC_USE_CASES.map((u) => [u, fittedDraftLengths(row[u])])),
+      ]),
+    );
+    expect(fitted).toEqual({
+      mtp_multi_step: { prose: [15], code: [], math: [7], reasoning: [3], agentic: [15] },
+      mtp_single_step: { prose: [1], code: [1], math: [1], reasoning: [1], agentic: [1] },
+      dflash2: { prose: [7], code: [7, 15], math: [], reasoning: [7], agentic: [15] },
+      dspark: { prose: [7], code: [], math: [], reasoning: [7], agentic: [7] },
+    });
+    expect(pooledDraftLengths(ACCEPTANCE_PRESETS.dspark.code)).toEqual([7, 15]);
+    expect(pooledDraftLengths(ACCEPTANCE_PRESETS.mtp_multi_step.code)).toEqual([3, 7, 15]);
+    expect(pooledDraftLengths(ACCEPTANCE_PRESETS.dspark.prose)).toEqual([]);
+  });
+  it('warns with the fitted k when k is none of them, not when it is one; a cited report at k does not count', () => {
+    expect(presetDraftLengthExtrapolation('dflash2', 'agentic', 7)).toEqual([15]);
+    expect(presetDraftLengthExtrapolation('dflash2', 'agentic', 15)).toBeUndefined();
+    expect(presetDraftLengthExtrapolation('dflash2', 'prose', 7)).toBeUndefined();
+    // Muse and the blog report DFlash 2 prose at k 15, but 0.79 is fitted to the k 7 card only
+    expect(presetDraftLengthExtrapolation('dflash2', 'prose', 15)).toEqual([7]);
+    // Inco's k 15 DSpark retrain (.796) is cited, not fitted: E[τ](0.76, 15) = 4.12 vs 4.77
+    expect(presetDraftLengthExtrapolation('dspark', 'prose', 15)).toEqual([7]);
+    expect(presetDraftLengthExtrapolation('dspark', 'prose', 5)).toEqual([7]);
+    expect(presetDraftLengthExtrapolation('mtp', 'math', 3, MULTI_STEP)).toEqual([7]);
+    expect(presetDraftLengthExtrapolation('mtp', 'prose', 3, MULTI_STEP)).toEqual([15]);
+    expect(presetDraftLengthExtrapolation('mtp', 'prose', 15, MULTI_STEP)).toBeUndefined();
+  });
+  it('pooled presets warn when k is none of their pooled runs’ k', () => {
+    expect(presetDraftLengthExtrapolation('dspark', 'code', 5)).toEqual([7, 15]);
+    expect(presetDraftLengthExtrapolation('dspark', 'code', 7)).toBeUndefined();
+    expect(presetDraftLengthExtrapolation('dflash2', 'math', 3)).toEqual([7, 15]);
+    expect(presetDraftLengthExtrapolation('mtp', 'code', 3, MULTI_STEP)).toBeUndefined();
+    expect(presetDraftLengthExtrapolation('mtp', 'code', 5, MULTI_STEP)).toEqual([3, 7, 15]);
+  });
+  it('no warning for a user α, nor for a single-step head past its depth (the tail rule applies)', () => {
+    expect(presetDraftLengthExtrapolation('dflash2', 'agentic', 7, undefined, 0.7)).toBeUndefined();
+    expect(presetDraftLengthExtrapolation('mtp', 'prose', 1, MTP_DRAFT)).toBeUndefined();
+    expect(presetDraftLengthExtrapolation('mtp', 'prose', 3, MTP_DRAFT)).toBeUndefined();
+  });
+  it('F10 probe: an α fitted at k 7 to a decay curve 0.92 − 0.06/position overstates k 15 and understates k 3', () => {
+    // α_j = 0.92 − 0.06·(j − 1), j = 1..15 (illustrative, not measured)
+    const decay: AcceptanceModel = {
+      kind: 'per_position',
+      alphas: Array.from({ length: 15 }, (_, j) => 0.92 - 0.06 * j),
+    };
+    const alpha = iidAlphaForTokens(expectedTokens(decay, 7), 7);
+    expect(expectedTokens({ kind: 'iid', alpha }, 15)).toBeCloseTo(5.36, 2);
+    expect(expectedTokens(decay, 15)).toBeCloseTo(4.53, 2);
+    expect(expectedTokens({ kind: 'iid', alpha }, 3)).toBeCloseTo(3.05, 2);
+    expect(expectedTokens(decay, 3)).toBeCloseTo(3.34, 2);
+  });
 });
 
 describe('draftContextRows: m_ctx = ⌈E[τ]⌉ (design doc §3.3)', () => {

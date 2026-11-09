@@ -2203,6 +2203,74 @@ speedup        = tokens/s / tokens/s of the same input with speculative decoding
 the Σ op times of the `draft.*` layers and of every other layer (without overlap). With `tokensPerStep` absent the
 rate expressions are today's, bit for bit.
 
+### Acceptance defaults
+
+`src/sim/engine/specdec.ts: ACCEPTANCE_PRESETS, AcceptancePreset, AcceptanceMeasurement, acceptanceRuns,
+iidAlphaForTokens, FIT_TOLERANCE_ALPHA, fittedDraftLengths, pooledDraftLengths, presetDraftLengthExtrapolation`; the UI
+(`ui/components/SpecDecodeSection.tsx`) fills α from the preset unless the user types one. Each reported τ is stored
+with its source URL and location, the method version actually measured, the target (and thinking mode), the drafter
+where it is not the method's own release, the benchmark, k and temperature. A preset's `measurements` are the runs
+behind α; `otherReports` are cited for context only and never count as a fitted k.
+
+```
+run            = one source table at one k; τ_run = mean of its τ over the use case's benchmarks and targets
+α_iid(τ, k)    = the α with (1 − α^(k+1)) / (1 − α) = τ                   bisection; E[τ] rises with α
+reproduces     |α − α_iid(τ_run, k_run)| ≤ 0.006                      α quoted to 0.01, τ to 0.01
+measured       α reproduces every run in `measurements`; no run in `otherReports` reproduces it
+borrowed       the same, with runs of another version of the method (a proxy)
+pooled         α lies strictly between its runs and reproduces none of them
+carried_over   α = α(other use case) + offset                       no source measured this method × use case
+fitted k       = { k_run } of the reproduced runs (carried_over: the source use case's; pooled: none)
+UI             k ∉ fitted k ⇒ "⚠ fitted at k = …";  pooled ⇒ "pooled from k = …" (its runs' k), "⚠ pooled from …" at any other k
+```
+
+The i.i.d. model carries one α across every k, but real per-position acceptance can fall (or rise) along the draft:
+an α fitted at k = 7 to an assumed curve `0.92 − 0.06·(j − 1)` gives E[τ] 5.36 at k = 15 against the curve's 4.53
+(+18%), and 3.05 against 3.34 at k = 3 (−9%) (practicality review F10; illustrative). So the UI marks the preset α
+when k is none of its fitted k (`presetDraftLengthExtrapolation`): a cited report at that k does not clear it (DSpark
+prose 0.76 at k = 15 gives E[τ] 4.12, Inco's k 15 retrain measures 4.77). A pooled preset follows the same rule with
+its pooled runs' k: at any other k it is extrapolated too. No mark for a user α, or for a single-step MTP head past
+its depth, where the collapsing tail replaces the i.i.d. α and the engine warns. The mark can appear at the default k:
+MTP multi-step prose and math (default k 3, fitted at 15 and 7), DeepSeek-V4.1's in-checkpoint DSpark (k capped at 5
+by `blockSize − 1`), DFlash 2 agentic (fitted at 15). Labels: "prose" is MT-Bench, "code" HumanEval + MBPP, "math"
+GSM8K + MATH-500. Runs are given as τ (α_iid).
+
+| method / use case                          | α    | basis                       | fitted k     | runs α is fitted to (or pooled from)                                                                                                  | cited, not fitted                                                                                                                                               |
+| ------------------------------------------ | ---- | --------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MTP multi-step / prose                     | 0.75 | measured                    | 15           | blog Qwen3.5-4B MT-Bench 3.90 (.746)                                                                                                  | card 3.74 (.763); [llama.cpp PR 27210](https://github.com/ggml-org/llama.cpp/pull/27210#issuecomment-5385811671) C1 greedy k 3, τ = 1 + 3 × 0.557 = 2.67 (.735) |
+| MTP multi-step / code                      | 0.82 | pooled, **mixed T**         | — (3, 7, 15) | card HE/MBPP 3.95 (.782); blog 4.50 (.782); PR 27210 greedy k 3 3.35 (.883)                                                           | —                                                                                                                                                               |
+| MTP multi-step / math                      | 0.85 | measured                    | 7            | card GSM8K/MATH 4.87 (.851)                                                                                                           | blog 4.91 (.802)                                                                                                                                                |
+| MTP multi-step / reasoning                 | 0.68 | measured (greedy)           | 3            | PR 27210 C1, thinking on, 2.47 (.684)                                                                                                 | —                                                                                                                                                               |
+| MTP multi-step / agentic                   | 0.75 | carried over (prose)        | 15           | —                                                                                                                                     | —                                                                                                                                                               |
+| MTP single-step / prose                    | 0.85 | measured                    | 1            | [DeepSeek-V3 §5.4.3](https://arxiv.org/abs/2412.19437), all topics, 85–90% → 1.85 (.85)                                               | [FastMTP Table 1](https://arxiv.org/abs/2509.18362) MiMo-RL-7B vanilla greedy MT 1.72 (.72)                                                                     |
+| MTP single-step / code, reasoning, agentic | 0.85 | carried over (prose)        | 1            | —                                                                                                                                     | code: FastMTP 1.73                                                                                                                                              |
+| MTP single-step / math                     | 0.87 | carried over (prose + 0.02) | 1            | —                                                                                                                                     | FastMTP 1.83                                                                                                                                                    |
+| DFlash 2 / prose                           | 0.79 | measured                    | 7            | card 4.10 (.795)                                                                                                                      | [Muse card](https://huggingface.co/incoai/Muse-Glimmer-30B-DFlash2) 4.42 (.778); blog 5.20 (.815)                                                               |
+| DFlash 2 / code                            | 0.83 | measured                    | 7, 15        | card HE/MBPP 4.59 (.832); Muse 5.48 (.826)                                                                                            | blog 5.85 (.839)                                                                                                                                                |
+| DFlash 2 / math                            | 0.87 | pooled                      | — (7, 15)    | card GSM8K/MATH 5.37 (.882); Muse 6.57 (.862); blog 6.48 (.859)                                                                       | —                                                                                                                                                               |
+| DFlash 2 / reasoning                       | 0.81 | carried over (prose + 0.02) | 7            | —                                                                                                                                     | —                                                                                                                                                               |
+| DFlash 2 / agentic                         | 0.65 | **borrowed: DFlash v1**     | 15           | [DDTree Table 1](https://arxiv.org/abs/2604.12989) Qwen3-8B, z-lab DFlash v1, SWE-bench Lite, T 1, 2.82 (.646)                        | no DFlash 2 agentic data                                                                                                                                        |
+| DSpark / prose                             | 0.76 | measured                    | 7            | [DSpark Table 1](https://arxiv.org/abs/2607.05147), DeepSeek-trained, non-thinking Qwen3-4B/8B/14B, T 1: 3.64/3.72/3.70 → 3.69 (.758) | blog Inco retrain 4.77 (.796); community Qwen3.8-27B thinking k 7 3.01 (.684), Muse k 15 3.59 (.723)                                                            |
+| DSpark / code                              | 0.84 | pooled                      | — (7, 15)    | paper HE/MBPP 5.31 (.879); blog Inco retrain 5.38 (.822)                                                                              | community k 7 3.41 (.730), k 15 4.18 (.764)                                                                                                                     |
+| DSpark / math                              | 0.88 | pooled                      | — (7, 15)    | paper GSM8K/MATH 5.95 (.913); blog Inco retrain 5.95 (.843)                                                                           | community k 7 4.14 (.798), k 15 5.23 (.816)                                                                                                                     |
+| DSpark / reasoning                         | 0.78 | carried over (prose + 0.02) | 7            | —                                                                                                                                     | —                                                                                                                                                               |
+| DSpark / agentic                           | 0.76 | carried over (prose)        | 7            | —                                                                                                                                     | —                                                                                                                                                               |
+
+"card" is the [Qwen3.8-27B DFlash 2 card](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) (thinking, xhigh effort,
+k 7, T 1), "Muse" the Muse-Glimmer-30B card (high reasoning strength, k 15, T 1), "blog" the
+[DFlash 2 blog](https://inco.ai/blog/dflash2/)'s matched Qwen3.5-4B comparison, Table 3 (thinking enabled, T 1.0, top-p
+0.95, top-k 20, presence penalty 1.5, k 15). DSpark prose 0.76 is fitted to the paper alone (k = 7, non-thinking Qwen3)
+and stays: it is the method authors' controlled measurement at the default k, and the other reports straddle it (Inco's
+retrain higher, the community thinking retrain lower: E[τ](0.76, 7) = 3.70 is +23% over its 3.01).
+
+**Per-position data.** The blog's Figure 5 gives per-position conditional acceptance on MATH-500 (Qwen3.5-4B, same
+sampling, 15 positions) for MTP (84.6% falling to about 78%), DFlash v1 (88.4%, then 78–81%), DSpark (87.2% to 79.9%)
+and DFlash 2 (flat near 85–86%); their products give E[τ] 4.87 / 5.14 / 5.92 / 6.46 against Table 3's 5.04 / 5.42 /
+6.20 / 6.76 (pooled per-position rates vs per-request means). The blog's selector table gives DFlash Recall@1 per position for k = 7, and
+DSpark Figure 2 per-position curves for Qwen3-4B. These are recorded, not used: the presets stay i.i.d., and
+`expectedTokens` accepts a `per_position` vector for a user who wants one. The α depends on target, temperature and
+thinking mode; no universal measured α exists.
+
 ### Draft memory
 
 `src/sim/lower/draft.ts: draftResidentWeightBytes, draftSequenceStateBytes`; `engine/memory.ts: memoryReport,

@@ -481,3 +481,41 @@ describe('config read from another repo', () => {
     expect(document.body.textContent).not.toMatch(/read from/i);
   });
 });
+
+describe('speculative-decoding acceptance hints', () => {
+  it('flags a preset α used at a k it was not fitted at, and clears the flag at a fitted k or a user α', async () => {
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B&sd=dflash2&sdr=hyp');
+    mount();
+    await screen.findByText(/qwen:/);
+    const section = await screen.findByTestId('specdec-section');
+    const k = within(section).getByLabelText('Draft length k');
+    // DFlash 2 prose 0.79 is fitted at k 7 (Qwen3.8 card) only; the k 15 reports are cited, not fitted. Default k 7.
+    expect((k as HTMLInputElement).value).toBe('7');
+    expect(within(section).queryByText(/fitted at k/)).toBeNull();
+    fireEvent.change(k, { target: { value: '5' } });
+    expect(await within(section).findByText('⚠ fitted at k = 7')).toBeTruthy();
+    fireEvent.change(k, { target: { value: '7' } });
+    await waitFor(() => expect(within(section).queryByText(/fitted at k/)).toBeNull());
+    // A user α is not a preset: no warning at any k.
+    fireEvent.change(k, { target: { value: '5' } });
+    fireEvent.change(within(section).getByLabelText('Acceptance α'), { target: { value: '0.8' } });
+    await waitFor(() => expect(within(section).queryByText(/fitted at k/)).toBeNull());
+  });
+  it('labels DFlash 2 agentic as DFlash v1 data fitted at k 15', async () => {
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B&sd=dflash2&sdr=hyp&sdu=agentic');
+    mount();
+    await screen.findByText(/qwen:/);
+    const section = await screen.findByTestId('specdec-section');
+    expect(await within(section).findByText('from DFlash v1 · ⚠ fitted at k = 15')).toBeTruthy();
+  });
+  it('labels a pooled preset with the k of its runs, with ⚠ at any other k', async () => {
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B&sd=dspark&sdr=hyp&sdu=code');
+    mount();
+    await screen.findByText(/qwen:/);
+    const section = await screen.findByTestId('specdec-section');
+    // default k 7 is one of the pooled runs' k (paper k 7, Inco k 15)
+    expect(await within(section).findByText('pooled from k = 7, 15')).toBeTruthy();
+    fireEvent.change(within(section).getByLabelText('Draft length k'), { target: { value: '5' } });
+    expect(await within(section).findByText('⚠ pooled from k = 7, 15')).toBeTruthy();
+  });
+});
