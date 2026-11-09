@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { HelpIcon } from './HelpIcon';
+import { helpLines } from './helpLines';
 import { Num } from './Num';
 import {
   BREAKDOWN_BOUND_LABELS,
@@ -55,9 +56,11 @@ export function BreakdownTable({ result }: { result: ResultSummary }) {
         <h2>
           Bottleneck estimation{' '}
           <HelpIcon term="Bottleneck estimation">
-            Summed op time before overlap, across all stages. Comm latency: the per-message latency
-            terms of collectives and stage sends. Comm bandwidth: their bytes over the link
-            bandwidth. Offload transfer: reads of off-device weights over the host link.
+            {helpLines([
+              'Time per kind of op, added up before any overlap.',
+              'Comm is the delay of each message plus the time to send its data.',
+              'Offload transfer is the time to read offloaded weights.',
+            ])}
           </HelpIcon>
         </h2>
         <div className="toggles">

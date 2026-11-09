@@ -5,6 +5,7 @@ import { formatParams, lookupTableParams, MODEL_SHORTLIST, type LoadedModel } fr
 import { Panel } from './Panel';
 import { Combobox } from './Combobox';
 import { HelpIcon } from './HelpIcon';
+import { helpLines } from './helpLines';
 
 interface ModelPanelProps {
   id: string;
@@ -43,7 +44,11 @@ export function ModelPanel({
           }}
           options={MODEL_SHORTLIST.map((m) => ({ value: m.id, label: m.name, description: m.id }))}
           placeholder="Qwen/Qwen3.8-27B"
-          help="Pick a popular model or paste any Hugging Face repo ID (owner/name), then press Enter or Load. Gated models need a token."
+          help={helpLines([
+            'Pick a model or paste any Hugging Face ID (owner/name).',
+            'Then press Enter or Load.',
+            'Gated models need a token.',
+          ])}
         />
         <button type="button" onClick={() => onLoad()}>
           Load
@@ -75,7 +80,10 @@ export function ModelPanel({
             />
           </label>
           <HelpIcon term="Hugging Face token">
-            Stored in this browser only. Sent only to Hugging Face; never included in a shared URL.
+            {helpLines([
+              'Stored in this browser only.',
+              'Sent only to Hugging Face, never in a shared link.',
+            ])}
           </HelpIcon>
           <button>Save token and retry</button>
         </form>

@@ -3,6 +3,7 @@ import { formatBytes, formatContextTokens, type ResultSummary, type StageMemory 
 import type { TierMemory } from '../../sim/engine/types';
 import { ChartTooltip, useChartPoint } from './ChartTooltip';
 import { HelpIcon } from './HelpIcon';
+import { helpLines } from './helpLines';
 import { Num } from './Num';
 import {
   HIGH_MEMORY_UTILISATION,
@@ -146,9 +147,11 @@ export function MemoryFit({
       <h2>
         Memory per device{' '}
         <HelpIcon term="Memory fit">
-          Memory is sized for the larger prefill or decode workload. Throughput is a mathematical
-          ceiling only when the workload does not fit. Unified memory does not reserve the OS share.
-          Host RAM and SSD bars are per node: the full offloaded weight groups placed there.
+          {helpLines([
+            'Memory needed per device, sized for the larger of prefill and decode.',
+            'If it does not fit, the speed shown is only a theoretical ceiling.',
+            'Host RAM and SSD bars are per machine.',
+          ])}
         </HelpIcon>
       </h2>
       {result.memory.stages.map((stage, stageIndex) => {
@@ -166,8 +169,10 @@ export function MemoryFit({
                   {' '}
                   ({memoryUtilisation(stage)}){' '}
                   <HelpIcon term="High memory utilisation">
-                    There is little headroom for the OS, the runtime, and fragmentation. Unified
-                    memory shares this pool with the OS.
+                    {helpLines([
+                      'Little memory is left for the OS and the runtime.',
+                      'Unified memory is shared with the OS.',
+                    ])}
                   </HelpIcon>
                 </>
               )}
@@ -237,8 +242,10 @@ export function MemoryFit({
                   </strong>
                   {segment.key === 'tier-experts' && (
                     <HelpIcon term="Routed experts">
-                      The tier keeps every expert. The resident fraction is a GPU-side cache, a copy
-                      of a subset, so it does not shrink this number.
+                      {helpLines([
+                        'The tier always stores every expert.',
+                        'The resident share is only a cached copy, so this number stays the same.',
+                      ])}
                     </HelpIcon>
                   )}
                 </li>

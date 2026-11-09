@@ -14,6 +14,7 @@ import {
 } from '../state';
 import { needsHostStaging } from '../../sim/engine/staging';
 import { HelpIcon } from './HelpIcon';
+import { helpLines } from './helpLines';
 import { networkLinkHelp } from './linkHelp';
 import { Picker } from './Picker';
 import type { PickerOption } from './fuzzy';
@@ -21,20 +22,23 @@ import { Segmented, type Segment } from './Segmented';
 
 /** Help texts of the setup row ("?" icons). */
 const HELP = {
-  machines:
-    'How many machines are connected. They talk over the network link, which is much slower than memory.',
-  network: 'The cable or network between machines. Only links this device has are listed.',
-  local: 'The link between devices inside one machine. Only links this device has are listed.',
-  cabling: (
-    <>
-      <span className="help-line">Switch: one cable from each machine to a switch.</span>
-      <span className="help-line">Full mesh: a cable between every pair.</span>
-      <span className="help-line">
-        Ring: each machine cabled to its two neighbours; traffic to farther machines is relayed.
-      </span>
-      <span className="help-line">Daisy chain: a ring with one cable missing.</span>
-    </>
-  ),
+  machines: helpLines([
+    'How many machines are linked together.',
+    'They talk over the network, which is much slower than memory.',
+  ]),
+  network: helpLines([
+    'The cable or network between machines.',
+    'Only links this device supports are listed.',
+  ]),
+  local: helpLines([
+    'The link between devices inside one machine.',
+    'Only links this device supports are listed.',
+  ]),
+  cabling: helpLines([
+    'Switch: every machine plugs into one switch.',
+    'Full mesh: a cable between every pair of machines.',
+    'Ring: each machine links to two neighbours; a daisy chain is a ring missing one cable.',
+  ]),
 };
 
 /** Segments for the offered counts, plus the current count when it is not offered (an older link). */
@@ -117,8 +121,11 @@ export function SetupRow({
   // The Network link's "?": the TCP links explain their latency (and host staging for a GPU), others the generic text.
   const interLink = built.hardware?.topology.interNode;
   const staged =
-    device !== undefined && built.hardware !== undefined && needsHostStaging(device.device, built.hardware.topology);
-  const networkHelp = (interLink !== undefined ? networkLinkHelp(interLink, staged) : undefined) ?? HELP.network;
+    device !== undefined &&
+    built.hardware !== undefined &&
+    needsHostStaging(device.device, built.hardware.topology);
+  const networkHelp =
+    (interLink !== undefined ? networkLinkHelp(interLink, staged) : undefined) ?? HELP.network;
   const totalText = (
     <span data-testid="device-total">
       = {total} {unit === 'GPUs' ? 'GPUs' : 'devices'} total
@@ -160,7 +167,10 @@ export function SetupRow({
             value={String(hw.devicesPerNode)}
             segments={countSegments(options.devicesPerNodeCounts, hw.devicesPerNode)}
             onChange={(v) => dispatch({ type: 'setCounts', devicesPerNode: Number(v) })}
-            help={`How many ${unit === 'GPUs' ? 'GPUs' : 'devices'} sit in one machine. They talk to each other over the local link, which is faster than the network.`}
+            help={helpLines([
+              `How many ${unit === 'GPUs' ? 'GPUs' : 'devices'} sit in one machine.`,
+              'They talk over the local link, which is faster than the network.',
+            ])}
           />
           {hw.devicesPerNode > 1 && local.length > 0 && linkField('intra', local, links.intra)}
         </div>

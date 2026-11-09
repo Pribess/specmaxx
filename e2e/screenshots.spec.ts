@@ -69,7 +69,9 @@ for (const size of ['desktop', 'phone'] as const) {
       await shoot(panel('Workload'), name('specdec-panel'));
       await page.evaluate(() => scrollTo(0, 0));
       await page.getByRole('button', { name: 'About Speculative decoding speedup' }).focus();
-      await expect(page.getByRole('tooltip').filter({ hasText: 'E[τ]' })).toBeVisible();
+      await expect(
+        page.getByRole('tooltip').filter({ hasText: 'tokens accepted per step' }),
+      ).toBeVisible();
       await page.screenshot({ path: name('specdec-rate-help') });
       await page.keyboard.press('Escape');
       const breakdown = page.locator('section.breakdown');

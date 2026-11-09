@@ -284,9 +284,14 @@ it('annotates a spec-dec decode: speedup with E[τ] help, verify and draft layer
   expect(line.textContent).toMatch(/tok\/s @ 8k\(spec-dec ×1\.67\)/);
   const help = screen.getByRole('button', { name: 'About Speculative decoding speedup' });
   fireEvent.focus(help);
-  expect(screen.getByRole('tooltip').textContent).toMatch(
-    /DFlash 2, k = 3, E\[τ\] = 2\.31 tokens .*draft 1\.20ms \+ verify 9\.80ms.* @ 8k/,
+  const tipLines = [...screen.getByRole('tooltip').querySelectorAll('.help-line')].map(
+    (l) => l.textContent,
   );
+  expect(tipLines).toEqual([
+    'DFlash 2, draft length k = 3.',
+    '2.31 tokens accepted per step on average (incl. the bonus token).',
+    'One step: draft 1.20ms + verify 9.80ms.',
+  ]);
   expect(screen.getByText('hypothetical drafter')).toBeTruthy();
   cleanup();
   render(<BreakdownTable result={spec} />);
@@ -327,8 +332,20 @@ it('annotates an offload result: chips, offload transfer bound, one memory bar p
     memory: {
       ...summary.memory,
       tiers: [
-        { tier: 'host_ram' as const, bytes: 16.3e9, breakdown: { lookupTables: 0, routedExperts: 16.3e9, denseLayers: 0, draftExperts: 0 }, capacityBytes: 96e9, fits: true },
-        { tier: 'nvme' as const, bytes: 2.2e12, breakdown: { lookupTables: 0, routedExperts: 2.2e12, denseLayers: 0, draftExperts: 0 }, capacityBytes: 2e12, fits: false },
+        {
+          tier: 'host_ram' as const,
+          bytes: 16.3e9,
+          breakdown: { lookupTables: 0, routedExperts: 16.3e9, denseLayers: 0, draftExperts: 0 },
+          capacityBytes: 96e9,
+          fits: true,
+        },
+        {
+          tier: 'nvme' as const,
+          bytes: 2.2e12,
+          breakdown: { lookupTables: 0, routedExperts: 2.2e12, denseLayers: 0, draftExperts: 0 },
+          capacityBytes: 2e12,
+          fits: false,
+        },
       ],
     },
   };
@@ -353,9 +370,7 @@ it('annotates an offload result: chips, offload transfer bound, one memory bar p
   ]);
   expect(tiers[1].firstElementChild?.className).toBe('memory-danger');
   fireEvent.focus(tiers[0].querySelector('[data-chart-point]')!);
-  expect(screen.getByRole('tooltip').textContent).toBe(
-    'Host RAM · Routed experts · 16.3GB @ 8k',
-  );
+  expect(screen.getByRole('tooltip').textContent).toBe('Host RAM · Routed experts · 16.3GB @ 8k');
   cleanup();
   const { container } = render(<BreakdownTable result={offload} />);
   const legend = screen.getByRole('list', { name: 'Limiting resource' });

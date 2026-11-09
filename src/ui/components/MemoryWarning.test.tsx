@@ -62,9 +62,9 @@ it.each([
   expect(container.querySelector('.capacity-bar.memory-warning')).toBeTruthy();
   fireEvent.focus(screen.getByRole('button', { name: 'About High memory utilisation' }));
   expect(screen.getByRole('tooltip').textContent).toContain(
-    'little headroom for the OS, the runtime, and fragmentation',
+    'Little memory is left for the OS and the runtime',
   );
-  expect(screen.getByRole('tooltip').textContent).toContain('shares this pool with the OS');
+  expect(screen.getByRole('tooltip').textContent).toContain('Unified memory is shared with the OS');
 });
 
 it('warns in red about overflow and keeps headline rates', async () => {

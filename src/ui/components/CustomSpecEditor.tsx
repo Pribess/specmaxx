@@ -10,6 +10,7 @@ import {
 } from '../state';
 import { NumberField } from './NumberField';
 import { HelpIcon } from './HelpIcon';
+import { helpLines } from './helpLines';
 import type { PanelProps as Props } from './types';
 
 export function CustomSpecEditor({ state, dispatch, built }: Props) {
@@ -38,8 +39,11 @@ export function CustomSpecEditor({ state, dispatch, built }: Props) {
       <summary>
         Edit spec numbers{hardware.edited ? ' (edited)' : ''}
         <HelpIcon term="Edit spec numbers">
-          Starts as a copy of this preset. Rates and capacity are per device; link bandwidth is per
-          direction.
+          {helpLines([
+            'Starts as a copy of this preset.',
+            'Rates and capacity are per device.',
+            'Link bandwidth is per direction.',
+          ])}
         </HelpIcon>
       </summary>
       {specs.map((s) => (

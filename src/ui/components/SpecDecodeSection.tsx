@@ -19,6 +19,7 @@ import { isValidModelId } from '../../hf/urls';
 import { Combobox } from './Combobox';
 import { NumberField } from './NumberField';
 import { Picker } from './Picker';
+import { helpLines } from './helpLines';
 import type { PickerOption } from './fuzzy';
 import type { PanelProps } from './types';
 
@@ -41,10 +42,11 @@ const USE_CASE_LABELS: Record<SpecDecUseCase, string> = {
 /** The picker value of "custom" acceptance (an α the user typed). */
 const CUSTOM = 'custom';
 
-const METHOD_HELP =
-  'Draft-then-verify decoding. Only the extra memory and compute/bandwidth of the draft and verify passes are modelled, with the acceptance ratio below; no engine overhead.';
-const PP_HELP =
-  'Speculative decoding with pipeline parallelism (PP > 1) is not supported yet. Set PP to 1 to enable it.';
+const METHOD_HELP = [
+  'A cheap draft guesses several tokens, then the model checks them all in one pass.',
+  'Accepted guesses give more tokens per step, so decode is faster.',
+];
+const PP_HELP = ['Needs PP 1: pipeline parallelism is not supported yet.'];
 
 /**
  * Workload → "Speculative decoding" (design doc §6.1): method, drafter (block methods), draft length k, use case and
@@ -103,7 +105,7 @@ export function SpecDecodeSection({
             specDec: v === 'off' ? undefined : { method: v as SpecDecMethod },
           })
         }
-        help={ppBlocked ? `${METHOD_HELP} ${PP_HELP}` : METHOD_HELP}
+        help={helpLines(ppBlocked ? [...METHOD_HELP, ...PP_HELP] : METHOD_HELP)}
       />
       {spec !== undefined && spec.method !== 'mtp' && (
         <DrafterField
@@ -130,7 +132,10 @@ export function SpecDecodeSection({
                 ? `⚠ head trained for k ≤ ${maxDepth}`
                 : undefined
             }
-            help="Tokens drafted per step; the verify pass runs the model over k+1 tokens. Expected accepted tokens per step = (1−α^(k+1))/(1−α)."
+            help={helpLines([
+              'How many tokens the draft guesses per step.',
+              'Longer drafts can accept more tokens, but cost more to check.',
+            ])}
           />
           <Picker
             label="Use case"
@@ -142,7 +147,10 @@ export function SpecDecodeSection({
             onChange={(v) => {
               if (v !== CUSTOM) set({ useCase: v as SpecDecUseCase, alpha: undefined });
             }}
-            help="Pre-fills the acceptance ratio from published measurements for this method. Code = code generation."
+            help={helpLines([
+              'Fills in the acceptance rate from published measurements.',
+              'Code means code generation.',
+            ])}
           />
           <NumberField
             label="Acceptance α"
@@ -156,7 +164,11 @@ export function SpecDecodeSection({
               })
             }
             hint={interpolated ? 'interpolated' : undefined}
-            help="Per-token probability that the target accepts a drafted token, assumed independent per position; measured at ~temperature 1 on short-context benchmarks. Editing it sets the use case to Custom."
+            help={helpLines([
+              'Chance that each drafted token is accepted.',
+              'Higher means more tokens per step and faster decode.',
+              'Editing it sets the use case to Custom.',
+            ])}
           />
         </>
       )}
@@ -229,7 +241,10 @@ function DrafterField({
             onChange(v === chosen ? chosen : v);
           else setText(shown);
         }}
-        help="The drafter's architecture from its Hugging Face config.json. 'Hypothetical' is a configurable stand-in, not a released model."
+        help={helpLines([
+          'The small model that drafts the tokens, from its Hugging Face config.',
+          'Hypothetical is a configurable stand-in, not a real model.',
+        ])}
       />
       {sourceKind === 'hypothetical' && (
         <span className="badge" data-testid="hypothetical-badge">

@@ -1,6 +1,7 @@
 import { validDegrees, applyQuantOverride } from '../state';
 import { Panel } from './Panel';
 import { NumberField } from './NumberField';
+import { helpLines } from './helpLines';
 import type { PanelProps as Props } from './types';
 
 /** Help text per field: short sentences, each shown on its own line in the tooltip. */
@@ -17,21 +18,9 @@ const HELP = {
   ],
 } as const;
 
-function helpLines(lines: readonly string[]) {
-  return lines.map((line) => (
-    <span key={line} className="help-line">
-      {line}
-    </span>
-  ));
-}
-
 export function ParallelPanel({ state, dispatch, loaded, built }: Props) {
   return (
-    <Panel
-      title="Parallelism"
-      value={`TP ${state.parallel.tp}, PP ${state.parallel.pp}`}
-      open
-    >
+    <Panel title="Parallelism" value={`TP ${state.parallel.tp}, PP ${state.parallel.pp}`} open>
       <div className="fields two">
         {(['tp', 'pp'] as const).map((field) => (
           <NumberField

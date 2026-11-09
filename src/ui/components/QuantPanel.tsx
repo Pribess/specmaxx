@@ -20,6 +20,7 @@ import {
   type FieldIssue,
 } from '../state';
 import { Picker } from './Picker';
+import { helpLines } from './helpLines';
 import type { PickerOption } from './fuzzy';
 import type { PanelProps as Props } from './types';
 
@@ -28,17 +29,26 @@ const FIELDS = [
   {
     key: 'weights',
     label: 'Weights',
-    help: 'Storage format of every linear-layer weight. Embeddings and the output head keep their own defaults.',
+    help: [
+      'Number format of the model weights.',
+      'Smaller formats use less memory and decode faster.',
+    ],
   },
   {
     key: 'activations',
     label: 'Activations',
-    help: 'Format of the matrix-multiply inputs. A checkpoint’s own activation format stays unless Weights is overridden too.',
+    help: [
+      'Number format of the values fed into matrix multiplies.',
+      'Lower precision can unlock faster compute.',
+    ],
   },
   {
     key: 'kvCache',
     label: 'KV cache',
-    help: 'Storage format of the attention key and value cache. Compressed KV caches follow it.',
+    help: [
+      'Number format of the KV cache (the stored attention state per token).',
+      'Smaller formats shrink memory use and the data read per decoded token.',
+    ],
   },
 ] as const;
 
@@ -76,18 +86,15 @@ function optionsFor(
   return [...opts, ...entries];
 }
 
-const BPW_HELP = (
-  <>
-    Bits per weight (bpw): the bits stored per weight, fractional values allowed.
-    <br />
-    EXL3 picks bpw per tensor, so a checkpoint’s bpw is an average over its tensors.
-    <br />
-    Weight bytes, and so memory-bound decode speed, scale with it.
-  </>
-);
-const HEAD_BPW_HELP =
-  'Bits per weight of the LM head (output projection), an integer 1–8 in EXL3; 16 keeps it unquantized fp16. ' +
-  'The head is quantized separately from the layers (exllamav3 default 6).';
+const BPW_HELP = helpLines([
+  'Bits per weight (bpw): how many bits each weight takes.',
+  'Fractions are fine: EXL3 averages over the model.',
+  'Fewer bits mean less memory and faster decode.',
+]);
+const HEAD_BPW_HELP = helpLines([
+  'Bits per weight of the output layer (the LM head).',
+  'Use 1–8, or 16 to leave it unquantized.',
+]);
 
 /** Warning for a bpw outside what EXL3 can store (the simulation clamps it). */
 function rangeIssue(field: 'bpw' | 'headBpw', valid: boolean): FieldIssue[] {
@@ -103,16 +110,11 @@ function rangeIssue(field: 'bpw' | 'headBpw', valid: boolean): FieldIssue[] {
 }
 
 /** Definition of the Lookup tables picker. */
-const LOOKUP_TABLES_HELP = (
-  <>
-    Storage format of the n-gram / Engram embedding tables.
-    <br />
-    The table is only gathered (a few rows per token), so its format changes capacity much more than
-    speed.
-    <br />
-    Weights does not apply to it.
-  </>
-);
+const LOOKUP_TABLES_HELP = helpLines([
+  'Number format of the extra lookup tables some models have (n-gram or Engram).',
+  'Only a few rows are read per token, so this changes memory size more than speed.',
+  'The Weights setting does not apply to them.',
+]);
 
 export function QuantPanel({ state, dispatch, loaded }: Props) {
   const { bpw, headBpw } = effectiveBpw(state.quant, loaded?.quant.exl3);
@@ -150,13 +152,15 @@ export function QuantPanel({ state, dispatch, loaded }: Props) {
         {FIELDS.map((f) => {
           const resolved = loaded ? resolvedDefault(loaded.quant.quant, f.key) : undefined;
           const defaultLabel = resolved ? `Model default (${resolved.label})` : 'Model default';
-          const help = (
-            <>
-              {f.help}
-              {loaded && f.key === 'weights' && <> Model default: {loaded.quant.scheme}.</>}
-              {resolved?.detail && <> Model default split: {resolved.detail}.</>}
-            </>
-          );
+          // At most one extra line, so the help stays at 3 lines: the model's own default (and its split).
+          const defaultParts = [
+            ...(loaded && f.key === 'weights' ? [`${loaded.quant.scheme}`] : []),
+            ...(resolved?.detail ? [`split: ${resolved.detail}`] : []),
+          ];
+          const help = helpLines([
+            ...f.help,
+            ...(defaultParts.length > 0 ? [`Model default: ${defaultParts.join(', ')}.`] : []),
+          ]);
           if (f.key === 'weights') {
             return (
               <Picker

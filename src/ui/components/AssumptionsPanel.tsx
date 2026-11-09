@@ -1,5 +1,6 @@
 import { DEFAULT_SIM_OPTIONS } from '../../sim/engine/simulate';
 import { HelpIcon } from './HelpIcon';
+import { helpLines } from './helpLines';
 import { Panel } from './Panel';
 import { Picker } from './Picker';
 import type { PickerOption } from './fuzzy';
@@ -10,7 +11,11 @@ const SWITCHES = [
   {
     key: 'overlap',
     label: 'Communication overlap',
-    help: 'Ideal: collective bandwidth time hides behind compute. None: communication adds to compute time. Latency is never hidden.',
+    help: [
+      'Ideal: time spent sending data hides behind compute.',
+      'None: sending time adds to compute time.',
+      'The fixed delay of each message is never hidden.',
+    ],
     options: [
       { value: 'ideal', label: 'ideal' },
       { value: 'none', label: 'none' },
@@ -19,7 +24,11 @@ const SWITCHES = [
   {
     key: 'elementwiseFusion',
     label: 'Elementwise fusion',
-    help: 'None: every elementwise op reads and writes its activations from memory. Ideal: that activation traffic is fused away; weights and state still move.',
+    help: [
+      'None: each simple op reads and writes its data from memory.',
+      'Ideal: that extra memory traffic disappears.',
+      'Weights and the KV cache still have to be read.',
+    ],
     options: [
       { value: 'none', label: 'none' },
       { value: 'ideal', label: 'ideal' },
@@ -28,7 +37,10 @@ const SWITCHES = [
   {
     key: 'collectiveAlgorithm',
     label: 'Collective algorithm',
-    help: 'All-reduce algorithm. Best takes the faster of ring and tree for each size.',
+    help: [
+      'How GPUs combine their partial results (all-reduce).',
+      'Best uses the faster of ring and tree for each message size.',
+    ],
     options: [
       { value: 'best', label: 'best' },
       { value: 'ring', label: 'ring' },
@@ -38,7 +50,7 @@ const SWITCHES = [
 ] as const satisfies readonly {
   key: keyof typeof DEFAULT_SIM_OPTIONS;
   label: string;
-  help: string;
+  help: readonly string[];
   options: readonly PickerOption[];
 }[];
 
@@ -47,8 +59,11 @@ export function AssumptionsPanel({ state, dispatch }: Props) {
     <Panel title="Assumptions">
       <div className="field-head panel-help">
         <HelpIcon term="Assumptions">
-          Hardware and math limits only. No scheduler, paging or engine-specific overhead.
-          Speculative decoding and offloading are off unless set in Workload and Hardware.
+          {helpLines([
+            'Hardware and math limits only.',
+            'No scheduler or engine overhead.',
+            'Speculative decoding and offloading stay off until you turn them on.',
+          ])}
         </HelpIcon>
       </div>
       {SWITCHES.map((s) => (
@@ -57,7 +72,7 @@ export function AssumptionsPanel({ state, dispatch }: Props) {
           label={s.label}
           value={state.options[s.key] ?? DEFAULT_SIM_OPTIONS[s.key]}
           options={[...s.options]}
-          help={s.help}
+          help={helpLines(s.help)}
           onChange={(v) => dispatch({ type: 'setOptions', options: { [s.key]: v } })}
         />
       ))}

@@ -14,6 +14,7 @@ import { RooflineChart } from './RooflineChart';
 import { MemoryFit } from './MemoryFit';
 import { HeroMemoryWarning } from './MemoryWarning';
 import { HelpIcon } from './HelpIcon';
+import { helpLines } from './helpLines';
 import { Num } from './Num';
 
 /** Display name of an off-device tier. */
@@ -111,12 +112,15 @@ export function ResultHero({
                       <span className="spec-dec" data-testid="spec-dec">
                         (spec-dec ×{spec.speedup.toFixed(2)}){' '}
                         <HelpIcon term="Speculative decoding speedup">
-                          {result.speculative ? `${METHOD_NAMES[result.speculative.method]}, ` : ''}
-                          {result.speculative ? `k = ${result.speculative.draftLength}, ` : ''}
-                          E[τ] = {spec.expectedTokensPerStep.toFixed(2)} tokens accepted per step
-                          (incl. the bonus token). Step: draft {formatSeconds(spec.draftSec)} +
-                          verify {formatSeconds(spec.verifySec)}. Speedup over decode without
-                          speculative decoding @ {formatContextTokens(result.decode.contextTokens)}.
+                          {helpLines([
+                            ...(result.speculative
+                              ? [
+                                  `${METHOD_NAMES[result.speculative.method]}, draft length k = ${result.speculative.draftLength}.`,
+                                ]
+                              : []),
+                            `${spec.expectedTokensPerStep.toFixed(2)} tokens accepted per step on average (incl. the bonus token).`,
+                            `One step: draft ${formatSeconds(spec.draftSec)} + verify ${formatSeconds(spec.verifySec)}.`,
+                          ])}
                         </HelpIcon>
                         {result.speculative?.hypothetical && (
                           <span className="result-chip">hypothetical drafter</span>
@@ -147,9 +151,11 @@ export function ResultHero({
                       <span className="result-chip">{offloadChipText(p)}</span>
                       {i === offload.length - 1 && (
                         <HelpIcon term="Offloaded weights">
-                          Weight groups kept in host RAM or on an SSD and read over the host link
-                          each step. h: probability that a needed expert is already in device
-                          memory, per unique expert per layer per step at batch 1.
+                          {helpLines([
+                            'Weight groups kept in host RAM or on an SSD.',
+                            'They are read over the host link every step.',
+                            'h is how often a needed expert is already in device memory.',
+                          ])}
                         </HelpIcon>
                       )}
                     </li>

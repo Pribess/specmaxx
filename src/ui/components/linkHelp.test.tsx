@@ -28,26 +28,17 @@ describe('networkLinkHelp', () => {
       ).toBe(true);
   });
 
-  it('formats α from the link, links its sources, and adds the staging line for a GPU (≤ 3 lines)', () => {
+  it('describes the link, formats the message delay from the link and adds the staging line for a GPU', () => {
     const ls = lines(networkLinkHelp(ETHERNET_10G_TCP, true));
     expect(ls).toHaveLength(3);
-    expect(ls[0].textContent).toMatch(
-      /^Latency 10 µs: one-way TCP floor between two machines over a direct cable/,
-    );
-    expect(ls[1].textContent).toMatch(/50–130 µs for a small all-reduce/);
-    expect(ls[2].textContent).toBe(
-      'GPUs with their own memory stage every message through host memory: about 2 µs more per message.',
-    );
-    const links = ls[1].querySelectorAll('a');
-    expect(links).toHaveLength(2);
-    for (const a of links) {
-      expect(a.getAttribute('target')).toBe('_blank');
-      expect(a.getAttribute('rel')).toBe('noreferrer');
-    }
+    expect(ls[0].textContent).toBe('Ethernet between machines, talking over TCP.');
+    expect(ls[1].textContent).toMatch(/^Each message takes about 10 µs one way/);
+    expect(ls[2].textContent).toBe('GPUs with their own memory add about 2 µs per message.');
+    expect(document.querySelector('a')).toBeNull();
     cleanup();
     expect(
-      lines(networkLinkHelp({ ...TB4_TCP, latencySec: 12.5e-6 }, false))[0].textContent,
-    ).toMatch(/^Latency 12\.5 µs/);
+      lines(networkLinkHelp({ ...TB4_TCP, latencySec: 12.5e-6 }, false))[1].textContent,
+    ).toMatch(/^Each message takes about 12\.5 µs/);
     cleanup();
     expect(lines(networkLinkHelp(TB4_TCP, false))).toHaveLength(2);
     for (const link of LINK_PRESETS.filter((l) => LINK_HELP_IDS.includes(linkPresetId(l)))) {

@@ -12,6 +12,7 @@ import {
 } from '../state';
 import { Panel } from './Panel';
 import { Picker } from './Picker';
+import { helpLines } from './helpLines';
 import type { PickerOption } from './fuzzy';
 import { CustomSpecEditor } from './CustomSpecEditor';
 import { SetupRow } from './SetupRow';
@@ -79,7 +80,10 @@ export function HardwarePanel(props: Props) {
             if (preset) dispatch({ type: 'setHardware', hw: popularSetupChoice(preset) });
           } else dispatch({ type: 'setDevice', deviceId: value.slice('device:'.length) });
         }}
-        help="A single device (chip and GPU-core count), or a popular setup that also sets the memory, machine count, link and cabling."
+        help={helpLines([
+          'Pick a single chip or a ready-made setup.',
+          'Setups also fill in memory, machine count, links and cabling.',
+        ])}
       />
       {device && device.device.memory.capacityOptionsBytes.length > 1 && (
         <Picker
@@ -90,7 +94,7 @@ export function HardwarePanel(props: Props) {
             label: `${v / 1e9}GB`,
           }))}
           onChange={(v) => dispatch({ type: 'setCapacity', index: Number(v) })}
-          help="Memory per device, for the SKU variants this device ships with."
+          help={helpLines(['Memory per device.', 'Lists the sizes this device is sold with.'])}
         />
       )}
       <SetupRow state={state} built={built} dispatch={dispatch} />
@@ -152,7 +156,10 @@ export function HardwarePanel(props: Props) {
             value={state.hw.engineId ?? device.device.engines[0].id}
             options={device.device.engines.map((e) => ({ value: e.id, label: e.name }))}
             onChange={(engineId) => dispatch({ type: 'setEngine', engineId })}
-            help="The matrix engine whose peak rates are used (for example tensor cores versus shader cores)."
+            help={helpLines([
+              'Which units do the matrix math, such as tensor cores or shader cores.',
+              'Their peak speed sets the compute limit.',
+            ])}
           />
         )}
         <CustomSpecEditor {...props} />

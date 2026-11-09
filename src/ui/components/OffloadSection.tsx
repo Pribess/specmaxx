@@ -16,6 +16,7 @@ import {
 } from '../state';
 import { NumberField } from './NumberField';
 import { Picker } from './Picker';
+import { helpLines } from './helpLines';
 import type { PickerOption } from './fuzzy';
 import type { PanelProps } from './types';
 
@@ -23,18 +24,11 @@ import type { PanelProps } from './types';
 const DEVICE = 'device';
 
 /** "?" help of the prefetch accuracy (docs/simulation-model.md §12 "Expert prefetch"). */
-const PREFETCH_HELP = (
-  <>
-    <span className="help-line">
-      Share of the needed experts the predictor picks one layer ahead (recall). Measured 67–90 %.
-    </span>
-    <span className="help-line">
-      Predicted experts are copied while the previous layer computes; the rest after the router, on
-      the critical path.
-    </span>
-    <span className="help-line">100 = perfect prediction, 0 = no prefetching. Default 80.</span>
-  </>
-);
+const PREFETCH_HELP = helpLines([
+  'How often needed experts are guessed one layer early, so they load in advance.',
+  'Missed experts load late and slow the step.',
+  '100 means perfect guesses, 0 means no prefetching.',
+]);
 
 /** Tier labels. */
 const TIER_LABELS: Record<TierChoice | typeof DEVICE, string> = {
@@ -165,7 +159,11 @@ export function OffloadSection(props: PanelProps) {
                 experts: t === undefined ? undefined : { ...experts, tier: t },
               });
             }}
-            help="Where the routed expert weights live. Misses stream to the GPU over PCIe at the hardware ceiling; the GPU computes."
+            help={helpLines([
+              'Where the experts (the specialist sub-networks of an MoE model) are stored.',
+              'Experts not on the GPU stream in over PCIe.',
+              'The GPU still does the compute.',
+            ])}
           />
           {experts !== undefined && (
             <div className="fields two">
@@ -180,7 +178,10 @@ export function OffloadSection(props: PanelProps) {
                     experts: { ...experts, fromLayer: Number.isInteger(v) && v >= 0 ? v : 0 },
                   })
                 }
-                help="Experts of layers ≥ this index are offloaded (llama.cpp --n-cpu-moe keeps the first layers on the device)."
+                help={helpLines([
+                  'Experts from this layer onward are offloaded.',
+                  'Earlier layers keep their experts on the device.',
+                ])}
               />
               <NumberField
                 label="Resident %"
@@ -194,7 +195,11 @@ export function OffloadSection(props: PanelProps) {
                     experts: { ...experts, residentFraction: Math.min(1, Math.max(0, v / 100)) },
                   })
                 }
-                help="Share f of each offloaded layer's experts kept in device memory (pinned or cache), counted in the memory fit."
+                help={helpLines([
+                  'Share of each offloaded layer’s experts kept in device memory.',
+                  'More resident experts mean fewer slow transfers.',
+                  'They count toward memory use.',
+                ])}
               />
             </div>
           )}
@@ -214,7 +219,11 @@ export function OffloadSection(props: PanelProps) {
                     },
                   })
                 }
-                help="Probability that a needed expert is already on the device, per unique expert per layer per step at batch 1. Uniform is exact for balanced routing; skewed presets fit measured LRU locality (h = f^0.55, f^0.2). Bounded by the resident count."
+                help={helpLines([
+                  'How often a needed expert is already on the device.',
+                  'Uniform assumes experts are used evenly.',
+                  'Skewed options assume some experts are used more often.',
+                ])}
               />
               {typeof hitRatio === 'number' && (
                 <NumberField
@@ -229,7 +238,11 @@ export function OffloadSection(props: PanelProps) {
                       experts: { ...experts, hitRatio: Math.min(1, Math.max(0, v)) },
                     })
                   }
-                  help="Probability that a needed expert is resident, per unique expert per layer per step at batch 1."
+                  help={helpLines([
+                    'How often a needed expert is already on the device.',
+                    '1 means always, 0 means never.',
+                    'Higher is faster.',
+                  ])}
                 />
               )}
             </>
@@ -253,7 +266,10 @@ export function OffloadSection(props: PanelProps) {
                   },
           });
         }}
-        help="Where whole decoder layers beyond the on-device count live; they are streamed from that tier every step (llama.cpp -ngl)."
+        help={helpLines([
+          'Where whole layers beyond the on-device count are stored.',
+          'They stream in from there every step.',
+        ])}
       />
       {offload.dense !== undefined && (
         <NumberField
@@ -267,7 +283,10 @@ export function OffloadSection(props: PanelProps) {
               dense: { ...offload.dense!, layersOnDevice: Number.isInteger(v) && v >= 0 ? v : 0 },
             })
           }
-          help={`Layers beyond this count (of ${layerCount}) are streamed from the tier every step.`}
+          help={helpLines([
+            `How many of the ${layerCount} layers stay on the device.`,
+            'The rest stream in from the tier every step.',
+          ])}
         />
       )}
       {issues.length > 0 && (
@@ -287,14 +306,20 @@ export function OffloadSection(props: PanelProps) {
             options={HOST_RAM_OPTIONS}
             searchThreshold={4}
             onChange={(v) => setHost({ ramId: v, ramCapacityBytes: undefined })}
-            help="Host memory: theoretical channel bandwidth and capacity (datasheet values); shared by every GPU of the node."
+            help={helpLines([
+              'Speed of the machine’s system memory (RAM), from its datasheet.',
+              'All GPUs in a machine share it.',
+            ])}
           />
           <NumberField
             label="Host RAM capacity (GB)"
             value={resolvedHost.ram.capacityBytes / 1e9}
             min={1}
             onChange={(v) => setHost({ ramCapacityBytes: v > 0 ? Math.round(v * 1e9) : undefined })}
-            help="Installed host-RAM capacity of the node; offloaded weights count against it."
+            help={helpLines([
+              'Installed system RAM per machine.',
+              'Offloaded weights must fit in it.',
+            ])}
           />
         </>
       )}
@@ -305,7 +330,10 @@ export function OffloadSection(props: PanelProps) {
           options={SSD_PRESETS.map((s) => ({ value: s.id, label: s.name }))}
           searchThreshold={4}
           onChange={(v) => setHost({ ssdId: v })}
-          help="NVMe drive: sequential read, QD1 latency and max random-read IOPS from the datasheet; shared by every GPU of the node."
+          help={helpLines([
+            'Speed of the NVMe SSD, from its datasheet.',
+            'All GPUs in a machine share it.',
+          ])}
         />
       )}
       {anyOff && !unified && (
@@ -328,7 +356,10 @@ export function OffloadSection(props: PanelProps) {
               setHost({ link: { generation: g as 3 | 4 | 5, lanes: lanes as 4 | 8 | 16 } });
             }
           }}
-          help="GPU-to-host PCIe link per direction; with host RAM bandwidth, the streaming ceiling."
+          help={helpLines([
+            'The PCIe link between the GPU and system memory.',
+            'Offloaded data cannot stream faster than this link or the RAM allows.',
+          ])}
         />
       )}
     </fieldset>
@@ -362,7 +393,12 @@ export function OffloadAdvancedFields(props: PanelProps) {
               const t = tier(v);
               setOffload({ ...offload, tables: t === undefined ? undefined : { tier: t } });
             }}
-            help={`Where the hashed n-gram tables live. Only the rows a token needs are gathered: ~1 µs per step from RAM, latency-bound from SSD. Counted against that tier's capacity.${designOffDevice ? ' This model ships its table to be kept off-device.' : ''}`}
+            help={helpLines([
+              'Where the lookup tables are stored.',
+              designOffDevice
+                ? 'This model is built to keep its tables off the GPU.'
+                : 'Only a few rows are read per token, so an SSD delay matters.',
+            ])}
           />
           {designOffDevice && tables === undefined && (
             <button
@@ -387,7 +423,13 @@ export function OffloadAdvancedFields(props: PanelProps) {
               tables: { ...tables, scaleLayout: v as ScaleLayoutChoice },
             })
           }
-          help={`Block-scaled tables only. Separate: the value row and its scales are two reads on the tier. ${unified ? 'Scales pinned in memory: the rows on the SSD, the scales in the unified pool (counted in the device total).' : 'Scales pinned in host RAM: the rows on the SSD, the scales in host RAM (counted there).'} Interleaved: one read per row.`}
+          help={helpLines([
+            'Separate: each row and its scales are two reads.',
+            unified
+              ? 'Pinned in memory: scales stay there, so only rows are read from the SSD.'
+              : 'Pinned in host RAM: scales stay there, so only rows are read from the SSD.',
+            'Interleaved: one read per row.',
+          ])}
         />
       )}
       {anyOff && (
@@ -401,7 +443,11 @@ export function OffloadAdvancedFields(props: PanelProps) {
               queueDepth: Number.isInteger(v) && v >= 1 ? v : undefined,
             })
           }
-          help="Outstanding read requests the deployment keeps in flight; 1 serializes every request behind its latency. Empty: the tier's rated maximum."
+          help={helpLines([
+            'How many reads are in flight at once.',
+            '1 means every read waits for the one before.',
+            'Empty uses the drive’s rated maximum.',
+          ])}
         />
       )}
       {anyOff && (
