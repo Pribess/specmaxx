@@ -121,7 +121,8 @@ test('a legacy offload-overlap URL is rewritten to the equivalent prefetch accur
   await expect(page.getByText('Ignored invalid URL values')).toHaveCount(0);
   await page.waitForTimeout(400);
   expect(new URL(page.url()).search).toBe('?m=Qwen/Qwen3.8-Flash-Next&ox=ram&opf=0');
-  await page.getByTestId('offload-section').getByText('Advanced', { exact: true }).click();
+  await page.locator('details.advanced > summary').click();
+  await expect(page.getByTestId('offload-advanced')).toBeVisible();
   await expect(page.getByLabel('Prefetch accuracy %', { exact: true })).toHaveValue('0');
 });
 

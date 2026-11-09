@@ -88,8 +88,10 @@ for (const size of ['desktop', 'phone'] as const) {
         '?m=Qwen/Qwen3.8-Flash-Next&w=fp8_e4m3&n=2&hr=ddr5-6000-12ch&tp=2&ox=ram&oxf=0.05&oxh=fine&olt=ram';
       await load(offload, ['Hardware']);
       const section = page.getByTestId('offload-section');
-      await section.locator('details.advanced > summary').click();
       await shoot(section, name('offload-panel'));
+      // The less common offload knobs are the Offload subsection of the Hardware panel's Advanced.
+      await page.locator('details.advanced > summary').click();
+      await shoot(page.getByTestId('offload-advanced'), name('offload-advanced'));
       await page.evaluate(() => scrollTo(0, 0));
       await expect(page.getByTestId('memory-tier').first()).toBeVisible();
       await page.locator('section.hero').screenshot({ path: name('offload-hero') });
@@ -100,8 +102,9 @@ for (const size of ['desktop', 'phone'] as const) {
       await load('?d=dgx-spark&m=Qwen/Qwen3.8-Flash-Next&ox=ssd', ['Hardware']);
       const storage = page.getByTestId('offload-section');
       await expect(storage.locator('legend')).toHaveText('Storage');
-      await storage.locator('details.advanced > summary').click();
       await shoot(storage, name('storage-panel'));
+      await page.locator('details.advanced > summary').click();
+      await shoot(page.getByTestId('offload-advanced'), name('storage-advanced'));
       await page.evaluate(() => scrollTo(0, 0));
       await page.locator('section.hero').screenshot({ path: name('storage-hero') });
     });

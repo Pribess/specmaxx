@@ -21,7 +21,7 @@ const STATES = [
   { name: '05-input-help', query: '', action: 'help' },
   // MTP enabled with k=3; reveal Workload and scroll the speculative controls into view.
   { name: '06-spec-dec', query: '?w=fp8_e4m3&n=2&tp=2&sd=mtp&sdk=3', action: 'specdec' },
-  // Routed-expert cache (5% resident), host RAM experts + lookup tables; reveal Offload Advanced.
+  // Routed-expert cache (5% resident), host RAM experts + lookup tables; reveal Hardware Advanced (its Offload part).
   {
     name: '07-offload',
     query:

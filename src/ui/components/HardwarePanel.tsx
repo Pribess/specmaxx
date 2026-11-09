@@ -15,7 +15,7 @@ import { Picker } from './Picker';
 import type { PickerOption } from './fuzzy';
 import { CustomSpecEditor } from './CustomSpecEditor';
 import { SetupRow } from './SetupRow';
-import { OffloadSection } from './OffloadSection';
+import { OffloadAdvancedFields, OffloadSection } from './OffloadSection';
 import type { PanelProps as Props } from './types';
 
 /** The group of the curated multi-device setups, at the top of the device picker. */
@@ -97,6 +97,7 @@ export function HardwarePanel(props: Props) {
       <OffloadSection {...props} />
       <details className="advanced">
         <summary>Advanced</summary>
+        <OffloadAdvancedFields {...props} />
         {device &&
           deviceUnlocks(device.base).map((axis) => (
             <fieldset className="unlock" key={axis.id}>

@@ -379,6 +379,8 @@ details.advanced > :not(summary) { margin-top: var(--space-4); }
   accent-color: var(--primary-fill);
 }
 .unlock details.hint summary { font-size: var(--type-meta); font-weight: 500; }
+/* An Advanced subsection of fields (Offload / Storage): the same heading, then fields spaced as in a panel. */
+.advanced-fields > :not(legend) + * { margin-top: var(--gap-field); }
 .tag {
   margin-left: var(--space-2);
   color: var(--muted);

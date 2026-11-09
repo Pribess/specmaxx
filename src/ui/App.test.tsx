@@ -359,6 +359,39 @@ describe('estimator inputs', () => {
     advanced.open = true;
     expect((container.querySelector('details.spec-editor') as HTMLDetailsElement).open).toBe(true);
   });
+  it.each([
+    { name: 'offload off', query: '?m=Qwen/Qwen3.8-27B', offload: [] },
+    { name: 'dense offload on', query: '?m=Qwen/Qwen3.8-27B&odl=32', offload: ['Queue depth', 'Prefetch accuracy %'] },
+    { name: 'a lookup-table model', query: '?m=Qwen/Qwen3.8-Flash-Next', offload: ['Lookup tables'] },
+    {
+      name: 'expert offload on a lookup-table model',
+      query: '?m=Qwen/Qwen3.8-Flash-Next&ox=ram',
+      offload: ['Lookup tables', 'Queue depth', 'Prefetch accuracy %'],
+    },
+  ])('shows one Advanced, with an Offload subsection only when it applies ($name)', async ({ query, offload }) => {
+    history.replaceState(null, '', `/${query}`);
+    const { container } = mount();
+    await screen.findByTestId('decode-tps');
+    const summaries = [...container.querySelectorAll('summary')].filter((s) => s.textContent === 'Advanced');
+    expect(summaries).toHaveLength(1);
+    const advanced = summaries[0].parentElement as HTMLDetailsElement;
+    expect(advanced.open).toBe(false);
+    expect(within(screen.getByTestId('offload-section')).queryByText('Advanced')).toBeNull();
+    const section = screen.queryByTestId('offload-advanced');
+    if (offload.length === 0) {
+      expect(section).toBeNull();
+      return;
+    }
+    expect(section).not.toBeNull();
+    expect(advanced.contains(section)).toBe(true);
+    // The subsection comes first, before the device unlocks and the spec editor.
+    expect(section!.compareDocumentPosition(advanced.querySelector('details.spec-editor')!)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(section!.querySelector('legend')!.textContent).toBe('Offload');
+    const labels = [...section!.querySelectorAll('.field-label')].map((l) => l.textContent?.trim());
+    expect(labels).toEqual(offload);
+  });
   it('labels the counts in plain language with a total', async () => {
     history.replaceState(null, '', '/?n=4');
     mount();

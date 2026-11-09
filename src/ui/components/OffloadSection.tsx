@@ -72,11 +72,6 @@ function linkLabel(link: { name: string; bandwidthPerDirectionBytesPerSec: numbe
   return `${link.name.replace(' (host link)', '')}, ${formatBytesPerSec(link.bandwidthPerDirectionBytesPerSec)}`;
 }
 
-/**
- * Hardware → "Offload" (dedicated memory) / "Storage" (unified memory), design doc §6.2: where routed experts, whole
- * layers and n-gram tables live, the expert cache, the queue depth, and the host's RAM, SSD and PCIe link. On
- * unified memory host RAM is the device pool, so only the SSD is a tier and there is no host link.
- */
 /** Host-RAM picker rows: grouped by DDR generation (DDR5 first, then DDR4), fastest first within a group. */
 const HOST_RAM_OPTIONS: PickerOption[] = [...HOST_RAM_PRESETS]
   .map((r) => ({ r, generation: r.id.split('-')[0].toUpperCase() }))
@@ -92,10 +87,14 @@ const HOST_RAM_OPTIONS: PickerOption[] = [...HOST_RAM_PRESETS]
     description: `${(r.bandwidthBytesPerSec / 1e9).toFixed(1)} GB/s`,
   }));
 
-export function OffloadSection({ state, dispatch, loaded, built }: PanelProps) {
+/**
+ * Shared state of the offload controls (the main section and its Advanced subsection): the model and device, the
+ * current offload choice and its setter, and the tier picker rows. `undefined` before a model and device resolve.
+ */
+function offloadControls({ state, dispatch, loaded, built }: PanelProps) {
   const model = loaded?.model;
   const device = built.hardware?.device.device;
-  if (model === undefined || device === undefined) return null;
+  if (model === undefined || device === undefined) return undefined;
   const unified = device.memory.kind === 'unified';
   const offload = state.deployment.offload ?? {};
   const designOffDevice = tablesOffDeviceByDesign(model);
@@ -105,26 +104,46 @@ export function OffloadSection({ state, dispatch, loaded, built }: PanelProps) {
       offload: next,
       tablesOffDeviceByDesign: designOffDevice && !unified,
     });
-  const host = state.hw.host ?? {};
-  const setHost = (next: Partial<HostChoice>) =>
-    dispatch({ type: 'setHost', host: { ...host, ...next } });
-  const resolvedHost = resolveHost(state.hw, device);
   const tierOptions: PickerOption[] = (
     unified ? [DEVICE, 'nvme'] : [DEVICE, 'host_ram', 'nvme']
   ).map((t) => ({
     value: t,
     label: TIER_LABELS[t as TierChoice | typeof DEVICE],
   }));
+  const tier = (v: string): TierChoice | undefined =>
+    v === DEVICE ? undefined : (v as TierChoice);
+  return {
+    model,
+    device,
+    unified,
+    offload,
+    designOffDevice,
+    setOffload,
+    tierOptions,
+    tier,
+    anyOff: offloadsAnything(offload),
+  };
+}
+
+/**
+ * Hardware → "Offload" (dedicated memory) / "Storage" (unified memory), design doc §6.2: where routed experts and
+ * whole layers live, the expert cache, and the host's RAM, SSD and PCIe link. On unified memory host RAM is the
+ * device pool, so only the SSD is a tier and there is no host link. The less common knobs (lookup-table placement,
+ * scale layout, queue depth, prefetch accuracy) are {@link OffloadAdvancedFields}, in the panel's Advanced.
+ */
+export function OffloadSection(props: PanelProps) {
+  const { state, dispatch, built } = props;
+  const controls = offloadControls(props);
+  if (controls === undefined) return null;
+  const { model, device, unified, offload, setOffload, tierOptions, tier, anyOff } = controls;
+  const host = state.hw.host ?? {};
+  const setHost = (next: Partial<HostChoice>) =>
+    dispatch({ type: 'setHost', host: { ...host, ...next } });
+  const resolvedHost = resolveHost(state.hw, device);
   const layerCount = model.layers.length;
   const issues = built.issues.filter((i) => i.field === 'offload');
   const experts = offload.experts;
   const hitRatio: HitRatioChoice = experts?.hitRatio ?? 'uniform';
-  const tables = offload.tables;
-  const anyOff = offloadsAnything(offload);
-  const tier = (v: string): TierChoice | undefined =>
-    v === DEVICE ? undefined : (v as TierChoice);
-  const placeTablesOnHost = () =>
-    setOffload({ ...offload, tables: { tier: unified ? 'nvme' : 'host_ram' } });
   return (
     <fieldset className="deployment-section" data-testid="offload-section">
       <legend>{unified ? 'Storage' : 'Offload'}</legend>
@@ -307,80 +326,94 @@ export function OffloadSection({ state, dispatch, loaded, built }: PanelProps) {
           help="GPU-to-host PCIe link per direction; with host RAM bandwidth, the streaming ceiling."
         />
       )}
-      {(hasLookupTables(model) || anyOff) && (
-        <details className="advanced">
-          <summary>Advanced</summary>
-          {hasLookupTables(model) && (
-            <div className="tables-field">
-              <Picker
-                label="Lookup tables"
-                value={tables?.tier ?? DEVICE}
-                options={tierOptions}
-                onChange={(v) => {
-                  const t = tier(v);
-                  setOffload({ ...offload, tables: t === undefined ? undefined : { tier: t } });
-                }}
-                help={`Where the hashed n-gram tables live. Only the rows a token needs are gathered: ~1 µs per step from RAM, latency-bound from SSD. Counted against that tier's capacity.${designOffDevice ? ' This model ships its table to be kept off-device.' : ''}`}
-              />
-              {designOffDevice && tables === undefined && (
-                <button
-                  type="button"
-                  className="chip"
-                  onClick={placeTablesOnHost}
-                  data-testid="tables-hint"
-                >
-                  {unified ? 'SSD ↗' : 'Host RAM ↗'}
-                </button>
-              )}
-            </div>
+    </fieldset>
+  );
+}
+
+/**
+ * Hardware → Advanced → "Offload" / "Storage": the lookup-table placement (models with n-gram tables), the scale
+ * layout of off-device tables, the queue depth and the prefetch accuracy (with any offload on). Renders nothing when
+ * none of them applies.
+ */
+export function OffloadAdvancedFields(props: PanelProps) {
+  const controls = offloadControls(props);
+  if (controls === undefined) return null;
+  const { model, unified, offload, designOffDevice, setOffload, tierOptions, tier, anyOff } =
+    controls;
+  const tables = offload.tables;
+  if (!hasLookupTables(model) && !anyOff) return null;
+  const placeTablesOnHost = () =>
+    setOffload({ ...offload, tables: { tier: unified ? 'nvme' : 'host_ram' } });
+  return (
+    <fieldset className="unlock advanced-fields" data-testid="offload-advanced">
+      <legend>{unified ? 'Storage' : 'Offload'}</legend>
+      {hasLookupTables(model) && (
+        <div className="tables-field">
+          <Picker
+            label="Lookup tables"
+            value={tables?.tier ?? DEVICE}
+            options={tierOptions}
+            onChange={(v) => {
+              const t = tier(v);
+              setOffload({ ...offload, tables: t === undefined ? undefined : { tier: t } });
+            }}
+            help={`Where the hashed n-gram tables live. Only the rows a token needs are gathered: ~1 µs per step from RAM, latency-bound from SSD. Counted against that tier's capacity.${designOffDevice ? ' This model ships its table to be kept off-device.' : ''}`}
+          />
+          {designOffDevice && tables === undefined && (
+            <button
+              type="button"
+              className="chip"
+              onClick={placeTablesOnHost}
+              data-testid="tables-hint"
+            >
+              {unified ? 'SSD ↗' : 'Host RAM ↗'}
+            </button>
           )}
-          {tables !== undefined && (
-            <Picker
-              label="Scale layout"
-              value={tables.scaleLayout ?? defaultScaleLayout(tables.tier)}
-              options={SCALE_LAYOUT_OPTIONS}
-              onChange={(v) =>
-                setOffload({
-                  ...offload,
-                  tables: { ...tables, scaleLayout: v as ScaleLayoutChoice },
-                })
-              }
-              help="Block-scaled tables only. Separate: the value row and its scales are two reads on the tier. Scales pinned in host RAM: the rows on the SSD, the scales in host RAM (counted there). Interleaved: one read per row."
-            />
-          )}
-          {anyOff && (
-            <NumberField
-              label="Queue depth"
-              value={offload.queueDepth ?? NaN}
-              min={1}
-              onChange={(v) =>
-                setOffload({
-                  ...offload,
-                  queueDepth: Number.isInteger(v) && v >= 1 ? v : undefined,
-                })
-              }
-              help="Outstanding read requests the deployment keeps in flight; 1 serializes every request behind its latency. Empty: the tier's rated maximum."
-            />
-          )}
-          {anyOff && (
-            <NumberField
-              label="Prefetch accuracy %"
-              value={Math.round((offload.prefetchAccuracy ?? DEFAULT_PREFETCH_ACCURACY) * 100)}
-              min={0}
-              max={100}
-              step="1"
-              onChange={(v) =>
-                setOffload({
-                  ...offload,
-                  prefetchAccuracy: Number.isFinite(v)
-                    ? Math.min(1, Math.max(0, v / 100))
-                    : undefined,
-                })
-              }
-              help={PREFETCH_HELP}
-            />
-          )}
-        </details>
+        </div>
+      )}
+      {tables !== undefined && (
+        <Picker
+          label="Scale layout"
+          value={tables.scaleLayout ?? defaultScaleLayout(tables.tier)}
+          options={SCALE_LAYOUT_OPTIONS}
+          onChange={(v) =>
+            setOffload({
+              ...offload,
+              tables: { ...tables, scaleLayout: v as ScaleLayoutChoice },
+            })
+          }
+          help="Block-scaled tables only. Separate: the value row and its scales are two reads on the tier. Scales pinned in host RAM: the rows on the SSD, the scales in host RAM (counted there). Interleaved: one read per row."
+        />
+      )}
+      {anyOff && (
+        <NumberField
+          label="Queue depth"
+          value={offload.queueDepth ?? NaN}
+          min={1}
+          onChange={(v) =>
+            setOffload({
+              ...offload,
+              queueDepth: Number.isInteger(v) && v >= 1 ? v : undefined,
+            })
+          }
+          help="Outstanding read requests the deployment keeps in flight; 1 serializes every request behind its latency. Empty: the tier's rated maximum."
+        />
+      )}
+      {anyOff && (
+        <NumberField
+          label="Prefetch accuracy %"
+          value={Math.round((offload.prefetchAccuracy ?? DEFAULT_PREFETCH_ACCURACY) * 100)}
+          min={0}
+          max={100}
+          step="1"
+          onChange={(v) =>
+            setOffload({
+              ...offload,
+              prefetchAccuracy: Number.isFinite(v) ? Math.min(1, Math.max(0, v / 100)) : undefined,
+            })
+          }
+          help={PREFETCH_HELP}
+        />
       )}
     </fieldset>
   );
