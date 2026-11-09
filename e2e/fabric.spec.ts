@@ -31,7 +31,7 @@ test('4 × DGX Spark: ring decode is slower than switched, prefill is slightly s
   await expect(page.getByTestId('model-facts')).toContainText('qwen');
   await expect(page.getByTestId('decode-tps')).toHaveText(/[1-9]/);
   await expect(page.locator('.rig')).toContainText(
-    '4 × NVIDIA DGX Spark (GB10) over ConnectX-7, with',
+    '4 × NVIDIA DGX Spark (GB10, 128GB memory) over ConnectX-7, with',
   );
   const switched = { prefill: await rate(page, 'prefill'), decode: await rate(page, 'decode') };
   const switchedDecodeText = await page.getByTestId('decode-tps').textContent();

@@ -415,3 +415,41 @@ it('hatches an on-device n-gram table and offers to move it (to the SSD on unifi
   expect(screen.queryAllByTestId('memory-tier')).toHaveLength(0);
   expect(screen.queryByTestId('memory-unified-host')).toBeNull();
 });
+
+function rigText(state: ReturnType<typeof reduce>): string {
+  const built = buildSimInput(state, BUNDLED_DEFAULT_MODEL);
+  if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));
+  const { container } = render(
+    <ResultHero state={state} loaded={BUNDLED_DEFAULT_MODEL} built={built} pending={false} />,
+  );
+  return container.querySelector('.rig')?.textContent ?? '';
+}
+it('names the chosen memory size in the rig line for Apple and multi-capacity devices only', () => {
+  const apple = reduce(
+    reduce(DEFAULT_STATE, { type: 'setDevice', deviceId: 'apple-m5-ultra-64c' }),
+    { type: 'setCapacity', index: 1 },
+  );
+  expect(rigText(apple)).toContain('Apple M5 Ultra (64-core GPU, 256GB memory)');
+  cleanup();
+  const halo = reduce(DEFAULT_STATE, { type: 'setDevice', deviceId: 'ryzen-ai-max-plus-395' });
+  expect(rigText(halo)).toMatch(/\(.*128GB memory\)/);
+  cleanup();
+  expect(rigText(reduce(halo, { type: 'setCapacity', index: 1 }))).toMatch(/\(.*, 64GB memory\)/);
+  cleanup();
+  // A single-capacity Apple device still names its memory.
+  expect(
+    rigText(reduce(DEFAULT_STATE, { type: 'setDevice', deviceId: 'apple-m5-max-32c' })),
+  ).toContain('(32-core GPU, 36GB memory)');
+  cleanup();
+  expect(rigText(reduce(DEFAULT_STATE, { type: 'setDevice', deviceId: 'rtx-5090' }))).not.toContain(
+    'memory)',
+  );
+  cleanup();
+  const edited = reduce(apple, {
+    type: 'setEdit',
+    target: 'device',
+    path: 'memory.capacityOptionsBytes.1',
+    value: 300e9,
+  });
+  expect(rigText(edited)).toContain('(64-core GPU, 300GB memory) (edited)');
+});

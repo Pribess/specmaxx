@@ -250,7 +250,7 @@ describe('estimator inputs', () => {
     fireEvent.click(await screen.findByRole('option', { name: /DGX Spark.*×4 · ConnectX-7 ring/ }));
     await waitFor(() => expect(new URLSearchParams(location.search).get('fab')).toBe('ring'));
     expect(screen.getByRole('combobox', { name: 'Cabling' }).textContent).toBe('Ring');
-    await waitFor(() => expect(document.querySelector('.rig')?.textContent).toMatch(/on 4 × NVIDIA DGX Spark \(GB10\) over ConnectX-7 \(ring\), with/));
+    await waitFor(() => expect(document.querySelector('.rig')?.textContent).toMatch(/on 4 × NVIDIA DGX Spark \(GB10, 128GB memory\) over ConnectX-7 \(ring\), with/));
     // Changing the cabling leaves the setup: the trigger shows the device again.
     fireEvent.click(screen.getByRole('combobox', { name: 'Cabling' }));
     fireEvent.click(await screen.findByRole('option', { name: 'Switch' }));

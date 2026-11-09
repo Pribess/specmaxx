@@ -7,6 +7,7 @@ import {
   type AppState,
   type LoadedModel,
   type BuildResult,
+  type ResolvedHardware,
   type OffloadPlacement,
   cablingName,
 } from '../state';
@@ -37,6 +38,23 @@ export function offloadChipText(p: OffloadPlacement): string {
     case 'lookup_tables':
       return `n-gram tables: ${tierName(p.tier)}`;
   }
+}
+
+/**
+ * The device name for the rig line. Apple devices and devices sold in several memory sizes get the chosen
+ * per-device size in their parentheses, e.g. `Apple M5 Ultra (64-core GPU, 256GB memory)`; the size is
+ * `memCapacityBytes` (so a spec-editor edit shows), written as the memory picker does.
+ */
+export function rigDeviceName(hardware: ResolvedHardware | undefined, fallback = ''): string {
+  if (!hardware) return fallback;
+  const { device, memCapacityBytes } = hardware;
+  // A spec edit renames the device `<name> (edited)`; the memory goes into the name's own parentheses.
+  const edited = device.device.name.endsWith(' (edited)') ? ' (edited)' : '';
+  const name = device.device.name.slice(0, device.device.name.length - edited.length);
+  const multi = device.device.memory.capacityOptionsBytes.length > 1;
+  if (!multi && device.device.vendor !== 'Apple') return device.device.name;
+  const mem = `${memCapacityBytes / 1e9}GB memory`;
+  return (name.endsWith(')') ? `${name.slice(0, -1)}, ${mem})` : `${name} (${mem})`) + edited;
 }
 
 const METHOD_NAMES = { mtp: 'MTP', dflash2: 'DFlash 2', dspark: 'DSpark' } as const;
@@ -78,9 +96,7 @@ export function ResultHero({
   const offload = result?.offload ?? [];
   const spec = result?.decode.speculative;
   // The count and "×" stay on one line with the device name's first word (never "on 2 ×" / "NVIDIA …").
-  const [deviceFirst, ...deviceRest] = (
-    built.hardware?.device.device.name ?? state.hw.deviceId
-  ).split(' ');
+  const [deviceFirst, ...deviceRest] = rigDeviceName(built.hardware, state.hw.deviceId).split(' ');
   return (
     <section className={`hero ${pending ? 'pending' : ''}`} aria-busy={pending}>
       <h1 className="rig">
