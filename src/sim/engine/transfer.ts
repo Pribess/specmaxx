@@ -135,6 +135,13 @@ export function expertHitsMisses(
 export interface TransferPath {
   /** The tier the bytes are read from (host RAM or the node's SSD). */
   tier: StorageTierSpec;
+  /** Opt-in NVMe read-size scenario; absent preserves the datasheet B/s ceiling. */
+  nvmeSustainedRead?: {
+    /** Low-QD / deep-queue rate ratio, dimensionless in (0, 1]. */
+    fraction: number;
+    /** Individual read size at which the scenario starts. Unit: bytes. */
+    blockBytes: number;
+  };
   /**
    * The device's host link (PCIe), per direction. Absent on unified memory, where the tier writes straight into the
    * device pool (α_link = 0, B_link = ∞).
@@ -190,7 +197,7 @@ export interface TransferTime {
   littleSec: number;
   /** The tier's request rate shared by n_stream: `R / (IOPS / n)`; absent for host RAM and an SSD without `randomRead`. Unit: seconds. */
   iopsSec?: number;
-  /** Tier bandwidth shared by n_stream: `bytes_tier / (B_tier / n)`. Unit: seconds. */
+  /** Sum of per-class tier bandwidth times, shared by n_stream: Σ bytes_i / (B_i / n). Unit: seconds. */
   tierSec: number;
   /** This device's host link: `usefulBytes / B_link` (0 on unified memory). Unit: seconds. */
   linkSec: number;
@@ -204,11 +211,12 @@ export interface TransferTime {
 
 /**
  * Time of one off-device read on `path` (design doc §2.3), the one rule for every group:
- *
+ *   B_i        = NVMe sustained, bytes_i ≥ blockBytes: min(f_sus·B_seq, B_slot); otherwise B_tier
+ *   tier       = Σ_i count_i·ceil(bytes_i/gran)·gran / (B_i/n)
  *   R          = Σ_i count_i
  *   bytes_tier = Σ_i count_i · ceil(bytes_i / gran) · gran
  *   α_path     = α_tier + α_link
- *   service    = max( (R − 1)·α_tier / QD,  R / (IOPS / n),  bytes_tier / (B_tier / n),  usefulBytes / B_link,
+ *   service    = max( (R − 1)·α_tier / QD,  R / (IOPS / n),  tier,  usefulBytes / B_link,
  *                     [NVMe on a dedicated device] bytes_tier / (B_ram / (2·n)) )
  *   t_path     = α_path + service
  *
@@ -232,9 +240,27 @@ export function transferTime(
   // Formula: little = (R − 1)·α_tier / QD
   const littleSec = (Math.max(0, requests - 1) * alphaTier) / QD;
   // Formula: iops = R / (IOPS / n)   (rated SSDs only)
-  const iopsSec = tier.kind === 'nvme' && tier.randomRead !== undefined ? requests / (tier.randomRead.iops / n) : undefined;
-  // Formula: tier = bytes_tier / (B_tier / n)
-  const tierSec = tierBytes / (tierBandwidthBytesPerSec(tier) / n);
+  const iopsSec =
+    tier.kind === 'nvme' && tier.randomRead !== undefined
+      ? requests / (tier.randomRead.iops / n)
+      : undefined;
+  // Formula: B_i = min(f_sus·B_seq, B_slot) for large NVMe reads; tier = Σ bytes_i / (B_i/n).
+  // Keep the old reduction/division in datasheet mode for byte-identical default results.
+  const sustained = tier.kind === 'nvme' ? path.nvmeSustainedRead : undefined;
+  const tierSec =
+    sustained === undefined
+      ? tierBytes / (tierBandwidthBytesPerSec(tier) / n)
+      : reads.reduce((seconds, read) => {
+          const bytes = read.count * Math.ceil(read.bytesEach / gran) * gran;
+          const bandwidth =
+            tier.kind === 'nvme' && read.bytesEach >= sustained.blockBytes
+              ? Math.min(
+                  tier.seqReadBandwidthBytesPerSec * sustained.fraction,
+                  tier.linkBandwidthBytesPerSec ?? Infinity,
+                )
+              : tierBandwidthBytesPerSec(tier);
+          return seconds + bytes / (bandwidth / n);
+        }, 0);
   // Formula: link = usefulBytes / B_link
   const linkSec = link === undefined ? 0 : usefulBytes / link.bandwidthPerDirectionBytesPerSec;
   // Formula: host = bytes_tier / (B_ram / (2·n))   (NVMe → host RAM → device: written once, read once)

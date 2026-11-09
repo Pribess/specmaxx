@@ -6,6 +6,7 @@ import {
   hasLookupTables,
   hasMoe,
   offloadsAnything,
+  offloadsToSsd,
   resolveHost,
   tablesOffDeviceByDesign,
   type HitRatioChoice,
@@ -447,6 +448,24 @@ export function OffloadAdvancedFields(props: PanelProps) {
             'How many reads are in flight at once.',
             '1 means every read waits for the one before.',
             'Empty uses the drive’s rated maximum.',
+          ])}
+        />
+      )}
+      {offloadsToSsd(offload) && (
+        <Picker
+          label="SSD read rate"
+          value={offload.ssdReadRate ?? 'datasheet'}
+          options={[
+            { value: 'datasheet', label: 'Datasheet' },
+            { value: 'sustained', label: 'Sustained' },
+          ]}
+          onChange={(v) =>
+            setOffload({ ...offload, ssdReadRate: v as OffloadChoice['ssdReadRate'] })
+          }
+          help={helpLines([
+            'Datasheet uses the drive’s rated sequential read speed.',
+            'Sustained uses a measured speed for large reads with few in flight, which is lower.',
+            'Applies to experts and layers read from the SSD.',
           ])}
         />
       )}

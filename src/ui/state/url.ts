@@ -29,6 +29,7 @@
  * | `odl`, `odt` | dense layers kept on the device (the rest stream; absent: none stream), their tier `ram` (default) or `ssd` | `odl=40` |
  * | `olt`, `ols` | lookup-tables tier `ram`, `ssd` (absent: on the device); (with `olt`) scale layout `separate`, `pinned`, `interleaved` (default: the tier's) | `olt=ram` |
  * | `oqd` | (with offload) queue depth, integer ≥ 1 (default: the tier's rated maximum) | `oqd=32` |
+ * | `osr` | (with SSD offload) SSD read rate: `datasheet` (default), `sustained` | `osr=sustained` |
  * | `opf` | (with offload) prefetch accuracy p 0–1 (default 0.8) | `opf=0.9` |
  * | `oo` | legacy offload overlap, read only: with offload and no `opf`, `ideal` → `opf=1`, `none` → `opf=0`; otherwise ignored | `oo=none` |
  * | `sd` | speculative decoding method: `mtp`, `dflash2`, `dspark` (absent: off) | `sd=mtp` |
@@ -46,6 +47,7 @@ import { DEFAULT_HW, DEFAULT_STATE, normalizeOptions, type AppState, type Hardwa
 import {
   SPEC_DEC_USE_CASES,
   HYPOTHETICAL_DRAFTER,
+  offloadsToSsd,
   normalizeDeployment,
   normalizeHost,
   type DeploymentChoice,
@@ -78,7 +80,7 @@ const OPTION_KEYS: [string, keyof SimOptions, readonly string[]][] = [
 export const URL_KEYS = [
   'm', 'rev', 'w', 'bpw', 'hbpw', 'a', 'kv', 'lt', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'fab', 'x', 'xi', 'xe',
   'hr', 'hrc', 'ssd', 'hl', 'gpu', 'rr', 'tp', 'pp', 'dp', 'ep', 'b', 'p', 'c', 'pc', 'ov', 'fu', 'ar', 'oo',
-  'ox', 'oxl', 'oxf', 'oxh', 'odl', 'odt', 'olt', 'ols', 'oqd', 'opf', 'sd', 'sdr', 'sdk', 'sdu', 'sda',
+  'ox', 'oxl', 'oxf', 'oxh', 'odl', 'odt', 'olt', 'ols', 'oqd', 'osr', 'opf', 'sd', 'sdr', 'sdk', 'sdu', 'sda',
 ] as const;
 
 /** URL value of a tier. */
@@ -209,6 +211,7 @@ export function encodeState(s: AppState): string {
     if (o.tables.scaleLayout !== undefined) put('ols', SCALE_LAYOUT_KEYS[o.tables.scaleLayout]);
   }
   put('oqd', o.queueDepth);
+  put('osr', o.ssdReadRate);
   put('opf', o.prefetchAccuracy);
   const sd = deployment.specDec;
   if (sd !== undefined) {
@@ -311,6 +314,9 @@ function decodeDeployment(get: (key: string) => string | undefined, drop: (key: 
   if (tablesTier !== undefined) offload.tables = { tier: tablesTier, scaleLayout };
   const any = offload.experts !== undefined || offload.dense !== undefined || offload.tables !== undefined;
   offload.queueDepth = read('oqd', any, (r) => parseInteger(r, 1, MAX_VALUE));
+  offload.ssdReadRate = read('osr', offloadsToSsd(offload), (r) =>
+    r === 'datasheet' || r === 'sustained' ? r : undefined,
+  );
   offload.prefetchAccuracy = read('opf', any, (r) => parseNumberIn(r, 0, 1));
   if (any && offload.prefetchAccuracy === undefined && get('oo') !== undefined) {
     // Legacy offload overlap: 'ideal' was perfect prefetch (p = 1), 'none' no prefetching (p = 0).

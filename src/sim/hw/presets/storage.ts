@@ -593,6 +593,7 @@ export const NVME_990_PRO_2TB: NvmeSpec = {
   name: 'Samsung 990 PRO 2 TB (PCIe 4.0 x4)',
   capacityBytes: 2e12,
   seqReadBandwidthBytesPerSec: gbPerSec(7.45),
+  sustainedRead: { fraction: 0.646, blockBytes: 1_048_576, queueDepth: 1, threads: 1 },
   // 1 / QD1 IOPS = 1 / 22,000 = 45.45e-6 s.
   randomReadLatencySec: 1 / 22_000,
   randomRead: { iops: 1_400_000, queueDepth: 32, threads: 16 },
@@ -600,6 +601,13 @@ export const NVME_990_PRO_2TB: NvmeSpec = {
   maxOutstanding: 32 * 16,
   readGranularityBytes: 4096,
   sources: [
+    {
+      url: 'https://www.tomshardware.com/reviews/samsung-990-pro-ssd-review/2',
+      title: 'Low-QD large-read comparison',
+      kind: 'review',
+      fields: ['sustainedRead'],
+      note: '2 TB CDM SEQ1M Q1T1 / Q8T1: 4,618 / 7,153 MB/s = 0.646. Condition: 1 MiB, QD1, 1 thread; divide by the same run deep-queue rate.',
+    },
     {
       url: SAMSUNG_990_PRO_URL,
       title: 'Samsung SSD 990 PRO datasheet Rev 1.0, Technical specifications',
@@ -626,11 +634,19 @@ export const NVME_SN850X_2TB: NvmeSpec = {
   name: 'WD_BLACK SN850X 2 TB (PCIe 4.0 x4)',
   capacityBytes: 2e12,
   seqReadBandwidthBytesPerSec: gbPerSec(7.3),
+  sustainedRead: { fraction: 0.747, blockBytes: 1_048_576, queueDepth: 1, threads: 1 },
   randomReadLatencySec: 50e-6,
   randomRead: { iops: 1_200_000, queueDepth: 32, threads: 16 },
   maxOutstanding: 32 * 16,
   readGranularityBytes: 4096,
   sources: [
+    {
+      url: 'https://www.tomshardware.com/reviews/samsung-990-pro-ssd-review/2',
+      title: 'Low-QD large-read comparison',
+      kind: 'review',
+      fields: ['sustainedRead'],
+      note: '2 TB SN850X comparison: CDM SEQ1M Q1T1 / Q8T1: 5,214 / 6,982 MB/s = 0.747. Condition: 1 MiB, QD1, 1 thread; divide by the same run deep-queue rate.',
+    },
     {
       url: SN850X_URL,
       title: 'Sandisk WD_BLACK SN850X NVMe SSD datasheet (July 2025), Product specifications',
@@ -671,12 +687,20 @@ export const NVME_9100_PRO_4TB: NvmeSpec = {
   name: 'Samsung 9100 PRO 4 TB (PCIe 5.0 x4)',
   capacityBytes: 4e12,
   seqReadBandwidthBytesPerSec: gbPerSec(14.8),
+  sustainedRead: { fraction: 0.72, blockBytes: 1_048_576, queueDepth: 1, threads: 1 },
   randomReadLatencySec: 45e-6,
   randomRead: { iops: 2_200_000, queueDepth: 256, threads: 32 },
   // queueDepth × threads of the rated condition = 256 × 32.
   maxOutstanding: 256 * 32,
   readGranularityBytes: 4096,
   sources: [
+    {
+      url: 'https://www.tomshardware.com/pc-components/ssds/samsung-9100-pro-ssd-review/3',
+      title: 'Low-QD large-read comparison',
+      kind: 'review',
+      fields: ['sustainedRead'],
+      note: '4 TB with heatsink: CDM SEQ1M Q1T1 / Q8T1: 10,287 / 14,295 MB/s = 0.720. Condition: 1 MiB, QD1, 1 thread; divide by the same run deep-queue rate.',
+    },
     {
       url: SAMSUNG_9100_PRO_URL,
       title: 'Samsung SSD 9100 PRO datasheet Rev 2.0, Technical specifications',
@@ -703,11 +727,19 @@ export const NVME_T705_2TB: NvmeSpec = {
   name: 'Crucial T705 2 TB (PCIe 5.0 x4)',
   capacityBytes: 2e12,
   seqReadBandwidthBytesPerSec: gbPerSec(14.5),
+  sustainedRead: { fraction: 0.646, blockBytes: 1_048_576, queueDepth: 1, threads: 1 },
   randomReadLatencySec: 45e-6,
   randomRead: { iops: 1_550_000, queueDepth: 512, threads: 1 },
   maxOutstanding: 512,
   readGranularityBytes: 4096,
   sources: [
+    {
+      url: 'https://www.cdrlabs.com/reviews/crucial-t705-2tb-pcie-gen5-nvme-solid-state-drive/print.html',
+      title: 'Low-QD large-read comparison',
+      kind: 'review',
+      fields: ['sustainedRead'],
+      note: '2 TB CDM Real World SEQ1M Q1T1 / Peak SEQ1M Q8T1: 9,453.93 / 14,631.35 MB/s = 0.646. Condition: 1 MiB, QD1, 1 thread; divide by the same run deep-queue rate.',
+    },
     {
       url: CRUCIAL_T705_URL,
       title: 'Crucial T705 2TB PCIe Gen5 NVMe M.2 SSD (CT2000T705SSD3) product page',
@@ -751,12 +783,20 @@ export const APPLE_SSD_M3_M4_MAX_1TB: NvmeSpec = {
   name: 'Apple M3 / M4 Max internal SSD, 1 TB',
   capacityBytes: 1e12,
   seqReadBandwidthBytesPerSec: gbPerSec(6.4),
+  sustainedRead: { fraction: 0.51, blockBytes: 1_048_576, queueDepth: 1, threads: 1 },
   // 4096 B / 60e6 B/s (crowd-median random 4 KiB QD1 ≈ 60 MB/s) = 68e-6 s.
   randomReadLatencySec: 4096 / 60e6,
   randomRead: { iops: 250_000, queueDepth: 64, threads: 1 },
   maxOutstanding: 64,
   readGranularityBytes: 4096,
   sources: [
+    {
+      url: 'https://docs.google.com/spreadsheets/d/1Mu8n3438TM2orWivg_Y8YGlbd8VLcy3c-xBZulH_1zM/edit?usp=sharing',
+      title: 'Low-QD large-read comparison',
+      kind: 'community',
+      fields: ['sustainedRead'],
+      note: 'AmorphousDiskMark SEQ1M QD1 / QD8, 1 TB: M3 Max 3,169 / 6,396; M4 Max 3,363 / 6,444 MB/s; mean 0.509 ≈ 0.51 (n=2). Condition: 1 MiB, QD1, 1 thread; divide by the same run deep-queue rate.',
+    },
     {
       url: MAC_SSD_REDDIT_URL,
       title:
@@ -805,11 +845,19 @@ export const APPLE_SSD_M5_PRO_MAX: NvmeSpec = {
   name: 'Apple M5 Pro / Max internal SSD, 2 TB',
   capacityBytes: 2e12,
   seqReadBandwidthBytesPerSec: gbPerSec(13.1),
+  sustainedRead: { fraction: 0.84, blockBytes: 1_048_576, queueDepth: 1, threads: 1 },
   randomReadLatencySec: 65e-6,
   randomRead: { iops: 270_000, queueDepth: 64, threads: 1 },
   maxOutstanding: 64,
   readGranularityBytes: 4096,
   sources: [
+    {
+      url: 'https://docs.google.com/spreadsheets/d/1Mu8n3438TM2orWivg_Y8YGlbd8VLcy3c-xBZulH_1zM/edit?usp=sharing',
+      title: 'Low-QD large-read comparison',
+      kind: 'community',
+      fields: ['sustainedRead'],
+      note: 'AmorphousDiskMark SEQ1M QD1 / QD8 median 0.839 ≈ 0.84 (7 M5 Pro/Max, 1–8 TB). 2 TB: 11,157 / 13,302 and 11,384 / 13,147 MB/s. Condition: 1 MiB, QD1, 1 thread; divide by the same run deep-queue rate.',
+    },
     {
       url: MAC_SSD_REDDIT_URL,
       title:
@@ -853,6 +901,7 @@ export const DGX_SPARK_SSD_4TB: NvmeSpec = {
   capacityBytes: 4e12,
   // 11.4 GiB/s × 2^30 B/GiB = 12.24e9 B/s.
   seqReadBandwidthBytesPerSec: 11.4 * 2 ** 30,
+  sustainedRead: { fraction: 0.65, blockBytes: 1_048_576, queueDepth: 1, threads: 1 },
   randomReadLatencySec: 50e-6,
   randomRead: { iops: 1_500_000, queueDepth: 32, threads: 16 },
   maxOutstanding: 32 * 16,
@@ -875,6 +924,11 @@ export const DGX_SPARK_SSD_4TB: NvmeSpec = {
     },
   ],
   estimated: [
+    {
+      field: 'sustainedRead',
+      reason:
+        'No CPU-path low-QD data. Borrowed Gen5 peer fraction (T705 0.646, 9100 PRO 0.720). Closest GDSIO 1 MiB 1-thread / 16-thread = 2.2 / 11.4 GiB/s = 0.193 includes cuFile overhead and is not a drive-only ratio. https://www.storagereview.com/review/nvidia-dgx-spark-review-the-ai-appliance-bringing-datacenter-capabilities-to-desktops Condition: 1 MiB, QD1, 1 thread.',
+    },
     {
       field: 'randomReadLatencySec',
       reason:
@@ -905,6 +959,7 @@ export const NVME_GEN4_X4_GENERIC: NvmeSpec = {
   name: 'Generic PCIe 4.0 x4 NVMe SSD, 2 TB',
   capacityBytes: 2e12,
   seqReadBandwidthBytesPerSec: gbPerSec(7.0),
+  sustainedRead: { fraction: 0.666, blockBytes: 1_048_576, queueDepth: 1, threads: 1 },
   randomReadLatencySec: 50e-6,
   randomRead: { iops: 1_000_000, queueDepth: 32, threads: 16 },
   maxOutstanding: 32 * 16,
@@ -920,6 +975,11 @@ export const NVME_GEN4_X4_GENERIC: NvmeSpec = {
     },
   ],
   estimated: [
+    {
+      field: 'sustainedRead',
+      reason:
+        'Median CDM SEQ1M Q1T1 / Q8T1 fraction of 19 Gen4 x4 drives (2/4 TB), IQR 0.608–0.736; comparison charts in this review and the 9100 PRO review pages 2–3. https://www.tomshardware.com/reviews/samsung-990-pro-ssd-review/2 Condition: 1 MiB, QD1, 1 thread.',
+    },
     {
       field: 'capacityBytes',
       reason: 'Configuration choice: a 2 TB drive. Set it to the installed amount.',

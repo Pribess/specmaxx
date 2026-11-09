@@ -247,6 +247,8 @@ export function validateStorageTier(t: StorageTierSpec, label = `${t.kind} ${t.i
           ['randomReadLatencySec', t.randomReadLatencySec],
           ['randomRead.iops', t.randomRead?.iops],
           ['linkBandwidthBytesPerSec', t.linkBandwidthBytesPerSec],
+          ['sustainedRead.fraction', t.sustainedRead?.fraction],
+          ['sustainedRead.blockBytes', t.sustainedRead?.blockBytes],
         ],
         label,
       ),
@@ -256,10 +258,18 @@ export function validateStorageTier(t: StorageTierSpec, label = `${t.kind} ${t.i
           ['maxOutstanding', t.maxOutstanding],
           ['randomRead.queueDepth', t.randomRead?.queueDepth],
           ['randomRead.threads', t.randomRead?.threads],
+          ['sustainedRead.queueDepth', t.sustainedRead?.queueDepth],
+          ['sustainedRead.threads', t.sustainedRead?.threads],
         ],
         label,
       ),
     );
+  }
+  if (t.kind === 'nvme' && t.sustainedRead !== undefined) {
+    if (t.sustainedRead.fraction > 1) errors.push(`${label}: sustainedRead.fraction must be ≤ 1`);
+    if (t.sustainedRead.blockBytes < t.readGranularityBytes) {
+      errors.push(`${label}: sustainedRead.blockBytes must be ≥ readGranularityBytes`);
+    }
   }
   return errors;
 }

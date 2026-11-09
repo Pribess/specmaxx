@@ -49,7 +49,7 @@ cited.
   - Prefill is a ceiling only: llama.cpp reached 0.1–0.38, vLLM and MLX 0.5–0.8. Short-prompt TTFT rows say nothing.
   - **CPU + GPU expert offload**: llama.cpp computes on the CPU, a mode the sim does not support (F3), so those
     reports are mismatched comparisons, in both directions.
-  - **SSD offload**: the hit model and the checkpoint layout are unvalidated.
+  - **SSD offload**: F-W12/F-W13 inputs corrected in F13; both decode rows now asserted (see §2).
 
 The theoretical headline stays the datasheet peak. Sustained-rate scenarios (F2, F4) and the per-op floor (F1) are
 proposed as **labelled additional figures**, not as a replacement bound.
@@ -63,7 +63,7 @@ proposed as **labelled additional figures**, not as a replacement bound.
 | 3   | **Confirmed preset bug**: Arc B580 catalog (`src/sim/hw/presets/catalog.ts:424`) offers PCIe 5.0 x16 for a PCIe 4.0 x8 card; Arc Pro B60 (`:423`) offers x16 for an x8 card | overestimate (comm)                                                         | link 4× too fast (B60: 2×). A 2-GPU 100 MB all-reduce takes 34% too little time via host bounce, and a quarter of the right time via direct P2P. The tok/s effect scales with the exposed comm share                                                                                                                                                             | certain                                                   |
 | 4   | **F2** Decode uses the datasheet memory bandwidth (correct for the theoretical bound)                                                                                       | sustained scenario lower                                                    | measured STREAM / clpeak fractions (workload-specific): H100 91–93% (−7% to −9%), Strix Halo 83% (−17%), M3 Ultra 78% (−22%), Spark 73–90% (−10% to −27%)                                                                                                                                                                                                        | high (measurements); scenario, not a proven tighter bound |
 | 5   | **F4** Matmul peaks are vendor (mostly boost-clock) figures; tile/wave quantisation is the only derate                                                                      | sustained scenario lower (prefill)                                          | independently supported clock/power limits: Strix Halo sustained ≈ 2.0 of 2.9 GHz (−31%), GB10 throttling (size varies by OEM). Library-efficiency measurements, separately: Spark BF16 77–99 of 125 TF, H100 MAMF 80–86%, MI300X 49–58%                                                                                                                         | high (Halo clock); medium (rest)                          |
-| 6   | **SSD-offload exceptions** `F-W12` / `F-W13` (2.9× / 4.9×)                                                                                                                  | sim below reports, cause unknown                                            | competing explanations: (a) expert locality (the uniform default; the fine-grained model would cut misses 3.1× at f = 0.25); (b) checkpoint identity and size (page says "552B, 518 GB at 4-bit"; the fixture is used, with a 4.5 bpw Q4 surrogate for an unpublished module mix); (c) read pattern (software alone moved the same machine 1.8×). **Unresolved** | low                                                       |
+| 6 | **SSD-offload inputs** F-W12 / F-W13 — resolved F13 | corrected ratios 0.321 / 0.479 @612 | checkpoint, module layout, table placement and measured/derived cache hits corrected; defaults unchanged | high (input correction) |
 | 7   | **F1** No per-op latency term in decode: tiny ops cost only bytes ÷ bandwidth                                                                                               | sensitivity, possibly an overestimate                                       | a floor of 0.6–1 µs per IR op would cost −2.5% to −4% (Llama-3-8B, 4090) and −12% to −19% (Qwen3-30B-A3B, 4090). The hardware floor is **unmeasured**: IR ops are not all dependent DRAM round trips, and the 78% megakernel figure is one fused implementation. Engine dispatch (1.3–2.9 µs per kernel) is out of scope                                         | low (hardware size); high (dispatch is large for engines) |
 | 8   | **F6** No softmax/SFU (exp) cost in attention                                                                                                                               | overestimate (long-context datacenter prefill)                              | B200: −4% / −10% / −16% for Llama-3-8B fp8 @ pp8k/32k/128k, up to −48% for gpt-oss (head dim 64) @ pp128k with overlapped exp. H100 0% overlapped. Decode unaffected                                                                                                                                                                                             | medium-high                                               |
 | 9   | **F7** Prefill assumes ideal comm/compute overlap; small all-reduce α                                                                                                       | overestimate                                                                | prefill under `overlap: 'none'`: −40% (4×4090 TP4, Llama-3-70B), −31.5% (Spark pair), −24% (2×3090 MoE). Decode: the measured 6.1–13.5 µs PCIe all-reduce includes kernel launch; the hardware share (≈ 2–3 µs) would cost a few percent                                                                                                                         | medium                                                    |
@@ -76,7 +76,7 @@ proposed as **labelled additional figures**, not as a replacement bound.
 ### How to read the findings
 
 - **Two rows break the comparison, not the formulas.** F3 is a missing execution mode. F5 is a pessimistic
-  approximation. The ratios above 1 in the data are one of these, the unresolved SSD and `lm-35` rows, or `lm-36`
+  approximation. The ratios above 1 in the data are one of these, the unresolved `lm-35` row, or `lm-36`
   (1.079, inside the test's 10% tolerance).
 - **The sustained scenarios are not a tighter proven bound.** F2 and F4 measurements are workload-specific. They are
   useful as a labelled "sustained" figure next to the peak.
@@ -176,8 +176,8 @@ The auditor's notable **non-findings**:
 - **The test.** `reports.test.ts` asserts `simulated ≥ 0.9 × reported`, i.e. a ratio ≤ 1.11. Cases that fail it are
   listed as exceptions with a reason.
 - **181 metrics:**
-  - 156 asserted
-  - 8 known exceptions
+  - 158 asserted
+  - 6 known exceptions
   - 17 excluded (fresh short-prompt TTFT prefill rows, and one series of a low-reliability host)
   - The distributions use the 164 asserted and exception metrics.
 - **Caveat on independence.** Source series are correlated, not independent samples. Several points share one host, one
@@ -209,8 +209,8 @@ All reports (earlier + fresh):
 | Strix Halo         | prefill | 7   | 0.114 | 0.198 | 0.215  | 0.228 | 0.243 |
 | DDR expert offload | decode  | 11  | 0.065 | 0.079 | 0.173  | 1.140 | 3.648 |
 | DDR expert offload | prefill | 8   | 0.045 | 0.063 | 0.086  | 0.144 | 0.544 |
-| SSD offload        | decode  | 5   | 0.433 | 0.485 | 0.489  | 2.879 | 4.874 |
-| SSD offload        | prefill | 3   | 0.153 | 0.387 | 0.622  | 0.805 | 0.989 |
+| SSD offload        | decode  | 5   | 0.321 | 0.423 | 0.479  | 0.485 | 0.489 |
+| SSD offload        | prefill | 3   | 0.153 | 0.387 | 0.625  | 0.810 | 0.995 |
 | spec-dec           | decode  | 12  | 0.221 | 0.366 | 0.627  | 0.823 | 1.079 |
 | spec-dec           | prefill | 6   | 0.098 | 0.309 | 0.501  | 0.571 | 0.954 |
 
@@ -232,8 +232,8 @@ Fresh reports only:
 | Strix Halo         | prefill | 3   | 0.191 | 0.203 | 0.215  | 0.225 | 0.235 |
 | DDR expert offload | decode  | 9   | 0.065 | 0.074 | 0.147  | 1.131 | 3.648 |
 | DDR expert offload | prefill | 7   | 0.045 | 0.061 | 0.068  | 0.175 | 0.544 |
-| SSD offload        | decode  | 5   | 0.433 | 0.485 | 0.489  | 2.879 | 4.874 |
-| SSD offload        | prefill | 3   | 0.153 | 0.387 | 0.622  | 0.805 | 0.989 |
+| SSD offload        | decode  | 5   | 0.321 | 0.423 | 0.479  | 0.485 | 0.489 |
+| SSD offload        | prefill | 3   | 0.153 | 0.387 | 0.625  | 0.810 | 0.995 |
 | spec-dec           | decode  | 9   | 0.221 | 0.367 | 0.534  | 0.819 | 0.841 |
 | spec-dec           | prefill | 3   | 0.098 | 0.275 | 0.453  | 0.501 | 0.548 |
 
@@ -376,10 +376,10 @@ The chart uses a log scale. The dashed line at 1 is the bound. Black ticks are c
       {"id":"F-W09-p5650","class":"DDR expert offload","phase":"decode","ratio":0.147,"context":"5714","set":"fresh","check":"asserted"},
       {"id":"F-W10","class":"DDR expert offload","phase":"prefill","ratio":0.544,"context":"2048","set":"fresh","check":"asserted"},
       {"id":"F-W10","class":"DDR expert offload","phase":"decode","ratio":3.648,"context":"64","set":"fresh","check":"exception"},
-      {"id":"F-W12","class":"SSD offload","phase":"prefill","ratio":0.622,"context":"512","set":"fresh","check":"asserted"},
-      {"id":"F-W12","class":"SSD offload","phase":"decode","ratio":2.879,"context":"612","set":"fresh","check":"exception"},
-      {"id":"F-W13","class":"SSD offload","phase":"prefill","ratio":0.989,"context":"512","set":"fresh","check":"asserted"},
-      {"id":"F-W13","class":"SSD offload","phase":"decode","ratio":4.874,"context":"612","set":"fresh","check":"exception"},
+      {"id":"F-W12","class":"SSD offload","phase":"prefill","ratio":0.625,"context":"512","set":"fresh","check":"asserted"},
+      {"id":"F-W12","class":"SSD offload","phase":"decode","ratio":0.321,"context":"612","set":"fresh","check":"asserted"},
+      {"id":"F-W13","class":"SSD offload","phase":"prefill","ratio":0.995,"context":"512","set":"fresh","check":"asserted"},
+      {"id":"F-W13","class":"SSD offload","phase":"decode","ratio":0.479,"context":"612","set":"fresh","check":"asserted"},
       {"id":"F-W19","class":"single Mac","phase":"prefill","ratio":0.795,"context":"8192","set":"fresh","check":"asserted"},
       {"id":"F-W19","class":"single Mac","phase":"decode","ratio":0.793,"context":"8256","set":"fresh","check":"asserted"},
       {"id":"F-W20","class":"single Mac","phase":"prefill","ratio":0.763,"context":"8192","set":"fresh","check":"asserted"},
@@ -410,7 +410,7 @@ The chart uses a log scale. The dashed line at 1 is the bound. Black ticks are c
       {"id":"F-LM07","class":"SSD offload","phase":"prefill","ratio":0.153,"context":"262004","set":"fresh","check":"asserted"},
       {"id":"F-LM07","class":"SSD offload","phase":"decode","ratio":0.489,"context":"262068","set":"fresh","check":"asserted"},
       {"id":"F-LM34","class":"SSD offload","phase":"decode","ratio":0.485,"context":"65","set":"fresh","check":"asserted"},
-      {"id":"F-LM49","class":"SSD offload","phase":"decode","ratio":0.433,"context":"790","set":"fresh","check":"asserted"}
+      {"id":"F-LM49","class":"SSD offload","phase":"decode","ratio":0.423,"context":"790","set":"fresh","check":"asserted"}
     ]
   },
   "transform": [{ "calculate": "random()", "as": "jitter" }],
@@ -554,19 +554,18 @@ against these rows. Ratios are quoted at the reported context.
     - **Hypothesis:** llama.cpp moves the weights per micro-batch (ubatch), so PCIe traffic scales with
       prompt ÷ ubatch. That is an engine choice, not hardware.
 - **SSD offload.**
-  - Three rows with resident weights and a small SSD component: 0.43–0.49.
-  - Two DeepSeek-V4.1-Flash rows on one M5 Max laptop SSD exceed the bound by 2.9× and 4.9× (`F-W12`, `F-W13`).
-    Competing explanations, none established:
-    - **Checkpoint identity and size.** The page says "552B, 518 GB at 4-bit"; the encoded rows use the
-      `deepseek-ai/DeepSeek-V4.1-Flash` fixture (40 layers × 384 experts), which may not be the same checkpoint. The
-      page's size label is not a verified weight-file size.
-    - **Quant/layout surrogate.** The ds4 Q4 module mix is unpublished; the rows use a 4.5 bpw GGUF-style surrogate for
-      every module. A smaller real expert footprint would raise the sim directly.
-    - **Expert locality.** The default hit model is uniform (`h = f`), with f = 3688/15360 and 4600/15360 cached slots.
-      The fine-grained model would cut misses 3.1× at f = 0.25.
-    - **Read pattern.** The same hardware moved 1.8× from software alone (`F-W12` → `F-W13`, same file, identical
-      output hash).
-    - **This is not a demonstrated cost-formula bug.** No hit rate is reported. **Do not tune h to fit the speed.**
+  - Three resident-weight/small-SSD rows now have ratios 0.42–0.49 after the merged review fixes.
+  - **Resolved F13 (2026-11-09): input issue, not an SSD-bandwidth formula bug.** Corrected F-W12/F-W13 decode
+    is 31.7 / 38.9 tok/s @612 vs reported 10.18 / 18.66 (ratios 0.321 / 0.479); both now asserted.
+    The checkpoint is `antirez/deepseek-v4.1-flash-gguf/DeepSeek-V4.1-Flash-Q4.gguf`, 518,596,067,328 B.
+    Routed experts use Q4_K 4.5 bpw; attention/shared/head Q8_0 8.5 bpw; token_embd F16.
+    Engram tables are NVMe-resident 264-B interleaved rows, not device-resident.
+  - Published cache data replaces uniform h=f: F-W12 h≈0.933 is derived from device bytes (OS-cache ambiguity);
+    F-W13 h=0.9491 is measured by 12.216 misses / 240 lookups. One prompt after prefill seeding, not a new default.
+    Sources and the full before/after table: [sanity-check F13 correction](../sanity-check.md).
+  - Remaining gap is software: decode uses only 25–35% of drive bandwidth; fork changes cache/scheduling as well.
+    Keep datasheet SSD rate for these bound checks: corrected F-W13 prefill 31.15 tok/s @512 vs 30.98 reported
+    would fail under the optional 0.84 sustained scenario. Do not tune h or SSD fractions to match throughput.
 - **Spec-dec, decode: 0.22–0.84, plus `lm-36` at 1.079.**
   - Hypothesis: the base-decode gap (F1, F2) plus verify-kernel efficiency.
   - Where the report gives an acceptance, it is used. Otherwise the preset α is used, and its provenance issues
@@ -577,9 +576,7 @@ against these rows. Ratios are quoted at the reported context.
 
 | report         | class              | ratio | reported → simulated                 | reason (from `reports.ts`)                                                                                                                                                                                                                                                                    | finding                             |
 | -------------- | ------------------ | ----- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `F-W13`        | SSD offload        | 4.874 | 18.66 → 3.8 tok/s @ 612              | exception. Cause unresolved; competing explanations: checkpoint identity and size (page: "552B, 518 GB"; fixture used), the 4.5 bpw Q4 surrogate for an unpublished module mix, expert locality (uniform hit default), read pattern                                                           | unresolved                          |
 | `F-W10`        | DDR expert offload | 3.648 | 26.4 → 7.2 tok/s @ 64                | exception. EPYC 12-channel DDR5 computes the experts on the CPU. **Low-reliability** secondary page                                                                                                                                                                                           | F3                                  |
-| `F-W12`        | SSD offload        | 2.879 | 10.18 → 3.5 tok/s @ 612              | exception. Same machine and file as `F-W13`, upstream ds4 binary; same competing explanations                                                                                                                                                                                                 | unresolved                          |
 | `web-04`       | Spark              | 2.034 | 262.2 → 128.9 tok/s @ 4112, batch 32 | exception. Balanced routing reads all 128 experts per layer; the iid-uniform expected unique count is ≈ 82. **After the F5 fix**: 191.1 tok/s @ 4112, ratio **1.372**, still an exception (262.2 needs ≤ ≈ 55 of 128 experts per layer, uniform touches 81.7), so F5 is a partial explanation | F5 (partial; fixed, exception kept) |
 | `web-53`       | DDR expert offload | 1.938 | 10 → 5.2 tok/s @ 512                 | exception. ik_llama.cpp CPU-computes the experts of layers 10–93 from DDR5                                                                                                                                                                                                                    | F3                                  |
 | `lm-35`        | Spark ×4           | 1.601 | 74.6 → 46.6 tok/s @ 637              | exception, **unresolved**. Local GLM-5.3-Flash NVFP4 checkpoint of unknown layout. An all-linear NVFP4 layout would give a ratio of 0.84                                                                                                                                                      | open question                       |
@@ -986,7 +983,7 @@ The sim is unmodified. Decode is batch 1. tg128 runs use the harness midpoint (@
 - **Fix.** An optional imbalance factor. Size S.
 - **Confidence.** Medium.
 
-### F13. Offload knobs barely move transfer-bound results
+### F13. Offload knobs barely move transfer-bound results — resolved (opt-in)
 
 - **Code.** `src/sim/engine/transfer.ts:30` (prefetch 0.8), the pipeline's overlap term, and `transferTime`.
 - **Probe.**
@@ -994,10 +991,33 @@ The sim is unmodified. Decode is batch 1. tg128 runs use the harness midpoint (@
   - NVMe queue depth makes no difference for Qwen3-235B on a 4090 with experts on a 990 Pro: 0.96 tok/s @ 64 at any depth.
     Each expert is one large sequential read, so the result is bandwidth bound.
   - No double counting.
-- **Classification.** Fine as an upper bound. The risk is the SSD's "up to" sequential rate: expect ≈ 70–85% for 4–9 MB
-  reads at low concurrency. **Not measured.**
-- **Fix.** A sustained NVMe read fraction alongside F2. Size S.
+- **Classification.** Fine as an upper bound. The original unmeasured estimate was 70–85% of the SSD's sequential
+  rate; the implemented scenario uses per-drive measurements instead (design doc §2.2–2.3).
+- **Implemented.** `OffloadConfig.ssdReadRate` opts into sourced low-QD fractions; absent/datasheet stays byte-identical. Per-preset decode changes range −16% to −49%, not uniformly the estimated −15% to −30%. Tiny SSD rows remain unchanged. F-W12/F-W13 exceptions resolved as input issues (§2).
 - **Confidence.** Medium.
+
+**Reconstructed probes (2026-11-09).** Original probe configs were not retained. Qwen3-30B-A3B Q8_0 on a
+4090, all routed experts in default DDR5-6000 ×2 RAM (f=0, uniform), prefetch 0 / 0.8 / 1 gives
+15.518 / 16.178 / 16.352 tok/s @64 on the original branch. After rebasing the merged F8 PCIe payload fix,
+the same probe gives 14.251 / 14.806 / 14.952 tok/s @64, identical in datasheet and sustained mode (RAM is unchanged by F13).
+Qwen3-235B-A22B with 4.5-bpw weights (fp16 embedding/head), one 4090, experts on each SSD, f=0, uniform, default prefetch 0.8:
+The SSD table is unchanged by the rebase; omitted and explicit datasheet results remain byte-identical.
+
+| SSD | Before = after datasheet | After sustained | Sustained/datasheet |
+| --- | --- | --- | --- |
+| 990 PRO | 0.927060 | 0.600264 | 0.647 |
+| SN850X | 0.908161 | 0.679559 | 0.748 |
+| 9100 PRO | 1.830071 | 1.322379 | 0.723 |
+| T705 | 1.793439 | 1.163716 | 0.649 |
+| Generic Gen4 | 0.871082 | 0.581400 | 0.667 |
+| Apple M3/M4 Max | 0.795772 | 0.407299 | 0.512 |
+| Apple M5 Pro/Max | 1.617307 | 1.361659 | 0.842 |
+| DGX Spark | 1.515868 | 0.989223 | 0.653 |
+
+All rates are decode tok/s @64, identical at deployment QD1 / QD8 / default. Workload: batch 1, prompt 128,
+generated 128, context starts empty (midpoint 64); `UPPER_BOUND_OPTIONS`, fp16 activations, fp32 accumulate.
+The 990 PRO reconstruction is 3.4% below the review's 0.96; compare changes against the reproduced baseline,
+not a guessed exact original config. Corrected SSD sanity rows and their sources are in [sanity-check](../sanity-check.md).
 
 ### F14. Apple GEMV path pads M = 1 to the 8×8×8 MMA
 
@@ -1076,7 +1096,7 @@ real run come first. Sustained scenarios and sensitivity settings are additions 
 | 11   | Thunderbolt 4 negotiated-path variant                                                                                                           | `links.ts`, catalog                                                                                                                                 | TB4 TCP link 5 → 2.5 GB/s where negotiated at 20 Gb/s                                                                                                                                                                                      | low                                                                                 | XS           |
 | 12   | Chunked-prefill activation peak for fit; optional runtime reserve (F11)                                                                         | `src/sim/engine/memory.ts`                                                                                                                          | fit verdicts at long prompts (less pessimistic) and near-full dGPUs (more realistic)                                                                                                                                                       | low                                                                                 | S            |
 | 13   | Optional per-op latency sensitivity setting (F1a), default 0                                                                                    | `src/sim/hw/types.ts`, `opTime.ts`, docs §7/§9                                                                                                      | none by default; at 0.6–1 µs: decode −1% to −4% (large dense) to −12% to −19% (Qwen3-30B-A3B on a 4090)                                                                                                                                    | medium: the hardware floor is unmeasured; needs a microbenchmark before any default | S–M          |
-| 14   | Sustained NVMe read fraction (F13); collect checkpoint size, module layout and measured hit rates for the SSD rows before touching SSD defaults | `src/sim/hw/presets/storage.ts`; a data-collection task                                                                                             | SSD-bound decode −15% to −30%; locality data decides whether `F-W12`/`F-W13` are a model issue                                                                                                                                             | low (code); research needed                                                         | S + research |
+| 14 | **Done:** opt-in sustained NVMe fraction (F13); F-W12/F-W13 re-encoded and asserted | `storage.ts`, `transfer.ts`, `sustained-read.test.ts`; see §2 | default unchanged; sustained SSD-bound decode −16% to −49% | low-medium (scenario, not proven bound) | S + research |
 | 15   | **Done.** EP imbalance factor (F12), default 1.2                                                                                                | `src/sim/lower/moe.ts`                                                                                                                              | EP prefill −5% to −11% at max/mean 1.2–1.5 (re-run on Qwen3-235B FP8, 8× H100: −6.9% to −9.4% at 1.2; 0% where the TP all-reduce binds)                                                                                                    | low                                                                                 | S            |
 | 16   | **Done.** Apple GEMV path without MMA padding (F14)                                                                                             | `src/sim/hw/presets/apple.ts`, `src/sim/hw/efficiency.ts`                                                                                           | Apple MoE decode +≈ 3%                                                                                                                                                                                                                     | low                                                                                 | S            |
 | 17   | Dispatch-floor overlay (F1b): engine overhead, out of scope unless the user wants it                                                            | `simulate.ts` / result, UI                                                                                                                          | informational only: −13% to −52% on small and fine-grained MoE at batch 1; headline unchanged                                                                                                                                              | medium: outside the project's stated exceptions                                     | M            |
@@ -1090,6 +1110,7 @@ real run come first. Sustained scenarios and sensitivity settings are additions 
 | 4    | done: PCIe payload efficiency 256/280 (F8 status)                                         |
 | 9    | α: unchanged, no hardware-only measurement (F7 status); the overlap display is still open |
 | 11   | done: `TB4_TCP_20G` variant; default kept at 5 GB/s (Thunderbolt 4 status above)          |
+| 14 | done: opt-in sustained NVMe rate; corrected F-W12/F-W13 both asserted (F13 status) |
 | 15   | done: EP load imbalance ρ, default 1.2 (F12 status)                                       |
 
 ---
@@ -1102,9 +1123,7 @@ real run come first. Sustained scenarios and sensitivity settings are additions 
   assumption, and IR op counts overstate the dependency chain. The dispatch part (1.3–2.9 µs) is better measured but is
   engine overhead.
 - **Datacenter batch-1 gaps** (0.15–0.42) are attributed to F1 by estimate only. No probe was run on B200 or MI300X.
-- **SSD rows.** `F-W12`/`F-W13` need the checkpoint identity and weight size (the page's 552B / 518 GB against the
-  fixture), the ds4 module layout (instead of the 4.5 bpw surrogate), and a measured hit rate. The fine-grained hit
-  model's γ = 0.2 itself rests on developer measurements.
+- **SSD rows resolved (F13).** Checkpoint/layout/table placement and prompt-specific custom hits are now encoded; see §2 and [sanity-check](../sanity-check.md). Unpublished internal SSD capacity and upstream OS-cache contribution remain caveats, not unexplained exceptions.
 - **The sample.** The ratio ranges are descriptive over a selected, correlated sample; 11 fresh decode rows are lower
   bounds (context 1). Class attributions in §2 are hypotheses.
 - **The DDR offload class** is dominated by a few correlated, partly low-reliability sources:

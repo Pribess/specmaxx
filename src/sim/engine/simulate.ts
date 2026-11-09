@@ -122,6 +122,8 @@ interface PhaseOffload {
   host: ResolvedHost;
   /** The deployment's queue depth request (capped per tier). Count. */
   queueDepth: number | undefined;
+  /** SSD bandwidth scenario; absent preserves the datasheet rate. */
+  ssdReadRate: 'datasheet' | 'sustained' | undefined;
   /** Prefetching on, i.e. prefetch accuracy p > 0 (more stages stream at once; docs §12 "Expert prefetch"). */
   prefetching: boolean;
 }
@@ -153,7 +155,7 @@ function stageTransferPaths(
       offload.prefetching,
       microbatches,
     );
-    paths[tier] = transferPath(tier, offload.host, offload.queueDepth, n);
+    paths[tier] = transferPath(tier, offload.host, offload.queueDepth, n, offload.ssdReadRate);
   }
   return paths;
 }
@@ -373,10 +375,20 @@ export function simulate(input: SimInput): SimResult {
   let phaseOffload: PhaseOffload | undefined;
   if (resolved.offload !== undefined) {
     const host = resolveHost(input.hardware, device, offloadTiers(resolved.offload));
+    if (
+      input.deployment?.offload?.ssdReadRate === 'sustained' &&
+      host.ssd !== undefined &&
+      host.ssd.sustainedRead === undefined
+    ) {
+      warnings.push(
+        `offload: no sustained-read data for ${host.ssd.id}; using datasheet SSD read rate`,
+      );
+    }
     warnings.push(...host.warnings);
     phaseOffload = {
       host,
       queueDepth: input.deployment?.offload?.queueDepth,
+      ssdReadRate: input.deployment?.offload?.ssdReadRate,
       prefetching: resolved.offload.prefetchAccuracy > 0,
     };
   }

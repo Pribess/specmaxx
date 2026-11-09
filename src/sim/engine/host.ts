@@ -180,11 +180,28 @@ export function resolveHost(hardware: HardwareStack, device: DeviceSpec, tiers: 
  * The transfer path of `tier` on one device (design doc §2.3): host RAM → link → device; NVMe → host RAM → link →
  * device on dedicated memory (the staging term uses host RAM's bandwidth); NVMe → unified memory directly (no link,
  * no staging). `queueDepth` is the deployment's request (capped by the tier); `nStream` the tier's sharing.
+ * `ssdReadRate` opts into the SSD's large-read fraction; absent/datasheet leaves all B/s ceilings unchanged.
  */
-export function transferPath(tier: OffloadTier, host: ResolvedHost, queueDepth: number | undefined, nStream: number): TransferPath {
+export function transferPath(
+  tier: OffloadTier,
+  host: ResolvedHost,
+  queueDepth: number | undefined,
+  nStream: number,
+  ssdReadRate?: OffloadConfig['ssdReadRate'],
+): TransferPath {
   const spec = tier === 'host_ram' ? host.ram : host.ssd;
-  if (spec === undefined) throw new Error(`offload: no ${tier === 'host_ram' ? 'host RAM' : 'SSD'} resolved for a transfer`);
-  const path: TransferPath = { tier: spec, queueDepth: resolveQueueDepth(spec, queueDepth), nStream };
+  if (spec === undefined)
+    throw new Error(
+      `offload: no ${tier === 'host_ram' ? 'host RAM' : 'SSD'} resolved for a transfer`,
+    );
+  const path: TransferPath = {
+    tier: spec,
+    queueDepth: resolveQueueDepth(spec, queueDepth),
+    nStream,
+  };
+  if (spec.kind === 'nvme' && ssdReadRate === 'sustained' && spec.sustainedRead !== undefined) {
+    path.nvmeSustainedRead = spec.sustainedRead;
+  }
   if (host.link !== undefined) {
     path.link = { latencySec: host.link.latencySec, bandwidthPerDirectionBytesPerSec: host.link.bandwidthPerDirectionBytesPerSec };
   }

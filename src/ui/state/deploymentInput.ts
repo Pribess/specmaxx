@@ -210,6 +210,7 @@ export function deploymentConfig(
       offload = {
         ...out,
         ...(o.queueDepth !== undefined ? { queueDepth: o.queueDepth } : {}),
+        ...(o.ssdReadRate === 'sustained' ? { ssdReadRate: o.ssdReadRate } : {}),
         ...(o.prefetchAccuracy !== undefined ? { prefetchAccuracy: o.prefetchAccuracy } : {}),
       };
   }

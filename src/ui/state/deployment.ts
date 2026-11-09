@@ -52,6 +52,8 @@ export interface OffloadChoice {
   };
   /** Outstanding read requests per device; absent = the tier's rated maximum. Integer ≥ 1. Count. */
   queueDepth?: number;
+  /** SSD large-read rate: rated sequential speed (default) or the preset's measured low-queue-depth fraction. */
+  ssdReadRate?: 'datasheet' | 'sustained';
   /**
    * Prefetch accuracy p (engine `OffloadConfig.prefetchAccuracy`): the predictor's recall, the share of the needed
    * experts it picks one layer ahead; absent = the default 0.8. In [0, 1]. Dimensionless.
@@ -124,6 +126,13 @@ export function offloadsAnything(offload: OffloadChoice | undefined): boolean {
   );
 }
 
+/** True when any offloaded weight group uses the SSD. */
+export function offloadsToSsd(offload: OffloadChoice | undefined): boolean {
+  return [offload?.experts, offload?.dense, offload?.tables].some(
+    (group) => group?.tier === 'nvme',
+  );
+}
+
 /** The default scale layout of a tier (design doc §2.10): `'separate'` on host RAM, `'pinned_host'` on SSD. */
 export function defaultScaleLayout(tier: TierChoice): ScaleLayoutChoice {
   return tier === 'host_ram' ? 'separate' : 'pinned_host';
@@ -163,7 +172,12 @@ export function normalizeOffload(o: OffloadChoice): OffloadChoice {
   const prefetchAccuracy =
     o.prefetchAccuracy === DEFAULT_PREFETCH_ACCURACY ? undefined : o.prefetchAccuracy;
   return offloadsAnything(out)
-    ? compact({ ...out, queueDepth: o.queueDepth, prefetchAccuracy })
+    ? compact({
+        ...out,
+        queueDepth: o.queueDepth,
+        ssdReadRate: offloadsToSsd(out) && o.ssdReadRate === 'sustained' ? 'sustained' : undefined,
+        prefetchAccuracy,
+      })
     : {};
 }
 

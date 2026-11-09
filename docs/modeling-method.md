@@ -80,6 +80,8 @@ Two parameters shape the result:
 
 With both set, the result is still an upper bound given those numbers.
 
+**SSD read rate** defaults to the unchanged datasheet ceiling; the optional sustained scenario uses measured low-queue large-read fractions for experts and layers, not small lookup rows. These workload-specific measurements are not a tighter proven upper bound.
+
 More: [offloading](simulation-model.md#12-offloading), [expert hit ratio](simulation-model.md#expert-hit-ratio), [expert prefetch](simulation-model.md#expert-prefetch), [host and storage tiers](simulation-model.md#host-and-storage-tiers).
 
 ## Speculative decoding

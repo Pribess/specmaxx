@@ -149,3 +149,46 @@ test('Host RAM picker groups DDR5 before DDR4, searches, and a DDR4 id round-tri
   );
   expect(errors).toEqual([]);
 });
+
+for (const viewport of [
+  { width: 1440, height: 1000 },
+  { width: 390, height: 844 },
+]) {
+  test(`SSD read rate picker persists and only appears for SSD offload (${viewport.width}px)`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await mockHf(page);
+    await page.goto('/?odl=0&odt=ssd');
+    if (viewport.width < 600)
+      await page.locator('.panel > summary').filter({ hasText: 'Hardware' }).click();
+    await page.locator('details.advanced > summary').click();
+    const rate = page.getByRole('combobox', { name: 'SSD read rate', exact: true });
+    await expect(rate).toHaveText('Datasheet');
+    await expect(page).not.toHaveURL(/osr=/);
+    await pick(page, 'SSD read rate', 'Sustained');
+    await expect(page).toHaveURL(/osr=sustained/);
+    await page.reload();
+    if (viewport.width < 600)
+      await page.locator('.panel > summary').filter({ hasText: 'Hardware' }).click();
+    await page.locator('details.advanced > summary').click();
+    await expect(rate).toHaveText('Sustained');
+    await rate.scrollIntoViewIfNeeded();
+    if (process.env.SSD_SCREENSHOTS_DIR) {
+      await page.screenshot({
+        path: `${process.env.SSD_SCREENSHOTS_DIR}/ssd-rate-${viewport.width}.png`,
+      });
+      await page.emulateMedia({ colorScheme: 'dark' });
+      await page.screenshot({
+        path: `${process.env.SSD_SCREENSHOTS_DIR}/ssd-rate-${viewport.width}-dark.png`,
+      });
+    }
+    await pick(page, 'SSD read rate', 'Datasheet');
+    await expect(page).not.toHaveURL(/osr=/);
+    await page.goto('/?odl=0');
+    if (viewport.width < 600)
+      await page.locator('.panel > summary').filter({ hasText: 'Hardware' }).click();
+    await page.locator('details.advanced > summary').click();
+    await expect(rate).toHaveCount(0);
+  });
+}

@@ -89,9 +89,34 @@ out right, but it is a workaround (follow-up 5).
   rows ran with speculative decoding (lm-09, lm-36, lm-39) and two web rows with experts in host RAM.
 - **Later additions.** The [practicality review](review/practicality-review.md) (§2) added 60 fresh reports in nine
   setup classes (single GPU, multi-GPU PCIe, single Mac, Mac TB5 clusters, DGX Spark ×1/2/4, Strix Halo, DDR and SSD
-  expert offload, speculative decoding). `reports.ts` now holds **105 reports** and 181 metrics: 156 asserted, 8 known
+  expert offload, speculative decoding). `reports.ts` now holds **105 reports** and 181 metrics: 158 asserted, 6 known
   exceptions and 17 excluded. The tables and distributions below cover the original 45; the per-class distributions,
   the chart and the exceptions for all 105 are in that review's §2.
+
+- **F13 SSD correction (2026-11-09):** F-W12/F-W13 are now asserted, not exceptions. The checkpoint is
+  `antirez/deepseek-v4.1-flash-gguf/DeepSeek-V4.1-Flash-Q4.gguf`, 518,596,067,328 B (HF file listing/header).
+  Routed experts are Q4_K (4.5 bpw), attention/shared/head Q8_0 (8.5 bpw), embedding F16; Engram tables live
+  on NVMe as 264-B interleaved rows. Custom hits are 0.933 (F-W12, derived from device bytes; OS-cache ambiguity)
+  and 0.9491 (F-W13, 12.216 misses per 240 lookups, engine counter). Both describe one prompt after prefill seeding,
+  not general routing defaults. This was an **input issue** (uniform h=f and tables on-device), not an SSD-bandwidth
+  formula bug. Remaining decode overhead uses only 25–35% of the drive's bandwidth.
+  Sources: [ds4 bd66c402](https://github.com/antirez/ds4/tree/bd66c402),
+  [argodrive ladder](https://github.com/argonautlabsai/ds4-argodrive/tree/v41-stack-20260927/argodrive/candidates/2026-09-27-ladder),
+  [checkpoint](https://huggingface.co/antirez/deepseek-v4.1-flash-gguf).
+  Keep these bound checks at datasheet SSD rate: F-W13 prefill is 31.15 tok/s @512 vs reported 30.98;
+  the optional 0.84 sustained scenario would fail the bound check.
+
+  | Row | Phase/context | Before sim (report/sim) | Corrected sim (report/sim) |
+  | --- | --- | --- | --- |
+  | F-W12 | prefill @512 | 28.9 (0.622) | 28.7 (0.625) |
+  | F-W12 | decode @612 | 3.5 (2.879) | 31.7 (0.321) |
+  | F-W13 | prefill @512 | 31.3 (0.989) | 31.1 (0.995) |
+  | F-W13 | decode @612 | 3.8 (4.874) | 38.9 (0.479) |
+
+  After rebasing the merged review fixes, decode is 31.667 / 38.920 tok/s @612 (previous F13 branch: 31.616 / 38.597).
+  Both still pass without exceptions; the original before-column is retained as a historical baseline.
+  Rates are tokens/s. Exact weight-file bytes are documented, not used as a resident-weight assertion:
+  the harness's file-size check compares only device weights, excluding streamed tiers and including cache copies.
 - Siblings (not shortlist models) are hand-written specs (`models.ts`) whose dims come from the real HF config.json;
   approximations (gpt-oss attention sinks and expert biases, GLM partial RoPE, the Qwen3-Next shared-expert gate) are
   listed on each spec. No 2-node DGX Spark report exists; the 4-node ones are used.
@@ -229,7 +254,7 @@ Halo builds).
   now pays its softmax (exp on the SFU, overlapped with the MMAs, [§7 "Attention softmax"](simulation-model.md#attention-softmax)),
   and Apple decode GEMMs of one token row take the GEMV path. Only Apple rows moved (the table above: lm-28, lm-34,
   web-12, web-14, web-26 decode; fresh rows F-LM25/26/27/53/54 decode by +0.1 % to +25 % (F-LM54 249 → 312 tok/s),
-  F-W13 decode 4.874 → 4.873, F-LM53 prefill +0.01 %); the datacenter prompts here are too short for the softmax to
+  F-W13 decode 4.874 → 4.873 before the F13 input correction above, F-LM53 prefill +0.01 %); the datacenter prompts here are too short for the softmax to
   bind. Every check keeps
   its verdict.
 - **No report was traced to a wrong hardware number.** The

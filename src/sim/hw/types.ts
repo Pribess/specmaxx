@@ -398,6 +398,20 @@ export interface NvmeSpec {
   capacityBytes: number;
   /** Datasheet sequential read (large blocks, deep queue). Unit: B/s. */
   seqReadBandwidthBytesPerSec: number;
+  /**
+   * Opt-in low-concurrency large-read scenario; absent means no measured fraction.
+   * A 1 MiB QD1 measurement is pessimistic for 10–20 MB experts (2 MB QD3 can reach 91–95%).
+   */
+  sustainedRead?: {
+    /** Low-QD read rate / same-run deep-queue sequential rate. Dimensionless, in (0, 1]. */
+    fraction: number;
+    /** Minimum individual read size to apply this scenario. Unit: bytes. */
+    blockBytes: number;
+    /** Queue depth per thread of the measurement (not the deployment's queue cap). Count. */
+    queueDepth: number;
+    /** Submission threads of the measurement. Count. */
+    threads: number;
+  };
   /** Random 4 KiB read latency at QD1 (1 / QD1 IOPS when only the IOPS is published). Unit: seconds. */
   randomReadLatencySec: number;
   /**

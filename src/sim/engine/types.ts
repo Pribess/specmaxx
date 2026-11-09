@@ -104,6 +104,12 @@ export interface OffloadConfig {
    */
   queueDepth?: number;
   /**
+   * SSD large-read bandwidth scenario: absent or 'datasheet' preserves the rated B/s ceiling;
+   * 'sustained' applies the drive's measured low-QD fraction to reads at least its measured block size.
+   * Small table reads and host RAM are unchanged; missing data warns and uses datasheet bandwidth.
+   */
+  ssdReadRate?: 'datasheet' | 'sustained';
+  /**
    * Prefetch accuracy p: the predictor's recall one layer ahead, the share of the needed routed experts it picks from
    * the previous layer's hidden state. While a stage computes, the link copies predicted experts; a share p of them are
    * needed, the rest of the misses are copied after the router, on the critical path.

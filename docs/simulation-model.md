@@ -918,6 +918,9 @@ offloaded no result depends on them.
   that condition (or an estimate); `readGranularityBytes` 4096 (one logical block); `linkBandwidthBytesPerSec?`
   the slot ceiling when it binds below the drive (Gen4 x4 = 7.20 GB/s payload). Datasheet ceilings, not achieved rates.
   Apple SSDs have no datasheet: their numbers rest on crowd measurements (`kind: 'community'`).
+  `sustainedRead?: { fraction, blockBytes, queueDepth, threads }` records low-QD / same-run deep-queue large-read
+  bandwidth (dimensionless), measured block size (bytes), and measurement queue/thread counts. It affects only
+  the opt-in SSD read-rate scenario (§12); absent data warns and falls back to the datasheet rate.
 - **Host link**: `hostPcieLink(generation, lanes)` = GT/s × lanes × 128/130 ÷ 8 × 256/280 per direction (Gen3 8,
   Gen4 16, Gen5 32 GT/s per lane; the payload efficiency above), the same formula as the device-to-device PCIe links
   (Gen5 x16 = 57.614 GB/s), α = 1 µs
@@ -2216,9 +2219,11 @@ storage tiers", resolved only when something is off-device; each default warns:
 R          = Σ_i count_i                                      read requests (expected, real)
 bytes_tier = Σ_i count_i·ceil(bytes_i / gran)·gran            every read rounded up to the tier's granularity
 α_path     = α_tier + α_link                                  latencies add (α_link = 0 on unified memory)
+B_i        = NVMe sustained and bytes_i ≥ blockBytes: min(f_sus·B_seq, B_slot); otherwise B_tier
+tier       = Σ_i count_i·ceil(bytes_i/gran)·gran / (B_i/n_stream)
 service    = max( (R − 1)·α_tier / QD,                        Little's law, QD outstanding requests
                   R / (IOPS / n_stream),                      SSD request rate (rated SSDs only)
-                  bytes_tier / (B_tier / n_stream),           tier bandwidth
+                  tier,                                      tier bandwidth by read class
                   usefulBytes / B_link,                       this device's link (not shared)
                   [NVMe, dedicated] bytes_tier / (B_ram / (2·n_stream)) )   host RAM staging: written and read once
 t_path     = α_path + service
@@ -2229,6 +2234,14 @@ or `min(seqRead, linkBandwidth)`; `QD = min(queueDepth ?? maxOutstanding, maxOut
 across requests and chunks, so the throughput terms take the max. The op's `transferLatencySec = α_path`,
 `transferBandwidthSec = service`, `sec = t_path`, `bound = 'transfer'`. Documented approximation: the DMA write
 into device memory is not charged to the device's memory bandwidth (≤ `B_link/memBW`, ≈ 3.5% on an RTX 5090).
+
+**SSD read rate** (`OffloadConfig.ssdReadRate`, resolved in `engine/host.ts: transferPath`):
+absent or `'datasheet'` preserves the original result bit for bit. `'sustained'` applies the preset's fraction
+before the slot cap, to individual reads at least `blockBytes`, whether random experts or streamed whole layers.
+Small table rows, host RAM, IOPS, Little's law, links and staging are unchanged. Measurement QD/threads describe
+the fraction; they do not replace deployment QD. This is a measured scenario, not a tighter proven bound.
+The presets use 1 MiB QD1 / QD8 ratios; they are pessimistic for 10–20 MB expert reads
+(2 MB QD3 reaches 91–95% in CDRLabs' 990 PRO/T705/9100 PRO tests). No thermal or engine-overhead model is added.
 
 **Sharing** (`stageNStream, nStream, streamSlots, stageDevicesOnNode`): a tier is shared by its concurrent
 consumers on the node. `consumers(s)` = devices of stage s on the node (rank layout of §5) if stage s has a

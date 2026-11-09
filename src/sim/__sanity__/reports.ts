@@ -2923,6 +2923,7 @@ export const REPORTS: BenchmarkReport[] = [
     },
   },
   // SSD offload; collection row F-W12
+  // After merged review fixes: decode 31.667 tok/s @612, report/sim 0.321 (datasheet); asserted below.
   {
     id: 'F-W12',
     sourceUrl: 'https://argonautlabs.ai/research/apple-silicon-results.html',
@@ -2941,35 +2942,40 @@ export const REPORTS: BenchmarkReport[] = [
     decode: {
       tokensPerSec: 10.18,
       kind: 'perSequence',
-      check: {
-        mode: 'exception',
-        reason:
-          'Possible sim underestimate: uniform cache-hit default misses real expert locality; measured hit rate and exact ds4 Q4 module layout are unknown. Cache size is reported, not fitted; see docs/review/practicality-review.md §2/§3.',
-      },
+      check: { mode: 'assert' },
     },
     caveats:
-      "40 layers ×384 experts in fixture; 3688 cached expert slots means f=3688/15360. Hit rate not reported: uniform default, prefetch default 0.8; NOT fitted to observed throughput. Q4 storage represented at 4.5 bpw. Steady decode excludes first step; engine model uses midpoint across 200 generated tokens. Page's 552B/518GB label is not a verified weight-file size.",
+      'Checkpoint antirez/deepseek-v4.1-flash-gguf / DeepSeek-V4.1-Flash-Q4.gguf: 518,596,067,328 B (HF listing/header). Routed Q4_K 4.5 bpw; attention/shared/head Q8_0 8.5 bpw; token_embd F16. Engram tables stay on NVMe as 264-B interleaved rows. h≈0.933 derived from 3.207–3.265 GB/s device reads / 10.18 tok/s / 19,906,560 B per expert; upstream OS-cache help cannot be separated. Cache slots reported, not fitted. One Italian prompt after prefill seeding, 200 generated tokens, midpoint @612. Datasheet SSD rate retained; remaining software gap uses only 25–35% of drive bandwidth. Sources: https://github.com/antirez/ds4/tree/bd66c402 and https://github.com/argonautlabsai/ds4-argodrive/tree/v41-stack-20260927/argodrive/candidates/2026-09-27-ladder',
     input: {
       model: { kind: 'hf', repoId: 'deepseek-ai/DeepSeek-V4.1-Flash' },
       quant: {
         kind: 'preset',
-        preset: ggufBpw(4.5, 'Q4 block-storage surrogate; exact ds4 module mix unpublished'),
+        preset: {
+          weights: bpwFormat(8.5),
+          modules: { routed_experts: bpwFormat(4.5) },
+          embeddings: { dtype: 'fp16' },
+          lmHead: bpwFormat(8.5),
+          note: 'ds4 GGUF: Q4_K routed experts, Q8_0 attention/shared/head, F16 token_embd',
+        },
       },
       numerics: LLAMACPP_METAL,
       hardware: { deviceId: 'apple-m5-max-40c', host: { ssd: APPLE_SSD_M5_PRO_MAX } },
       workload: { batch: 1, promptLen: 512, genLen: 200, contextDepth: 512 },
       deployment: {
         offload: {
+          ssdReadRate: 'datasheet',
+          lookupTables: { tier: 'nvme', scaleLayout: 'interleaved' },
           routedExperts: {
             tier: 'nvme',
             residentFraction: 3688 / (40 * 384),
-            hitRatio: { kind: 'uniform' },
+            hitRatio: { kind: 'custom', h: 0.933 },
           },
         },
       },
     },
   },
   // SSD offload; collection row F-W13
+  // After merged review fixes: decode 38.920 tok/s @612, report/sim 0.479 (datasheet); asserted below.
   {
     id: 'F-W13',
     sourceUrl: 'https://argonautlabs.ai/research/apple-silicon-results.html',
@@ -2988,29 +2994,33 @@ export const REPORTS: BenchmarkReport[] = [
     decode: {
       tokensPerSec: 18.66,
       kind: 'perSequence',
-      check: {
-        mode: 'exception',
-        reason:
-          'Possible sim underestimate: uniform cache-hit default misses real expert locality/read-pattern improvements; exact ds4 Q4 module layout and measured hit rate are unknown. No acceptance or cache parameter fitted; see docs/review/practicality-review.md §2/§3.',
-      },
+      check: { mode: 'assert' },
     },
     caveats:
-      "40 layers ×384 experts in fixture; 4600 cached expert slots means f=4600/15360. Hit rate not reported: uniform default, prefetch default 0.8; NOT fitted to observed throughput. Q4 storage represented at 4.5 bpw. Steady decode excludes first step; engine model uses midpoint across 200 generated tokens. Page's 552B/518GB label is not a verified weight-file size.",
+      'Checkpoint antirez/deepseek-v4.1-flash-gguf / DeepSeek-V4.1-Flash-Q4.gguf: 518,596,067,328 B (HF listing/header). Routed Q4_K 4.5 bpw; attention/shared/head Q8_0 8.5 bpw; token_embd F16. Engram tables stay on NVMe as 264-B interleaved rows. h=0.9491 from 12.216 misses/token / 240 lookups (engine counter, v41-stack-20260927 ladder results). Cache slots reported, not fitted. One Italian prompt after prefill seeding, 200 generated tokens, midpoint @612. Datasheet SSD rate retained; remaining software gap uses only 25–35% of drive bandwidth. Sources: https://github.com/antirez/ds4/tree/bd66c402 and https://github.com/argonautlabsai/ds4-argodrive/tree/v41-stack-20260927/argodrive/candidates/2026-09-27-ladder',
     input: {
       model: { kind: 'hf', repoId: 'deepseek-ai/DeepSeek-V4.1-Flash' },
       quant: {
         kind: 'preset',
-        preset: ggufBpw(4.5, 'Q4 block-storage surrogate; exact ds4 module mix unpublished'),
+        preset: {
+          weights: bpwFormat(8.5),
+          modules: { routed_experts: bpwFormat(4.5) },
+          embeddings: { dtype: 'fp16' },
+          lmHead: bpwFormat(8.5),
+          note: 'ds4 GGUF: Q4_K routed experts, Q8_0 attention/shared/head, F16 token_embd',
+        },
       },
       numerics: LLAMACPP_METAL,
       hardware: { deviceId: 'apple-m5-max-40c', host: { ssd: APPLE_SSD_M5_PRO_MAX } },
       workload: { batch: 1, promptLen: 512, genLen: 200, contextDepth: 512 },
       deployment: {
         offload: {
+          ssdReadRate: 'datasheet',
+          lookupTables: { tier: 'nvme', scaleLayout: 'interleaved' },
           routedExperts: {
             tier: 'nvme',
             residentFraction: 4600 / (40 * 384),
-            hitRatio: { kind: 'uniform' },
+            hitRatio: { kind: 'custom', h: 0.9491 },
           },
         },
       },
