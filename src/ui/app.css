@@ -191,9 +191,11 @@ details.advanced > summary::before,
   gap: var(--gap-field) var(--gap-field-inline);
 }
 .fields.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.fields.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .fields .field + .field { margin-top: 0; }
 @container inputs (max-width: 340px) {
-  .fields.two { grid-template-columns: minmax(0, 1fr); }
+  .fields.two,
+  .fields.three { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Label and its "?" icon on one 20px line; the icon's 24px hit box has negative margins, so it never makes the

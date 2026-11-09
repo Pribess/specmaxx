@@ -19,6 +19,7 @@ import {
 import { applyDeviceModifiers } from '../hw/modifiers';
 import { modelSpecErrors } from '../ir/validateModel';
 import { lowerBlock, type LoweringContext } from '../lower/lower';
+import { moeParallelErrors } from '../lower/moe';
 import { checkPlacement, expertTpCollectivePath } from './placement';
 import type { LayerRange, SimInput } from './types';
 
@@ -189,7 +190,9 @@ function inRange(x: number, lo: number, hi: number, hiOpen = false): boolean {
  *
  * Speculative decoding: rejected with pp > 1 (§3.6, {@link SPEC_DEC_PP_ERROR}); `draftLength` k an integer in
  * 1..16; `'mtp'` needs `model.draft.kind === 'mtp'`; a block method needs a `drafter` of the same method with
- * `k + 1 ≤ blockSize`; acceptance i.i.d. α in [0, 1), per-position α_j in [0, 1] (non-empty).
+ * `k + 1 ≤ blockSize`; acceptance i.i.d. α in [0, 1), per-position α_j in [0, 1] (non-empty); the drafter's own MoE
+ * blocks (MTP layers, a block drafter's `moeLayers`) follow the same expert-parallel rules as the target's
+ * (`moeParallelErrors`: their expert count may differ, e.g. DeepSeek-V4.1 DSpark's 128 against 384).
  */
 export function deploymentErrors(input: SimInput): string[] {
   const { model, parallel, hardware } = input;
@@ -279,6 +282,18 @@ export function deploymentErrors(input: SimInput): string[] {
         errors.push(
           `deployment.speculative.draftLength ${k}: k + 1 must not exceed the drafter's blockSize (${drafter.blockSize})`,
         );
+      }
+    }
+    // The drafter's MoE blocks lower with the same parallel config: each must satisfy moeParallelErrors (E % ep == 0,
+    // and tp % ep == 0 or the mode-B rule), else simulate would throw while lowering the draft layers.
+    const draftLayers =
+      spec.method === 'mtp'
+        ? model.draft?.kind === 'mtp' ? model.draft.layers : []
+        : spec.drafter?.spec.moeLayers ?? [];
+    for (const layer of draftLayers) {
+      for (const block of layer.blocks) {
+        if (block.kind !== 'moe') continue;
+        for (const e of moeParallelErrors(block, parallel)) errors.push(`deployment.speculative drafter ${layer.name}: ${e}`);
       }
     }
     const acc = spec.acceptance;

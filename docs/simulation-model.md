@@ -970,6 +970,9 @@ offloaded no result depends on them.
 The divisibility rules (heads, KV heads, widths over tp; experts and MoE modes over ep) are checked by lowering
 each block once for a one-token step: `src/sim/engine/validate.ts: blockShardingErrors` (called by
 `validateInput`; exported so the UI can attribute TP / EP errors to their fields).
+The UI fixes dp = 1 (`src/ui/state/parallelism.ts: effectiveParallel`), so only MoE mode A is reachable there: valid
+ep = the divisors of tp that divide E (and pass placement), the device count is `tp·pp`, and a dense model runs with
+ep = 1. Under mode A EP adds no all-to-all ([MoE modes A/B](#moe-modes-ab); `src/sim/engine/ep.test.ts`).
 
 ### TP sharding
 
@@ -1211,6 +1214,11 @@ distinct experts" and "EP load imbalance" below). Valid iff `E % ep == 0` and (`
   top-k → [`latent_in`] → grouped `gate_up (batch a, weights U, m mE, n (gated?2:1)·fe/etp, k l)` → act →
   `down (n l)` → combine (`a·mE·l`, writes `T·l·reduceBpe`) → [`latent_all_reduce` → `latent_norm`] →
   [`latent_out`] → shared experts as one dense MLP of `S·fs` sharded by tp → **one** all_reduce(tp) of `T·h`.
+  No token moves: the expert outputs are partial sums of the layer output and ride that same all-reduce, so at
+  dp = 1 (the UI) ep = tp has the same collectives as ep = 1 (except the expert-TP pair of a split expert-output
+  norm, below, which etp = 1 removes). What EP changes is per device: `A_max` instead of an even fe/tp slice of
+  every row (FLOP ×≈ρ in prefill), activations of its own `a·mE` rows only, and whole experts in decode
+  (`src/sim/engine/ep.test.ts`).
 - **Mode B**: the EP group spans p replicas; each device routes its slice `Ts = ceil(T/tp)`; `A = Ts·k`,
   `A_max` as in mode A, `etp = 1`. Router → top-k → [`latent_in`] → `all_to_all(ep)` dispatch `Ts·k·l·bpe(act)` →
   experts (grid and weights as in mode A) → `all_to_all(ep)` combine `Ts·k·l·reduceBpe` → combine (`Ts·k·l`) →
@@ -1293,7 +1301,7 @@ reads `U(8) = 51.6` experts per layer instead of 64 (−19.3 % expert bytes).
 ### EP load imbalance
 
 `lower/moe.ts: epImbalance, DEFAULT_EP_IMBALANCE, moeRouting`; `ParallelConfig.epImbalance` (engine-level; the UI
-keeps ep = 1). The step waits for the busiest device of the EP group, which gets more than the mean share:
+sets ep, not ρ). The step waits for the busiest device of the EP group, which gets more than the mean share:
 
 ```
 ρ     = max/mean (token, expert) assignments per device     1 at ep = 1; default 1.2 at ep > 1
@@ -2505,8 +2513,10 @@ Deployment knob `SimInput.deployment.speculative` (design: `docs/design/offload-
 default: absent or `{}` lowers the plain decode (`qLen 1`), appends no `draft.*` layer and gives bit-identical
 results. With it on, the result is the hardware/math bound given the stated acceptance: the engine adds the GEMM,
 attention and state work the draft and verify passes physically need, nothing else (no scheduler, tree, or
-confidence policy). Rejected with pp > 1 (`validate.ts: SPEC_DEC_PP_ERROR`). Worked example W2 and U-8, U-14,
-U-18 are tests in `engine/e2e-specdec.test.ts`.
+confidence policy). Rejected with pp > 1 (`validate.ts: SPEC_DEC_PP_ERROR`). Works with ep > 1: the drafter's MoE
+layers lower with the same parallel config, and `deploymentErrors` checks their expert count against ep like the
+target's (it may differ: DeepSeek-V4.1 DSpark has 128 experts against 384; `engine/ep.test.ts`). Worked example W2
+and U-8, U-14, U-18 are tests in `engine/e2e-specdec.test.ts`.
 
 ### Draft spec
 

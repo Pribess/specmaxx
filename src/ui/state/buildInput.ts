@@ -10,7 +10,7 @@ import { REF_DENSE_8B } from '../../sim/models/reference';
 import type { HfMapResult, QuantDefaults } from '../../sim/models/hf/types';
 import type { AppState, ModelChoice } from './appState';
 import { resolveHardware, type ResolvedHardware } from './hardware';
-import { fieldIssues, hasErrors, type FieldIssue } from './parallelism';
+import { effectiveParallel, fieldIssues, hasErrors, type FieldIssue } from './parallelism';
 import { REFERENCE_QUANT_DEFAULTS, applyQuantOverride } from './quant';
 import { deploymentConfig, type DrafterStatus } from './deploymentInput';
 
@@ -100,13 +100,14 @@ export function buildSimInput(state: AppState, loaded: LoadedModel | null, draft
     return { kind: 'issues', issues: [{ field: 'general', level: 'error', message: (e as Error).message }] };
   }
   const quant = applyQuantOverride(loaded.quant.quant, state.quant, loaded.quant.exl3);
-  const issues = [...fieldIssues(loaded.model, quant, state.parallel, state.workload, hardware.topology), ...deployment.issues];
+  const parallel = effectiveParallel(state.parallel, loaded.model);
+  const issues = [...fieldIssues(loaded.model, quant, parallel, state.workload, hardware.topology), ...deployment.issues];
   if (hasErrors(issues)) return { kind: 'issues', issues, hardware };
   const input: SimInput = {
     model: loaded.model,
     quant,
-    // DP and EP are not user-facing: always 1.
-    parallel: { tp: state.parallel.tp, pp: state.parallel.pp, dp: 1, ep: 1 },
+    // DP is not user-facing (always 1); EP is the user's on a MoE model, else 1.
+    parallel: { tp: parallel.tp, pp: parallel.pp, dp: 1, ep: parallel.ep },
     workload: state.workload,
     hardware: hardware.stack,
     ...(Object.keys(state.options).length > 0 ? { options: state.options } : {}),

@@ -110,6 +110,31 @@ for (const size of ['desktop', 'phone'] as const) {
       await page.evaluate(() => scrollTo(0, 0));
       await page.locator('section.hero').screenshot({ path: name('storage-hero') });
     });
+    test(`parallelism moe ${size} ${colorScheme}`, async ({ page }) => {
+      await open(page, size, colorScheme);
+      const name = (s: string) => `${DIR}/parallelism-${s}-${size}-${colorScheme}.png`;
+      const panel = page.locator('details.panel', {
+        has: page.locator('> summary', { hasText: 'Parallelism' }),
+      });
+      // A MoE model on 4 GPUs with TP 4 and EP 2: the EP field shows next to TP and PP.
+      await page.goto('/?m=Qwen/Qwen3.8-Flash-Next&w=fp8_e4m3&n=4&tp=4&ep=2');
+      await expect(page.getByTestId('decode-tps')).toHaveText(/[1-9]/);
+      if ((await panel.getAttribute('open')) === null) await panel.locator('> summary').click();
+      await expect(panel.getByText('Valid EP: 1, 2, 4')).toBeVisible();
+      // The sticky duplicate rates would overlay the element crop.
+      await page.addStyleTag({ content: '.compact-results { visibility: hidden !important }' });
+      await page.evaluate(() => document.fonts.ready);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
+      await panel.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+      await page.waitForTimeout(50);
+      await panel.screenshot({ path: name('panel') });
+      // The EP help, on keyboard focus.
+      await panel.getByRole('button', { name: 'About EP' }).focus();
+      await expect(page.getByRole('tooltip').filter({ hasText: 'must divide TP' })).toBeVisible();
+      await page.screenshot({ path: name('ep-help') });
+    });
     test(`hardware setups ${size} ${colorScheme}`, async ({ page }) => {
       await open(page, size, colorScheme);
       const name = (s: string) => `${DIR}/hardware-${s}-${size}-${colorScheme}.png`;

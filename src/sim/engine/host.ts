@@ -64,7 +64,7 @@ export function resolveOffload(
     };
     if (ep > 1) {
       warnings.push(
-        'offload: ep > 1 — needed experts per device use the with-replacement approximation U_dev = E_loc·(1 − (1 − 1/E_loc)^A)',
+        'offload: with EP > 1, the experts each GPU must fetch per step are estimated as if every routed pick were independent (U_dev = E_loc·(1 − (1 − 1/E_loc)^A))',
       );
     }
     const skewed = experts.hitRatio.kind === 'skewed_classic' || experts.hitRatio.kind === 'skewed_fine_grained';

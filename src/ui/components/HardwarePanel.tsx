@@ -51,7 +51,7 @@ export function HardwarePanel(props: Props) {
       const quant = applyQuantOverride(loaded.quant.quant, next.quant, loaded.quant.exl3);
       props.dispatch({
         type: 'setParallel',
-        parallel: chooseDegrees(loaded.model, quant, next.workload, topology),
+        parallel: chooseDegrees(loaded.model, quant, next.workload, topology, next.parallel.ep),
       });
     } catch {
       // Unresolvable hardware: the build step reports it.

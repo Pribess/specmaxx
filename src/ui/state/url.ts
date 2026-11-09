@@ -15,7 +15,7 @@
  * | `il`, `xl` | intra / inter link preset ids (`linkPresetId`; renamed ids load through `LEGACY_LINK_IDS`) | `il=pcie-5-0-x16-direct-p2p` |
  * | `fab` | cabling between machines: `switched`, `mesh`, `mesh2` (2 cables per pair), `ring`, `chain` (absent: the default for the link and counts) | `fab=ring` |
  * | `x`, `xi`, `xe` | spec edits on device / intra link / inter link, `path:value` comma list, SI units | `x=memory.bandwidthBytesPerSec:2e12` |
- * | `tp`, `pp` | parallel degrees (old `dp` / `ep` are ignored: both fixed at 1) | `tp=2` |
+ * | `tp`, `pp`, `ep` | parallel degrees (old `dp` is ignored: fixed at 1; `ep` applies to MoE models only) | `tp=2&ep=2` |
  * | `b`, `p`, `c` | batch, prefill length (default 8192), decode context (default 8192) | `b=8` |
  * | `pc` | prefill chunk of the memory fit, tokens (default 8192) | `pc=2048` |
  * | `ov`, `fu`, `ar` | overlap, elementwise fusion, all-reduce algorithm | `ov=none` |
@@ -197,7 +197,7 @@ export function encodeState(s: AppState): string {
   // Percent with at most 4 decimals, so 0.9 encodes as 90 (not 90.00000000000001).
   if (hw.gpuUsableFraction !== undefined) put('gpu', Math.round(hw.gpuUsableFraction * 1e6) / 1e4);
   if (hw.runtimeReserveBytes !== undefined) put('rr', hw.runtimeReserveBytes / 1e9);
-  for (const key of ['tp', 'pp'] as const) if (s.parallel[key] !== 1) put(key, s.parallel[key]);
+  for (const key of ['tp', 'pp', 'ep'] as const) if (s.parallel[key] !== 1) put(key, s.parallel[key]);
   const w = s.workload;
   const dw = DEFAULT_STATE.workload;
   if (w.batch !== dw.batch) put('b', w.batch);
@@ -474,10 +474,9 @@ export function decodeState(search: string): DecodedState {
 
   // Parallelism and workload.
   const parallel = { ...DEFAULT_STATE.parallel };
-  // Old URLs may carry dp / ep; they are accepted and forced to 1.
+  // Old URLs may carry dp; it is accepted and forced to 1.
   get('dp');
-  get('ep');
-  for (const key of ['tp', 'pp'] as const) {
+  for (const key of ['tp', 'pp', 'ep'] as const) {
     const v = get(key);
     if (v === undefined) continue;
     const parsed = parseInteger(v, 1, MAX_VALUE);
