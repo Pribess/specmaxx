@@ -99,3 +99,18 @@ test('phone: headline, figures and memory first, then inputs, then the analysis'
   await expect.poll(async () => (await mini.boundingBox())!.y).toBe(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
+
+for (const width of [360, 390]) {
+  for (const use of ['prose', 'code', 'reasoning', 'agentic']) {
+    test(`phone ${width}px: the spec-dec chip (${use}, hypothetical drafter) does not overflow the page`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 844 });
+      await mockHf(page);
+      await page.goto(`/?sd=dspark&sdr=hyp&sdu=${use}`);
+      await expect(page.getByTestId('decode-tps')).toHaveText(/[1-9]/);
+      await expect(page.locator('.result-chip').first()).toContainText(`· ${use}`);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    });
+  }
+}

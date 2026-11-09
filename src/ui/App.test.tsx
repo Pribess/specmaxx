@@ -621,7 +621,7 @@ describe('speculative-decoding acceptance hints', () => {
     expect((k as HTMLInputElement).value).toBe('7');
     expect(within(section).queryByText(/fitted at k/)).toBeNull();
     fireEvent.change(k, { target: { value: '5' } });
-    expect(await within(section).findByText('⚠ fitted at k = 7')).toBeTruthy();
+    expect(await within(section).findByText('⚠ fitted at k=7')).toBeTruthy();
     fireEvent.change(k, { target: { value: '7' } });
     await waitFor(() => expect(within(section).queryByText(/fitted at k/)).toBeNull());
     // A user α is not a preset: no warning at any k.
@@ -634,7 +634,7 @@ describe('speculative-decoding acceptance hints', () => {
     mount();
     await screen.findByText(/qwen:/);
     const section = await screen.findByTestId('specdec-section');
-    expect(await within(section).findByText('from DFlash v1 · ⚠ fitted at k = 15')).toBeTruthy();
+    expect(await within(section).findByText('from DFlash v1 · ⚠ fitted at k=15')).toBeTruthy();
   });
   it('labels a pooled preset with the k of its runs, with ⚠ at any other k', async () => {
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B&sd=dspark&sdr=hyp&sdu=code');
@@ -642,9 +642,9 @@ describe('speculative-decoding acceptance hints', () => {
     await screen.findByText(/qwen:/);
     const section = await screen.findByTestId('specdec-section');
     // default k 7 is one of the pooled runs' k (paper k 7, Inco k 15)
-    expect(await within(section).findByText('pooled from k = 7, 15')).toBeTruthy();
+    expect(await within(section).findByText('pooled from k=7, 15')).toBeTruthy();
     fireEvent.change(within(section).getByLabelText('Draft length k'), { target: { value: '5' } });
-    expect(await within(section).findByText('⚠ pooled from k = 7, 15')).toBeTruthy();
+    expect(await within(section).findByText('⚠ pooled from k=7, 15')).toBeTruthy();
   });
 });
 

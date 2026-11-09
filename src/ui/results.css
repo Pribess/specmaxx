@@ -142,19 +142,21 @@
 .result-chip {
   display: inline-flex;
   align-items: center;
-  height: 24px;
-  padding: 0 var(--space-2);
+  min-height: 24px;
+  padding: 2px var(--space-2);
   border-radius: var(--control-radius);
   background: var(--mist);
   color: var(--ink);
   font-size: var(--type-meta);
-  white-space: nowrap;
+  /* A long chip (spec-dec with use case and drafter) wraps inside itself on phones. */
+  min-width: 0;
 }
 /* A chip and, on the last one, the "?": kept on one line together. */
 .result-chip-item {
   display: inline-flex;
   align-items: center;
   gap: var(--gap-label-icon);
+  max-width: 100%;
 }
 .theory {
   margin: var(--space-5) 0 0;

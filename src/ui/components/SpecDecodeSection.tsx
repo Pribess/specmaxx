@@ -102,13 +102,13 @@ export function SpecDecodeSection({
   const extrapolatedFrom = spec
     ? presetDraftLengthExtrapolation(spec.method, spec.useCase ?? 'prose', k, draft, spec.alpha)
     : undefined;
-  // A pooled preset names the k of its runs once ("pooled from k = 7, 15"), with ⚠ when k is none of them.
+  // A pooled preset names the k of its runs once ("pooled from k=7, 15"), with ⚠ when k is none of them.
   const alphaHint =
     preset?.basis === 'pooled'
       ? `${extrapolatedFrom ? '⚠ ' : ''}${basisHint(preset)}`
       : [
           preset ? basisHint(preset) : undefined,
-          extrapolatedFrom ? `⚠ fitted at k = ${extrapolatedFrom.join(', ')}` : undefined,
+          extrapolatedFrom ? `⚠ fitted at k=${extrapolatedFrom.join(', ')}` : undefined,
         ]
           .filter(Boolean)
           .join(' · ');
@@ -210,7 +210,7 @@ function basisHint(preset: AcceptancePreset): string | undefined {
     case 'measured':
       return undefined;
     case 'pooled':
-      return `pooled from k = ${pooledDraftLengths(preset).join(', ')}`;
+      return `pooled from k=${pooledDraftLengths(preset).join(', ')}`;
     case 'carried_over':
       return 'interpolated';
     case 'borrowed':

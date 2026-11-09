@@ -61,7 +61,7 @@ for (const size of ['desktop', 'phone'] as const) {
         await page.setViewportSize(before);
       };
 
-      // Speculative decoding: MTP k = 3 on the default model (an MTP head with any depth), FP8 weights on
+      // Speculative decoding: MTP k=3 on the default model (an MTP head with any depth), FP8 weights on
       // 2 × RTX 5090 with TP 2, so the model fits.
       await load('?w=fp8_e4m3&n=2&tp=2&sd=mtp&sdk=3', ['Workload']);
       await expect(page.getByTestId('memory-verdict').first()).toHaveClass(/memory-fits/);

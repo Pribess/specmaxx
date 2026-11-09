@@ -58,6 +58,22 @@ export function rigDeviceName(hardware: ResolvedHardware | undefined, fallback =
 
 const METHOD_NAMES = { mtp: 'MTP', dflash2: 'DFlash 2', dspark: 'DSpark' } as const;
 
+/**
+ * The spec-dec chip: `spec-dec: off`, `spec-dec: MTP, k=3`, or `spec-dec: DSpark, k=7 · code` (block methods name the use case
+ * preset, prose by default, but not a custom acceptance), plus ` · hypothetical drafter` when that applies.
+ */
+export function specDecChipText(
+  speculative: ResultSummary['speculative'],
+  choice?: { useCase?: string; alpha?: number },
+): string {
+  if (!speculative) return 'spec-dec: off';
+  const parts = [`${METHOD_NAMES[speculative.method]}, k=${speculative.draftLength}`];
+  // MTP keeps its compact form; a block method names its preset (prose when none is chosen), not a custom α.
+  if (speculative.method !== 'mtp' && choice && choice.alpha === undefined) parts.push(choice.useCase ?? 'prose');
+  if (speculative.hypothetical) parts.push('hypothetical drafter');
+  return `spec-dec: ${parts.join(' · ')}`;
+}
+
 export function ResultHero({
   result,
   state,
@@ -94,6 +110,10 @@ export function ResultHero({
   const linkName = [intraName, interName].filter((n) => n !== undefined).join(' and ');
   const offload = result?.offload ?? [];
   const spec = result?.decode.speculative;
+  const chips = [
+    { key: 'spec-dec', text: specDecChipText(result?.speculative, state.deployment.specDec) },
+    ...offload.map((p) => ({ key: `${p.group}-${p.layers?.from ?? 0}`, text: offloadChipText(p) })),
+  ];
   // The count and "×" stay on one line with the device name's first word (never "on 2 ×" / "NVIDIA …").
   const [deviceFirst, ...deviceRest] = rigDeviceName(built.hardware, state.hw.deviceId).split(' ');
   return (
@@ -130,16 +150,13 @@ export function ResultHero({
                           {helpLines([
                             ...(result.speculative
                               ? [
-                                  `${METHOD_NAMES[result.speculative.method]}, draft length k = ${result.speculative.draftLength}.`,
+                                  `${METHOD_NAMES[result.speculative.method]}, k=${result.speculative.draftLength}.`,
                                 ]
                               : []),
                             `${spec.expectedTokensPerStep.toFixed(2)} tokens accepted per step on average (incl. the bonus token).`,
                             `One step: draft ${formatSeconds(spec.draftSec)} + verify ${formatSeconds(spec.verifySec)}.`,
                           ])}
                         </HelpIcon>
-                        {result.speculative?.hypothetical && (
-                          <span className="result-chip">hypothetical drafter</span>
-                        )}
                       </span>
                     )}
                   </div>
@@ -192,25 +209,23 @@ export function ResultHero({
                   </small>
                 </div>
               ))}
-              {offload.length > 0 && (
-                <ul className="result-chips" aria-label="Offloaded weights">
-                  {offload.map((p, i) => (
-                    // The "?" shares the last chip's item, so it never wraps onto a line of its own.
-                    <li className="result-chip-item" key={`${p.group}-${p.layers?.from ?? 0}`}>
-                      <span className="result-chip">{offloadChipText(p)}</span>
-                      {i === offload.length - 1 && (
-                        <HelpIcon term="Offloaded weights">
-                          {helpLines([
-                            'Weight groups kept in host RAM or on an SSD.',
-                            'They are read over the host link every step.',
-                            'h is how often a needed expert is already in device memory.',
-                          ])}
-                        </HelpIcon>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <ul className="result-chips" aria-label="Result settings">
+                {chips.map((chip, i) => (
+                  // The "?" shares the last chip's item, so it never wraps onto a line of its own.
+                  <li className="result-chip-item" key={chip.key}>
+                    <span className="result-chip">{chip.text}</span>
+                    {i === chips.length - 1 && (
+                      <HelpIcon term="Result settings">
+                        {helpLines([
+                          'Settings that change these numbers.',
+                          'Offloaded weights are fetched from host RAM or SSD every step.',
+                          'Spec-dec shows whether decode uses a draft model, and which.',
+                        ])}
+                      </HelpIcon>
+                    )}
+                  </li>
+                ))}
+              </ul>
             </div>
             {roofline && (
               <RooflineChart
