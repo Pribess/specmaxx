@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mapHfModel } from '../../sim/models/hf';
 import type { HfApiModelInfo } from '../../sim/models/hf/types';
+import { fixtureRepoFiles } from '../../sim/models/__fixtures__/fixtures.testutil';
 import flashApi from '../../sim/models/__fixtures__/Qwen__Qwen3.8-Flash-Next.api.json?raw';
 import flashConfig from '../../sim/models/__fixtures__/Qwen__Qwen3.8-Flash-Next.config.json?raw';
 import {
@@ -13,8 +14,18 @@ import {
 import { DEFAULT_STATE, reduce, type AppState } from './appState';
 import { BUNDLED_DEFAULT_MODEL } from './bundledModel';
 import { buildSimInput, loadedFromHf, type LoadedModel } from './buildInput';
-import { normalizeDeployment, normalizeOffload } from './deployment';
-import { drafterSource, lookupTableParams, tablesOffDeviceByDesign } from './deploymentInput';
+import {
+  normalizeDeployment,
+  normalizeOffload,
+  splitTierRanges,
+  type OffloadChoice,
+} from './deployment';
+import {
+  drafterSource,
+  lookupTableParams,
+  tableLayerIndices,
+  tablesOffDeviceByDesign,
+} from './deploymentInput';
 import { defaultSsdFor, editableFields, findDevice, resolveHardware } from './hardware';
 
 const apply = (s: AppState, ...actions: Parameters<typeof reduce>[1][]) =>
@@ -56,6 +67,50 @@ describe('deployment normalizers', () => {
     expect(
       normalizeDeployment({ specDec: { method: 'dflash2', useCase: 'code', alpha: 0.8 } }),
     ).toEqual({ specDec: { method: 'dflash2', alpha: 0.8 } });
+  });
+
+  it('keep a split only with the split placement, without the default ramEnd', () => {
+    expect(
+      normalizeOffload({
+        experts: { tier: 'nvme', split: { ramLayers: 3, ramEnd: 'last' } },
+        tables: { tier: 'split', split: { ramEnd: 'first' }, scaleLayout: 'separate' },
+      }),
+    ).toEqual({
+      experts: { tier: 'nvme' },
+      // A split keeps its scale layout: there is no single default to drop.
+      tables: { tier: 'split', scaleLayout: 'separate' },
+    });
+    expect(
+      normalizeOffload({ experts: { tier: 'split', split: { ramLayers: 0, ramEnd: 'last' } } }),
+    ).toEqual({ experts: { tier: 'split', split: { ramLayers: 0, ramEnd: 'last' } } });
+    // A split reads from the SSD, so the SSD read rate stays.
+    expect(normalizeOffload({ experts: { tier: 'split' }, ssdReadRate: 'sustained' })).toEqual({
+      experts: { tier: 'split' },
+      ssdReadRate: 'sustained',
+    });
+  });
+
+  it('splitTierRanges: r of K layers in host RAM at either end; an empty side is left out', () => {
+    expect(splitTierRanges(4, 48, { ramLayers: 20 })).toEqual([
+      { tier: 'host_ram', layers: { from: 4, to: 24 } },
+      { tier: 'nvme', layers: { from: 24, to: 48 } },
+    ]);
+    expect(splitTierRanges(4, 48, { ramLayers: 20, ramEnd: 'last' })).toEqual([
+      { tier: 'nvme', layers: { from: 4, to: 28 } },
+      { tier: 'host_ram', layers: { from: 28, to: 48 } },
+    ]);
+    // Default: half, rounded down (K = 7 → 3 in RAM).
+    expect(splitTierRanges(0, 7, undefined)).toEqual([
+      { tier: 'host_ram', layers: { from: 0, to: 3 } },
+      { tier: 'nvme', layers: { from: 3, to: 7 } },
+    ]);
+    expect(splitTierRanges(0, 10, { ramLayers: 0 })).toEqual([
+      { tier: 'nvme', layers: { from: 0, to: 10 } },
+    ]);
+    // More than K: clamped to every offloaded layer.
+    expect(splitTierRanges(2, 10, { ramLayers: 99 })).toEqual([
+      { tier: 'host_ram', layers: { from: 2, to: 10 } },
+    ]);
   });
 });
 
@@ -209,17 +264,114 @@ describe('buildSimInput: deployment', () => {
     expect(built.input.hardware.host?.ram).toBe(DEFAULT_HOST_RAM);
   });
 
-  it('dense-layer offload streams layers [n, L)', () => {
+  it('removed whole-layer offload: a state that still carries `dense` places nothing for it', () => {
     const s = reduce(DEFAULT_STATE, {
       type: 'setOffload',
-      offload: { dense: { tier: 'nvme', layersOnDevice: 40 } },
+      offload: { dense: { tier: 'nvme', layersOnDevice: 40 } } as OffloadChoice,
     });
+    expect(s.deployment).toEqual({});
     const built = buildSimInput(s, BUNDLED_DEFAULT_MODEL);
     if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));
-    expect(built.input.deployment?.offload?.denseLayers).toEqual({
-      tier: 'nvme',
-      layers: { from: 40, to: BUNDLED_DEFAULT_MODEL.model.layers.length },
+    expect(built.input.deployment).toBeUndefined();
+  });
+
+  it('a host-RAM + SSD expert split becomes two rules with the same f and h; an empty side gives the object form', () => {
+    const L = FLASH.model.layers.length;
+    const config = (experts: NonNullable<OffloadChoice['experts']>) => {
+      const built = buildSimInput(
+        reduce(FLASH_STATE, { type: 'setOffload', offload: { experts } }),
+        FLASH,
+      );
+      if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));
+      return built.input.deployment?.offload?.routedExperts;
+    };
+    const cache = { residentFraction: 0.25, hitRatio: { kind: 'skewed_fine_grained' } } as const;
+    expect(
+      config({
+        tier: 'split',
+        split: { ramLayers: 10 },
+        fromLayer: 4,
+        residentFraction: 0.25,
+        hitRatio: 'skewed_fine_grained',
+      }),
+    ).toEqual([
+      { tier: 'host_ram', layers: { from: 4, to: 14 }, ...cache },
+      { tier: 'nvme', layers: { from: 14, to: L }, ...cache },
+    ]);
+    expect(config({ tier: 'split', split: { ramLayers: 10, ramEnd: 'last' } })).toEqual([
+      {
+        tier: 'nvme',
+        layers: { from: 0, to: L - 10 },
+        residentFraction: 0,
+        hitRatio: { kind: 'uniform' },
+      },
+      {
+        tier: 'host_ram',
+        layers: { from: L - 10, to: L },
+        residentFraction: 0,
+        hitRatio: { kind: 'uniform' },
+      },
+    ]);
+    // r = 0 or r = K: the single-tier object form, exactly as with that tier picked.
+    expect(config({ tier: 'split', split: { ramLayers: 0 } })).toEqual(config({ tier: 'nvme' }));
+    expect(config({ tier: 'split', split: { ramLayers: L } })).toEqual({
+      tier: 'host_ram',
+      residentFraction: 0,
+      hitRatio: { kind: 'uniform' },
     });
+    expect(config({ tier: 'split', split: { ramLayers: L - 4 }, fromLayer: 4 })).toEqual(
+      config({ tier: 'host_ram', fromLayer: 4 }),
+    );
+  });
+
+  it('a lookup-table split counts table layers; ranges cover every layer; an empty side gives the object form', () => {
+    // DeepSeek-V4.1-Flash has Engram tables at layers 1 and 14 (Qwen3.8-Flash-Next has a single table layer).
+    const id = 'deepseek-ai/DeepSeek-V4.1-Flash';
+    const mapped = mapHfModel(fixtureRepoFiles(id, { dir: '' }));
+    if (mapped.kind !== 'ok') throw new Error(mapped.kind);
+    const ds = loadedFromHf({ kind: 'hf', id }, mapped);
+    const L = ds.model.layers.length;
+    expect(tableLayerIndices(ds.model)).toEqual([1, 14]);
+    expect(tableLayerIndices(FLASH.model)).toHaveLength(1);
+    const tables = (choice: NonNullable<OffloadChoice['tables']>) => {
+      const built = buildSimInput(
+        reduce(
+          { ...DEFAULT_STATE, model: { kind: 'hf', id } },
+          { type: 'setOffload', offload: { tables: choice } },
+        ),
+        ds,
+      );
+      if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));
+      return built.input.deployment?.offload?.lookupTables;
+    };
+    // 1 of the 2 table layers in host RAM (the default half): the boundary is the 2nd table layer, 14.
+    expect(tables({ tier: 'split', scaleLayout: 'interleaved' })).toEqual([
+      { tier: 'host_ram', layers: { from: 0, to: 14 }, scaleLayout: 'interleaved' },
+      { tier: 'nvme', layers: { from: 14, to: L }, scaleLayout: 'interleaved' },
+    ]);
+    expect(tables({ tier: 'split', split: { ramLayers: 1, ramEnd: 'last' } })).toEqual([
+      { tier: 'nvme', layers: { from: 0, to: 14 } },
+      { tier: 'host_ram', layers: { from: 14, to: L } },
+    ]);
+    expect(tables({ tier: 'split', split: { ramLayers: 0 } })).toEqual(tables({ tier: 'nvme' }));
+    expect(tables({ tier: 'split', split: { ramLayers: 2 } })).toEqual({ tier: 'host_ram' });
+    // Scales pinned in host RAM apply to the SSD side only; the host-RAM side keeps its tier default (its scales are
+    // already in RAM). Other layouts apply to both sides.
+    expect(tables({ tier: 'split', scaleLayout: 'pinned_host' })).toEqual([
+      { tier: 'host_ram', layers: { from: 0, to: 14 } },
+      { tier: 'nvme', layers: { from: 14, to: L }, scaleLayout: 'pinned_host' },
+    ]);
+    expect(tables({ tier: 'split', split: { ramLayers: 2 }, scaleLayout: 'pinned_host' })).toEqual({
+      tier: 'host_ram',
+    });
+    expect(tables({ tier: 'split', split: { ramLayers: 0 }, scaleLayout: 'pinned_host' })).toEqual({
+      tier: 'nvme',
+      scaleLayout: 'pinned_host',
+    });
+    expect(tables({ tier: 'split', scaleLayout: 'separate' })).toEqual([
+      { tier: 'host_ram', layers: { from: 0, to: 14 }, scaleLayout: 'separate' },
+      { tier: 'nvme', layers: { from: 14, to: L }, scaleLayout: 'separate' },
+    ]);
   });
 
   it('MTP on the default model uses its head, the default k and the prose preset', () => {

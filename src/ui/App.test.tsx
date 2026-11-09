@@ -386,6 +386,83 @@ describe('estimator inputs', () => {
     fireEvent.change(screen.getByLabelText('Prefetch accuracy %'), { target: { value: '80' } });
     await waitFor(() => expect(location.search).not.toContain('opf='));
   });
+  it('splits routed experts between host RAM and SSD: half by default, then the count and the end', async () => {
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-Flash-Next&olt=ssd&ox=ram');
+    mount();
+    await screen.findByTestId('decode-tps');
+    expect(screen.queryByLabelText('Layers in host RAM')).toBeNull();
+    fireEvent.click(screen.getByRole('combobox', { name: 'MoE experts' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Host RAM + SSD' }));
+    await waitFor(() => expect(location.search).toContain('ox=split&oxr=24'));
+    const ram = screen.getByLabelText('Layers in host RAM') as HTMLInputElement;
+    expect(ram.value).toBe('24');
+    fireEvent.change(ram, { target: { value: '10' } });
+    await waitFor(() => expect(location.search).toContain('oxr=10'));
+    fireEvent.click(screen.getByRole('combobox', { name: 'Host RAM holds' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Latest layers' }));
+    await waitFor(() => expect(location.search).toContain('oxr=10&oxe=last'));
+    // Back to one tier: the split keys go.
+    fireEvent.click(screen.getByRole('combobox', { name: 'MoE experts' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'SSD' }));
+    await waitFor(() => expect(location.search).toContain('ox=ssd'));
+    expect(location.search).not.toMatch(/ox[re]=/);
+  });
+  it('offers no lookup-table split for a model with a single table layer (Qwen PLE)', async () => {
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-Flash-Next&olt=ssd');
+    mount();
+    await screen.findByTestId('decode-tps');
+    const section = screen.getByTestId('offload-advanced');
+    fireEvent.click(within(section).getByRole('combobox', { name: 'Lookup tables' }));
+    expect(await screen.findByRole('option', { name: 'SSD' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Host RAM + SSD' })).toBeNull();
+  });
+  it('splits lookup tables between host RAM and SSD by table layer, in Advanced', async () => {
+    history.replaceState(null, '', '/?m=deepseek-ai/DeepSeek-V4.1-Flash&olt=ssd');
+    mount();
+    await screen.findByTestId('decode-tps');
+    const section = screen.getByTestId('offload-advanced');
+    const picker = within(section).getByRole('combobox', { name: 'Lookup tables' });
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByRole('option', { name: 'Host RAM + SSD' }));
+    await waitFor(() => expect(location.search).toMatch(/olt=split&olr=1/));
+    const ram = within(section).getByLabelText('Layers in host RAM') as HTMLInputElement;
+    fireEvent.change(ram, { target: { value: '2' } });
+    await waitFor(() => expect(location.search).toContain('olt=split&olr=2'));
+    fireEvent.click(within(section).getByRole('combobox', { name: 'Host RAM holds' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Latest layers' }));
+    await waitFor(() => expect(location.search).toContain('olr=2&ole=last'));
+    // With a split, the scale layout defaults to each tier's own (no `ols`).
+    expect(within(section).getByRole('combobox', { name: 'Scale layout' }).textContent).toContain(
+      'Each tier’s default',
+    );
+    expect(location.search).not.toContain('ols=');
+  });
+  it('every scale layout offered on a lookup-table split still gives a result', async () => {
+    history.replaceState(null, '', '/?m=deepseek-ai/DeepSeek-V4.1-Flash&olt=split');
+    mount();
+    await screen.findByTestId('decode-tps');
+    const section = screen.getByTestId('offload-advanced');
+    const layout = () => within(section).getByRole('combobox', { name: 'Scale layout' });
+    const names = [
+      'Each tier’s default',
+      'Separate scale reads',
+      'Scales pinned in host RAM',
+      'Interleaved rows',
+    ];
+    fireEvent.click(layout());
+    expect((await screen.findAllByRole('option')).map((o) => o.textContent?.replace('✓', ''))).toEqual(
+      names,
+    );
+    fireEvent.click(screen.getByRole('option', { name: names[0] }));
+    for (const name of [...names.slice(1), names[0]]) {
+      fireEvent.click(layout());
+      fireEvent.click(await screen.findByRole('option', { name }));
+      await waitFor(() => expect(layout().textContent).toContain(name));
+      // The engine accepts the rules: the result stays, and no validation error shows.
+      await waitFor(() => expect(screen.getByTestId('decode-tps').textContent).toMatch(/[1-9]/));
+      expect(screen.queryByText(/pinned_host/)).toBeNull();
+    }
+  });
   it('per-op costs in Advanced: the latency floor writes lf, the dispatch overlay ed=1 and its hero figure', async () => {
     mount();
     await screen.findByTestId('decode-tps');
@@ -413,12 +490,17 @@ describe('estimator inputs', () => {
   });
   it.each([
     { name: 'offload off', query: '?m=Qwen/Qwen3.8-27B', offload: [] },
-    { name: 'dense offload on', query: '?m=Qwen/Qwen3.8-27B&odl=32', offload: ['Queue depth', 'Prefetch accuracy %'] },
+    { name: 'an old whole-layer offload URL (ignored)', query: '?m=Qwen/Qwen3.8-27B&odl=32', offload: [] },
     { name: 'a lookup-table model', query: '?m=Qwen/Qwen3.8-Flash-Next', offload: ['Lookup tables'] },
     {
       name: 'expert offload on a lookup-table model',
       query: '?m=Qwen/Qwen3.8-Flash-Next&ox=ram',
       offload: ['Lookup tables', 'Queue depth', 'Prefetch accuracy %'],
+    },
+    {
+      name: 'a lookup-table split',
+      query: '?m=deepseek-ai/DeepSeek-V4.1-Flash&olt=split',
+      offload: ['Lookup tables', 'Layers in host RAM', 'Host RAM holds', 'Scale layout', 'Queue depth', 'SSD read rate', 'Prefetch accuracy %'],
     },
   ])('shows one Advanced, with an Offload subsection only when it applies ($name)', async ({ query, offload }) => {
     history.replaceState(null, '', `/${query}`);

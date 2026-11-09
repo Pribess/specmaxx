@@ -7,11 +7,10 @@
  */
 
 import { opBytes } from '../ir/metrics';
-import type { CollectiveOp, Op, TransferOp } from '../ir/ops';
+import type { CollectiveOp, Op } from '../ir/ops';
 import type {
   BlockSpec,
   DraftSpec,
-  LayerSpec,
   ModelSpec,
   ParallelConfig,
   QuantConfig,
@@ -28,7 +27,6 @@ import { lowerMlp } from './mlp';
 import { lowerMoe, moeResidentWeightBytes } from './moe';
 import { lowerNgram, ngramResidentWeightBytes, ngramSequenceStateBytes } from './ngram';
 import { lowerNorm, lowerResidual, lowerResidualMix } from './norm';
-import { denseLayerPlacementAt, prefetchedFraction } from './offload';
 import { lowerShortConv, shortConvSequenceStateBytes } from './shortConv';
 
 /** One phase step of one microbatch, as seen by the lowering. */
@@ -57,6 +55,33 @@ export interface LoweringContext {
   speculative?: SpeculativeLowering;
 }
 
+/** One resolved routed-expert placement rule (`RoutedExpertRule` with every default filled in). */
+export interface ExpertPlacement {
+  /** Tier holding each offloaded layer's full expert set. */
+  tier: 'host_ram' | 'nvme';
+  /** Offloaded layer range `[from, to)` (all layers when a lone rule gave none); non-MoE layers are skipped. */
+  layers: { from: number; to: number };
+  /** Fraction f of each offloaded layer's experts resident on the device, in [0, 1]. Dimensionless. */
+  residentFraction: number;
+  /**
+   * h(f): probability that a unique needed expert is resident, already evaluated by this rule's hit-ratio model
+   * (design doc §2.4), before the physical clamp of the hit count. Dimensionless, in [0, 1].
+   */
+  hitRatio: number;
+  /** Also offload the drafter's own MoE experts (DSpark MoE drafters) with this placement. */
+  includeDraft: boolean;
+}
+
+/** One resolved lookup-table placement rule: the n-gram tables of layers `[from, to)` read row by row from `tier`. */
+export interface TablePlacement {
+  /** Tier holding these layers' tables. */
+  tier: 'host_ram' | 'nvme';
+  /** Layer range `[from, to)`, zero-based (every layer when a lone rule gave none); layers without a table are skipped. */
+  layers: { from: number; to: number };
+  /** Scale layout of block-scaled tables (design doc §2.10), default filled in. */
+  scaleLayout: 'separate' | 'pinned_host' | 'interleaved';
+}
+
 /**
  * The off-device placement lowering applies, resolved from `OffloadConfig` with every default filled in (built once
  * per run by `simulate`). Each present group adds one `TransferOp` in front of the block that consumes it, only
@@ -68,29 +93,18 @@ export interface OffloadLowering {
    * `prefetchedFraction` (docs §12 "Expert prefetch"). Dimensionless, in [0, 1].
    */
   prefetchAccuracy: number;
-  /** Routed experts of the MoE layers in `layers` live on `tier`; a resident cache keeps a fraction of them. */
-  routedExperts?: {
-    /** Tier holding each offloaded layer's full expert set. */
-    tier: 'host_ram' | 'nvme';
-    /** Offloaded layer range `[from, to)` (all MoE layers when the user gave none); non-MoE layers are skipped. */
-    layers: { from: number; to: number };
-    /** Fraction f of each offloaded layer's experts resident on the device, in [0, 1]. Dimensionless. */
-    residentFraction: number;
-    /**
-     * h(f): probability that a unique needed expert is resident, already evaluated by the hit-ratio model
-     * (design doc §2.4), before the physical clamp of the hit count. Dimensionless, in [0, 1].
-     */
-    hitRatio: number;
-    /** Also offload the drafter's own MoE experts (DSpark MoE drafters). */
-    includeDraft: boolean;
-  };
-  /** Whole decoder layers `[from, to)` streamed from `tier` every step. */
-  denseLayers?: { tier: 'host_ram' | 'nvme'; layers: { from: number; to: number } };
-  /** n-gram lookup tables read row by row from `tier` (absent = on the device), with their scale layout (design doc §2.10). */
-  lookupTables?: {
-    tier: 'host_ram' | 'nvme';
-    scaleLayout: 'separate' | 'pinned_host' | 'interleaved';
-  };
+  /**
+   * Routed-expert placements, one per rule: the MoE layers in each `layers` keep their experts on its `tier`, with a
+   * resident cache of a fraction of them. Absent = none; else non-empty, sorted by `layers.from`, ranges disjoint.
+   * Layers no placement covers keep their experts on the device.
+   */
+  routedExperts?: readonly ExpertPlacement[];
+  /**
+   * Off-device n-gram lookup-table placements, one per rule (`'device'` rules dropped): the tables of the layers in each
+   * `layers` are read row by row from its `tier`. Absent = none; else non-empty, sorted by `layers.from`, ranges
+   * disjoint. Layers no placement covers keep their tables on the device.
+   */
+  lookupTables?: readonly TablePlacement[];
   /**
    * Unified memory: host RAM is the device pool, so pinned-host table scales (and any host-RAM group) are device
    * bytes, never a separate tier. Absent/false = dedicated memory (host RAM is its own tier).
@@ -159,9 +173,7 @@ export function lowerModel(model: ModelSpec, ctx: LoweringContext): LoweredModel
     if (s === 0) layers.push({ name: 'embed', layerIndex: null, ops: lowerEmbedding(model, ctx) });
     const [start, end] = stageLayerRange(L, pp, s);
     for (let i = start; i < end; i++) {
-      const fetch = denseLayerFetchOp(model.layers[i], i, ctx);
-      const blockOps = model.layers[i].blocks.flatMap((block) => lowerBlock(block, ctx, i));
-      const ops = fetch === undefined ? blockOps : [fetch, ...blockOps];
+      const ops = model.layers[i].blocks.flatMap((block) => lowerBlock(block, ctx, i));
       layers.push({ name: `layer.${i}`, layerIndex: i, ops });
     }
     const stage: LoweredStage = { index: s, layers };
@@ -219,44 +231,6 @@ export function ppBoundaryResidualVectors(model: ModelSpec, layerIndex: number):
 }
 
 /**
- * Bytes of ONE decoder layer resident on one device with everything on the device: Σ of its blocks' resident weight
- * bytes (all local experts, the whole table shard). What a `denseLayers` placement streams for it every step. Unit: bytes.
- */
-export function layerWeightBytesOnDevice(layer: LayerSpec, ctx: LoweringContext): number {
-  const onDevice: LoweringContext = { ...ctx, offload: undefined };
-  // Formula: W_layer = Σ_blocks W_block   (no offload)
-  return layer.blocks.reduce((sum, block) => sum + blockResidentWeightBytes(block, onDevice), 0);
-}
-
-/**
- * The whole-layer fetch of a layer in the `denseLayers` range (design doc §2.5): `reads [{ 1, W_layer }]`,
- * `usefulBytes = W_layer`, every step (no hit ratio). Undefined when the layer is on the device or has no weights.
- */
-export function denseLayerFetchOp(
-  layer: LayerSpec,
-  layerIndex: number,
-  ctx: LoweringContext,
-): TransferOp | undefined {
-  const placement = denseLayerPlacementAt(ctx, layerIndex);
-  if (placement === undefined) return undefined;
-  const W_layer = layerWeightBytesOnDevice(layer, ctx);
-  if (!(W_layer > 0)) return undefined;
-  // Formula: reads = [{ 1, W_layer }];  usefulBytes = W_layer
-  // See docs/simulation-model.md §12 ("Placement")
-  return {
-    kind: 'transfer',
-    name: 'layer.fetch',
-    group: 'dense_layer',
-    source: placement.tier,
-    reads: [{ count: 1, bytesEach: W_layer }],
-    usefulBytes: W_layer,
-    prefetchedFraction: prefetchedFraction(ctx.offload?.prefetchAccuracy ?? 0, {
-      group: 'dense_layer',
-    }),
-  };
-}
-
-/**
  * Lower one block to its per-device ops, in execution order (a `switch` on `block.kind` into `lower/<kind>.ts`).
  * `layerIndex` (index into `ModelSpec.layers`) locates the block for the offload placement; without it (draft layers,
  * one-token weight probes) no transfer op is emitted.
@@ -304,8 +278,7 @@ export function lowerBlock(block: BlockSpec, ctx: LoweringContext, layerIndex?: 
  * bytes equal the weight bytes of its ops in any step: we lower a one-token decode step and sum them (this keeps
  * resident and streamed weights consistent by construction). A MoE step touches only active experts, and an
  * n-gram step only its gathered table rows, so those use their own formulas ({@link moeResidentWeightBytes},
- * {@link ngramResidentWeightBytes}), which also drop the off-device part of an offloaded layer `layerIndex`. A layer
- * of a `denseLayers` range is handled by the caller (resident 0).
+ * {@link ngramResidentWeightBytes}), which also drop the off-device part of an offloaded layer `layerIndex`.
  */
 export function blockResidentWeightBytes(
   block: BlockSpec,

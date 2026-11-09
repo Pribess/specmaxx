@@ -143,37 +143,69 @@ export interface OffloadConfig {
    * Prefetch accuracy p: the predictor's recall one layer ahead, the share of the needed routed experts it picks from
    * the previous layer's hidden state. While a stage computes, the link copies predicted experts; a share p of them are
    * needed, the rest of the misses are copied after the router, on the critical path.
-   * `0` = no prefetching at all (dense layers and table rows are fetched on demand too: the former
+   * `0` = no prefetching at all (table rows are fetched on demand too: the former
    * `offloadOverlap 'none'`); `1` = perfect prediction (the former `'ideal'`). Absent = {@link
    * DEFAULT_PREFETCH_ACCURACY} (0.8, estimated). Dimensionless, in [0, 1]. See docs/simulation-model.md §12
    * ("Expert prefetch").
    */
   prefetchAccuracy?: number;
-  /** Routed experts of MoE layers kept partly off-device, with a resident expert cache. */
-  routedExperts?: {
-    /** Tier holding the full expert set of each offloaded layer. */
-    tier: OffloadTier;
-    /** Layers whose experts are offloaded; absent = every MoE layer. Layers of the range without a MoE block are skipped. */
-    layers?: LayerRange;
-    /** Fraction f of each offloaded layer's experts kept resident in device memory, in [0, 1]. Dimensionless. */
-    residentFraction: number;
-    /** Hit-ratio model h(f) of the resident cache. */
-    hitRatio: HitRatioModel;
-    /** Also offload the drafter's own MoE experts (DeepSeek-V4 DSpark); default false. */
-    includeDraft?: boolean;
-  };
-  /** Whole decoder layers streamed from a tier every step (llama.cpp `-ngl N`); no hit ratio. */
-  denseLayers?: { tier: OffloadTier; layers: LayerRange };
   /**
-   * n-gram lookup-table placement (Qwen PLE, DeepSeek Engram; design doc §2.10); absent = `'device'` (identity).
-   * `scaleLayout` (block-scaled tables only): default `'separate'` on host RAM, `'pinned_host'` on NVMe (the scales
-   * pinned in host RAM and counted in its capacity; on unified memory they stay in the unified pool and count in the
-   * device total), `'interleaved'` for a repacked table (one read per row).
+   * Routed experts of MoE layers kept partly off-device, with a resident expert cache. One rule, or a list of rules
+   * over disjoint layer ranges (e.g. layers 0–23 in host RAM, 24–47 on the SSD); layers no rule covers keep their
+   * experts on the device. The single object is the one-rule list (same meaning, bit-identical results); `[]` = none.
+   * See docs/simulation-model.md §12 ("Placement") and docs/design/offload-specdec-latency.md §2.11.
    */
-  lookupTables?: {
-    tier: 'device' | OffloadTier;
-    scaleLayout?: 'separate' | 'pinned_host' | 'interleaved';
-  };
+  routedExperts?: RoutedExpertRule | readonly RoutedExpertRule[];
+  /**
+   * n-gram lookup-table placement (Qwen PLE, DeepSeek Engram; design doc §2.10); absent = `'device'` (identity). One
+   * rule, or a list of rules over disjoint layer ranges (tables live in specific layers, e.g. Engram layers 1 and 14:
+   * one in host RAM, one on the SSD); layers no rule covers keep their tables on the device. The single object is the
+   * one-rule list (same meaning, bit-identical results); `[]` = none. See design doc §2.11.
+   */
+  lookupTables?: LookupTableRule | readonly LookupTableRule[];
+}
+
+/**
+ * One routed-expert placement rule: the MoE layers in `layers` keep their full local expert set on `tier`, with a
+ * device-resident cache of a fraction f of them (per layer). Rules of one list cover disjoint ranges.
+ */
+export interface RoutedExpertRule {
+  /** Tier holding the full expert set of each offloaded layer of this rule. */
+  tier: OffloadTier;
+  /**
+   * Layers whose experts this rule offloads. Absent = every MoE layer, allowed only when this is the only rule.
+   * Layers of the range without a MoE block are skipped.
+   */
+  layers?: LayerRange;
+  /** Fraction f of each offloaded layer's experts kept resident in device memory, in [0, 1]. Dimensionless. */
+  residentFraction: number;
+  /** Hit-ratio model h(f) of this rule's resident cache. */
+  hitRatio: HitRatioModel;
+  /**
+   * Also offload the drafter's own MoE experts (DeepSeek-V4 DSpark) with this rule's tier, f and h; default false.
+   * At most one rule of a list may set it.
+   */
+  includeDraft?: boolean;
+}
+
+/**
+ * One lookup-table placement rule: the n-gram tables of the layers in `layers` are read row by row from `tier`
+ * (`'device'` = they stay on the device). Rules of one list cover disjoint ranges.
+ */
+export interface LookupTableRule {
+  /** Where these layers' tables live. */
+  tier: 'device' | OffloadTier;
+  /**
+   * Layers whose tables this rule places. Absent = every layer, allowed only when this is the only rule. Layers of the
+   * range without an n-gram block are skipped.
+   */
+  layers?: LayerRange;
+  /**
+   * Block-scaled tables only: default `'separate'` on host RAM, `'pinned_host'` on NVMe (the scales pinned in host RAM
+   * and counted in its capacity; on unified memory they stay in the unified pool and count in the device total),
+   * `'interleaved'` for a repacked table (one read per row).
+   */
+  scaleLayout?: 'separate' | 'pinned_host' | 'interleaved';
 }
 
 /**
@@ -464,8 +496,6 @@ export interface TierBytes {
    * `residentFraction` is (that is a device-side cache of a subset, a copy). Unit: bytes.
    */
   routedExperts: number;
-  /** Whole weights of the layers placed by `offload.denseLayers`. Unit: bytes. */
-  denseLayers: number;
   /** The speculative drafter's own routed experts (`includeDraft`). Unit: bytes. */
   draftExperts: number;
 }
@@ -476,7 +506,7 @@ export interface TierMemory {
   tier: OffloadTier;
   /**
    * Bytes the node's devices place on the tier: the FULL offloaded groups (all experts of the offloaded layers,
-   * whole dense layers, whole table shards), since the device cache is a copy; plus pinned table scales on host
+   * whole table shards), since the device cache is a copy; plus pinned table scales on host
    * RAM. Unit: bytes (per node, summed over its devices).
    */
   bytes: number;

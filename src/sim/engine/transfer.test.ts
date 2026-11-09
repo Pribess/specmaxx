@@ -4,7 +4,9 @@ import { hostPcieLink } from '../hw/presets/links';
 import { DDR5_6000_2CH, DGX_SPARK_SSD_4TB, NVME_990_PRO_2TB } from '../hw/presets/storage';
 import { RTX_5090 } from '../hw/presets/nvidia';
 import type { NvmeSpec } from '../hw/types';
-import { REF_DENSE_8B } from '../models/reference';
+import { fixtureRepoFiles } from '../models/__fixtures__/fixtures.testutil';
+import { mapHfModel } from '../models/hf/index';
+import { REF_DENSE_8B, REF_MOE_30B_A3B } from '../models/reference';
 import { resolveHost } from './host';
 import { simulate } from './simulate';
 import {
@@ -184,10 +186,10 @@ describe('U-17 n_stream (one node, tp = dp = 1 unless said)', () => {
     expect(nStream([4, 1, 2, 0], 1, 2)).toBe(3); // 1 + 2
     expect(nStream([4, 1, 2, 0], 0, 2)).toBe(4); // at least its own 4
   });
-  it('(e) end to end: REF_DENSE_8B pp 4, b 2, dense layers on the SSD, prefetch accuracy 0 ⇒ tier term / 2 consumers', () => {
+  it('(e) end to end: REF_MOE_30B_A3B pp 4, b 2, experts on the SSD, prefetch accuracy 0 ⇒ tier term / 2 consumers', () => {
     const run = (prefetch: 'ideal' | 'none') =>
       simulate({
-        model: REF_DENSE_8B,
+        model: REF_MOE_30B_A3B,
         quant: { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } },
         parallel: { tp: 1, pp: 4, dp: 1, ep: 1 },
         workload: { batch: 2, promptLen: 128, decodeContextLen: 128 },
@@ -195,18 +197,113 @@ describe('U-17 n_stream (one node, tp = dp = 1 unless said)', () => {
         deployment: {
           offload: {
             prefetchAccuracy: prefetch === 'ideal' ? 1 : 0,
-            denseLayers: { tier: 'nvme', layers: { from: 0, to: 32 } },
+            routedExperts: { tier: 'nvme', residentFraction: 0, hitRatio: { kind: 'uniform' } },
           },
         },
       });
     for (const [overlap, n] of [['none', 2], ['ideal', 4]] as const) {
-      const fetch = run(overlap).decode.stages[1].layers[0].ops[0];
-      expect(fetch.op.kind).toBe('transfer');
-      if (fetch.op.kind !== 'transfer') continue;
-      const tierBytes = Math.ceil(fetch.op.usefulBytes / 4096) * 4096;
+      const fetch = run(overlap)
+        .decode.stages[1].layers.flatMap((l) => l.ops)
+        .find((o) => o.op.kind === 'transfer');
+      expect(fetch?.op.kind).toBe('transfer');
+      if (fetch === undefined || fetch.op.kind !== 'transfer') continue;
+      // m = 2 microbatches of one sequence: M = U = k = 8 experts of 9.44 MB; the drive's term dominates
+      // (staging 75.5 MB/(96e9/(2n)) and the link stay below it).
+      const tierBytes = fetch.op.reads.reduce((s, r) => s + r.count * Math.ceil(r.bytesEach / 4096) * 4096, 0);
       expectClose(fetch.transferBandwidthSec, tierBytes / (7.45e9 / n));
       expectClose(fetch.transferLatencySec, 46e-6);
       expect(fetch.bound).toBe('transfer');
     }
+  });
+});
+
+/**
+ * Mixed placement: host RAM is one resource behind host-RAM-tier reads and NVMe staging, so its sharing n_host counts
+ * every stage that uses it either way (docs/simulation-model.md §12 "Sharing"):
+ *   hostStreams[s] = streams_ram[s] ∨ streams_nvme[s];  n_host = stageNStream(hostStreams)
+ *   RAM tier term = bytes_tier / (B_ram / n_host);  NVMe staging = bytes_tier / (B_ram / (2·n_host))
+ * Qwen3.8-Flash-Next (48 MoE layers, the PLE table in layer 1) at pp 2: the table (stage 0) in DDR5-6000 ×2
+ * (96e9 B/s), the experts of layers 24–47 (stage 1) on a fast SSD (200 GB/s, so the staging term, not the drive, is
+ * the largest throughput term), PCIe 5.0 x16 (57.6 GB/s). Decode b 1: the table reads 16 rows of 320 B (5,120 B).
+ */
+describe('n_host: host RAM shared by host-RAM reads and NVMe staging (tables in RAM, experts on SSD)', () => {
+  const FAST_SSD: NvmeSpec = { ...SSD_45US, seqReadBandwidthBytesPerSec: 200e9 };
+  const B_RAM = 96e9;
+  const qwen = (() => {
+    const mapped = mapHfModel(fixtureRepoFiles('Qwen/Qwen3.8-Flash-Next', { dir: '' }));
+    if (mapped.kind !== 'ok') throw new Error('fixture');
+    return { model: mapped.model, quant: mapped.quant.quant };
+  })();
+  const run = (parallel: { tp: number; pp: number }, prefetch: number) =>
+    simulate({
+      ...qwen,
+      parallel: { ...parallel, dp: 1, ep: 1 },
+      workload: { batch: 1, promptLen: 128, decodeContextLen: 128 },
+      hardware: { device: SYNTH_GPU, topology: SYNTH_CLUSTER, host: { link: PCIE5, ssd: FAST_SSD, ram: DDR5_6000_2CH } },
+      deployment: {
+        offload: {
+          prefetchAccuracy: prefetch,
+          lookupTables: { tier: 'host_ram' },
+          routedExperts: { tier: 'nvme', layers: { from: 24, to: 48 }, residentFraction: 0, hitRatio: { kind: 'uniform' } },
+        },
+      },
+    });
+  /** The transfer op of `group` in decoder layer `i`, with its result. */
+  const fetchOf = (r: ReturnType<typeof run>, i: number, group: 'lookup_table' | 'routed_experts') => {
+    const layer = r.decode.stages.flatMap((s) => s.layers).find((l) => l.layerIndex === i);
+    const fetch = layer?.ops.find((o) => o.op.kind === 'transfer' && o.op.group === group);
+    if (fetch === undefined || fetch.op.kind !== 'transfer') throw new Error(`layer ${i}: no ${group} op`);
+    return { fetch, op: fetch.op };
+  };
+  const ramBytes = (op: { reads: { count: number; bytesEach: number }[] }) =>
+    op.reads.reduce((s, r) => s + r.count * Math.ceil(r.bytesEach / 64) * 64, 0);
+  const ssdBytes = (op: { reads: { count: number; bytesEach: number }[] }) =>
+    op.reads.reduce((s, r) => s + r.count * Math.ceil(r.bytesEach / 4096) * 4096, 0);
+
+  it('each op reads from its rule\'s tier', () => {
+    const r = run({ tp: 1, pp: 2 }, 1);
+    expect(fetchOf(r, 1, 'lookup_table').op.source).toBe('host_ram');
+    for (const i of [24, 47]) expect(fetchOf(r, i, 'routed_experts').op.source).toBe('nvme');
+  });
+
+  it('pp 2, b 1, p > 0: stage 0 (RAM table) and stage 1 (SSD experts) both use host RAM ⇒ n_host = 2', () => {
+    const r = run({ tp: 1, pp: 2 }, 1);
+    const table = fetchOf(r, 1, 'lookup_table');
+    // RAM: max(little, tier = 5,120/(B_ram/2) = 1.07e-7 s, link = 5,120/57.6e9 = 8.9e-8 s) ⇒ tier
+    // (n_host = 1 would make it link-bound)
+    expectClose(table.fetch.transferBandwidthSec, ramBytes(table.op) / (B_RAM / 2));
+    const experts = fetchOf(r, 24, 'routed_experts');
+    // SSD: max(tier = bytes/200e9, link, staging = bytes/(B_ram/(2·2)) = bytes/24e9) ⇒ staging
+    expectClose(experts.fetch.transferBandwidthSec, ssdBytes(experts.op) / (B_RAM / 4));
+  });
+
+  it('the same with p = 0, m = 1: one stage streams at a time ⇒ n_host = 1', () => {
+    const r = run({ tp: 1, pp: 2 }, 0);
+    const table = fetchOf(r, 1, 'lookup_table');
+    // RAM: tier = 5,120/96e9 < link = 5,120/B_link ⇒ link-bound
+    expectClose(table.fetch.transferBandwidthSec, table.op.usefulBytes / B_LINK);
+    const experts = fetchOf(r, 24, 'routed_experts');
+    // SSD: staging = bytes/(B_ram/2) = bytes/48e9 > link, tier
+    expectClose(experts.fetch.transferBandwidthSec, ssdBytes(experts.op) / (B_RAM / 2));
+  });
+
+  it('tp 2, both tiers in one stage: n_host = 2 = n_tier (each device counted once)', () => {
+    const r = run({ tp: 2, pp: 1 }, 1);
+    const table = fetchOf(r, 1, 'lookup_table');
+    expectClose(table.fetch.transferBandwidthSec, ramBytes(table.op) / (B_RAM / 2));
+    const experts = fetchOf(r, 24, 'routed_experts');
+    expectClose(experts.fetch.transferBandwidthSec, ssdBytes(experts.op) / (B_RAM / 4));
+  });
+
+  it('transferTime: hostStagingNStream sets the staging share; absent, it is nStream (single-tier results unchanged)', () => {
+    const reads = [{ count: 1, bytesEach: 409_600 }];
+    expect(transferTime(reads, 409_600, ssdPath({ nStream: 2 }))).toEqual(
+      transferTime(reads, 409_600, ssdPath({ nStream: 2, hostStagingNStream: 2 })),
+    );
+    const t = transferTime(reads, 409_600, ssdPath({ nStream: 1, hostStagingNStream: 3 }));
+    expectClose(t.hostSec ?? 0, 409_600 / (96e9 / 6));
+    expectClose(t.tierSec, 409_600 / 7.45e9);
+    // A host-RAM path has no staging term at all.
+    expect(transferTime(reads, 409_600, ramPath()).hostSec).toBeUndefined();
   });
 });

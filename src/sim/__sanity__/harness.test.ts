@@ -8,7 +8,7 @@ import { DGX_SPARK_PAIR, HGX_H100_8, pcieBox } from '../hw/presets/topologies';
 import { PCIE_4_X16 } from '../hw/presets/links';
 import { RTX_3090 } from '../hw/presets/nvidia';
 import { bitsPerElement } from '../ir/dtype';
-import { REF_DENSE_8B } from '../models/reference';
+import { REF_DENSE_8B, REF_MOE_30B_A3B } from '../models/reference';
 import { sanityRepoFiles } from './configs.testutil';
 import { bpwFormat, resolveQuant, simulateReport, simpleDecoder, type SanityInput, type SanityResult } from './harness';
 
@@ -106,16 +106,22 @@ describe('sanity harness smoke', () => {
     expect(() => resolveQuant('native')).toThrow();
   });
 
-  it('deployment: absent and {} give identical results; streamed layers make decode transfer-bound; a checkpoint drafter resolves', () => {
+  it('deployment: absent and {} give identical results; offloaded experts make decode transfer-bound; a checkpoint drafter resolves', () => {
     const base: SanityInput = { model: { kind: 'spec', spec: REF_DENSE_8B }, quant: 'q4_k_m', hardware: { deviceId: 'rtx-4090' }, workload: PP512_TG128 };
     const off = simulateReport(base);
     const empty = simulateReport({ ...base, deployment: {} });
     expect(empty.decodePerSequenceTokensPerSec).toBe(off.decodePerSequenceTokensPerSec);
     expect(empty.prefillPerSequenceTokensPerSec).toBe(off.prefillPerSequenceTokensPerSec);
-    // A dense model streamed whole from host RAM over the 4090's PCIe 4.0 x16: decode becomes transfer-bound.
-    const streamed = simulateReport({ ...base, deployment: { offload: { denseLayers: { tier: 'host_ram', layers: { from: 0, to: 36 } } } } });
+    // A MoE model with every routed expert in host RAM (nothing cached) over the 4090's PCIe 4.0 x16: decode becomes
+    // transfer-bound. (Whole-layer streaming of a dense model, the former case here, was removed.)
+    const moe: SanityInput = { ...base, model: { kind: 'spec', spec: REF_MOE_30B_A3B } };
+    const moeOff = simulateReport(moe);
+    const streamed = simulateReport({
+      ...moe,
+      deployment: { offload: { routedExperts: { tier: 'host_ram', residentFraction: 0, hitRatio: { kind: 'uniform' } } } },
+    });
     expect(streamed.decodeBound.dominant).toBe('transfer');
-    expect(streamed.decodePerSequenceTokensPerSec).toBeLessThan(off.decodePerSequenceTokensPerSec);
+    expect(streamed.decodePerSequenceTokensPerSec).toBeLessThan(moeOff.decodePerSequenceTokensPerSec);
     // DeepSeek-V4.1-Flash ships its DSpark drafter in the checkpoint; REF_DENSE_8B has none.
     const flash = simulateReport({
       model: { kind: 'hf', files: sanityRepoFiles('deepseek-ai/DeepSeek-V4.1-Flash') },

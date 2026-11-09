@@ -3,38 +3,49 @@
  * lowering context. Small pure lookups shared by `lowerModel`, `lowerMoe`, `lowerNgram` and the memory fit.
  * See docs/simulation-model.md §12 ("Placement").
  *
- * Precedence: a layer of the `denseLayers` range is streamed whole (all its weights, experts and tables included),
- * so no expert or table transfer is emitted for it on top.
+ * Each group may hold several placement rules over disjoint layer ranges (e.g. experts of layers 0–23 in host RAM,
+ * 24–47 on the SSD); a layer takes the one rule whose range contains it. (Whole-layer streaming, `denseLayers`, was
+ * removed: docs/simulation-model.md §12 "Placement".)
  */
 
-import type { LoweringContext, OffloadLowering } from './lower';
+import type { ExpertPlacement, LoweringContext, OffloadLowering, TablePlacement } from './lower';
 
 /** True if zero-based layer index `i` lies in the half-open range `[from, to)`. */
 export function inLayerRange(range: { from: number; to: number }, i: number): boolean {
   return i >= range.from && i < range.to;
 }
 
-/** The dense-layer placement streaming layer `i` whole every step, or undefined. */
-export function denseLayerPlacementAt(ctx: LoweringContext, i: number | undefined): OffloadLowering['denseLayers'] {
-  const dense = ctx.offload?.denseLayers;
-  return i !== undefined && dense !== undefined && inLayerRange(dense.layers, i) ? dense : undefined;
+/** The placement among `rules` whose layer range contains layer `i` (ranges are disjoint, so at most one), or undefined. */
+function ruleAt<R extends { layers: { from: number; to: number } }>(
+  rules: readonly R[] | undefined,
+  i: number | undefined,
+): R | undefined {
+  if (i === undefined || rules === undefined) return undefined;
+  return rules.find((r) => inLayerRange(r.layers, i));
 }
 
 /**
  * The routed-expert placement of layer `i`, or undefined when its experts are on the device (no offload, layer outside
- * the range, the layer is streamed whole, or `i` is unknown: a draft layer).
+ * every rule's range, or `i` is unknown: a draft layer).
  */
-export function expertPlacementAt(ctx: LoweringContext, i: number | undefined): OffloadLowering['routedExperts'] {
-  const experts = ctx.offload?.routedExperts;
-  if (i === undefined || experts === undefined || !inLayerRange(experts.layers, i)) return undefined;
-  return denseLayerPlacementAt(ctx, i) === undefined ? experts : undefined;
+export function expertPlacementAt(ctx: LoweringContext, i: number | undefined): ExpertPlacement | undefined {
+  return ruleAt(ctx.offload?.routedExperts, i);
 }
 
-/** The lookup-table placement of the n-gram blocks of layer `i`, or undefined when the tables are on the device. */
-export function tablePlacementAt(ctx: LoweringContext, i: number | undefined): OffloadLowering['lookupTables'] {
-  const tables = ctx.offload?.lookupTables;
-  if (i === undefined || tables === undefined) return undefined;
-  return denseLayerPlacementAt(ctx, i) === undefined ? tables : undefined;
+/**
+ * The routed-expert placement that also offloads the speculative drafter's own MoE experts (`includeDraft`), or
+ * undefined. Validation allows `includeDraft` on at most one rule, so the first match is the only one.
+ */
+export function draftExpertPlacement(offload: OffloadLowering | undefined): ExpertPlacement | undefined {
+  return offload?.routedExperts?.find((r) => r.includeDraft);
+}
+
+/**
+ * The lookup-table placement of the n-gram blocks of layer `i` (the rule whose range contains it), or undefined when
+ * its tables are on the device (no rule covers it, or `i` is unknown).
+ */
+export function tablePlacementAt(ctx: LoweringContext, i: number | undefined): TablePlacement | undefined {
+  return ruleAt(ctx.offload?.lookupTables, i);
 }
 
 /**
@@ -43,7 +54,7 @@ export function tablePlacementAt(ctx: LoweringContext, i: number | undefined): O
  */
 export type PrefetchTarget =
   | { group: 'routed_experts'; misses: number; nonResidentExperts: number }
-  | { group: 'dense_layer' | 'lookup_table' };
+  | { group: 'lookup_table' };
 
 /**
  * q: the share of one transfer op's time that is prefetched, i.e. may hide behind the stage's compute
@@ -54,15 +65,15 @@ export type PrefetchTarget =
  *   predictions, of which a share p are needed misses; or, when nearly every non-resident expert is needed (prefill,
  *   large batches), copy the non-resident experts unconditionally, of which a share M/(E_loc − C) are needed. So
  *   q = p at batch 1 (M ≪ E_loc − C) and q = 1 in prefill (M = E_loc − C);
- * - dense layers and table rows, p > 0: q = 1. Their bytes are known before the step (every layer streams; rows
- *   come from token ids), and an engine that prefetches at all prefetches these deterministic transfers.
+ * - table rows, p > 0: q = 1. Their bytes are known before the step (rows come from token ids), and an engine that
+ *   prefetches at all prefetches these deterministic transfers.
  * So p = 1 gives q = 1 everywhere (the former `'ideal'`). Dimensionless, in [0, 1].
  */
 export function prefetchedFraction(p: number, target: PrefetchTarget): number {
   // Formula: q = 0   (p = 0, every group)
   if (!(p > 0)) return 0;
   if (target.group !== 'routed_experts') {
-    // Formula: q = 1   (dense layers, table rows; p > 0)
+    // Formula: q = 1   (table rows; p > 0)
     return 1;
   }
   const { misses: M, nonResidentExperts } = target;

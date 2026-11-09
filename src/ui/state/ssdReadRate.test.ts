@@ -1,14 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_STATE, reduce } from './appState';
-import { buildSimInput } from './buildInput';
-import { BUNDLED_DEFAULT_MODEL } from './bundledModel';
+import { buildSimInput, loadedFromHf } from './buildInput';
+import { mapHfModel } from '../../sim/models/hf/index';
+import { fixtureRepoFiles } from '../../sim/models/__fixtures__/fixtures.testutil';
 import { normalizeOffload, type OffloadChoice } from './deployment';
 import { decodeState, encodeState } from './url';
 
+/** Qwen3.8-Flash-Next (a MoE with PLE tables), mapped from the committed fixtures. */
+function flashNext() {
+  const id = 'Qwen/Qwen3.8-Flash-Next';
+  const r = mapHfModel(fixtureRepoFiles(id, { dir: '' }));
+  if (r.kind !== 'ok') throw new Error(r.kind);
+  return loadedFromHf({ kind: 'hf', id }, r);
+}
 describe('SSD read rate', () => {
   it.each<OffloadChoice>([
     { experts: { tier: 'nvme' } },
-    { dense: { tier: 'nvme', layersOnDevice: 0 } },
+    { experts: { tier: 'split' } },
     { tables: { tier: 'nvme' } },
   ])('round-trips sustained mode with each SSD group: %j', (placement) => {
     const state = reduce(DEFAULT_STATE, {
@@ -24,9 +32,9 @@ describe('SSD read rate', () => {
   });
 
   it('omits datasheet defaults and removes sustained mode without SSD placement', () => {
-    const placement = { dense: { tier: 'nvme' as const, layersOnDevice: 0 } };
+    const placement = { experts: { tier: 'nvme' as const } };
     expect(normalizeOffload({ ...placement, ssdReadRate: 'datasheet' })).toEqual(placement);
-    expect(encodeState(decodeState('odl=0&odt=ssd&osr=datasheet').state)).toBe('odl=0&odt=ssd');
+    expect(encodeState(decodeState('ox=ssd&osr=datasheet').state)).toBe('ox=ssd');
     expect(normalizeOffload({ ssdReadRate: 'sustained' })).toEqual({});
     expect(normalizeOffload({ experts: { tier: 'host_ram' }, ssdReadRate: 'sustained' })).toEqual({
       experts: { tier: 'host_ram' },
@@ -44,12 +52,13 @@ describe('SSD read rate', () => {
   );
 
   it('passes sustained mode to the engine but leaves datasheet mode absent', () => {
+    const flash = flashNext();
     for (const rate of ['datasheet', 'sustained'] as const) {
-      const state = reduce(DEFAULT_STATE, {
-        type: 'setOffload',
-        offload: { dense: { tier: 'nvme', layersOnDevice: 0 }, ssdReadRate: rate },
-      });
-      const built = buildSimInput(state, BUNDLED_DEFAULT_MODEL);
+      const state = reduce(
+        { ...DEFAULT_STATE, model: { kind: 'hf', id: 'Qwen/Qwen3.8-Flash-Next' } },
+        { type: 'setOffload', offload: { experts: { tier: 'nvme' }, ssdReadRate: rate } },
+      );
+      const built = buildSimInput(state, flash);
       if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));
       expect(built.input.deployment?.offload?.ssdReadRate).toBe(
         rate === 'sustained' ? rate : undefined,

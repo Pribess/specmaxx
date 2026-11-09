@@ -11,7 +11,7 @@ import type { BlockDraftSpec, ModelSpec, ParallelConfig, QuantConfig } from '../
 import { REF_DENSE_8B, TINY_HC_NGRAM, TINY_HYBRID } from '../models/reference';
 import { singleDevice } from '../hw/presets';
 import type { TopologySpec } from '../hw/types';
-import type { DeploymentConfig, OffloadConfig, SimInput, SpecDecodeConfig } from './types';
+import type { DeploymentConfig, OffloadConfig, RoutedExpertRule, SimInput, SpecDecodeConfig } from './types';
 import { blockShardingErrors, deploymentErrors, SPEC_DEC_PP_ERROR, validateInput } from './validate';
 import { simulate } from './simulate';
 import { countParams } from '../ir/params';
@@ -179,8 +179,8 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
   const offload = (o: OffloadConfig, model: ModelSpec = TINY_HYBRID): SimInput =>
     input({}, { model, hardware: withHost, deployment: { offload: o } });
   const experts = (
-    over: Partial<NonNullable<OffloadConfig['routedExperts']>> = {},
-  ): NonNullable<OffloadConfig['routedExperts']> => ({
+    over: Partial<RoutedExpertRule> = {},
+  ): RoutedExpertRule => ({
     tier: 'host_ram',
     residentFraction: 0.5,
     hitRatio: { kind: 'uniform' },
@@ -270,7 +270,7 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
   it('layer ranges are non-empty, integer and inside [0, L); queueDepth is an integer ≥ 1', () => {
     const L = TINY_HYBRID.layers.length;
     expect(errorsOf(offload({ routedExperts: experts({ layers: { from: 0, to: L } }) }))).toEqual([]);
-    expect(errorsOf(offload({ denseLayers: { tier: 'nvme', layers: { from: 1, to: 2 } } }))).toEqual([]);
+    expect(errorsOf(offload({ lookupTables: { tier: 'nvme', layers: { from: 1, to: 2 } } }, TINY_HC_NGRAM))).toEqual([]);
     for (const layers of [
       { from: 0, to: 0 },
       { from: -1, to: 2 },
@@ -278,7 +278,7 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
       { from: 2, to: 1 },
       { from: 0.5, to: 2 },
     ]) {
-      expect(errorsOf(offload({ denseLayers: { tier: 'host_ram', layers } }))).toHaveLength(1);
+      expect(errorsOf(offload({ lookupTables: { tier: 'host_ram', layers } }, TINY_HC_NGRAM))).toHaveLength(1);
       expect(errorsOf(offload({ routedExperts: experts({ layers }) }))).toHaveLength(1);
     }
     expect(errorsOf(offload({ queueDepth: 1, routedExperts: experts() }))).toEqual([]);
@@ -313,6 +313,93 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
     // A cited edge connector is enough.
     const withInterface = { ...SYNTH_GPU, hostInterface: { generation: 5, lanes: 16 } as const };
     expect(errorsOf({ ...noHost, hardware: { device: withInterface, topology: SYNTH_CLUSTER } })).toEqual([]);
+  });
+
+  describe('placement rule lists (mixed host RAM + SSD by layer range)', () => {
+    const ram = (from: number, to: number) => experts({ layers: { from, to } });
+    const ssd = (from: number, to: number) => experts({ tier: 'nvme', layers: { from, to } });
+
+    it('disjoint ranges in any order are valid; [] is valid (nothing offloaded, so no host link is needed either)', () => {
+      expect(errorsOf(offload({ routedExperts: [ram(0, 2), ssd(2, 4)] }))).toEqual([]);
+      expect(errorsOf(offload({ routedExperts: [ssd(2, 4), ram(0, 2)] }))).toEqual([]);
+      expect(errorsOf(offload({ routedExperts: [ram(0, 1), ssd(3, 4)] }))).toEqual([]);
+      expect(errorsOf(offload({ routedExperts: [] }, REF_DENSE_8B))).toEqual([]);
+      expect(errorsOf(offload({ lookupTables: [] }, REF_DENSE_8B))).toEqual([]);
+      const noHost = input({}, { model: TINY_HYBRID, deployment: { offload: { routedExperts: [], lookupTables: [] } } });
+      expect(errorsOf(noHost)).toEqual([]);
+    });
+
+    it('a one-rule list without layers means every layer, as the object form does', () => {
+      expect(errorsOf(offload({ routedExperts: [experts()] }))).toEqual([]);
+    });
+
+    it('overlapping ranges are rejected, naming both rules (list order does not matter)', () => {
+      expect(errorsOf(offload({ routedExperts: [ram(0, 3), ssd(2, 4)] }))).toEqual([
+        'deployment.offload.routedExperts[0].layers [0, 3) overlaps deployment.offload.routedExperts[1].layers [2, 4)',
+      ]);
+      expect(errorsOf(offload({ routedExperts: [ssd(2, 4), ram(0, 3)] }))).toEqual([
+        'deployment.offload.routedExperts[0].layers [2, 4) overlaps deployment.offload.routedExperts[1].layers [0, 3)',
+      ]);
+      expect(
+        errorsOf(
+          offload(
+            {
+              lookupTables: [
+                { tier: 'host_ram', layers: { from: 0, to: 2 } },
+                { tier: 'nvme', layers: { from: 1, to: 2 } },
+              ],
+            },
+            TINY_HC_NGRAM,
+          ),
+        ),
+      ).toEqual(['deployment.offload.lookupTables[0].layers [0, 2) overlaps deployment.offload.lookupTables[1].layers [1, 2)']);
+    });
+
+    it('a rule without layers in a list of two or more is rejected', () => {
+      expect(errorsOf(offload({ routedExperts: [experts(), ssd(2, 4)] }))).toEqual([
+        'deployment.offload.routedExperts[0].layers is required when there is more than one rule',
+      ]);
+      expect(
+        errorsOf(offload({ lookupTables: [{ tier: 'host_ram' }, { tier: 'nvme', layers: { from: 1, to: 2 } }] }, TINY_HC_NGRAM)),
+      ).toEqual(['deployment.offload.lookupTables[0].layers is required when there is more than one rule']);
+    });
+
+    it('includeDraft on more than one rule is rejected; on one rule it is valid', () => {
+      expect(errorsOf(offload({ routedExperts: [{ ...ram(0, 2), includeDraft: true }, ssd(2, 4)] }))).toEqual([]);
+      expect(
+        errorsOf(offload({ routedExperts: [{ ...ram(0, 2), includeDraft: true }, { ...ssd(2, 4), includeDraft: true }] })),
+      ).toEqual(['deployment.offload.routedExperts: includeDraft may be set on one rule only (rules 0, 1)']);
+    });
+
+    it('per-rule field errors name the rule index; the object form keeps its original paths', () => {
+      expect(errorsOf(offload({ routedExperts: [ram(0, 2), { ...ssd(2, 4), residentFraction: 1.2 }] }))).toEqual([
+        'deployment.offload.routedExperts[1].residentFraction must be in [0, 1] (got 1.2)',
+      ]);
+      expect(errorsOf(offload({ routedExperts: [ram(0, 2), ssd(2, 5)] }))).toEqual([
+        'deployment.offload.routedExperts[1].layers [2, 5) must be a non-empty range inside [0, 4)',
+      ]);
+      expect(errorsOf(offload({ lookupTables: [{ tier: 'nvme', layers: { from: 2, to: 2 } }] }, TINY_HC_NGRAM))).toEqual([
+        'deployment.offload.lookupTables[0].layers [2, 2) must be a non-empty range inside [0, 2)',
+      ]);
+      expect(
+        errorsOf(offload({ lookupTables: [{ tier: 'host_ram', layers: { from: 1, to: 2 }, scaleLayout: 'pinned_host' }] }, TINY_HC_NGRAM)),
+      ).toEqual(["deployment.offload.lookupTables[0].scaleLayout 'pinned_host' needs tier 'nvme'"]);
+      // A table list on a model without tables: one error for the group; device rules alone are fine.
+      expect(errorsOf(offload({ lookupTables: [{ tier: 'nvme', layers: { from: 0, to: 1 } }] }, REF_DENSE_8B))).toEqual([
+        'deployment.offload.lookupTables: the model has no n-gram lookup table',
+      ]);
+      expect(errorsOf(offload({ lookupTables: [{ tier: 'device', layers: { from: 0, to: 1 } }] }, REF_DENSE_8B))).toEqual([]);
+      expect(errorsOf(offload({ routedExperts: { ...ram(0, 2), residentFraction: 1.2 } }))).toEqual([
+        'deployment.offload.routedExperts.residentFraction must be in [0, 1] (got 1.2)',
+      ]);
+    });
+
+    it('the removed whole-layer placement (denseLayers) is rejected, not silently ignored', () => {
+      const old = { denseLayers: { tier: 'host_ram', layers: { from: 0, to: 2 } } } as unknown as OffloadConfig;
+      expect(errorsOf(offload(old))).toEqual([
+        'deployment.offload.denseLayers was removed: whole-layer streaming is no longer modeled (offload MoE experts instead)',
+      ]);
+    });
   });
 
   it("the model's own draft head stays out of countParams, modelSpecErrors and the result while spec-dec is off", () => {

@@ -16,7 +16,7 @@ import type { NgramEmbeddingBlock } from '../ir/model';
 import type { EmbeddingOp, Op, TransferOp } from '../ir/ops';
 import { actBpe, causalConvOp, convStateTokens, elementwise, hpBpe, linearGemm, stepTokens, tpAllReduce } from './common';
 import { embeddingFormat } from './embedding';
-import type { LoweringContext, OffloadLowering } from './lower';
+import type { LoweringContext, TablePlacement } from './lower';
 import { prefetchedFraction, tablePlacementAt } from './offload';
 
 /** Storage format of n-gram lookup tables: `quant.lookupTables`, else the embedding format. */
@@ -49,7 +49,7 @@ export function tableRowBytes(format: TensorFormat, d: number): { valueBytes: nu
 export function tableFetchOp(
   block: NgramEmbeddingBlock,
   ctx: LoweringContext,
-  placement: NonNullable<OffloadLowering['lookupTables']>,
+  placement: TablePlacement,
 ): TransferOp | undefined {
   const rows = (stepTokens(ctx) * block.rowsPerToken) / ctx.parallel.tp;
   if (!(rows > 0)) return undefined;

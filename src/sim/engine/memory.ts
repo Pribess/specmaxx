@@ -15,14 +15,13 @@ import { lmHeadFormat, lmHeadResidentWeightBytes } from '../lower/head';
 import {
   blockResidentWeightBytes,
   blockSequenceStateBytes,
-  layerWeightBytesOnDevice,
   stageLayerRange,
   type LoweredModel,
   type LoweringContext,
 } from '../lower/lower';
 import { moeLocalExpertBytes } from '../lower/moe';
 import { lookupTableFormat, ngramTableShardBytes, tableRowBytes } from '../lower/ngram';
-import { denseLayerPlacementAt, expertPlacementAt, tablePlacementAt } from '../lower/offload';
+import { draftExpertPlacement, expertPlacementAt, tablePlacementAt } from '../lower/offload';
 import type { ResolvedHost } from './host';
 import type { DeviceMemory, MemoryReport, OffloadTier, TierBytes, TierMemory } from './types';
 
@@ -136,7 +135,7 @@ export function sameStoredFormat(a: TensorFormat, b: TensorFormat): boolean {
  * embedding shard on stage 0 and the LM-head shard (+ final norm) on the last stage. A tied head shares the
  * embedding table only when it is on the same device (pp = 1) AND stored in the same format (dtype and
  * overhead); a tied head quantized differently is a second copy and is counted in full. With weights offloaded
- * (`ctx.offload`), a layer of a `denseLayers` range keeps nothing, an offloaded MoE layer keeps `C = f·E_loc`
+ * (`ctx.offload`), an offloaded MoE layer keeps `C = f·E_loc`
  * experts, an off-device table keeps its non-table part (design doc §2.7). Unit: bytes.
  */
 export function stageWeightBytes(model: ModelSpec, ctx: LoweringContext, s: number): number {
@@ -144,8 +143,6 @@ export function stageWeightBytes(model: ModelSpec, ctx: LoweringContext, s: numb
   const [start, end] = stageLayerRange(model.layers.length, pp, s);
   let layerBytes = 0;
   for (let i = start; i < end; i++) {
-    // Formula: W_layer = 0 for a layer streamed whole (denseLayers)
-    if (denseLayerPlacementAt(ctx, i) !== undefined) continue;
     for (const block of model.layers[i].blocks)
       layerBytes += blockResidentWeightBytes(block, ctx, i);
   }
@@ -214,8 +211,7 @@ export function stageLookupTableBytes(model: ModelSpec, ctx: LoweringContext, s:
   const [start, end] = stageLayerRange(model.layers.length, ctx.parallel.pp, s);
   let bytes = 0;
   for (let i = start; i < end; i++) {
-    if (denseLayerPlacementAt(ctx, i) !== undefined || tablePlacementAt(ctx, i) !== undefined)
-      continue;
+    if (tablePlacementAt(ctx, i) !== undefined) continue;
     for (const block of model.layers[i].blocks) {
       if (block.kind === 'ngram_embedding') bytes += ngramTableShardBytes(block, ctx);
     }
@@ -228,7 +224,7 @@ export function stageLookupTableBytes(model: ModelSpec, ctx: LoweringContext, s:
  * Staging buffer of stage `s` for streamed weight groups (design doc §2.7): the largest single transfer of the stage
  * over the given phases, double-buffered when it is prefetched (`prefetchedFraction > 0`: one buffer fills while the
  * other is read), single otherwise.
- * A transfer's buffer is `Σ ceil(count)·bytesEach` for experts and dense layers (capacity is not an average, so
+ * A transfer's buffer is `Σ ceil(count)·bytesEach` for experts (capacity is not an average, so
  * expected misses round up) and its `usefulBytes` for table rows (the gathered rows, not the tier's pages).
  * 0 when nothing streams. Unit: bytes.
  */
@@ -256,18 +252,18 @@ export function stageStagingBytes(lowered: LoweredModel[], s: number): number {
 
 /** An all-zero {@link TierBytes}. */
 function emptyTierBytes(): TierBytes {
-  return { lookupTables: 0, routedExperts: 0, denseLayers: 0, draftExperts: 0 };
+  return { lookupTables: 0, routedExperts: 0, draftExperts: 0 };
 }
 
 /** Sum of the categories of a {@link TierBytes}. Unit: bytes. */
 export function tierBytesTotal(b: TierBytes): number {
-  return b.lookupTables + b.routedExperts + b.denseLayers + b.draftExperts;
+  return b.lookupTables + b.routedExperts + b.draftExperts;
 }
 
 /**
  * Bytes one device of stage `s` places on each off-device tier, split by what they hold (design doc §2.7): the FULL
- * groups, since the device cache is a copy: all local experts of each offloaded MoE layer (`routedExperts`), the
- * whole weights of each `denseLayers` layer (`denseLayers`), each off-device table shard (`lookupTables`); plus, for
+ * groups, since the device cache is a copy: all local experts of each offloaded MoE layer (`routedExperts`), each
+ * off-device table shard (`lookupTables`); plus, for
  * an NVMe table with `scaleLayout 'pinned_host'`, its scales (`ceil(rows/tp)·scaleBytes`) on host RAM
  * (`lookupTables`) — on dedicated memory only: on unified memory (`hostRamIsDevice`) the scales are device bytes counted
  * in {@link stageWeightBytes}, and a `host_ram` group is an error (invariant). The draft's own experts are
@@ -285,12 +281,6 @@ export function stageTierBreakdown(
   const [start, end] = stageLayerRange(model.layers.length, ctx.parallel.pp, s);
   for (let i = start; i < end; i++) {
     const layer = model.layers[i];
-    const dense = denseLayerPlacementAt(ctx, i);
-    if (dense !== undefined) {
-      // Formula: tier += W_layer
-      bytes[dense.tier].denseLayers += layerWeightBytesOnDevice(layer, ctx);
-      continue;
-    }
     const experts = expertPlacementAt(ctx, i);
     const tables = tablePlacementAt(ctx, i);
     for (const block of layer.blocks) {
@@ -313,12 +303,13 @@ export function stageTierBreakdown(
       }
     }
   }
-  // Spec-dec with includeDraft: the drafter's own MoE experts (last stage) live on the experts' tier too (design §3.8).
-  const draftExperts = ctx.offload?.routedExperts;
+  // Spec-dec with includeDraft: the drafter's own MoE experts (last stage) live on the tier of the one rule that sets
+  // includeDraft (design §3.8).
+  const draftExperts = draftExpertPlacement(ctx.offload);
   if (
     s === ctx.parallel.pp - 1 &&
     ctx.speculative !== undefined &&
-    draftExperts?.includeDraft === true
+    draftExperts !== undefined
   ) {
     for (const layer of draftLayerSpecs(ctx.speculative.draft)) {
       for (const block of layer.blocks) {

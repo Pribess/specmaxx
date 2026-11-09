@@ -2785,20 +2785,29 @@ export const REPORTS: BenchmarkReport[] = [
       tokensPerSec: 0.9,
       kind: 'perSequence',
       check: {
-        mode: 'exception',
+        mode: 'excluded',
         reason:
-          'Sim underestimate (missing CPU-side whole-layer compute): CPU layers execute in DDR4, whereas the sim streams every whole-layer weight over PCIe. Source also claims 32 layers for a 36-layer model (possible mislabeled report); see docs/review/practicality-review.md §2/§3 F3.',
+          'Mode not modelled: llama.cpp computes the 23 CPU layers (attention and experts) on the CPU from DDR4. Whole-layer streaming, the old encoding of this row, was removed; it is re-encoded as the experts of those layers offloaded to host RAM, a different setup, so it is not compared. The CPU-compute mode (docs/review/practicality-review.md F3) would bound it. Source also claims 32 layers for a 36-layer model (possible mislabeled report).',
       },
     },
     caveats:
-      'Source claims 13/32 layers on GPU, but GPT-OSS-120B fixture has 36 layers: use stated 13 GPU layers, remaining 23 CPU. Possible mislabeled layer-count report. Simulator streams whole layers instead of CPU compute. Generated length unknown, standard 128 assumed; EPYC eight-channel DDR4 assumed.',
+      'Source claims 13/32 layers on GPU, but GPT-OSS-120B fixture has 36 layers: use stated 13 GPU layers, remaining 23 CPU. Possible mislabeled layer-count report. Re-encoded as routed experts of layers 0–22 in host RAM (whole-layer streaming removed), not the CPU compute llama.cpp does. Generated length unknown, standard 128 assumed; EPYC eight-channel DDR4 assumed.',
     input: {
       model: { kind: 'spec', spec: GPT_OSS_120B },
       quant: { kind: 'preset', preset: GPT_OSS_GGUF },
       numerics: LLAMACPP_MMQ,
       hardware: { deviceId: 'rtx-3090', host: { link: hostPcieLink(4, 16), ram: DDR4_3200_8CH } },
       workload: { batch: 1, promptLen: 71, genLen: 128, contextDepth: 71 },
-      deployment: { offload: { denseLayers: { tier: 'host_ram', layers: { from: 0, to: 23 } } } },
+      deployment: {
+        offload: {
+          routedExperts: {
+            tier: 'host_ram',
+            layers: { from: 0, to: 23 },
+            residentFraction: 0,
+            hitRatio: { kind: 'uniform' },
+          },
+        },
+      },
     },
   },
   // DDR expert offload; collection row F-W09

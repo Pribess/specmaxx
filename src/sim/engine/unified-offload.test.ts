@@ -130,7 +130,7 @@ describe('unified memory × every placement: no host_ram tier, the invariant nev
     }
   });
 
-  it('routed experts (with includeDraft) and dense layers on either tier', () => {
+  it('routed experts (with includeDraft) on either tier, and split between both', () => {
     for (const tier of tiers) {
       const base: SimInput = {
         model: REF_MOE_30B_A3B,
@@ -157,11 +157,18 @@ describe('unified memory × every placement: no host_ram tier, the invariant nev
         },
       });
       expect(experts.memory.tiers.some((t) => t.tier === 'host_ram')).toBe(false);
-      const dense = simulate({
+      const split = simulate({
         ...base,
-        deployment: { offload: { denseLayers: { tier, layers: { from: 0, to: 4 } } } },
+        deployment: {
+          offload: {
+            routedExperts: [
+              { tier, layers: { from: 0, to: 24 }, residentFraction: 0, hitRatio: { kind: 'uniform' } },
+              { tier: 'nvme', layers: { from: 24, to: 48 }, residentFraction: 0, hitRatio: { kind: 'uniform' } },
+            ],
+          },
+        },
       });
-      expect(dense.memory.tiers.some((t) => t.tier === 'host_ram')).toBe(false);
+      expect(split.memory.tiers.some((t) => t.tier === 'host_ram')).toBe(false);
     }
   });
 });

@@ -112,7 +112,7 @@ it('shows the red hero warning naming a failing tier when every stage fits', asy
     {
       tier: 'nvme',
       bytes: 2.2e12,
-      breakdown: { lookupTables: 2.2e12, routedExperts: 0, denseLayers: 0, draftExperts: 0 },
+      breakdown: { lookupTables: 2.2e12, routedExperts: 0, draftExperts: 0 },
       capacityBytes: 2e12,
       fits: false,
     },
@@ -152,7 +152,7 @@ it('is red, not amber, when a stage is above 90% but a tier does not fit', async
     {
       tier: 'nvme',
       bytes: 2.2e12,
-      breakdown: { lookupTables: 2.2e12, routedExperts: 0, denseLayers: 0, draftExperts: 0 },
+      breakdown: { lookupTables: 2.2e12, routedExperts: 0, draftExperts: 0 },
       capacityBytes: 2e12,
       fits: false,
     },

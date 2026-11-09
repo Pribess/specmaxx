@@ -8,12 +8,15 @@ import {
   offloadsAnything,
   offloadsToSsd,
   resolveHost,
+  tableLayerIndices,
   tablesOffDeviceByDesign,
   type HitRatioChoice,
   type HostChoice,
   type OffloadChoice,
   type ScaleLayoutChoice,
+  type PlacementChoice,
   type TierChoice,
+  type TierSplitChoice,
 } from '../state';
 import { NumberField } from './NumberField';
 import { Picker } from './Picker';
@@ -24,6 +27,9 @@ import type { PanelProps } from './types';
 /** Picker value of "on the device". */
 const DEVICE = 'device';
 
+/** Scale-layout picker value of "each side of a split uses its own tier's default" (`scaleLayout` absent). */
+const TIER_DEFAULT = 'tier-default';
+
 /** "?" help of the prefetch accuracy (docs/simulation-model.md §12 "Expert prefetch"). */
 const PREFETCH_HELP = helpLines([
   'How often needed experts are guessed one layer early, so they load in advance.',
@@ -32,11 +38,62 @@ const PREFETCH_HELP = helpLines([
 ]);
 
 /** Tier labels. */
-const TIER_LABELS: Record<TierChoice | typeof DEVICE, string> = {
+const TIER_LABELS: Record<PlacementChoice | typeof DEVICE, string> = {
   device: 'Device',
   host_ram: 'Host RAM',
   nvme: 'SSD',
+  split: 'Host RAM + SSD',
 };
+
+/** "Host RAM holds" picker rows: which end of the offloaded layers is in host RAM. */
+const RAM_END_OPTIONS: PickerOption[] = [
+  { value: 'first', label: 'Earliest layers' },
+  { value: 'last', label: 'Latest layers' },
+];
+
+/**
+ * The host-RAM / SSD split fields of a group with `tier: 'split'`: how many of its `offloadedLayers` are in host RAM
+ * (absent = half) and which end of them.
+ */
+function SplitFields({
+  split,
+  offloadedLayers,
+  onChange,
+}: {
+  split: TierSplitChoice | undefined;
+  offloadedLayers: number;
+  onChange: (next: TierSplitChoice) => void;
+}) {
+  const k = Math.max(0, offloadedLayers);
+  const ramLayers = Math.min(k, split?.ramLayers ?? Math.floor(k / 2));
+  return (
+    <div className="fields two" data-testid="split-fields">
+      <NumberField
+        label="Layers in host RAM"
+        value={ramLayers}
+        min={0}
+        max={k}
+        onChange={(v) =>
+          onChange({ ...split, ramLayers: Number.isInteger(v) ? Math.min(k, Math.max(0, v)) : 0 })
+        }
+        help={helpLines([
+          'How many offloaded layers are kept in host RAM.',
+          'The other offloaded layers are on the SSD.',
+        ])}
+      />
+      <Picker
+        label="Host RAM holds"
+        value={split?.ramEnd ?? 'first'}
+        options={RAM_END_OPTIONS}
+        onChange={(v) => onChange({ ...split, ramEnd: v as 'first' | 'last' })}
+        help={helpLines([
+          'Which end of the offloaded layers goes to host RAM.',
+          'The other end goes to the SSD.',
+        ])}
+      />
+    </div>
+  );
+}
 
 /** Hit-ratio model labels (custom is a number in the state). */
 const HIT_RATIO_OPTIONS: PickerOption[] = [
@@ -89,7 +146,8 @@ const HOST_RAM_OPTIONS: PickerOption[] = [...HOST_RAM_PRESETS]
 
 /**
  * Shared state of the offload controls (the main section and its Advanced subsection): the model and device, the
- * current offload choice and its setter, and the tier picker rows. `undefined` before a model and device resolve.
+ * current offload choice and its setter, and the tier picker rows (`placementOptions` adds "Host RAM + SSD" for the
+ * experts and lookup tables). `undefined` before a model and device resolve.
  */
 function offloadControls({ state, dispatch, loaded, built }: PanelProps) {
   const model = loaded?.model;
@@ -112,6 +170,20 @@ function offloadControls({ state, dispatch, loaded, built }: PanelProps) {
   }));
   const tier = (v: string): TierChoice | undefined =>
     v === DEVICE ? undefined : (v as TierChoice);
+  /**
+   * Rows of the experts / lookup-tables picker: the tiers plus the host-RAM + SSD split on dedicated memory when the
+   * group has at least 2 layers to split (`splittable`). On unified memory host RAM is the device pool, so the split
+   * is listed only while the state holds it (a shared URL); the same for a group with fewer than 2 layers.
+   */
+  const placementOptions = (
+    current: PlacementChoice | undefined,
+    splittable = true,
+  ): PickerOption[] =>
+    (!unified && splittable) || current === 'split'
+      ? [...tierOptions, { value: 'split', label: TIER_LABELS.split }]
+      : tierOptions;
+  const placement = (v: string): PlacementChoice | undefined =>
+    v === DEVICE ? undefined : (v as PlacementChoice);
   return {
     model,
     device,
@@ -121,13 +193,15 @@ function offloadControls({ state, dispatch, loaded, built }: PanelProps) {
     setOffload,
     tierOptions,
     tier,
+    placementOptions,
+    placement,
     anyOff: offloadsAnything(offload),
   };
 }
 
 /**
- * Hardware → "Offload" (dedicated memory) / "Storage" (unified memory), design doc §6.2: where routed experts and
- * whole layers live, the expert cache, and the host's RAM, SSD and PCIe link. On unified memory host RAM is the
+ * Hardware → "Offload" (dedicated memory) / "Storage" (unified memory), design doc §6.2: where the MoE experts and
+ * the expert cache live, and the host's RAM, SSD and PCIe link. On unified memory host RAM is the
  * device pool, so only the SSD is a tier and there is no host link. The less common knobs (lookup-table placement,
  * scale layout, queue depth, prefetch accuracy) are {@link OffloadAdvancedFields}, in the panel's Advanced.
  */
@@ -135,7 +209,8 @@ export function OffloadSection(props: PanelProps) {
   const { state, dispatch, built } = props;
   const controls = offloadControls(props);
   if (controls === undefined) return null;
-  const { model, device, unified, offload, setOffload, tierOptions, tier, anyOff } = controls;
+  const { model, device, unified, offload, setOffload, placementOptions, placement, anyOff } =
+    controls;
   const host = state.hw.host ?? {};
   const setHost = (next: Partial<HostChoice>) =>
     dispatch({ type: 'setHost', host: { ...host, ...next } });
@@ -150,20 +225,30 @@ export function OffloadSection(props: PanelProps) {
       {hasMoe(model) && (
         <>
           <Picker
-            label="Routed experts"
+            label="MoE experts"
             value={experts?.tier ?? DEVICE}
-            options={tierOptions}
+            options={placementOptions(experts?.tier)}
             onChange={(v) => {
-              const t = tier(v);
+              const t = placement(v);
+              const offloaded = layerCount - (experts?.fromLayer ?? 0);
               setOffload({
                 ...offload,
-                experts: t === undefined ? undefined : { ...experts, tier: t },
+                experts:
+                  t === undefined
+                    ? undefined
+                    : {
+                        ...experts,
+                        tier: t,
+                        ...(t === 'split' && experts?.tier !== 'split'
+                          ? { split: { ramLayers: Math.floor(offloaded / 2) } }
+                          : {}),
+                      },
               });
             }}
             help={helpLines([
-              'Where the experts (the specialist sub-networks of an MoE model) are stored.',
-              'Experts not on the GPU stream in over PCIe.',
-              'The GPU still does the compute.',
+              'Experts live in host RAM or SSD; some stay cached on the GPU.',
+              'Each token fetches only the few experts it needs, if not cached.',
+              'Usually the fastest way to fit a large MoE.',
             ])}
           />
           {experts !== undefined && (
@@ -203,6 +288,13 @@ export function OffloadSection(props: PanelProps) {
                 ])}
               />
             </div>
+          )}
+          {experts?.tier === 'split' && (
+            <SplitFields
+              split={experts.split}
+              offloadedLayers={layerCount - (experts.fromLayer ?? 0)}
+              onChange={(split) => setOffload({ ...offload, experts: { ...experts, split } })}
+            />
           )}
           {experts !== undefined && (
             <>
@@ -249,46 +341,6 @@ export function OffloadSection(props: PanelProps) {
             </>
           )}
         </>
-      )}
-      <Picker
-        label="Dense layers"
-        value={offload.dense?.tier ?? DEVICE}
-        options={tierOptions}
-        onChange={(v) => {
-          const t = tier(v);
-          setOffload({
-            ...offload,
-            dense:
-              t === undefined
-                ? undefined
-                : {
-                    tier: t,
-                    layersOnDevice: offload.dense?.layersOnDevice ?? Math.floor(layerCount / 2),
-                  },
-          });
-        }}
-        help={helpLines([
-          'Where whole layers beyond the on-device count are stored.',
-          'They stream in from there every step.',
-        ])}
-      />
-      {offload.dense !== undefined && (
-        <NumberField
-          label="Layers on device"
-          value={offload.dense.layersOnDevice}
-          min={0}
-          max={layerCount}
-          onChange={(v) =>
-            setOffload({
-              ...offload,
-              dense: { ...offload.dense!, layersOnDevice: Number.isInteger(v) && v >= 0 ? v : 0 },
-            })
-          }
-          help={helpLines([
-            `How many of the ${layerCount} layers stay on the device.`,
-            'The rest stream in from the tier every step.',
-          ])}
-        />
       )}
       {issues.length > 0 && (
         <span className="hint" role="status">
@@ -375,9 +427,19 @@ export function OffloadSection(props: PanelProps) {
 export function OffloadAdvancedFields(props: PanelProps) {
   const controls = offloadControls(props);
   if (controls === undefined) return null;
-  const { model, unified, offload, designOffDevice, setOffload, tierOptions, tier, anyOff } =
-    controls;
+  const {
+    model,
+    unified,
+    offload,
+    designOffDevice,
+    setOffload,
+    placementOptions,
+    placement,
+    anyOff,
+  } = controls;
   const tables = offload.tables;
+  // A split counts table layers: it needs at least 2 (Qwen PLE has 1, DeepSeek Engram 2).
+  const tableLayerCount = tableLayerIndices(model).length;
   if (!hasLookupTables(model) && !anyOff) return null;
   const placeTablesOnHost = () =>
     setOffload({ ...offload, tables: { tier: unified ? 'nvme' : 'host_ram' } });
@@ -389,10 +451,23 @@ export function OffloadAdvancedFields(props: PanelProps) {
           <Picker
             label="Lookup tables"
             value={tables?.tier ?? DEVICE}
-            options={tierOptions}
+            options={placementOptions(tables?.tier, tableLayerCount >= 2)}
             onChange={(v) => {
-              const t = tier(v);
-              setOffload({ ...offload, tables: t === undefined ? undefined : { tier: t } });
+              const t = placement(v);
+              setOffload({
+                ...offload,
+                tables:
+                  t === undefined
+                    ? undefined
+                    : t === 'split'
+                      ? {
+                          tier: t,
+                          split: tables?.split ?? {
+                            ramLayers: Math.floor(tableLayerCount / 2),
+                          },
+                        }
+                      : { tier: t },
+              });
             }}
             help={helpLines([
               'Where the lookup tables are stored.',
@@ -413,15 +488,34 @@ export function OffloadAdvancedFields(props: PanelProps) {
           )}
         </div>
       )}
+      {tables?.tier === 'split' && (
+        <SplitFields
+          split={tables.split}
+          offloadedLayers={tableLayerCount}
+          onChange={(split) => setOffload({ ...offload, tables: { ...tables, split } })}
+        />
+      )}
       {tables !== undefined && (
         <Picker
           label="Scale layout"
-          value={tables.scaleLayout ?? defaultScaleLayout(tables.tier)}
-          options={unified ? UNIFIED_SCALE_LAYOUT_OPTIONS : SCALE_LAYOUT_OPTIONS}
+          value={
+            tables.scaleLayout ??
+            (tables.tier === 'split' ? TIER_DEFAULT : defaultScaleLayout(tables.tier))
+          }
+          options={[
+            // A split has no single default: each side uses its own tier's layout.
+            ...(tables.tier === 'split'
+              ? [{ value: TIER_DEFAULT, label: 'Each tier’s default' }]
+              : []),
+            ...(unified ? UNIFIED_SCALE_LAYOUT_OPTIONS : SCALE_LAYOUT_OPTIONS),
+          ]}
           onChange={(v) =>
             setOffload({
               ...offload,
-              tables: { ...tables, scaleLayout: v as ScaleLayoutChoice },
+              tables: {
+                ...tables,
+                scaleLayout: v === TIER_DEFAULT ? undefined : (v as ScaleLayoutChoice),
+              },
             })
           }
           help={helpLines([

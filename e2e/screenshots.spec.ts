@@ -100,6 +100,26 @@ for (const size of ['desktop', 'phone'] as const) {
       await breakdown.getByRole('button', { name: 'Kind', exact: true }).click();
       await breakdown.screenshot({ path: name('breakdown-comm-transfer') });
 
+      // Host RAM + SSD split: DeepSeek-V4.1-Flash on one RTX 5090 with 256 GB of DDR5-5600 × 2: half of the expert
+      // layers in host RAM and half on the SSD, and its two Engram table layers split one each: the split fields (main
+      // section and Advanced) and both tier bars with their layer spans.
+      await load('?m=deepseek-ai/DeepSeek-V4.1-Flash&hr=ddr5-5600-2ch&hrc=256&ox=split&olt=split', [
+        'Hardware',
+      ]);
+      await expect(page.getByTestId('split-fields').first()).toBeVisible();
+      await shoot(page.getByTestId('offload-section'), name('offload-split-panel'));
+      await page.locator('details.advanced > summary').click();
+      await shoot(page.getByTestId('offload-advanced'), name('offload-split-advanced'));
+      await page.evaluate(() => scrollTo(0, 0));
+      const memory = page.locator('section.memory');
+      await expect(memory.getByTestId('memory-tier')).toHaveCount(2);
+      await memory.scrollIntoViewIfNeeded();
+      // No help popup left open from an earlier hover or focus.
+      await page.mouse.move(0, 0);
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await expect(page.getByRole('tooltip')).toHaveCount(0);
+      await memory.screenshot({ path: name('offload-split-memory') });
+
       // Unified memory: DGX Spark, experts on its SSD ("Storage").
       await load('?d=dgx-spark&m=Qwen/Qwen3.8-Flash-Next&ox=ssd', ['Hardware']);
       const storage = page.getByTestId('offload-section');

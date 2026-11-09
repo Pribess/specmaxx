@@ -50,6 +50,7 @@ import {
   type LoweringContext,
 } from './lower';
 import { lowerDenseFfn } from './mlp';
+import { draftExpertPlacement } from './offload';
 
 // ---------------------------------------------------------------------------------------------------------------
 // Shared helpers
@@ -60,21 +61,21 @@ const TOKEN_ID_BYTES = 4;
 /**
  * The lowering context of the drafter's own layers: the given step shape, without the verify's speculative
  * settings (the drafter keeps one state snapshot: only its final state is kept) and without the target's offload
- * placement, except the routed-expert placement when `includeDraft` puts the drafter's own MoE experts off-device
- * (design doc §3.8). That placement's layer range is over the TARGET's layers, so it is widened to every drafter
- * layer (`[0, ∞)`); drafter blocks are lowered with their own drafter layer (module) index, which the offload
- * lowering needs to place experts.
+ * placement, except the routed-expert placement whose rule sets `includeDraft` (at most one), which puts the drafter's
+ * own MoE experts off-device with that rule's tier, f and h (design doc §3.8). That rule's layer range is over the
+ * TARGET's layers, so it is widened to every drafter layer (`[0, ∞)`), as a one-rule list; drafter blocks are lowered
+ * with their own drafter layer (module) index, which the offload lowering needs to place experts.
  */
 function draftContext(ctx: LoweringContext, qLen: number, kvLen: number): LoweringContext {
-  const experts = ctx.offload?.routedExperts;
+  const experts = draftExpertPlacement(ctx.offload);
   const draftCtx: LoweringContext = { ...ctx, qLen, kvLen };
   delete draftCtx.speculative;
   delete draftCtx.offload;
-  if (experts !== undefined && experts.includeDraft) {
+  if (experts !== undefined) {
     // Formula: draft expert range = [0, ∞) (every drafter MoE layer is offloaded with includeDraft)
     draftCtx.offload = {
       prefetchAccuracy: ctx.offload?.prefetchAccuracy ?? 0,
-      routedExperts: { ...experts, layers: { from: 0, to: Infinity } },
+      routedExperts: [{ ...experts, layers: { from: 0, to: Infinity } }],
     };
   }
   return draftCtx;

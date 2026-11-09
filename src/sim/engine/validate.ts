@@ -21,6 +21,7 @@ import { modelSpecErrors } from '../ir/validateModel';
 import { lowerBlock, type LoweringContext } from '../lower/lower';
 import { moeParallelErrors } from '../lower/moe';
 import { checkPlacement, expertTpCollectivePath } from './placement';
+import { expertRules, lookupTableRules } from './offloadRules';
 import type { LayerRange, SimInput } from './types';
 
 /** The exact error for speculative decoding with pipeline parallelism (design doc §3.6). */
@@ -174,6 +175,32 @@ function layerRangeErrors(range: LayerRange, layerCount: number, label: string):
   return [];
 }
 
+/**
+ * Errors for rules of one group whose layer ranges overlap (rules must cover disjoint ranges; a rule without `layers`
+ * is reported elsewhere and skipped here). Names both rule indices: `<label>[i].layers [a, b) overlaps <label>[j].layers
+ * [c, d)`. Rules are compared by start layer, so their list order does not matter.
+ */
+function overlapErrors(rules: readonly { layers?: LayerRange }[], label: string): string[] {
+  const ranged = rules
+    .flatMap((r, i) => (r.layers === undefined ? [] : [{ i, range: r.layers }]))
+    .sort((a, b) => a.range.from - b.range.from);
+  const errors: string[] = [];
+  for (let k = 0; k < ranged.length; k++) {
+    for (let m = k + 1; m < ranged.length; m++) {
+      const a = ranged[k]!;
+      const b = ranged[m]!;
+      // Formula: [a.from, a.to) ∩ [b.from, b.to) ≠ ∅  ⇔  b.from < a.to   (b.from ≥ a.from after the sort)
+      if (b.range.from < a.range.to) {
+        const [x, y] = a.i < b.i ? [a, b] : [b, a];
+        errors.push(
+          `${label}[${x.i}].layers [${x.range.from}, ${x.range.to}) overlaps ${label}[${y.i}].layers [${y.range.from}, ${y.range.to})`,
+        );
+      }
+    }
+  }
+  return errors;
+}
+
 /** True if `x` is a finite number in [lo, hi] (or [lo, hi) when `hiOpen`). */
 function inRange(x: number, lo: number, hi: number, hiOpen = false): boolean {
   return Number.isFinite(x) && x >= lo && (hiOpen ? x < hi : x <= hi);
@@ -184,8 +211,9 @@ function inRange(x: number, lo: number, hi: number, hiOpen = false): boolean {
  *
  * Offload: `mode 'cpu_compute'` is a designed hook, rejected for now (§2.8); `queueDepth` an integer ≥ 1; routed
  * experts need a MoE model, `residentFraction` in [0, 1], a custom `h` in [0, 1] and `h = 0` when `f = 0` (no expert
- * is resident); layer ranges non-empty inside `[0, L)`; an off-device lookup-table tier needs n-gram tables, and
- * `scaleLayout 'pinned_host'` needs the NVMe tier. Any off-device group on a dedicated-memory device needs a host
+ * is resident); layer ranges non-empty inside `[0, L)`, disjoint within a group, and required in a list of two or more
+ * rules; `includeDraft` on one expert rule at most; an off-device lookup-table tier needs n-gram tables, and
+ * `scaleLayout 'pinned_host'` needs the NVMe tier; the removed `denseLayers` is rejected. Any off-device group on a dedicated-memory device needs a host
  * link: `hardware.host.link` or the device's cited `hostInterface`. `hardware.host`, when given, is validated.
  *
  * Speculative decoding: rejected with pp > 1 (§3.6, {@link SPEC_DEC_PP_ERROR}); `draftLength` k an integer in
@@ -218,38 +246,69 @@ export function deploymentErrors(input: SimInput): string[] {
     if (p !== undefined && !(Number.isFinite(p) && inRange(p, 0, 1))) {
       errors.push(`deployment.offload.prefetchAccuracy must be in [0, 1] (got ${p})`);
     }
-    const experts = offload.routedExperts;
-    if (experts !== undefined) {
+    const experts = expertRules(offload);
+    // The object form keeps its original message paths; a list names the rule: `routedExperts[i].…`.
+    const expertLabel = (i: number): string =>
+      Array.isArray(offload.routedExperts)
+        ? `deployment.offload.routedExperts[${i}]`
+        : 'deployment.offload.routedExperts';
+    if (experts.length > 0) {
       const hasMoe = model.layers.some((l) => l.blocks.some((b) => b.kind === 'moe'));
       if (!hasMoe) errors.push('deployment.offload.routedExperts: the model has no MoE block');
-      const f = experts.residentFraction;
-      if (!inRange(f, 0, 1)) errors.push(`deployment.offload.routedExperts.residentFraction must be in [0, 1] (got ${f})`);
-      if (experts.hitRatio.kind === 'custom') {
-        const h = experts.hitRatio.h;
-        if (!inRange(h, 0, 1)) errors.push(`deployment.offload.routedExperts.hitRatio.h must be in [0, 1] (got ${h})`);
+    }
+    experts.forEach((rule, i) => {
+      const label = expertLabel(i);
+      const f = rule.residentFraction;
+      if (!inRange(f, 0, 1)) errors.push(`${label}.residentFraction must be in [0, 1] (got ${f})`);
+      if (rule.hitRatio.kind === 'custom') {
+        const h = rule.hitRatio.h;
+        if (!inRange(h, 0, 1)) errors.push(`${label}.hitRatio.h must be in [0, 1] (got ${h})`);
         else if (f === 0 && h > 0) {
-          errors.push('deployment.offload.routedExperts.hitRatio: no experts are resident, h must be 0');
+          errors.push(`${label}.hitRatio: no experts are resident, h must be 0`);
         }
       }
-      if (experts.layers !== undefined) {
-        errors.push(...layerRangeErrors(experts.layers, L, 'deployment.offload.routedExperts.layers'));
+      if (rule.layers !== undefined) {
+        errors.push(...layerRangeErrors(rule.layers, L, `${label}.layers`));
+      } else if (experts.length > 1) {
+        errors.push(`${label}.layers is required when there is more than one rule`);
       }
+    });
+    errors.push(...overlapErrors(experts, 'deployment.offload.routedExperts'));
+    const drafting = experts.flatMap((rule, i) => (rule.includeDraft === true ? [i] : []));
+    if (drafting.length > 1) {
+      errors.push(
+        `deployment.offload.routedExperts: includeDraft may be set on one rule only (rules ${drafting.join(', ')})`,
+      );
     }
-    if (offload.denseLayers !== undefined) {
-      errors.push(...layerRangeErrors(offload.denseLayers.layers, L, 'deployment.offload.denseLayers.layers'));
+    // Whole-layer streaming (`denseLayers`) was removed (docs/simulation-model.md §12 "Placement"); an old input that
+    // still carries it is rejected rather than silently simulated as on-device.
+    if ('denseLayers' in offload) {
+      errors.push(
+        'deployment.offload.denseLayers was removed: whole-layer streaming is no longer modeled (offload MoE experts instead)',
+      );
     }
-    const tables = offload.lookupTables;
-    if (tables !== undefined && tables.tier !== 'device') {
+    const tables = lookupTableRules(offload);
+    // The object form keeps its original message paths; a list names the rule: `lookupTables[i].…`.
+    const tableLabel = (i: number): string =>
+      Array.isArray(offload.lookupTables) ? `deployment.offload.lookupTables[${i}]` : 'deployment.offload.lookupTables';
+    const offDeviceTables = tables.some((rule) => rule.tier !== 'device');
+    if (offDeviceTables) {
       const hasNgram = model.layers.some((l) => l.blocks.some((b) => b.kind === 'ngram_embedding'));
       if (!hasNgram) errors.push('deployment.offload.lookupTables: the model has no n-gram lookup table');
-      if (tables.scaleLayout === 'pinned_host' && tables.tier !== 'nvme') {
-        errors.push("deployment.offload.lookupTables.scaleLayout 'pinned_host' needs tier 'nvme'");
-      }
     }
-    const offDevice =
-      experts !== undefined ||
-      offload.denseLayers !== undefined ||
-      (tables !== undefined && tables.tier !== 'device');
+    tables.forEach((rule, i) => {
+      const label = tableLabel(i);
+      if (rule.tier !== 'device' && rule.scaleLayout === 'pinned_host' && rule.tier !== 'nvme') {
+        errors.push(`${label}.scaleLayout 'pinned_host' needs tier 'nvme'`);
+      }
+      if (rule.layers !== undefined) {
+        errors.push(...layerRangeErrors(rule.layers, L, `${label}.layers`));
+      } else if (tables.length > 1) {
+        errors.push(`${label}.layers is required when there is more than one rule`);
+      }
+    });
+    errors.push(...overlapErrors(tables, 'deployment.offload.lookupTables'));
+    const offDevice = experts.length > 0 || offDeviceTables;
     const device = hardware.device;
     if (
       offDevice &&

@@ -301,7 +301,7 @@ describe('latent MoE (latentDim)', () => {
   it('offloaded experts: the fetch moves experts at l; the latent projections stay resident', () => {
     const offload: OffloadLowering = {
       prefetchAccuracy: 0,
-      routedExperts: { tier: 'host_ram', layers: { from: 0, to: 4 }, residentFraction: 0.5, hitRatio: 0.5, includeDraft: false },
+      routedExperts: [{ tier: 'host_ram', layers: { from: 0, to: 4 }, residentFraction: 0.5, hitRatio: 0.5, includeDraft: false }],
     };
     const c: LoweringContext = { ...ctx(1, {}), offload };
     // W_expert = 3·32·32·2 = 6144 (at h it would be 12,288)

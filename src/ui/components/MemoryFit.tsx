@@ -1,5 +1,11 @@
 import type { CSSProperties } from 'react';
-import { formatBytes, formatContextTokens, type ResultSummary, type StageMemory } from '../state';
+import {
+  formatBytes,
+  formatContextTokens,
+  type OffloadPlacement,
+  type ResultSummary,
+  type StageMemory,
+} from '../state';
 import type { TierMemory } from '../../sim/engine/types';
 import { ChartTooltip, useChartPoint } from './ChartTooltip';
 import { HelpIcon } from './HelpIcon';
@@ -45,19 +51,41 @@ function stageSegments(stage: StageMemory): Segment[] {
   ].filter((s) => s.bytes > 0 || ['weights', 'state', 'activations'].includes(s.key));
 }
 
-/** Legend order, labels and key suffixes of what fills an off-device tier ({@link TierMemory.breakdown}). */
+/**
+ * Legend order, labels and key suffixes of what fills an off-device tier ({@link TierMemory.breakdown}), with the
+ * offload group whose placements give the layer spans (none for draft experts).
+ */
 const TIER_CATEGORIES = [
-  { field: 'lookupTables', key: 'tier-tables', label: 'Lookup tables' },
-  { field: 'routedExperts', key: 'tier-experts', label: 'Routed experts' },
-  { field: 'denseLayers', key: 'tier-dense', label: 'Dense layers' },
-  { field: 'draftExperts', key: 'tier-draft', label: 'Draft experts' },
+  { field: 'lookupTables', key: 'tier-tables', label: 'Lookup tables', group: 'lookup_tables' },
+  { field: 'routedExperts', key: 'tier-experts', label: 'MoE experts', group: 'routed_experts' },
+  { field: 'draftExperts', key: 'tier-draft', label: 'Draft experts', group: undefined },
 ] as const;
 
-/** The non-empty categories of an off-device tier as bar segments. */
-function tierSegments(tier: TierMemory): Segment[] {
+/** A layer range `[from, to)` as the inclusive span users read, e.g. `0–23`. */
+function layerSpan(layers: { from: number; to: number }): string {
+  return layers.to - layers.from === 1 ? `${layers.from}` : `${layers.from}–${layers.to - 1}`;
+}
+
+/**
+ * The label of a tier's category with the layer spans of the group's placements on that tier, e.g. `MoE experts,
+ * layers 0–23` (a host-RAM + SSD split); the plain label when no placement gives a range (every layer).
+ */
+function categoryLabel(
+  category: (typeof TIER_CATEGORIES)[number],
+  tier: TierMemory['tier'],
+  placements: readonly OffloadPlacement[],
+): string {
+  const onTier = placements.filter((p) => p.group === category.group && p.tier === tier);
+  const spans = onTier.flatMap((p) => (p.layers ? [layerSpan(p.layers)] : []));
+  if (spans.length === 0 || spans.length < onTier.length) return category.label;
+  return `${category.label}, ${spans.length === 1 && !spans[0].includes('–') ? 'layer' : 'layers'} ${spans.join(', ')}`;
+}
+
+/** The non-empty categories of an off-device tier as bar segments, labelled with their layer spans. */
+function tierSegments(tier: TierMemory, placements: readonly OffloadPlacement[]): Segment[] {
   return TIER_CATEGORIES.map((c) => ({
     key: c.key,
-    label: c.label,
+    label: categoryLabel(c, tier.tier, placements),
     bytes: tier.breakdown[c.field],
   })).filter((s) => s.bytes > 0);
 }
@@ -92,7 +120,7 @@ export function MemoryFit({
     ...tierBars.map((tier) => ({
       key: `tier-${tier.tier}`,
       name: TIER_LABEL[tier.tier],
-      segments: tierSegments(tier),
+      segments: tierSegments(tier, result.offload ?? []),
     })),
   ];
   const offsets = bars.map((_, i) =>
@@ -255,7 +283,7 @@ export function MemoryFit({
                     <Num>{formatBytes(segment.bytes)}</Num>
                   </strong>
                   {segment.key === 'tier-experts' && (
-                    <HelpIcon term="Routed experts">
+                    <HelpIcon term="MoE experts">
                       {helpLines([
                         'The tier always stores every expert.',
                         'The resident share is only a cached copy, so this number stays the same.',

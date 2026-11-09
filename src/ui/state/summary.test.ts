@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { OpResult, SimInput } from '../../sim/engine/types';
+import type { OpResult, RoutedExpertRule, SimInput } from '../../sim/engine/types';
 import type { BlockDraftSpec } from '../../sim/ir/model';
 import { simulate } from '../../sim/engine/simulate';
 import { mapHfModel } from '../../sim/models/hf/index';
@@ -12,7 +12,7 @@ import {
   modelKey,
   type LoadedModel,
 } from './buildInput';
-import { summarize, type Breakdown } from './summary';
+import { offloadPlacements, summarize, type Breakdown } from './summary';
 import { BUNDLED_DEFAULT_MODEL } from './bundledModel';
 import { SWEEP_STEPS, batchSweep } from './sweep';
 import {
@@ -223,7 +223,7 @@ describe('summarize', () => {
     const result = structuredClone(base);
     result.decode.stages[0].layers[1].ops.unshift(transferOp(0.5e-3, 1.5e-3));
     result.decode.transfer = { sec: 2e-3, exposedSec: 1e-3, bytes: 300e6, requests: 40 };
-    result.memory.tiers = [{ tier: 'host_ram', bytes: 16.3e9, breakdown: { lookupTables: 0, routedExperts: 16.3e9, denseLayers: 0, draftExperts: 0 }, capacityBytes: 96e9, fits: true }];
+    result.memory.tiers = [{ tier: 'host_ram', bytes: 16.3e9, breakdown: { lookupTables: 0, routedExperts: 16.3e9, draftExperts: 0 }, capacityBytes: 96e9, fits: true }];
     const input: SimInput = {
       ...built.input,
       deployment: {
@@ -259,6 +259,41 @@ describe('summarize', () => {
       before.roofline.decode.flops / (before.breakdown.decode.totalSec + 2e-3),
       0,
     );
+  });
+
+  it('offload placements: one per rule, by first layer, each with its layers and hit ratio', () => {
+    const built = buildSimInput(DEFAULT_STATE, BUNDLED_DEFAULT_MODEL);
+    if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));
+    const cache = { residentFraction: 0.25, hitRatio: { kind: 'custom', h: 0.5 } } as const;
+    const input: SimInput = {
+      ...built.input,
+      deployment: {
+        offload: {
+          routedExperts: [
+            { tier: 'nvme', layers: { from: 24, to: 48 }, ...cache },
+            { tier: 'host_ram', layers: { from: 0, to: 24 }, ...cache },
+          ],
+          lookupTables: [
+            { tier: 'nvme', layers: { from: 30, to: 64 } },
+            { tier: 'device', layers: { from: 0, to: 10 } },
+            { tier: 'host_ram', layers: { from: 10, to: 30 }, scaleLayout: 'interleaved' },
+          ],
+        },
+      },
+    };
+    expect(offloadPlacements(input)).toEqual([
+      { group: 'routed_experts', tier: 'host_ram', hitRatio: 0.5, layers: { from: 0, to: 24 } },
+      { group: 'routed_experts', tier: 'nvme', hitRatio: 0.5, layers: { from: 24, to: 48 } },
+      // Tables left on the device are not a placement.
+      { group: 'lookup_tables', tier: 'host_ram', layers: { from: 10, to: 30 } },
+      { group: 'lookup_tables', tier: 'nvme', layers: { from: 30, to: 64 } },
+    ]);
+    // The one-rule object form gives the same placement as its one-rule list.
+    const one = { tier: 'nvme', ...cache } as const;
+    const withRules = (routedExperts: RoutedExpertRule | readonly RoutedExpertRule[]) =>
+      offloadPlacements({ ...built.input, deployment: { offload: { routedExperts } } });
+    expect(withRules(one)).toEqual(withRules([one]));
+    expect(withRules([])).toEqual([]);
   });
 
   it('a hand-built spec-dec decode: draft and verify sections, speedup, drafter badge', () => {

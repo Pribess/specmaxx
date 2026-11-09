@@ -48,7 +48,7 @@ import {
   tpAllReduce,
 } from './common';
 import { activationOp, lowerDenseFfn, type DenseFfnShape } from './mlp';
-import type { LoweringContext, OffloadLowering } from './lower';
+import type { ExpertPlacement, LoweringContext } from './lower';
 import { expertPlacementAt, prefetchedFraction } from './offload';
 
 /** The expert-parallel layout of one MoE block under a parallel config. */
@@ -292,7 +292,7 @@ export function expertFetchOp(
   layout: MoeLayout,
   routing: MoeRouting,
   ctx: LoweringContext,
-  placement: NonNullable<OffloadLowering['routedExperts']>,
+  placement: ExpertPlacement,
 ): TransferOp | undefined {
   const U = routing.distinctExperts;
   const { misses, residentExperts } = expertHitsMisses(U, placement.hitRatio, placement.residentFraction, layout.localExperts);

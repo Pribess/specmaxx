@@ -28,15 +28,14 @@ function layerSpan(layers: { from: number; to: number }): string {
   return layers.to - layers.from === 1 ? `${layers.from}` : `${layers.from}–${layers.to - 1}`;
 }
 
-/** The chip text of one off-device placement, e.g. `experts: host RAM, h 0.50`. */
+/** The chip text of one off-device placement, e.g. `MoE experts: host RAM, h 0.50`, `n-gram tables 0–23: SSD`. */
 export function offloadChipText(p: OffloadPlacement): string {
+  const span = p.layers ? ` ${layerSpan(p.layers)}` : '';
   switch (p.group) {
     case 'routed_experts':
-      return `experts${p.layers ? ` ${layerSpan(p.layers)}` : ''}: ${tierName(p.tier)}, h ${(p.hitRatio ?? 0).toFixed(2)}`;
-    case 'dense_layers':
-      return `layers${p.layers ? ` ${layerSpan(p.layers)}` : ''}: ${tierName(p.tier)}`;
+      return `MoE experts${span}: ${tierName(p.tier)}, h ${(p.hitRatio ?? 0).toFixed(2)}`;
     case 'lookup_tables':
-      return `n-gram tables: ${tierName(p.tier)}`;
+      return `n-gram tables${span}: ${tierName(p.tier)}`;
   }
 }
 
@@ -197,7 +196,7 @@ export function ResultHero({
                 <ul className="result-chips" aria-label="Offloaded weights">
                   {offload.map((p, i) => (
                     // The "?" shares the last chip's item, so it never wraps onto a line of its own.
-                    <li className="result-chip-item" key={p.group}>
+                    <li className="result-chip-item" key={`${p.group}-${p.layers?.from ?? 0}`}>
                       <span className="result-chip">{offloadChipText(p)}</span>
                       {i === offload.length - 1 && (
                         <HelpIcon term="Offloaded weights">

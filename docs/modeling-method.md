@@ -75,7 +75,9 @@ More: [memory fit](simulation-model.md#memory-fit), [activation peak](simulation
 
 ## Offloading
 
-Optional, off by default. Part of the weights can live in host RAM or on an SSD instead of device memory: experts of mixture-of-experts layers, whole layers, or n-gram lookup tables. Whatever is needed and not resident is fetched over the host link each step, which adds transfer time and frees device memory.
+Optional, off by default. Part of the weights can live in host RAM or on an SSD instead of device memory: experts of mixture-of-experts layers, or n-gram lookup tables. Each can be split by layer range, e.g. the experts of the first layers in host RAM and the rest on the SSD. Whatever is needed and not resident is fetched over the host link each step, which adds transfer time and frees device memory.
+
+Whole-layer offload (copying entire layers to the GPU every step) was removed: local setups don't run that way (llama.cpp computes the layers it keeps off the GPU on the CPU instead), and for a MoE model it reads every expert each step. Partial offload of dense layers would return as a CPU-compute mode, not as streaming.
 
 Two parameters shape the result:
 
@@ -84,7 +86,7 @@ Two parameters shape the result:
 
 With both set, the result is still an upper bound given those numbers.
 
-**SSD read rate** defaults to the unchanged datasheet ceiling; the optional sustained scenario uses measured low-queue large-read fractions for experts and layers, not small lookup rows. These workload-specific measurements are not a tighter proven upper bound.
+**SSD read rate** defaults to the unchanged datasheet ceiling; the optional sustained scenario uses measured low-queue large-read fractions for expert reads, not small lookup rows. These workload-specific measurements are not a tighter proven upper bound.
 
 More: [offloading](simulation-model.md#12-offloading), [expert hit ratio](simulation-model.md#expert-hit-ratio), [expert prefetch](simulation-model.md#expert-prefetch), [host and storage tiers](simulation-model.md#host-and-storage-tiers).
 

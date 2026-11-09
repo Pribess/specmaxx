@@ -15,7 +15,7 @@ const stage = (used: number): StageMemory => ({
 const tier = (fits: boolean): TierMemory => ({
   tier: 'nvme',
   bytes: fits ? 1 : 3,
-  breakdown: { lookupTables: fits ? 1 : 3, routedExperts: 0, denseLayers: 0, draftExperts: 0 },
+  breakdown: { lookupTables: fits ? 1 : 3, routedExperts: 0, draftExperts: 0 },
   capacityBytes: 2,
   fits,
 });

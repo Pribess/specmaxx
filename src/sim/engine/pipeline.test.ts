@@ -298,13 +298,13 @@ describe('U-5 stage formula with transfers: compute 2, bw 1, lat 0.5, xfer 3, p2
   it('q 0.8 (the default p at batch 1): t_s = 0.5 + 2 + 3 − 0.8·2 = 3.9', () => {
     expect(stageResult(0, layers(3, 0.8), send, 'ideal').sec).toBeCloseTo(3.9, 12);
   });
-  it('mixed q: a dense fetch (q 1, 1 s) and an expert fetch (q 0.5, 2 s) give pbar = 2/3', () => {
+  it('mixed q: a table-row fetch (q 1, 1 s) and an expert fetch (q 0.5, 2 s) give pbar = 2/3', () => {
     const mixed = [
       layerResult('layer.0', 0, [
         result(ELEMENTWISE, { sec: 2 }),
         result(ALL_REDUCE, { sec: 1.5, lat: 0.5, bw: 1 }),
         result(
-          { ...FETCH, group: 'dense_layer', prefetchedFraction: 1 },
+          { ...FETCH, group: 'lookup_table', prefetchedFraction: 1 },
           { sec: 1, xferLat: 0, xferBw: 1 },
         ),
         result({ ...FETCH, prefetchedFraction: 0.5 }, { sec: 2, xferLat: 0, xferBw: 2 }),

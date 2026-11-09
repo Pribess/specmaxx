@@ -150,7 +150,7 @@ for (const size of ['desktop', 'phone'] as const) {
                   window.scrollBy(0, -96);
                 });
                 await expect(
-                  page.getByRole('combobox', { name: 'Routed experts', exact: true }),
+                  page.getByRole('combobox', { name: 'MoE experts', exact: true }),
                 ).toHaveText('Host RAM');
                 break;
               }

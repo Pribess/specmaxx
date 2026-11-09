@@ -137,6 +137,13 @@ interface PhaseOffload {
  * Transfer paths of stage `s` per tier this phase streams from (design doc §2.3): a tier is shared by the
  * concurrently streaming stages of the node ({@link stageNStream}), which depends on which stages hold a transfer op
  * of that tier in this phase, whether prefetching is on (p > 0) and the microbatches `m`.
+ *
+ * Host RAM is one resource behind two paths: host-RAM-tier reads and the staging hop of NVMe reads (dedicated memory).
+ * Its sharing n_host counts every stage that uses it either way, each device once:
+ *   hostStreams[s] = streams_ram[s] ∨ streams_nvme[s];  n_host = stageNStream(hostStreams)
+ * The host-RAM tier is shared by n_host, and the NVMe staging term by n_host; the SSD's own bandwidth and IOPS stay
+ * shared by n_nvme. With one tier streaming, hostStreams = streams_tier, so n_host = n_tier (results unchanged).
+ * See docs/simulation-model.md §12 ("Sharing").
  */
 function stageTransferPaths(
   lowered: LoweredModel,
@@ -147,20 +154,24 @@ function stageTransferPaths(
   microbatches: number,
 ): Partial<Record<OffloadTier, TransferPath>> {
   const paths: Partial<Record<OffloadTier, TransferPath>> = {};
-  for (const tier of ['host_ram', 'nvme'] as const) {
-    const streams = lowered.stages.map((st) =>
+  const streamsFrom = (tier: OffloadTier): boolean[] =>
+    lowered.stages.map((st) =>
       st.layers.some((l) => l.ops.some((op) => op.kind === 'transfer' && op.source === tier)),
     );
-    if (!streams[s]) continue;
-    const n = stageNStream(
-      input.parallel,
-      topology.devicesPerNode,
-      streams,
-      s,
-      offload.prefetching,
-      microbatches,
-    );
-    paths[tier] = transferPath(tier, offload.host, offload.queueDepth, n, offload.ssdReadRate);
+  const nStreamOf = (streams: readonly boolean[]): number =>
+    stageNStream(input.parallel, topology.devicesPerNode, streams, s, offload.prefetching, microbatches);
+  const streams = { host_ram: streamsFrom('host_ram'), nvme: streamsFrom('nvme') };
+  // Formula: hostStreams[s] = streams_ram[s] ∨ streams_nvme[s];  n_host = stageNStream(hostStreams)
+  const hostStreams = streams.host_ram.map((ram, i) => ram || streams.nvme[i] === true);
+  const n_host = hostStreams[s] === true ? nStreamOf(hostStreams) : 1;
+  if (streams.host_ram[s] === true) {
+    // Formula: n(host_ram) = n_host
+    paths.host_ram = transferPath('host_ram', offload.host, offload.queueDepth, n_host, offload.ssdReadRate);
+  }
+  if (streams.nvme[s] === true) {
+    // Formula: n(nvme) = n_nvme (drive bandwidth, IOPS);  staging shares host RAM by n_host
+    const n_nvme = nStreamOf(streams.nvme);
+    paths.nvme = transferPath('nvme', offload.host, offload.queueDepth, n_nvme, offload.ssdReadRate, n_host);
   }
   return paths;
 }

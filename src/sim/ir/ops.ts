@@ -407,16 +407,16 @@ export interface CollectiveOp {
  */
 export interface TransferOp {
   kind: 'transfer';
-  /** Stable dotted name, e.g. `'moe.expert_fetch'`, `'layer.fetch'`, `'ngram.row_fetch'`. */
+  /** Stable dotted name, e.g. `'moe.expert_fetch'`, `'ngram.row_fetch'`. */
   name: string;
-  /** What is streamed: missed routed experts, a whole decoder layer, or gathered n-gram table rows. */
-  group: 'routed_experts' | 'dense_layer' | 'lookup_table';
+  /** What is streamed: missed routed experts, or gathered n-gram table rows. */
+  group: 'routed_experts' | 'lookup_table';
   /** Storage tier the bytes come from (`'host_ram'` on a unified-memory device is never emitted: it is device memory). */
   source: 'host_ram' | 'nvme';
   /**
    * Physical read classes issued this step: `count` reads of `bytesEach` bytes each (before rounding to the tier's
-   * read granularity). Experts: `[{ count: M, bytesEach: W_expert }]`; a dense layer: `[{ count: 1, bytesEach:
-   * W_layer }]`; table rows per the scale layout of design doc §2.10, e.g. separate value and scale reads
+   * read granularity). Experts: `[{ count: M, bytesEach: W_expert }]`; table rows per the scale layout of design
+   * doc §2.10, e.g. separate value and scale reads
    * `[{ count: T·g, bytesEach: 256 }, { count: T·g, bytesEach: 8 }]`. `Σ count` pays the per-request (IOPS,
    * Little's-law) terms; each class is rounded up to the tier granularity for the tier-bandwidth term.
    * Unit: `count` requests (expected, real), `bytesEach` bytes.
@@ -429,8 +429,8 @@ export interface TransferOp {
   usefulBytes: number;
   /**
    * q: the share of this op's transfer time that is prefetched, i.e. issued before the consuming block's router (or
-   * before the step, for dense layers and table rows) and so eligible to hide behind the stage's compute
-   * (docs/simulation-model.md §12 "Expert prefetch"). Routed experts: `q = max(p, M/(E_loc − C))`; dense layers and table rows:
+   * before the step, for table rows) and so eligible to hide behind the stage's compute
+   * (docs/simulation-model.md §12 "Expert prefetch"). Routed experts: `q = max(p, M/(E_loc − C))`; table rows:
    * `q = 1` when prefetching is on (`p > 0`), `0` at `p = 0`. Set by `lower/offload.ts: prefetchedFraction`.
    * Dimensionless, in [0, 1].
    */

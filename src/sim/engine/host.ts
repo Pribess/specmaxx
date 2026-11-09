@@ -16,9 +16,10 @@ import {
 import { hostPcieLink } from '../hw/presets/links';
 import type { DeviceSpec, HardwareStack, HostMemorySpec, LinkSpec, NvmeSpec } from '../hw/types';
 import type { ModelSpec } from '../ir/model';
-import type { OffloadLowering } from '../lower/lower';
+import type { ExpertPlacement, OffloadLowering, TablePlacement } from '../lower/lower';
+import { expertRules, lookupTableRules } from './offloadRules';
 import { DEFAULT_PREFETCH_ACCURACY, hitRatio, resolveQueueDepth, type TransferPath } from './transfer';
-import type { OffloadConfig, OffloadTier } from './types';
+import type { LayerRange, OffloadConfig, OffloadTier } from './types';
 
 /** The resolved placement and the notes it produced. */
 export interface ResolvedOffload {
@@ -29,12 +30,14 @@ export interface ResolvedOffload {
 }
 
 /**
- * Resolve the deployment's offload placement (design doc §2.1): the routed-expert layer range defaults to every
- * layer, the prefetch accuracy defaults to `DEFAULT_PREFETCH_ACCURACY`, h(f) is evaluated from the hit-ratio model,
- * the table scale layout defaults to `'separate'` on host RAM and `'pinned_host'` on NVMe (also on unified memory, where
- * the pinned scales sit in the device pool and count in the device bytes: `hostRamIsDevice`). On unified memory host
- * RAM IS the device pool, so a `'host_ram'` placement is dropped
- * (no transfer, weights stay counted on the device). Lookup tables at `'device'` are no placement.
+ * Resolve the deployment's offload placement (design doc §2.1, §2.11): each routed-expert and lookup-table rule
+ * becomes one placement (a lone rule's layer range defaults to every layer; h(f) is evaluated per expert rule from its
+ * own hit-ratio model and f), sorted by `layers.from` so the order the user listed the rules in never changes a result.
+ * The prefetch accuracy defaults to `DEFAULT_PREFETCH_ACCURACY`; a table rule's scale layout defaults to `'separate'`
+ * on host RAM and `'pinned_host'` on NVMe (also on unified memory, where the pinned scales sit in the device pool and
+ * count in the device bytes: `hostRamIsDevice`). On unified memory host RAM IS the device pool, so each `'host_ram'`
+ * rule is dropped (no transfer, its layers' weights stay counted on the device) and only `'nvme'` rules remain. Table
+ * rules at `'device'` are no placement. Nothing left off-device → `offload: undefined` (identity).
  */
 export function resolveOffload(
   model: ModelSpec,
@@ -52,60 +55,73 @@ export function resolveOffload(
     return false;
   };
   const offload: OffloadLowering = { prefetchAccuracy: config.prefetchAccuracy ?? DEFAULT_PREFETCH_ACCURACY };
-  const experts = config.routedExperts;
-  if (experts !== undefined && !onDevice(experts.tier)) {
-    const f = experts.residentFraction;
-    offload.routedExperts = {
-      tier: experts.tier,
-      layers: experts.layers ?? { from: 0, to: model.layers.length },
+  const expertPlacements: ExpertPlacement[] = [];
+  const skewedRules: { range: LayerRange; f: number }[] = [];
+  for (const rule of expertRules(config)) {
+    if (onDevice(rule.tier)) continue;
+    const f = rule.residentFraction;
+    const layers = rule.layers ?? { from: 0, to: model.layers.length };
+    expertPlacements.push({
+      tier: rule.tier,
+      layers,
       residentFraction: f,
-      hitRatio: hitRatio(experts.hitRatio, f),
-      includeDraft: experts.includeDraft ?? false,
-    };
+      hitRatio: hitRatio(rule.hitRatio, f),
+      includeDraft: rule.includeDraft ?? false,
+    });
+    if (rule.hitRatio.kind === 'skewed_classic' || rule.hitRatio.kind === 'skewed_fine_grained') {
+      skewedRules.push({ range: layers, f });
+    }
+  }
+  if (expertPlacements.length > 0) {
+    offload.routedExperts = expertPlacements.sort((a, b) => a.layers.from - b.layers.from);
     if (ep > 1) {
       warnings.push(
         'offload: with EP > 1, the experts each GPU must fetch per step are estimated as if every routed pick were independent (U_dev = E_loc·(1 − (1 − 1/E_loc)^A))',
       );
     }
-    const skewed = experts.hitRatio.kind === 'skewed_classic' || experts.hitRatio.kind === 'skewed_fine_grained';
-    if (skewed) {
-      const thrashing = model.layers.some((l) =>
-        l.blocks.some((b) => b.kind === 'moe' && f * (b.experts / ep) > 0 && f * (b.experts / ep) < b.topK),
+    // A skewed rule whose layers keep fewer resident experts than top-k: LRU thrashing, per rule over its own range.
+    const thrashing = skewedRules.some(({ range, f }) =>
+      model.layers.some(
+        (l, i) =>
+          i >= range.from &&
+          i < range.to &&
+          l.blocks.some((b) => b.kind === 'moe' && f * (b.experts / ep) > 0 && f * (b.experts / ep) < b.topK),
+      ),
+    );
+    if (thrashing) {
+      warnings.push(
+        'offload: fewer resident experts per layer than top-k — an LRU cache thrashes there (h ≈ 0); the skewed hit ratio is optimistic',
       );
-      if (thrashing) {
-        warnings.push(
-          'offload: fewer resident experts per layer than top-k — an LRU cache thrashes there (h ≈ 0); the skewed hit ratio is optimistic',
-        );
-      }
     }
   }
-  const dense = config.denseLayers;
-  if (dense !== undefined && !onDevice(dense.tier)) {
-    offload.denseLayers = { tier: dense.tier, layers: dense.layers };
+  const tablePlacements: TablePlacement[] = [];
+  for (const rule of lookupTableRules(config)) {
+    const tier = rule.tier;
+    if (tier === 'device' || onDevice(tier)) continue;
+    tablePlacements.push({
+      tier,
+      layers: rule.layers ?? { from: 0, to: model.layers.length },
+      scaleLayout: rule.scaleLayout ?? (tier === 'host_ram' ? 'separate' : 'pinned_host'),
+    });
   }
-  const tables = config.lookupTables;
-  if (tables !== undefined && tables.tier !== 'device' && !onDevice(tables.tier)) {
-    offload.lookupTables = {
-      tier: tables.tier,
-      scaleLayout: tables.scaleLayout ?? (tables.tier === 'host_ram' ? 'separate' : 'pinned_host'),
-    };
+  if (tablePlacements.length > 0) {
+    offload.lookupTables = tablePlacements.sort((a, b) => a.layers.from - b.layers.from);
   }
-  const any = offload.routedExperts !== undefined || offload.denseLayers !== undefined || offload.lookupTables !== undefined;
+  const any = offload.routedExperts !== undefined || offload.lookupTables !== undefined;
   if (any && memoryKind === 'unified') {
     offload.hostRamIsDevice = true;
-    if (offload.lookupTables?.scaleLayout === 'pinned_host') {
+    if (offload.lookupTables?.some((t) => t.scaleLayout === 'pinned_host') === true) {
       warnings.push('offload: unified memory — pinned table scales stay in the unified pool and count in device memory');
     }
   }
   return { offload: any ? offload : undefined, warnings: [...new Set(warnings)] };
 }
 
-/** The off-device tiers a resolved placement uses. */
+/** The off-device tiers a resolved placement uses (the union over every rule of every group). */
 export function offloadTiers(offload: OffloadLowering): Set<OffloadTier> {
   const tiers = new Set<OffloadTier>();
-  if (offload.routedExperts !== undefined) tiers.add(offload.routedExperts.tier);
-  if (offload.denseLayers !== undefined) tiers.add(offload.denseLayers.tier);
-  if (offload.lookupTables !== undefined) tiers.add(offload.lookupTables.tier);
+  for (const rule of offload.routedExperts ?? []) tiers.add(rule.tier);
+  for (const rule of offload.lookupTables ?? []) tiers.add(rule.tier);
   return tiers;
 }
 
@@ -179,8 +195,10 @@ export function resolveHost(hardware: HardwareStack, device: DeviceSpec, tiers: 
 /**
  * The transfer path of `tier` on one device (design doc §2.3): host RAM → link → device; NVMe → host RAM → link →
  * device on dedicated memory (the staging term uses host RAM's bandwidth); NVMe → unified memory directly (no link,
- * no staging). `queueDepth` is the deployment's request (capped by the tier); `nStream` the tier's sharing.
- * `ssdReadRate` opts into the SSD's large-read fraction; absent/datasheet leaves all B/s ceilings unchanged.
+ * no staging). `queueDepth` is the deployment's request (capped by the tier); `nStream` the tier's sharing (n_host for
+ * the host-RAM tier); `hostStagingNStream` the host RAM sharing n_host of the NVMe staging hop (absent = `nStream`;
+ * docs/simulation-model.md §12 "Sharing"). `ssdReadRate` opts into the SSD's large-read fraction; absent/datasheet
+ * leaves all B/s ceilings unchanged.
  */
 export function transferPath(
   tier: OffloadTier,
@@ -188,6 +206,7 @@ export function transferPath(
   queueDepth: number | undefined,
   nStream: number,
   ssdReadRate?: OffloadConfig['ssdReadRate'],
+  hostStagingNStream?: number,
 ): TransferPath {
   const spec = tier === 'host_ram' ? host.ram : host.ssd;
   if (spec === undefined)
@@ -205,6 +224,9 @@ export function transferPath(
   if (host.link !== undefined) {
     path.link = { latencySec: host.link.latencySec, bandwidthPerDirectionBytesPerSec: host.link.bandwidthPerDirectionBytesPerSec };
   }
-  if (tier === 'nvme' && host.ram !== undefined) path.hostStagingBandwidthBytesPerSec = host.ram.bandwidthBytesPerSec;
+  if (tier === 'nvme' && host.ram !== undefined) {
+    path.hostStagingBandwidthBytesPerSec = host.ram.bandwidthBytesPerSec;
+    if (hostStagingNStream !== undefined) path.hostStagingNStream = hostStagingNStream;
+  }
   return path;
 }

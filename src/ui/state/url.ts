@@ -26,10 +26,12 @@
  * | `hl` | host-link override, `<PCIe gen>x<lanes>` (default: the device's host interface) | `hl=4x16` |
  * | `gpu` | (unified memory) GPU-usable share of memory in percent, (0, 100] (default: the device's) | `gpu=90` |
  * | `rr` | runtime reserve per device in GB (1e9 B), ≥ 0 (default 0) | `rr=1.5` |
- * | `ox` | routed experts tier: `ram`, `ssd` (absent: on the device) | `ox=ram` |
+ * | `ox` | routed experts tier: `ram`, `ssd`, `split` (host RAM + SSD) (absent: on the device) | `ox=ram` |
  * | `oxl`, `oxf`, `oxh` | (with `ox`) first offloaded layer (default 0), resident fraction 0–1 (default 0), hit-ratio model `classic`, `fine` or a custom h 0–1 (default uniform) | `oxf=0.25&oxh=fine` |
- * | `odl`, `odt` | dense layers kept on the device (the rest stream; absent: none stream), their tier `ram` (default) or `ssd` | `odl=40` |
- * | `olt`, `ols` | lookup-tables tier `ram`, `ssd` (absent: on the device); (with `olt`) scale layout `separate`, `pinned`, `interleaved` (default: the tier's) | `olt=ram` |
+ * | `oxr`, `oxe` | (with `ox=split`) offloaded layers in host RAM, integer ≥ 0 (default: half, rounded down), which end is in host RAM: `last` (default `first`, never written) | `oxr=24&oxe=last` |
+ * | `odl`, `odt` | legacy whole-layer offload (removed), read only: accepted and ignored, never written | `odl=40` |
+ * | `olt`, `ols` | lookup-tables tier `ram`, `ssd`, `split` (host RAM + SSD) (absent: on the device); (with `olt`) scale layout `separate`, `pinned`, `interleaved` (default: the tier's; with `split`, each side's tier's) | `olt=ram` |
+ * | `olr`, `ole` | (with `olt=split`) layers with a table kept in host RAM, integer ≥ 0 (default: half, rounded down), which end is in host RAM: `last` (default `first`, never written) | `olr=24` |
  * | `oqd` | (with offload) queue depth, integer ≥ 1 (default: the tier's rated maximum) | `oqd=32` |
  * | `osr` | (with SSD offload) SSD read rate: `datasheet` (default), `sustained` | `osr=sustained` |
  * | `opf` | (with offload) prefetch accuracy p 0–1 (default 0.8) | `opf=0.9` |
@@ -59,7 +61,9 @@ import {
   type ScaleLayoutChoice,
   type SpecDecChoice,
   type SpecDecMethod,
+  type PlacementChoice,
   type TierChoice,
+  type TierSplitChoice,
 } from './deployment';
 import { currentLinkId, findDevice, findHostRam, findLink, findSsd, cablingOptions, isEditableDevicePath, normalizeCabling, normalizeLocalLink, resolveDevice, resolveLinks } from './hardware';
 import { CABLING_IDS } from '../../sim/hw/presets/catalog';
@@ -89,15 +93,30 @@ export function latencyFloorSecFromMicros(us: number): number {
   return Math.round(us * 1e3) / 1e9;
 }
 
-/** Every key the codec knows, in encoding order (`oo` is a legacy key: read, never written). */
+/**
+ * Every key the codec knows, in encoding order (`oo`, `odl`, `odt` are legacy keys: read, never written), except the
+ * split keys of the last two lines: `oxr`, `oxe` are written right after `oxh`, and `olr`, `ole`
+ * right after `ols`.
+ */
 export const URL_KEYS = [
   'm', 'rev', 'w', 'bpw', 'hbpw', 'a', 'kv', 'lt', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'fab', 'x', 'xi', 'xe',
   'hr', 'hrc', 'ssd', 'hl', 'gpu', 'rr', 'tp', 'pp', 'dp', 'ep', 'b', 'p', 'c', 'pc', 'ov', 'fu', 'ar', 'lf', 'ed', 'oo',
   'ox', 'oxl', 'oxf', 'oxh', 'odl', 'odt', 'olt', 'ols', 'oqd', 'osr', 'opf', 'sd', 'sdr', 'sdk', 'sdu', 'sda',
+  'oxr', 'oxe',
+  'olr', 'ole',
 ] as const;
 
 /** URL value of a tier. */
 const TIER_KEYS: Record<TierChoice, string> = { host_ram: 'ram', nvme: 'ssd' };
+
+/** URL value of a placement of experts or lookup tables: a tier, or `split` (host RAM + SSD). */
+const PLACEMENT_KEYS: Record<PlacementChoice, string> = { ...TIER_KEYS, split: 'split' };
+
+/** Puts a split's `<ram>` (layers in host RAM) and `<end>` (`last` only) keys; nothing without a split. */
+function putSplit(put: (key: string, value: string | number | undefined) => void, ramKey: string, endKey: string, split: TierSplitChoice | undefined): void {
+  put(ramKey, split?.ramLayers);
+  if (split?.ramEnd === 'last') put(endKey, 'last');
+}
 
 /** URL value of a named hit-ratio model. */
 const HIT_RATIO_KEYS: Record<Exclude<HitRatioChoice, number>, string> = {
@@ -212,19 +231,17 @@ export function encodeState(s: AppState): string {
   const deployment = normalizeDeployment(s.deployment);
   const o = deployment.offload ?? {};
   if (o.experts !== undefined) {
-    put('ox', TIER_KEYS[o.experts.tier]);
+    put('ox', PLACEMENT_KEYS[o.experts.tier]);
     put('oxl', o.experts.fromLayer);
     put('oxf', o.experts.residentFraction);
     const h = o.experts.hitRatio;
     put('oxh', typeof h === 'number' ? h : h === undefined ? undefined : HIT_RATIO_KEYS[h]);
-  }
-  if (o.dense !== undefined) {
-    put('odl', o.dense.layersOnDevice);
-    if (o.dense.tier !== 'host_ram') put('odt', TIER_KEYS[o.dense.tier]);
+    putSplit(put, 'oxr', 'oxe', o.experts.split);
   }
   if (o.tables !== undefined) {
-    put('olt', TIER_KEYS[o.tables.tier]);
+    put('olt', PLACEMENT_KEYS[o.tables.tier]);
     if (o.tables.scaleLayout !== undefined) put('ols', SCALE_LAYOUT_KEYS[o.tables.scaleLayout]);
+    putSplit(put, 'olr', 'ole', o.tables.split);
   }
   put('oqd', o.queueDepth);
   put('osr', o.ssdReadRate);
@@ -315,20 +332,28 @@ function decodeDeployment(get: (key: string) => string | undefined, drop: (key: 
     if (v === undefined) drop(key, raw);
     return v;
   };
-  const tier = (raw: string) => keyOf(TIER_KEYS, raw);
+  const placement = (raw: string) => keyOf(PLACEMENT_KEYS, raw);
+  /** The split of the `<ram>` / `<end>` keys; both are dropped unless the group's placement is `split`. */
+  const readSplit = (ramKey: string, endKey: string, isSplit: boolean): TierSplitChoice | undefined => {
+    const ramLayers = read(ramKey, isSplit, (r) => parseInteger(r, 0, MAX_VALUE));
+    const ramEnd = read(endKey, isSplit, (r) => (r === 'first' || r === 'last' ? r : undefined));
+    return isSplit ? { ramLayers, ramEnd } : undefined;
+  };
   const offload: OffloadChoice = {};
-  const expertsTier = read('ox', true, tier);
+  const expertsTier = read('ox', true, placement);
   const fromLayer = read('oxl', expertsTier !== undefined, (r) => parseInteger(r, 0, MAX_VALUE));
   const residentFraction = read('oxf', expertsTier !== undefined, (r) => parseNumberIn(r, 0, 1));
   const hitRatio = read<HitRatioChoice>('oxh', expertsTier !== undefined, (r) => keyOf(HIT_RATIO_KEYS, r) ?? parseNumberIn(r, 0, 1));
-  if (expertsTier !== undefined) offload.experts = { tier: expertsTier, fromLayer, residentFraction, hitRatio };
-  const layersOnDevice = read('odl', true, (r) => parseInteger(r, 0, MAX_VALUE));
-  const denseTier = read('odt', layersOnDevice !== undefined, tier);
-  if (layersOnDevice !== undefined) offload.dense = { tier: denseTier ?? 'host_ram', layersOnDevice };
-  const tablesTier = read('olt', true, tier);
+  const expertsSplit = readSplit('oxr', 'oxe', expertsTier === 'split');
+  if (expertsTier !== undefined) offload.experts = { tier: expertsTier, split: expertsSplit, fromLayer, residentFraction, hitRatio };
+  // Whole-layer offload was removed: old URLs may carry odl / odt; they are accepted and ignored (like dp / ep).
+  get('odl');
+  get('odt');
+  const tablesTier = read('olt', true, placement);
   const scaleLayout = read('ols', tablesTier !== undefined, (r) => keyOf(SCALE_LAYOUT_KEYS, r));
-  if (tablesTier !== undefined) offload.tables = { tier: tablesTier, scaleLayout };
-  const any = offload.experts !== undefined || offload.dense !== undefined || offload.tables !== undefined;
+  const tablesSplit = readSplit('olr', 'ole', tablesTier === 'split');
+  if (tablesTier !== undefined) offload.tables = { tier: tablesTier, split: tablesSplit, scaleLayout };
+  const any = offload.experts !== undefined || offload.tables !== undefined;
   offload.queueDepth = read('oqd', any, (r) => parseInteger(r, 1, MAX_VALUE));
   offload.ssdReadRate = read('osr', offloadsToSsd(offload), (r) =>
     r === 'datasheet' || r === 'sustained' ? r : undefined,

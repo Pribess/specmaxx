@@ -8,6 +8,7 @@
  */
 
 import type {
+  LayerRange,
   OffloadTier,
   OpResult,
   PhaseResult,
@@ -17,6 +18,7 @@ import type {
 } from '../../sim/engine/types';
 import { engineMemBandwidthBytesPerSec } from '../../sim/engine/opTime';
 import { hitRatio } from '../../sim/engine/transfer';
+import { expertRules, lookupTableRules } from '../../sim/engine/offloadRules';
 import { memoryFits } from './memoryVerdict';
 import type { Op } from '../../sim/ir/ops';
 
@@ -178,8 +180,8 @@ export interface Breakdown {
 
 /** A weight group the deployment keeps off-device, for the result chips. */
 export interface OffloadPlacement {
-  /** Which group: routed experts, whole decoder layers, or the n-gram lookup tables. */
-  group: 'routed_experts' | 'dense_layers' | 'lookup_tables';
+  /** Which group: routed (MoE) experts or the n-gram lookup tables. */
+  group: 'routed_experts' | 'lookup_tables';
   /** Tier holding the group. */
   tier: OffloadTier;
   /**
@@ -187,7 +189,7 @@ export interface OffloadPlacement {
    * fraction, before the engine's physical clamp). Dimensionless, in [0, 1].
    */
   hitRatio?: number;
-  /** Dense layers (and an explicit expert range): the layer range `[from, to)`, zero-based. */
+  /** An explicit layer range `[from, to)` of the rule (a split, or experts from a later layer), zero-based. */
   layers?: { from: number; to: number };
 }
 
@@ -468,13 +470,17 @@ export function summarize(result: SimResult, input: SimInput, notes: string[] = 
   };
 }
 
-/** The off-device placements of `input.deployment.offload`, in the order experts, dense layers, lookup tables. */
+/**
+ * The off-device placements of `input.deployment.offload`, in the order experts, lookup tables; one per rule (a
+ * host-RAM + SSD split gives two), each group's rules by first layer; tables kept on the device are left out.
+ */
 export function offloadPlacements(input: SimInput): OffloadPlacement[] {
   const offload = input.deployment?.offload;
   if (offload === undefined) return [];
   const out: OffloadPlacement[] = [];
-  const experts = offload.routedExperts;
-  if (experts !== undefined) {
+  const byFirstLayer = (a: { layers?: LayerRange }, b: { layers?: LayerRange }) =>
+    (a.layers?.from ?? 0) - (b.layers?.from ?? 0);
+  for (const experts of [...expertRules(offload)].sort(byFirstLayer)) {
     out.push({
       group: 'routed_experts',
       tier: experts.tier,
@@ -482,16 +488,13 @@ export function offloadPlacements(input: SimInput): OffloadPlacement[] {
       ...(experts.layers && { layers: { ...experts.layers } }),
     });
   }
-  if (offload.denseLayers !== undefined) {
+  for (const tables of [...lookupTableRules(offload)].sort(byFirstLayer)) {
+    if (tables.tier === 'device') continue;
     out.push({
-      group: 'dense_layers',
-      tier: offload.denseLayers.tier,
-      layers: { ...offload.denseLayers.layers },
+      group: 'lookup_tables',
+      tier: tables.tier,
+      ...(tables.layers && { layers: { ...tables.layers } }),
     });
-  }
-  const tables = offload.lookupTables;
-  if (tables !== undefined && tables.tier !== 'device') {
-    out.push({ group: 'lookup_tables', tier: tables.tier });
   }
   return out;
 }

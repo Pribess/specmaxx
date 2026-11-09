@@ -13,6 +13,51 @@ import { DEFAULT_PREFETCH_ACCURACY } from '../../sim/engine/transfer';
 /** An off-device storage tier: the node's host RAM or its NVMe SSD (engine `OffloadTier`). */
 export type TierChoice = 'host_ram' | 'nvme';
 
+/** Where an offloaded weight group lives: one tier, or `'split'` = some layers in host RAM, the rest on the SSD. */
+export type PlacementChoice = TierChoice | 'split';
+
+/** How the offloaded layers of a group split between host RAM and the SSD (with `tier: 'split'`). */
+export interface TierSplitChoice {
+  /** Offloaded layers kept in host RAM; the rest go to the SSD. Absent = half (rounded down). Integer ≥ 0. Count. */
+  ramLayers?: number;
+  /** Which end of the offloaded layers is in host RAM: `'first'` (absent, the default: the earliest) or `'last'`. */
+  ramEnd?: 'first' | 'last';
+}
+
+/** One tier's share of a split: the tier and its layer range `[from, to)`, zero-based. */
+export interface TierRange {
+  /** The tier. */
+  tier: TierChoice;
+  /** Layers `[from, to)` on the tier. Zero-based. */
+  layers: { from: number; to: number };
+}
+
+/**
+ * The tier ranges of offloaded layers `[from, to)` split by `split`: K = to − from offloaded layers, r =
+ * clamp(ramLayers ?? ⌊K/2⌋, 0, K) of them in host RAM. With `ramEnd` `'first'`: RAM `[from, from + r)`, SSD
+ * `[from + r, to)`; with `'last'`: SSD `[from, to − r)`, RAM `[to − r, to)`. Sorted by `from`; an empty side is left
+ * out (so r = 0 or r = K gives one range).
+ */
+export function splitTierRanges(
+  from: number,
+  to: number,
+  split: TierSplitChoice | undefined,
+): TierRange[] {
+  const k = Math.max(0, to - from);
+  const r = Math.min(k, Math.max(0, Math.floor(split?.ramLayers ?? Math.floor(k / 2))));
+  const ranges: TierRange[] =
+    split?.ramEnd === 'last'
+      ? [
+          { tier: 'nvme', layers: { from, to: to - r } },
+          { tier: 'host_ram', layers: { from: to - r, to } },
+        ]
+      : [
+          { tier: 'host_ram', layers: { from, to: from + r } },
+          { tier: 'nvme', layers: { from: from + r, to } },
+        ];
+  return ranges.filter((range) => range.layers.to > range.layers.from);
+}
+
 /**
  * Expert hit-ratio model h(f) (engine `HitRatioModel`): `'uniform'` (h = f, the default), the skewed fits
  * `'skewed_classic'` (h = f^0.55, ≤ 64 experts) and `'skewed_fine_grained'` (h = f^0.2, ≥ 128 experts), or a custom h in
@@ -27,8 +72,10 @@ export type ScaleLayoutChoice = 'separate' | 'pinned_host' | 'interleaved';
 export interface OffloadChoice {
   /** Routed experts of MoE layers kept on a tier; absent = on the device. */
   experts?: {
-    /** Tier holding the experts. */
-    tier: TierChoice;
+    /** Tier holding the experts, or `'split'` between host RAM and the SSD (see `split`). */
+    tier: PlacementChoice;
+    /** With `tier: 'split'`: how the offloaded layers split; absent = the default split. */
+    split?: TierSplitChoice;
     /** First offloaded layer index (layers ≥ it are offloaded, llama.cpp `--n-cpu-moe`); absent = 0 (all). Zero-based. */
     fromLayer?: number;
     /** Fraction f of each offloaded layer's experts kept resident on the device, in (0, 1]; absent = 0. Dimensionless. */
@@ -36,18 +83,19 @@ export interface OffloadChoice {
     /** Hit-ratio model; absent = `'uniform'`. */
     hitRatio?: HitRatioChoice;
   };
-  /** Whole decoder layers streamed every step (llama.cpp `-ngl N`); absent = every layer on the device. */
-  dense?: {
-    /** Tier holding the streamed layers. */
-    tier: TierChoice;
-    /** Layers kept on the device (layers `[0, n)`); the rest `[n, L)` stream. Integer ≥ 0. Count. */
-    layersOnDevice: number;
-  };
   /** n-gram lookup tables (Qwen PLE, DeepSeek Engram) on a tier; absent = on the device. */
   tables?: {
-    /** Tier holding the tables. */
-    tier: TierChoice;
-    /** Scale layout; absent = the tier's default (`'separate'` on host RAM, `'pinned_host'` on SSD). */
+    /** Tier holding the tables, or `'split'` between host RAM and the SSD by table layer (see `split`). */
+    tier: PlacementChoice;
+    /**
+     * With `tier: 'split'`: how the layers that have a table split (`ramLayers` counts table layers, not all layers);
+     * absent = the default split.
+     */
+    split?: TierSplitChoice;
+    /**
+     * Scale layout; absent = the tier's default (`'separate'` on host RAM, `'pinned_host'` on SSD; with a split, each
+     * side its own tier's default).
+     */
     scaleLayout?: ScaleLayoutChoice;
   };
   /** Outstanding read requests per device; absent = the tier's rated maximum. Integer ≥ 1. Count. */
@@ -120,16 +168,13 @@ export interface HostChoice {
 
 /** True when the choice moves any weight group off the device. */
 export function offloadsAnything(offload: OffloadChoice | undefined): boolean {
-  return (
-    offload !== undefined &&
-    (offload.experts !== undefined || offload.dense !== undefined || offload.tables !== undefined)
-  );
+  return offload !== undefined && (offload.experts !== undefined || offload.tables !== undefined);
 }
 
-/** True when any offloaded weight group uses the SSD. */
+/** True when any offloaded weight group uses the SSD (a host-RAM + SSD split counts). */
 export function offloadsToSsd(offload: OffloadChoice | undefined): boolean {
-  return [offload?.experts, offload?.dense, offload?.tables].some(
-    (group) => group?.tier === 'nvme',
+  return [offload?.experts, offload?.tables].some(
+    (group) => group?.tier === 'nvme' || group?.tier === 'split',
   );
 }
 
@@ -146,15 +191,30 @@ function compact<T extends object>(record: T): T {
   return out;
 }
 
+/** The split with defaults removed (`ramEnd` `'first'`); undefined unless `tier` is `'split'` or nothing is left. */
+function normalizeSplit(
+  tier: PlacementChoice,
+  split: TierSplitChoice | undefined,
+): TierSplitChoice | undefined {
+  if (tier !== 'split' || split === undefined) return undefined;
+  const out = compact({
+    ramLayers: split.ramLayers,
+    ramEnd: split.ramEnd === 'last' ? split.ramEnd : undefined,
+  });
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /**
- * The offload choice with defaults removed (fromLayer 0, f 0, uniform h, the tier's scale layout) and a queue depth
- * and a prefetch accuracy (without the default 0.8) kept only while something is offloaded; `{}` when nothing is.
+ * The offload choice with defaults removed (fromLayer 0, f 0, uniform h, a single tier's scale layout, a split without
+ * `tier: 'split'`, `ramEnd` `'first'`) and a queue depth and a prefetch accuracy (without the default 0.8) kept only
+ * while something is offloaded; `{}` when nothing is.
  */
 export function normalizeOffload(o: OffloadChoice): OffloadChoice {
   const experts =
     o.experts &&
     compact({
       tier: o.experts.tier,
+      split: normalizeSplit(o.experts.tier, o.experts.split),
       fromLayer: o.experts.fromLayer === 0 ? undefined : o.experts.fromLayer,
       residentFraction: o.experts.residentFraction === 0 ? undefined : o.experts.residentFraction,
       hitRatio: o.experts.hitRatio === 'uniform' ? undefined : o.experts.hitRatio,
@@ -163,12 +223,14 @@ export function normalizeOffload(o: OffloadChoice): OffloadChoice {
     o.tables &&
     compact({
       tier: o.tables.tier,
+      split: normalizeSplit(o.tables.tier, o.tables.split),
+      // A split has no single default layout (each side uses its tier's), so its layout is kept as given.
       scaleLayout:
-        o.tables.scaleLayout === defaultScaleLayout(o.tables.tier)
+        o.tables.tier !== 'split' && o.tables.scaleLayout === defaultScaleLayout(o.tables.tier)
           ? undefined
           : o.tables.scaleLayout,
     });
-  const out = compact({ experts, dense: o.dense && { ...o.dense }, tables });
+  const out = compact({ experts, tables });
   const prefetchAccuracy =
     o.prefetchAccuracy === DEFAULT_PREFETCH_ACCURACY ? undefined : o.prefetchAccuracy;
   return offloadsAnything(out)

@@ -40,7 +40,6 @@ const STATES: [string, AppState][] = [
       deployment: {
         offload: {
           experts: { tier: 'nvme', fromLayer: 3, residentFraction: 0.25, hitRatio: 'skewed_fine_grained' },
-          dense: { tier: 'nvme', layersOnDevice: 40 },
           tables: { tier: 'host_ram', scaleLayout: 'interleaved' },
           queueDepth: 32,
           prefetchAccuracy: 0.9,
@@ -48,7 +47,18 @@ const STATES: [string, AppState][] = [
       },
     }),
   ],
-  ['custom hit ratio, host-RAM dense layers', state({ deployment: { offload: { experts: { tier: 'host_ram', hitRatio: 0.6 }, dense: { tier: 'host_ram', layersOnDevice: 0 } } } })],
+  ['custom hit ratio', state({ deployment: { offload: { experts: { tier: 'host_ram', hitRatio: 0.6 } } } })],
+  [
+    'host-RAM + SSD splits of experts and lookup tables',
+    state({
+      deployment: {
+        offload: {
+          experts: { tier: 'split', split: { ramLayers: 20, ramEnd: 'last' }, fromLayer: 4, residentFraction: 0.1 },
+          tables: { tier: 'split', split: { ramLayers: 10 }, scaleLayout: 'separate' },
+        },
+      },
+    }),
+  ],
   ['MTP with k and a use case', state({ deployment: { specDec: { method: 'mtp', k: 2, useCase: 'code' } } })],
   ['DFlash 2 with a drafter repo and custom α', state({ deployment: { specDec: { method: 'dflash2', drafter: 'incoai/Qwen3.8-27B-DFlash2', k: 7, alpha: 0.8 } } })],
   ['DSpark with the hypothetical drafter', state({ deployment: { specDec: { method: 'dspark', drafter: 'hyp', useCase: 'agentic' } } })],
@@ -303,7 +313,7 @@ describe('URL codec', () => {
   });
 
   it('encodes the deployment and host keys in a readable canonical form', () => {
-    const q = 'hr=ddr5-6400-8ch&hrc=512&ssd=nvme-t705-2tb&hl=4x8&ox=ssd&oxl=3&oxf=0.25&oxh=fine&odl=40&odt=ssd&olt=ram&ols=interleaved&oqd=32&opf=0&sd=dflash2&sdr=hyp&sdk=5&sda=0.8';
+    const q = 'hr=ddr5-6400-8ch&hrc=512&ssd=nvme-t705-2tb&hl=4x8&ox=ssd&oxl=3&oxf=0.25&oxh=fine&olt=ram&ols=interleaved&oqd=32&opf=0&sd=dflash2&sdr=hyp&sdk=5&sda=0.8';
     const { state: s, dropped } = decodeState(q);
     expect(dropped).toEqual([]);
     expect(encodeState(s)).toBe(q);
@@ -346,10 +356,50 @@ describe('URL codec', () => {
     expect(d.dropped).toEqual(['hr=ddr9', 'hrc=-1', 'ssd=floppy', 'hl=6x16', 'ox=gpu', 'oxf=0.5', 'ols=zig', 'oqd=0', 'oo=maybe', 'sd=eagle', 'sdk=3']);
     expect(d.state.deployment).toEqual({ offload: { tables: { tier: 'host_ram' } } });
     expect(d.state.hw.host).toBeUndefined();
-    const range = decodeState('sd=mtp&sdk=17&sda=0.995&sdr=a/b&sdu=poetry&oxh=fine&odt=ssd');
-    expect(range.dropped).toEqual(['oxh=fine', 'odt=ssd', 'sdr=a/b', 'sdk=17', 'sdu=poetry', 'sda=0.995']);
+    const range = decodeState('sd=mtp&sdk=17&sda=0.995&sdr=a/b&sdu=poetry&oxh=fine&ols=pinned');
+    expect(range.dropped).toEqual(['oxh=fine', 'ols=pinned', 'sdr=a/b', 'sdk=17', 'sdu=poetry', 'sda=0.995']);
     expect(range.state.deployment).toEqual({ specDec: { method: 'mtp' } });
     expect(decodeState('ox=ram&oxf=1.5&oxh=1.2').dropped).toEqual(['oxf=1.5', 'oxh=1.2']);
+  });
+
+  it('host-RAM + SSD split: ox=split / olt=split with oxr, oxe, olr, ole; orphans dropped; old URLs unchanged', () => {
+    const q = 'ox=split&oxl=4&oxr=20&oxe=last&olt=split&ols=interleaved&olr=10&ole=last';
+    const d = decodeState(q);
+    expect(d.dropped).toEqual([]);
+    expect(d.state.deployment.offload).toEqual({
+      experts: { tier: 'split', fromLayer: 4, split: { ramLayers: 20, ramEnd: 'last' } },
+      tables: { tier: 'split', split: { ramLayers: 10, ramEnd: 'last' }, scaleLayout: 'interleaved' },
+    });
+    expect(encodeState(d.state)).toBe(q);
+    // `first` is the default: read, never written; a split without its keys is the default split.
+    expect(encodeState(decodeState('ox=split&oxr=24&oxe=first').state)).toBe('ox=split&oxr=24');
+    expect(decodeState('ox=split').state.deployment.offload).toEqual({ experts: { tier: 'split' } });
+    // A split keeps any scale layout (there is no single default; absent = each side's tier default).
+    expect(encodeState(decodeState('olt=split&ols=separate').state)).toBe('olt=split&ols=separate');
+    // The split keys need their group's split placement; invalid values are dropped.
+    expect(decodeState('ox=ram&oxr=3&oxe=last&olt=ssd&olr=2&ole=last').dropped).toEqual(['oxr=3', 'oxe=last', 'olr=2', 'ole=last']);
+    expect(decodeState('oxr=3&olr=2').dropped).toEqual(['oxr=3', 'olr=2']);
+    expect(decodeState('ox=split&oxr=-1&oxe=middle&olt=split&olr=1.5').dropped).toEqual(['oxr=-1', 'oxe=middle', 'olr=1.5']);
+    // Old single-tier URLs decode as before.
+    expect(decodeState('ox=ssd&oxl=3&olt=ram').state.deployment.offload).toEqual({
+      experts: { tier: 'nvme', fromLayer: 3 },
+      tables: { tier: 'host_ram' },
+    });
+    // The split counts as SSD offload for the SSD read rate.
+    expect(encodeState(decodeState('ox=split&osr=sustained').state)).toBe('ox=split&osr=sustained');
+    expect(encodeState(decodeState('olt=split&osr=sustained').state)).toBe('olt=split&osr=sustained');
+  });
+
+  it('loads an old URL with whole-layer offload (odl / odt, removed) and ignores it without a notice', () => {
+    const old = decodeState('ox=ram&odl=40&odt=ssd');
+    expect(old.dropped).toEqual([]);
+    expect(old.state.deployment.offload).toEqual({ experts: { tier: 'host_ram' } });
+    expect(encodeState(old.state)).toBe('ox=ram');
+    // Alone it offloads nothing, so the offload-only keys that came with it are dropped as usual.
+    const alone = decodeState('odl=0&odt=ssd&oqd=8');
+    expect(alone.dropped).toEqual(['oqd=8']);
+    expect(alone.state.deployment).toEqual({});
+    expect(encodeState(alone.state)).toBe('');
   });
 
   it('drops hostInterface edits from x (set through the host link instead)', () => {

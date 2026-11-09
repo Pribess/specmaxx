@@ -534,4 +534,12 @@ describe('deployment identity, knobs absent (after latency audit G1–G8, G6 exc
       ).toEqual(absent);
     },
   );
+  it.each(Object.entries(inputs))(
+    'ID-3 %s: empty placement rule lists (routedExperts [], lookupTables []) deep-equal absent deployment',
+    (_key, value) => {
+      expect(
+        simulate({ ...value, deployment: { offload: { routedExperts: [], lookupTables: [] } } }),
+      ).toEqual(simulate(value));
+    },
+  );
 });

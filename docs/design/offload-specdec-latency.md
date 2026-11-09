@@ -70,14 +70,14 @@ move**.
 | Group kind       | Covers                                                                 | Selector                                                                                | Resident on device                                                                                                                                     | Streamed per step                                                                                             |
 | ---------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
 | `routed_experts` | `MoeBlock` routed experts of the selected layers                       | all MoE layers, or a layer range `[from, to)` (llama.cpp `--n-cpu-moe`, ik_llama `-ot`) | `C = f·E` experts per offloaded layer (pinned or LRU cache; the sim does not distinguish, the hit-ratio model does), router, shared experts, attention | the missed experts' weights (§2.4–2.5)                                                                        |
-| `dense_layers`   | every weight of whole decoder layers `[from, to)` (dense or MoE model) | layer range                                                                             | all other layers                                                                                                                                       | the full weight bytes of each offloaded layer, every step (no hit ratio: a dense layer is read once per step) |
-| `lookup_tables`  | `NgramEmbeddingBlock` tables (Qwen PLE, DeepSeek Engram)               | all tables of the model                                                                 | projections, gate vectors, conv taps                                                                                                                   | the `T·g` gathered rows (§2.10)                                                                               |
+| ~~`dense_layers`~~ (removed, §2.11) | every weight of whole decoder layers `[from, to)` (dense or MoE model) | layer range                                                                             | all other layers                                                                                                                                       | the full weight bytes of each offloaded layer, every step (no hit ratio: a dense layer is read once per step) |
+| `lookup_tables`  | `NgramEmbeddingBlock` tables (Qwen PLE, DeepSeek Engram)               | all tables, or rules by layer range (§2.11)                                             | projections, gate vectors, conv taps                                                                                                                   | the `T·g` gathered rows (§2.10)                                                                               |
 
 Decisions:
 
-- **Dense whole-layer offload is in scope**: the same `TransferOp` with `bytes = W_layer`, `R = 1`; one `case` in
+- **Dense whole-layer offload was in scope, and was later removed (§2.11)**: the same `TransferOp` with `bytes = W_layer`, `R = 1`; one `case` in
   `lowerBlock`; it gives the common consumer case (a 70B at 4.5 bpw on a 32 GB card, llama.cpp `-ngl N`) an answer.
-- **Dense/attention weights and shared experts stay resident** unless their layer is in a `dense_layers` range.
+- **Dense/attention weights and shared experts stay resident** (before the removal: unless their layer was in a `dense_layers` range).
 - **Execution mode** `'transfer'` (misses stream to the device, which computes) is the first implementation;
   `'cpu_compute'` is a designed hook (§2.8).
 
@@ -165,7 +165,7 @@ service    = max( (R − 1) · α_tier / QD ,                  Little's law: at 
                   R / (IOPS_tier / n_stream) ,             the tier's request rate, shared by concurrent consumers (NVMe with `randomRead`; term absent otherwise)
                   Σ_i count_i·ceil(bytes_i/gran_tier)·gran_tier / (B_i/n_stream),   tier bandwidth by read class
                   bytes_link / B_link ,                    this device's link (not shared)
-                  [ bytes_tier / (B_ram / (2 · n_stream)) ]   NVMe → host → device only: host RAM written once, read once
+                  [ bytes_tier / (B_ram / (2 · n_host)) ]     NVMe → host → device only: host RAM written once, read once (n_host: §2.11)
                 )
 t_path     = α_path + service
 ```
@@ -262,7 +262,7 @@ skewed model is chosen.
 | group          | physical reads `{count, bytes}`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | `usefulBytes` (crosses the link)                                                                        | per step       |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------- |
 | routed experts | `[{ M, W_expert }]` (`M` from §2.4 with the phase's `T`; `W_expert = (gated ? 3 : 2)·h·fe·bpe(w_routed)/etp`, `gemmWeightBytes` incl. 2:4 metadata)                                                                                                                                                                                                                                                                                                                                                                                                                               | `M·W_expert`                                                                                            | expected value |
-| dense layer    | `[{ 1, W_layer }]` (`blockResidentWeightBytes` of the layer's blocks; a layer in the range streams whole: no expert or table transfer on top)                                                                                                                                                                                                                                                                                                                                                                                                                                     | `W_layer`                                                                                               | every step     |
+| dense layer (removed, §2.11) | `[{ 1, W_layer }]` (`blockResidentWeightBytes` of the layer's blocks; a layer in the range streams whole: no expert or table transfer on top)                                                                                                                                                                                                                                                                                                                                                                                                                                     | `W_layer`                                                                                               | every step     |
 | lookup table   | per §2.10's scale layout, with **`valueBytes = d·elementBits/8`** (Engram 256 B, PLE 320 B) and **`scaleBytes = d·blockScaleBitsPerElem/8`** (Engram `256·0.25/8 = 8 B`, PLE 0); the logical row is `rowBytes = d·bytesPerElement(format) = valueBytes + scaleBytes` (Engram 264 B, counted **once**); rows per device `R = T·g/tp` (the table is row-parallel; `T·g` at tp 1): `interleaved` `[{ R, rowBytes }]`; `separate` `[{ R, valueBytes }, { R, scaleBytes }]`; `pinned_host` `[{ R, valueBytes }]` on the table's tier (the scale read comes from RAM and is not costed) | `R·rowBytes` (Engram 6,336 B per 24-row step, PLE 5,120 B per 16-row step at tp 1, whatever the layout) | §2.10          |
 
 Op time (`opTime.ts`, new `case 'transfer'`): `t_path` of §2.3; result fields `transferLatencySec = α_path`,
@@ -307,10 +307,10 @@ t_s       = offloadOverlap === 'ideal' ? exposed_s + max(core_s, xfer_s)
 ### 2.7 Memory fit with tiers
 
 ```
-W_s      = Σ resident block weights  (routed experts: C = f·E_loc per offloaded layer, a real number; dense_layers range: 0; tables: the non-table part)
-staging  = (offloadOverlap === 'ideal' ? 2 : 1) · max_{phase, layer} ( ceil(M_ℓ)·W_expert,ℓ  |  W_layer  |  usefulBytes of the table op )    (0 when nothing is streamed)
+W_s      = Σ resident block weights  (routed experts: C = f·E_loc per offloaded layer, a real number; tables: the non-table part)
+staging  = (offloadOverlap === 'ideal' ? 2 : 1) · max_{phase, layer} ( ceil(M_ℓ)·W_expert,ℓ  |  usefulBytes of the table op )    (0 when nothing is streamed)
 total_s  = W_s + B_r·state_s + act_s + staging  ≤ capacity_device
-tier_bytes[host_ram | nvme] = Σ groups placed there (the FULL group: all experts of the offloaded layers, whole dense layers, whole tables; the device cache is a copy)
+tier_bytes[host_ram | nvme] = Σ groups placed there (the FULL group: all experts of the offloaded layers, whole tables; the device cache is a copy)
                             + [dedicated ∧ nvme tables with scaleLayout 'pinned_host'] rows·scaleBytes on host_ram (§2.10)
                               (unified: those scales are device bytes in W_s instead)
 fits = fits_device ∧ ∀ tiers (tier_bytes ≤ capacity_tier)
@@ -362,7 +362,7 @@ mapper (`qwen.ts:90, 101`, `pleLayers.includes(i + 1)`) is correct. DeepSeek `en
 - **Simulator default: `'device'`** (strict identity; today's pessimistic fit stays unless the user acts).
 - The mapper flags PLE and Engram blocks `offDeviceByDesign: true` (sources: the model cards). This drives the **UI
   only**:
-  - **Prefill:** when the user turns any offload placement on (experts or dense layers off-device, or opens the
+  - **Prefill:** when the user turns any offload placement on (experts off-device, or opens the
     Lookup-tables picker) on a model with such a table, the picker pre-fills **Host RAM**.
   - **Hint state (visible before any knob is on):** the "Lookup tables" picker trigger shows its current value
     "Device" with an accent dot, and a chip button "Host RAM ↗" sits next to the trigger (as built: a button inside
@@ -402,6 +402,114 @@ the F8_E8M0 scales as a separate tensor (`embed.scale [rows, 8]`), so
 **Memory fit**: the table shard `ceil(rows/tp)·d·bpe(lookup)` per device counts against its tier (summed over the
 node's devices for the host tiers); projections, gate vectors and conv taps stay in `W_s`.
 
+### 2.11 Mixed placement by layer range (host RAM + SSD)
+
+**Why.** Host RAM often cannot hold every offloaded layer (Qwen3.8-Flash-Next fp8: 120.8 GB of experts against
+96 GB of DDR5), but the SSD is ≈ 8× slower per miss. Splitting the layers keeps as many as fit in RAM and puts the
+rest on the SSD.
+
+**Placement** (`engine/types.ts: RoutedExpertRule, LookupTableRule`; `engine/offloadRules.ts`; `engine/host.ts:
+resolveOffload`; `lower/offload.ts`; model doc §12 "Placement"):
+
+- `routedExperts` and `lookupTables` take one rule or a list of rules over **disjoint** layer ranges. The single
+  object is the one-rule list (pinned by `engine/e2e-mixed-offload.test.ts` "single-tier configs are unchanged" and
+  `identity.test.ts` ID-3). `[]` = none. Tables live in given layers (Qwen PLE: layer 1; DeepSeek-V4.1 Engram: layers
+  1 and 14), so a table split is a layer boundary between them; a table rule at `'device'` places nothing.
+- Rules are sorted by `layers.from` when resolved, so list order never changes a result. `layers` may be absent only
+  in a one-rule list (every layer, as before). Layer i takes the one rule containing it; uncovered layers keep that
+  group on the device.
+- **`residentFraction` and `hitRatio` are per rule.** The device cache is `C = f·E_loc` *per layer*, and the hit clamp
+  `[max(0, U + C − E_loc), min(U, C)]` and prefetch's `M/(E_loc − C)` already use that layer's C, so a per-range f is
+  exact, not an approximation. It lets a deployment spend VRAM where a hit saves the most (an SSD miss costs ≈ 8× a
+  RAM miss on an RTX 5090 + 990 PRO), and the old form, which carries f and h on the group, normalises losslessly. The
+  UI keeps one f / h control and writes it into both rules.
+- Unified memory: each `host_ram` rule is dropped with the existing note (its layers stay device weights); the `nvme`
+  rules remain. Nothing left ⇒ identity.
+- `includeDraft` may be set on one rule only (validation); the drafter's experts take that rule's tier, f and h
+  (`lower/offload.ts: draftExpertPlacement`, used by `lower/draft.ts` and `engine/memory.ts`).
+
+**Whole-layer offload removed.** `denseLayers` (the `dense_layer` group of §2.1/§2.5) copied whole decoder layers
+to the device every step (the Accelerate / FlexGen style). Local users don't run that: llama.cpp `-ngl N` computes
+the layers it keeps off the GPU on the CPU. For a MoE model it also read every expert of those layers each step, a
+trap next to the far cheaper expert offload. It is removed from the types, lowering, memory fit, validation (an input
+that still carries `denseLayers` is rejected) and the UI. Partial offload of dense layers would come back as the
+CPU-compute mode (§2.8, review F3), not as streaming. The one sanity row that used it (F-W08) is re-encoded and
+excluded (docs/sanity-check.md).
+
+**Cost and fit.** No formula changes: transfer ops are already per layer, so each layer's op reads from its rule's
+tier (§2.3: RAM direct over PCIe, SSD with the staging term), prefetch's q is per op, and the tier bytes of §2.7 are
+already summed per layer through the per-layer lookup.
+
+**Contention: n_host** (`engine/simulate.ts: stageTransferPaths`, `engine/transfer.ts: TransferPath.hostStagingNStream`,
+model doc §12 "Sharing"). Host RAM is one resource behind host-RAM reads and NVMe staging. Before, with stage A
+streaming from RAM and stage B from the SSD, each got the full B_ram (granted twice). Now:
+
+```
+hostStreams(s) = streams_ram(s) ∨ streams_nvme(s)          dedicated memory; each device counted once
+n_host         = n_stream rule of §2.3 over hostStreams
+host RAM tier:   tier = bytes_tier / (B_ram / n_host)
+NVMe tier:       tier, IOPS shared by n_nvme;  staging = bytes_tier / (B_ram / (2·n_host))
+```
+
+**Compatibility.** With one physical off-device tier, or with both tiers used only inside the same stage(s),
+hostStreams = streams_tier, so n_host = n_tier and the result of an old input is unchanged: the identity pin, the
+sanity reports and every single-tier test pass without expectation edits. The exception is intended: an old
+single-object config whose **stages stream from different tiers** (pp > 1, e.g. tables in RAM on stage 0 and experts
+on the SSD on stage 1) moves, because the double grant is gone. Pinned: Qwen3.8-Flash-Next pp 2, PLE table in RAM
+(stage 0), experts of layers 24–47 on a 200 GB/s SSD (stage 1), decode @ 2k 15.86 → **8.64 tok/s @ 2k**: the expert
+fetch is bound by host-RAM staging, bytes/(B_ram/4) instead of bytes/(B_ram/2) (`e2e-mixed-offload.test.ts`, "moved by
+n_host"). The PCIe link is per device and never shared.
+
+**Within one device the transfer ops stay serial** (`xfer_s = Σ op sec`, the rule that already applies to experts in
+RAM next to tables on the SSD). Reason: in decode, a layer's needed experts are known only after that layer's router
+runs, so the demand fetch of layer j cannot start while layer i < j is still streaming; both tiers' streams are
+consumed in layer order, so the per-device transfer time is their sum. The link is never double-granted, the staging
+buffer rule stays valid, and `pipeline.ts` is untouched. The prefetched share could overlap (follow-up 1).
+
+**Worked example** (`engine/e2e-mixed-offload.test.ts`): Qwen3.8-Flash-Next fp8 (48 identical MoE layers, 512
+experts, top-10, W_expert = 4.9152 MB), one RTX 5090, DDR5-5600 ×2 (89.6 GB/s, 96 GB), 990 PRO, PLE table on the
+SSD, f = 0, b 1, decode @ 8k. Per layer M = 10 misses = 49.15 MB: a RAM layer is link-bound, 1.07 µs + 49.15 MB /
+57.6 GB/s = 0.854 ms; an SSD layer drive-bound, 46.5 µs + 49.15 MB / 7.45 GB/s = 6.644 ms (staging 1.10 ms below it).
+Transfer per step: all-RAM 41.06 ms, 24/24 180.02 ms (exactly the mean), all-SSD 318.97 ms. Decode:
+**23.73 tok/s @ 8k** (all-RAM; host RAM 120.8 GB > 96 GB, does not fit), **5.52 tok/s @ 8k** (24/24; 60.4 GB in RAM,
+fits), **3.12 tok/s @ 8k** (all-SSD). Tables split the same way: DeepSeek-V4.1-Flash with Engram layer 1 in RAM and
+layer 14 on the SSD sits between both-in-RAM and both-on-SSD, its transfer exactly their mean.
+
+**Follow-up 1: overlap the prefetched share across tiers (tighter bound, not built).** Only the prefetched share q
+(default p = 0.8 at b 1), fetched during the previous layer's compute, can overlap: an SSD → host RAM read of one
+layer can run while another layer's host RAM → GPU copy is in flight, so only the final PCIe hop and host RAM
+bandwidth are shared. The demand share (1 − q) stays serial (router-bound, above). Per device and stage:
+
+```
+xfer_s = Σ_ops (1 − q)·t_op
+       + max( Σ_ram q·t_op,  Σ_ssd q·t_op,                         per-source limits (each tier's own stream)
+              Σ_ops q·usefulBytes / B_link,                         the shared PCIe link
+              (Σ_ram q·bytes + 2·Σ_ssd q·bytes) / (B_ram / n_host) ) host RAM: RAM reads + SSD staging (written, read)
+```
+
+What it needs: per-op link bytes, host-RAM bytes and per-source tier time on `OpResult` (filled by
+`opTime.ts`/`transferTime`); a new `xfer_s` in `pipeline.ts: stageResult`, whose hiding term `pbar·min(core, xfer)` and
+exact-endpoint branches change with it; and a staging buffer per tier in flight (two buffers, one per source, instead
+of the largest one). Single-tier configs could stay bit-identical only behind an explicit one-source branch (the
+q-weighted re-summation changes the float order). Configs that would move: any device streaming from both tiers,
+including the existing experts-in-RAM + tables-on-SSD mixes (Qwen PLE, Engram with experts offloaded). Estimate for
+the worked example: 0.2·180.0 + 0.8·159.5 ≈ 163.6 ms per step, ≈ 6.07 vs 5.52 tok/s @ 8k (≈ +10%). Deferred because it
+changes `stageResult` broadly.
+
+**Follow-up 2: host RAM as a cache over the SSD (three-level VRAM → RAM → SSD, design only).** Hot experts of
+SSD-resident layers kept in RAM. What it needs:
+
+- two sources per expert fetch: `TransferOp.source` is one tier today, so an op per level (`reads` from RAM for the
+  level-2 hits, from the SSD for the rest), or a `sources` list;
+- RAM capacity for the cache copy (`f_ram·E_loc·W_expert` per SSD layer on the host-RAM tier, on top of the SSD copy
+  for an inclusive cache);
+- a level-2 hit model. For an exclusive hierarchy with the same h(f) curve:
+  `hits_dev = U·h(f_dev)`, `hits_ram = U·(h(f_dev + f_ram) − h(f_dev))`, `misses_ssd = U − hits_dev − hits_ram`, each
+  clamped like `expertHitsMisses` (`hits_dev + hits_ram ≤ min(U, C_dev + C_ram)`).
+
+Open questions: inclusive vs exclusive caches (capacity vs promotion traffic); whether prefetch also prefetches from
+RAM (q per level); whether RAM-cache fills (SSD → RAM promotions) cost host RAM bandwidth at steady state; and the UI
+(a second fraction next to f, or "RAM holds hot experts of SSD layers").
 ---
 
 ## 3. Speculative decoding
@@ -883,7 +991,7 @@ export interface TransferOp {
   /** Stable dotted name, e.g. `'moe.expert_fetch'`, `'layer.fetch'`, `'ngram.row_fetch'`. */
   name: string;
   /** What is streamed (breakdown row and tier accounting). */
-  group: 'routed_experts' | 'dense_layer' | 'lookup_table';
+  group: 'routed_experts' | 'dense_layer' | 'lookup_table'; // as built: 'dense_layer' removed (§2.11)
   /** Tier the bytes come from (`'host_ram'` on a unified-memory device is never emitted). */
   source: 'host_ram' | 'nvme';
   /**
@@ -1038,6 +1146,8 @@ export interface OffloadConfig {
   mode?: 'transfer' | 'cpu_compute';
   /** Outstanding read requests kept in flight per device; default and cap: the tier's `maxOutstanding`. 1 serializes. Count. */
   queueDepth?: number;
+  // As built (§2.11): routedExperts / lookupTables are `Rule | readonly Rule[]` (RoutedExpertRule, LookupTableRule in
+  // engine/types.ts), disjoint layer ranges; the single object below is the one-rule list. denseLayers was removed.
   routedExperts?: {
     tier: 'host_ram' | 'nvme';
     /** Layers whose experts are offloaded, `[from, to)` over `model.layers`; absent = all MoE layers. */
@@ -1381,7 +1491,7 @@ Where the code differs from revision 2 of this design, and why. The sections abo
     numbers hold; the real preset gives `α = 1/22,000 + 1 µs` (§8.6).
 13. n-gram table rows per device are `T·g/tp` (the table is row-parallel under TP); the design wrote `T·g`, the same
     at tp 1.
-14. A layer in the `denseLayers` range streams whole, with no expert or table transfer on top: its `W_layer` already
+14. (Superseded: whole-layer offload was removed, §2.11.) A layer in the `denseLayers` range streams whole, with no expert or table transfer on top: its `W_layer` already
     holds every expert and the table shard.
 15. `n_stream` across nodes: a stage spanning nodes takes the largest `n_stream` of its nodes; the tier bytes report
     the fullest node; DP replicas on one node each count their own copy. The design defined the sharing for one node.

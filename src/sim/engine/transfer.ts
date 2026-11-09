@@ -152,9 +152,19 @@ export interface TransferPath {
    * then reads every byte once. Present only for an NVMe tier on a dedicated-memory device. Unit: B/s.
    */
   hostStagingBandwidthBytesPerSec?: number;
+  /**
+   * Concurrent consumers of the node's host RAM bandwidth as seen by this device, for the staging term: every streaming
+   * device of the node that reads host RAM, either as its tier or as the staging hop of NVMe reads, each counted once
+   * (n_host, docs/simulation-model.md §12 "Sharing"). Host RAM is one resource behind both paths, so an SSD stream
+   * and a host-RAM stream on other stages split it. Absent = `nStream` (one tier streams: n_host = n_tier). Count (≥ 1).
+   */
+  hostStagingNStream?: number;
   /** Outstanding read requests in flight, `QD = min(queueDepth ?? maxOutstanding, maxOutstanding)`. Count (≥ 1). */
   queueDepth: number;
-  /** Concurrent consumers of the tier on this device's node ({@link nStream}); they share its bandwidth and IOPS. Count (≥ 1). */
+  /**
+   * Concurrent consumers of the tier on this device's node ({@link nStream}); they share its bandwidth and IOPS. For
+   * the host-RAM tier this is n_host (host-RAM readers and NVMe stagers together). Count (≥ 1).
+   */
   nStream: number;
 }
 
@@ -201,7 +211,7 @@ export interface TransferTime {
   tierSec: number;
   /** This device's host link: `usefulBytes / B_link` (0 on unified memory). Unit: seconds. */
   linkSec: number;
-  /** NVMe → host → device staging through host RAM: `bytes_tier / (B_ram / (2·n))`; absent otherwise. Unit: seconds. */
+  /** NVMe → host → device staging through host RAM: `bytes_tier / (B_ram / (2·n_host))`; absent otherwise. Unit: seconds. */
   hostSec?: number;
   /** `service = max(little, iops, tier, link, host)`: hops are pipelined across requests and chunks. Unit: seconds. */
   serviceSec: number;
@@ -217,9 +227,11 @@ export interface TransferTime {
  *   bytes_tier = Σ_i count_i · ceil(bytes_i / gran) · gran
  *   α_path     = α_tier + α_link
  *   service    = max( (R − 1)·α_tier / QD,  R / (IOPS / n),  tier,  usefulBytes / B_link,
- *                     [NVMe on a dedicated device] bytes_tier / (B_ram / (2·n)) )
+ *                     [NVMe on a dedicated device] bytes_tier / (B_ram / (2·n_host)) )
  *   t_path     = α_path + service
  *
+ * n is the tier's n_stream (`path.nStream`); n_host the consumers of host RAM bandwidth (`path.hostStagingNStream`,
+ * default n): host-RAM readers and NVMe stagers of the node share one B_ram (docs/simulation-model.md §12 "Sharing").
  * Latencies add (the first byte traverses every hop); throughput terms take the max (every hop moves chunks while
  * the next is read). The IOPS term exists only for an SSD with a rated `randomRead`.
  */
@@ -263,9 +275,12 @@ export function transferTime(
         }, 0);
   // Formula: link = usefulBytes / B_link
   const linkSec = link === undefined ? 0 : usefulBytes / link.bandwidthPerDirectionBytesPerSec;
-  // Formula: host = bytes_tier / (B_ram / (2·n))   (NVMe → host RAM → device: written once, read once)
+  // Formula: host = bytes_tier / (B_ram / (2·n_host))   (NVMe → host RAM → device: written once, read once;
+  //          n_host = host-RAM readers + NVMe stagers of the node, each device once; one tier streaming: n_host = n)
+  // See docs/simulation-model.md §12 ("Sharing")
   const B_ram = path.hostStagingBandwidthBytesPerSec;
-  const hostSec = B_ram === undefined ? undefined : tierBytes / (B_ram / (2 * n));
+  const n_host = path.hostStagingNStream ?? n;
+  const hostSec = B_ram === undefined ? undefined : tierBytes / (B_ram / (2 * n_host));
   const serviceSec = Math.max(littleSec, iopsSec ?? 0, tierSec, linkSec, hostSec ?? 0);
   const result: TransferTime = {
     requests,

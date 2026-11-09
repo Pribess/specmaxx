@@ -282,6 +282,12 @@ Halo builds).
   (0.95 → 0.94). Batch-1 decode without spec-dec is unchanged (U(1) = k); short memory-bound MoE prefills rise
   0.02–1.2 % (U a little below E; lm-36 the most). Of the newer rows, F-LM17, F-LM27, F-LM28 and F-LM49 decode rise 0.7–3 %
   (batched or spec-dec MoE), and lm-32 (EP8) prefill falls 0.2 % (ρ).
+- **Whole-layer offload removed** (`OffloadConfig.denseLayers`; [§12 "Placement"](simulation-model.md#placement)).
+  F-W08 (GPT-OSS-120B, llama.cpp with 13 of the layers on an RTX 3090, the rest on the CPU) was its only user. It is
+  re-encoded as the routed experts of layers 0–22 in host RAM and its decode check, a known exception before, is now
+  **excluded**: llama.cpp computes those layers on the CPU, a mode the simulator does not cost (CPU-compute, review F3),
+  and expert streaming is a different setup, so the comparison would mean nothing. No other row used whole-layer
+  offload; every other row is unchanged.
 
 ## Follow-ups (proposed, not done)
 

@@ -5,10 +5,9 @@ import type { QuantConfig } from '../ir/model';
 import { TINY_DENSE, TINY_HYBRID } from '../models/reference';
 import { singleDevice } from '../hw/presets';
 import { RTX_5090 } from '../hw/presets/nvidia';
-import type { DeviceSpec } from '../hw/types';
 import { embeddingResidentWeightBytes } from '../lower/embedding';
 import { lmHeadResidentWeightBytes } from '../lower/head';
-import { layerWeightBytesOnDevice, type LoweringContext } from '../lower/lower';
+import type { LoweringContext } from '../lower/lower';
 import { stageWeightBytes } from './memory';
 import { simulate } from './simulate';
 import type { SimInput } from './types';
@@ -122,7 +121,7 @@ describe('U-6 memory with routed experts offloaded (TINY_HYBRID on one RTX 5090,
     const base = run(undefined).memory;
     const m = run(0.5).memory;
     expect(base.perStage[0].weightBytes - m.perStage[0].weightBytes).toBe(6_291_456 / 2);
-    expect(m.tiers).toEqual([{ tier: 'host_ram', bytes: 6_291_456, breakdown: { lookupTables: 0, routedExperts: 6_291_456, denseLayers: 0, draftExperts: 0 }, capacityBytes: 96e9, fits: true }]);
+    expect(m.tiers).toEqual([{ tier: 'host_ram', bytes: 6_291_456, breakdown: { lookupTables: 0, routedExperts: 6_291_456, draftExperts: 0 }, capacityBytes: 96e9, fits: true }]);
     // Prefill T = 128: U ≈ 8 = E, hits = C = 4, M_max = 4 (decode: U 2, M 1).
     expect(m.perStage[0].stagingBytes).toBe(2 * 4 * W_EXPERT);
     expect(run(0.5, 'none').memory.perStage[0].stagingBytes).toBe(4 * W_EXPERT);
@@ -149,54 +148,38 @@ describe('U-6 memory with routed experts offloaded (TINY_HYBRID on one RTX 5090,
       expect(r[phase].cycleSec).toBe(base[phase].cycleSec);
       expect(r[phase].tokensPerSec).toBe(base[phase].tokensPerSec);
     }
-    expect(r.memory.tiers).toEqual([{ tier: 'host_ram', bytes: 6_291_456, breakdown: { lookupTables: 0, routedExperts: 6_291_456, denseLayers: 0, draftExperts: 0 }, capacityBytes: 96e9, fits: true }]);
+    expect(r.memory.tiers).toEqual([{ tier: 'host_ram', bytes: 6_291_456, breakdown: { lookupTables: 0, routedExperts: 6_291_456, draftExperts: 0 }, capacityBytes: 96e9, fits: true }]);
     expect(r.warnings).not.toEqual(base.warnings);
   });
 });
 
-describe('dense layers offloaded and unified memory', () => {
-  const dense = (device: DeviceSpec, tier: 'host_ram' | 'nvme') =>
+// Whole-layer streaming (`denseLayers`) was removed; its unified-memory cases are kept here with routed experts.
+describe('offloaded experts on unified memory', () => {
+  const experts = (tier: 'host_ram' | 'nvme') =>
     simulate({
-      model: TINY_DENSE,
+      model: TINY_HYBRID,
       quant: BF16,
       parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
       workload: { batch: 1, promptLen: 128, decodeContextLen: 256 },
-      hardware: { device, topology: singleDevice(device) },
-      deployment: { offload: { denseLayers: { tier, layers: { from: 1, to: 2 } } } },
+      hardware: { device: SYNTH_UNIFIED, topology: singleDevice(SYNTH_UNIFIED) },
+      deployment: { offload: { routedExperts: { tier, residentFraction: 0, hitRatio: { kind: 'uniform' } } } },
     });
-  const ctx: LoweringContext = { phase: 'decode', seqs: 1, qLen: 1, kvLen: 2, quant: BF16, parallel: { tp: 1, pp: 1, dp: 1, ep: 1 } };
-  const W_LAYER = layerWeightBytesOnDevice(TINY_DENSE.layers[1], ctx);
-
-  it('a dense layer on host RAM: resident 0, streamed whole every step (reads [{1, W_layer}]), host tier W_layer, staging 2·W_layer', () => {
-    const r = dense(RTX_5090, 'host_ram');
-    const base = simulate({ ...input(), hardware: { device: RTX_5090, topology: singleDevice(RTX_5090) } });
-    expect(base.memory.perStage[0].weightBytes - r.memory.perStage[0].weightBytes).toBe(W_LAYER);
-    expect(r.memory.tiers).toEqual([{ tier: 'host_ram', bytes: W_LAYER, breakdown: { lookupTables: 0, routedExperts: 0, denseLayers: W_LAYER, draftExperts: 0 }, capacityBytes: 96e9, fits: true }]);
-    expect(r.memory.perStage[0].stagingBytes).toBe(2 * W_LAYER);
-    for (const phase of [r.decode, r.prefill]) {
-      const fetch = phase.stages[0].layers.find((l) => l.layerIndex === 1)?.ops[0];
-      expect(fetch?.op).toEqual({
-        kind: 'transfer',
-        name: 'layer.fetch',
-        group: 'dense_layer',
-        source: 'host_ram',
-        reads: [{ count: 1, bytesEach: W_LAYER }],
-        usefulBytes: W_LAYER,
-        prefetchedFraction: 1,
-      });
-      expect(phase.stages[0].layers.find((l) => l.layerIndex === 0)?.ops.some((o) => o.op.kind === 'transfer')).toBe(false);
-    }
+  const base = simulate({
+    model: TINY_HYBRID,
+    quant: BF16,
+    parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
+    workload: { batch: 1, promptLen: 128, decodeContextLen: 256 },
+    hardware: { device: SYNTH_UNIFIED, topology: singleDevice(SYNTH_UNIFIED) },
   });
 
-  it("unified memory: 'host_ram' is the device pool (no transfer, no tier, a note); 'nvme' has no link term or α_link", () => {
-    const base = simulate(input());
-    const ram = dense(SYNTH_UNIFIED, 'host_ram');
+  it("'host_ram' is the device pool (no transfer, no tier, a note); 'nvme' has no link term or α_link", () => {
+    const ram = experts('host_ram');
     expect(ram.decode.cycleSec).toBe(base.decode.cycleSec);
     expect(ram.memory.tiers).toEqual([]);
     expect(ram.memory.perStage[0].weightBytes).toBe(base.memory.perStage[0].weightBytes);
     expect(ram.warnings.some((w) => w.includes('host RAM is the device memory'))).toBe(true);
-    const ssd = dense(SYNTH_UNIFIED, 'nvme');
-    const fetch = ssd.decode.stages[0].layers.find((l) => l.layerIndex === 1)?.ops[0];
+    const ssd = experts('nvme');
+    const fetch = ssd.decode.stages[0].layers.flatMap((l) => l.ops).find((o) => o.op.kind === 'transfer');
     // The default SSD of a device with no internal-drive preset is the 990 PRO: α = 1/22,000 s only (no link hop).
     expectClose(fetch?.transferLatencySec ?? 0, 1 / 22_000);
     expect(ssd.memory.tiers.map((t) => t.tier)).toEqual(['nvme']);

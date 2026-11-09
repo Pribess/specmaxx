@@ -9,8 +9,10 @@
 
 import type {
   AcceptanceModel,
+  LookupTableRule,
   DeploymentConfig,
   OffloadConfig,
+  RoutedExpertRule,
   SpecDecodeConfig,
 } from '../../sim/engine/types';
 import { defaultDraftLength, presetAcceptance, type SpecUseCase } from '../../sim/engine/specdec';
@@ -19,9 +21,13 @@ import { hypotheticalDrafter, knownDrafters } from '../../sim/models/hf/drafter'
 import type { AppState } from './appState';
 import {
   HYPOTHETICAL_DRAFTER,
+  splitTierRanges,
   type HitRatioChoice,
+  type PlacementChoice,
   type SpecDecChoice,
   type SpecDecMethod,
+  type TierRange,
+  type TierSplitChoice,
 } from './deployment';
 import type { FieldIssue } from './parallelism';
 
@@ -120,6 +126,35 @@ export function tablesOffDeviceByDesign(model: ModelSpec): boolean {
   );
 }
 
+/** Indices of the decoder layers that have an n-gram lookup table, ascending. Zero-based. */
+export function tableLayerIndices(model: ModelSpec): number[] {
+  return model.layers.flatMap((l, i) =>
+    l.blocks.some((b) => b.kind === 'ngram_embedding') ? [i] : [],
+  );
+}
+
+/**
+ * The layer ranges of a lookup-table placement: `splitTierRanges` over the K table layers `t_0 < … < t_{K−1}` (so a
+ * split counts table layers), each table-index range `[i, j)` widened to the decoder layers
+ * `[i = 0 ? 0 : t_i, j = K ? L : t_j)`, so the ranges cover `[0, L)` without gaps. One range for a single tier.
+ */
+function tableRanges(
+  tier: PlacementChoice,
+  split: TierSplitChoice | undefined,
+  tableLayers: readonly number[],
+  layerCount: number,
+): TierRange[] {
+  const k = tableLayers.length;
+  const byTableIndex = placementRanges(tier, split, 0, k);
+  return byTableIndex.map(({ tier: t, layers: { from, to } }) => ({
+    tier: t,
+    layers: {
+      from: from === 0 ? 0 : tableLayers[from],
+      to: to === k ? layerCount : tableLayers[to],
+    },
+  }));
+}
+
 /** Parameters of the model's n-gram tables (Σ tableRows · rowDim over every table). Unit: params. */
 export function lookupTableParams(model: ModelSpec): number {
   let params = 0;
@@ -130,11 +165,24 @@ export function lookupTableParams(model: ModelSpec): number {
 }
 
 /** The engine's hit-ratio model of a UI choice. */
-function hitRatioModel(
-  h: HitRatioChoice | undefined,
-): NonNullable<OffloadConfig['routedExperts']>['hitRatio'] {
+function hitRatioModel(h: HitRatioChoice | undefined): RoutedExpertRule['hitRatio'] {
   if (typeof h === 'number') return { kind: 'custom', h };
   return { kind: h ?? 'uniform' };
+}
+
+/**
+ * The tier ranges of a group's offloaded layers `[from, L)`: the one tier over the whole range, or the host-RAM / SSD
+ * ranges of a split (`splitTierRanges`; one range when a side is empty).
+ */
+function placementRanges(
+  tier: PlacementChoice,
+  split: TierSplitChoice | undefined,
+  from: number,
+  layerCount: number,
+): TierRange[] {
+  return tier === 'split'
+    ? splitTierRanges(from, layerCount, split)
+    : [{ tier, layers: { from, to: layerCount } }];
 }
 
 /** Result of {@link deploymentConfig}. */
@@ -148,8 +196,10 @@ export interface DeploymentResult {
 /**
  * The engine's `DeploymentConfig` of the state's deployment choices for `model`, with the problems:
  * - offload: experts only on MoE models, tables only on models with a table (else a warning and nothing is placed);
- *   a first offloaded layer at or past the last layer, or dense layers on the device ≥ the layer count, places
- *   nothing (a warning);
+ *   a first offloaded layer at or past the last layer places nothing (a warning);
+ * - a host-RAM + SSD split (`tier: 'split'`) becomes two rules over disjoint layer ranges (experts: both with the same
+ *   f and h; tables: split by table layers, with the same scale layout); a split with an empty side, like a single
+ *   tier, becomes the one-rule object form;
  * - spec-dec: MTP needs the checkpoint's head; a block method needs its drafter loaded (`drafter`).
  */
 export function deploymentConfig(
@@ -179,33 +229,53 @@ export function deploymentConfig(
           `Offloaded layers start at ${from}, past the last layer (${layerCount - 1}); nothing is offloaded.`,
         );
       else {
-        out.routedExperts = {
-          tier: o.experts.tier,
-          ...(from > 0 ? { layers: { from, to: layerCount } } : {}),
-          residentFraction: o.experts.residentFraction ?? 0,
-          hitRatio: hitRatioModel(o.experts.hitRatio),
-        };
+        const residentFraction = o.experts.residentFraction ?? 0;
+        const hitRatio = hitRatioModel(o.experts.hitRatio);
+        const rule = (range: TierRange, whole: boolean): RoutedExpertRule => ({
+          tier: range.tier,
+          // A rule over every layer keeps the original form (no `layers`).
+          ...(whole ? {} : { layers: range.layers }),
+          residentFraction,
+          hitRatio,
+        });
+        const ranges = placementRanges(o.experts.tier, o.experts.split, from, layerCount);
+        // One tier (or a split with an empty side): the single-rule object form, as before splits existed.
+        out.routedExperts =
+          ranges.length === 1 ? rule(ranges[0], from === 0) : ranges.map((r) => rule(r, false));
       }
-    }
-    if (o.dense !== undefined) {
-      const n = o.dense.layersOnDevice;
-      if (n >= layerCount)
-        warn('offload', `All ${layerCount} layers are on the device; no dense layer streams.`);
-      else out.denseLayers = { tier: o.dense.tier, layers: { from: n, to: layerCount } };
     }
     if (o.tables !== undefined) {
       if (!hasLookupTables(model))
         warn('offload', 'The model has no n-gram lookup tables; their placement has no effect.');
-      else
-        out.lookupTables = {
-          tier: o.tables.tier,
-          ...(o.tables.scaleLayout !== undefined ? { scaleLayout: o.tables.scaleLayout } : {}),
+      else {
+        const split = o.tables.tier === 'split';
+        const chosenLayout = o.tables.scaleLayout;
+        /**
+         * The rule's scale layout. 'pinned_host' (scales pinned in host RAM, rows read from the SSD) only means
+         * something for an SSD rule: on a split the host-RAM side keeps its tier default (its scales are already in RAM).
+         */
+        const layoutFor = (tier: TierRange['tier']) =>
+          split && tier === 'host_ram' && chosenLayout === 'pinned_host' ? undefined : chosenLayout;
+        const rule = (range: TierRange, whole: boolean): LookupTableRule => {
+          const scaleLayout = layoutFor(range.tier);
+          return {
+            tier: range.tier,
+            // A rule over every layer keeps the original form (no `layers`).
+            ...(whole ? {} : { layers: range.layers }),
+            ...(scaleLayout !== undefined ? { scaleLayout } : {}),
+          };
         };
+        const ranges = tableRanges(
+          o.tables.tier,
+          o.tables.split,
+          tableLayerIndices(model),
+          layerCount,
+        );
+        out.lookupTables =
+          ranges.length === 1 ? rule(ranges[0], true) : ranges.map((r) => rule(r, false));
+      }
     }
-    const placed =
-      out.routedExperts !== undefined ||
-      out.denseLayers !== undefined ||
-      out.lookupTables !== undefined;
+    const placed = out.routedExperts !== undefined || out.lookupTables !== undefined;
     if (placed)
       offload = {
         ...out,

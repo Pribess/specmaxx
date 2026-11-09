@@ -319,7 +319,7 @@ it('annotates an offload result: chips, offload transfer bound, one memory bar p
     ...summary,
     offload: [
       { group: 'routed_experts' as const, tier: 'host_ram' as const, hitRatio: 0.5 },
-      { group: 'dense_layers' as const, tier: 'nvme' as const, layers: { from: 24, to: 36 } },
+      { group: 'lookup_tables' as const, tier: 'nvme' as const, layers: { from: 24, to: 36 } },
     ],
     breakdown: {
       ...summary.breakdown,
@@ -335,14 +335,14 @@ it('annotates an offload result: chips, offload transfer bound, one memory bar p
         {
           tier: 'host_ram' as const,
           bytes: 16.3e9,
-          breakdown: { lookupTables: 0, routedExperts: 16.3e9, denseLayers: 0, draftExperts: 0 },
+          breakdown: { lookupTables: 0, routedExperts: 16.3e9, draftExperts: 0 },
           capacityBytes: 96e9,
           fits: true,
         },
         {
           tier: 'nvme' as const,
           bytes: 2.2e12,
-          breakdown: { lookupTables: 0, routedExperts: 2.2e12, denseLayers: 0, draftExperts: 0 },
+          breakdown: { lookupTables: 0, routedExperts: 2.2e12, draftExperts: 0 },
           capacityBytes: 2e12,
           fits: false,
         },
@@ -360,8 +360,8 @@ it('annotates an offload result: chips, offload transfer bound, one memory bar p
   );
   const chips = screen.getByRole('list', { name: 'Offloaded weights' });
   expect([...chips.querySelectorAll('.result-chip')].map((c) => c.textContent)).toEqual([
-    'experts: host RAM, h 0.50',
-    'layers 24–35: SSD',
+    'MoE experts: host RAM, h 0.50',
+    'n-gram tables 24–35: SSD',
   ]);
   const tiers = screen.getAllByTestId('memory-tier');
   expect(tiers.map((t) => t.firstElementChild?.textContent)).toEqual([
@@ -370,7 +370,7 @@ it('annotates an offload result: chips, offload transfer bound, one memory bar p
   ]);
   expect(tiers[1].firstElementChild?.className).toBe('memory-danger');
   fireEvent.focus(tiers[0].querySelector('[data-chart-point]')!);
-  expect(screen.getByRole('tooltip').textContent).toBe('Host RAM · Routed experts · 16.3GB @ 8k');
+  expect(screen.getByRole('tooltip').textContent).toBe('Host RAM · MoE experts · 16.3GB @ 8k');
   cleanup();
   const { container } = render(<BreakdownTable result={offload} />);
   const legend = screen.getByRole('list', { name: 'Limiting resource' });
@@ -385,6 +385,54 @@ it('annotates an offload result: chips, offload transfer bound, one memory bar p
   expect(first.querySelector('th')?.textContent).toBe('moe.expert_fetch');
   expect(first.querySelector('.transfer-text')?.textContent).toBe('offload transfer');
   expect((first.querySelector('.bound-bar .transfer') as HTMLElement).style.width).toBe('100%');
+});
+
+it('labels a host-RAM + SSD split in the tier bars with each tier’s layer span', async () => {
+  const { summary } = await defaultResult();
+  const tier = (t: 'host_ram' | 'nvme', experts: number, tables: number) => ({
+    tier: t,
+    bytes: experts + tables,
+    breakdown: { lookupTables: tables, routedExperts: experts, draftExperts: 0 },
+    capacityBytes: 2e12,
+    fits: true,
+  });
+  const split = {
+    ...summary,
+    offload: [
+      {
+        group: 'routed_experts' as const,
+        tier: 'host_ram' as const,
+        hitRatio: 0,
+        layers: { from: 0, to: 24 },
+      },
+      {
+        group: 'routed_experts' as const,
+        tier: 'nvme' as const,
+        hitRatio: 0,
+        layers: { from: 24, to: 48 },
+      },
+      { group: 'lookup_tables' as const, tier: 'host_ram' as const, layers: { from: 0, to: 47 } },
+      { group: 'lookup_tables' as const, tier: 'nvme' as const, layers: { from: 47, to: 48 } },
+    ],
+    memory: { ...summary.memory, tiers: [tier('host_ram', 40e9, 2e9), tier('nvme', 40e9, 1e8)] },
+  };
+  render(<MemoryFit result={split} />);
+  const legends = screen.getAllByTestId('memory-tier-legend');
+  const labels = legends.map((l) =>
+    [...l.querySelectorAll('li:has(.memory-swatch)')].map(
+      (li) => li.firstChild?.nextSibling?.textContent,
+    ),
+  );
+  expect(labels).toEqual([
+    ['Lookup tables, layers 0–46', 'MoE experts, layers 0–23'],
+    ['Lookup tables, layer 47', 'MoE experts, layers 24–47'],
+  ]);
+  fireEvent.focus(
+    screen.getAllByTestId('memory-tier')[1].querySelectorAll('[data-chart-point]')[1],
+  );
+  expect(screen.getByRole('tooltip').textContent).toBe(
+    'SSD · MoE experts, layers 24–47 · 40.0GB @ 8k',
+  );
 });
 
 it('hatches an on-device n-gram table and offers to move it (to the SSD on unified memory)', async () => {
