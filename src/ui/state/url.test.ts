@@ -13,6 +13,7 @@ const STATES: [string, AppState][] = [
   ['HF model', state({ model: { kind: 'hf', id: 'Qwen/Qwen3.8-27B' } })],
   ['HF model with revision', state({ model: { kind: 'hf', id: 'nvidia/Qwen3.8-27B-NVFP4', revision: 'a1b2c3d' } })],
   ['quant overrides', state({ quant: { weights: 'nvfp4', activations: 'fp8_e4m3', kvCache: 'fp8_e4m3' } })],
+  ['lookup-table format', state({ quant: { weights: 'nvfp4', lookupTables: 'nvfp4' } })],
   ['EXL3 weights with bpw and head bpw', state({ quant: { weights: 'exl3', bpw: 2.5, headBpw: 5 } })],
   ['EXL3 weights at the default bpw', state({ quant: { weights: 'exl3' } })],
   ['unlocks + capacity', state({ hw: { deviceId: 'rtx-4090', unlocks: { 'vram-mod': '48gb', 'pcie-p2p': 'direct' }, capacityIndex: 0 } })],
@@ -89,6 +90,9 @@ describe('URL codec', () => {
   });
 
   it('drops EXL3 bpw values that are out of range or lack w=exl3', () => {
+    expect(encodeState(DEFAULT_STATE)).not.toContain('lt=');
+    expect(decodeState('lt=mxfp8').state.quant).toEqual({ lookupTables: 'mxfp8' });
+    expect(decodeState('lt=fp32').dropped.length).toBe(1);
     expect(decodeState('w=exl3&bpw=2.5&hbpw=16').state.quant).toEqual({ weights: 'exl3', bpw: 2.5, headBpw: 16 });
     const d = decodeState('w=exl3&bpw=12&hbpw=0');
     expect(d.state.quant).toEqual({ weights: 'exl3' });

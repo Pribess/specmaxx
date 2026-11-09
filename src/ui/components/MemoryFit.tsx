@@ -43,6 +43,23 @@ function stageSegments(stage: StageMemory): Segment[] {
   ].filter((s) => s.bytes > 0 || ['weights', 'state', 'activations'].includes(s.key));
 }
 
+/** Legend order, labels and key suffixes of what fills an off-device tier ({@link TierMemory.breakdown}). */
+const TIER_CATEGORIES = [
+  { field: 'lookupTables', key: 'tier-tables', label: 'Lookup tables' },
+  { field: 'routedExperts', key: 'tier-experts', label: 'Routed experts' },
+  { field: 'denseLayers', key: 'tier-dense', label: 'Dense layers' },
+  { field: 'draftExperts', key: 'tier-draft', label: 'Draft experts' },
+] as const;
+
+/** The non-empty categories of an off-device tier as bar segments. */
+function tierSegments(tier: TierMemory): Segment[] {
+  return TIER_CATEGORIES.map((c) => ({
+    key: c.key,
+    label: c.label,
+    bytes: tier.breakdown[c.field],
+  })).filter((s) => s.bytes > 0);
+}
+
 /** Fit state of an off-device tier, with the same thresholds as a device. */
 function tierState(tier: TierMemory): MemoryState {
   if (!tier.fits) return 'danger';
@@ -74,7 +91,7 @@ export function MemoryFit({
     ...tierBars.map((tier) => ({
       key: `tier-${tier.tier}`,
       name: TIER_LABEL[tier.tier],
-      segments: [{ key: 'offloaded', label: 'Offloaded weights', bytes: tier.bytes }],
+      segments: tierSegments(tier),
     })),
   ];
   const offsets = bars.map((_, i) =>
@@ -207,6 +224,33 @@ export function MemoryFit({
               tier.bytes,
               tier.capacityBytes,
             )}
+            <ul
+              className="memory-legend"
+              data-testid="memory-tier-legend"
+              aria-label={`${TIER_LABEL[tier.tier]} contents`}
+            >
+              {bars[result.memory.stages.length + tierIndex].segments.map((segment) => (
+                <li key={segment.key}>
+                  <span className={`memory-swatch allocation-${segment.key}`} aria-hidden="true" />
+                  {segment.label}{' '}
+                  <strong>
+                    <Num>{formatBytes(segment.bytes)}</Num>
+                  </strong>
+                  {segment.key === 'tier-experts' && (
+                    <HelpIcon term="Routed experts">
+                      The tier keeps every expert. The resident fraction is a GPU-side cache, a copy
+                      of a subset, so it does not shrink this number.
+                    </HelpIcon>
+                  )}
+                </li>
+              ))}
+              <li>
+                Node total{' '}
+                <strong>
+                  <Num>{formatBytes(tier.bytes)}</Num>
+                </strong>
+              </li>
+            </ul>
           </div>
         );
       })}

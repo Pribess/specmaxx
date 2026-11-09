@@ -10,11 +10,23 @@ import type { QuantDefaults } from '../../sim/models/hf/types';
 import type { QuantOverrides } from './appState';
 
 /** Dtypes offered by the selects: every storage dtype but `int32` (never a matmul input) and `tf32` (a math mode). */
-export const QUANT_DTYPE_CHOICES: Dtype[] = (Object.keys(DTYPE_INFO) as Dtype[]).filter((d) => d !== 'int32' && d !== 'tf32');
+export const QUANT_DTYPE_CHOICES: Dtype[] = (Object.keys(DTYPE_INFO) as Dtype[]).filter(
+  (d) => d !== 'int32' && d !== 'tf32',
+);
 
 /** True when `value` is one of {@link QUANT_DTYPE_CHOICES}. */
 export function isQuantDtype(value: string): value is Dtype {
   return (QUANT_DTYPE_CHOICES as string[]).includes(value);
+}
+
+/** Dtypes offered for the lookup tables: the storage formats a row gather can read (no fp32/tf32 math modes). */
+export const LOOKUP_TABLE_DTYPES: Dtype[] = (
+  ['bf16', 'fp16', 'fp8_e4m3', 'mxfp8', 'nvfp4', 'mxfp4', 'int8', 'int4'] as Dtype[]
+).filter((d) => d in DTYPE_INFO);
+
+/** True when `value` is one of {@link LOOKUP_TABLE_DTYPES}. */
+export function isLookupTableDtype(value: string): value is Dtype {
+  return (LOOKUP_TABLE_DTYPES as string[]).includes(value);
 }
 
 /** Default EXL3 average bits per weight when the checkpoint states none. Unit: bits/weight. */
@@ -39,7 +51,10 @@ export function isValidHeadBpw(n: number): boolean {
 }
 
 /** The bpw pair EXL3 weights are simulated with: the override, else the checkpoint's, else the defaults. Unit: bits/weight. */
-export function effectiveBpw(o: QuantOverrides, exl3: QuantDefaults['exl3']): { bpw: number; headBpw: number } {
+export function effectiveBpw(
+  o: QuantOverrides,
+  exl3: QuantDefaults['exl3'],
+): { bpw: number; headBpw: number } {
   return {
     bpw: o.bpw ?? exl3?.bpw ?? DEFAULT_EXL3_BPW,
     headBpw: o.headBpw ?? exl3?.headBpw ?? EXL3_DEFAULT_HEAD_BPW,
@@ -48,14 +63,19 @@ export function effectiveBpw(o: QuantOverrides, exl3: QuantDefaults['exl3']): { 
 
 /** True when any override is set. */
 export function hasQuantOverride(o: QuantOverrides): boolean {
-  return o.weights !== undefined || o.activations !== undefined || o.kvCache !== undefined;
+  return (
+    o.weights !== undefined ||
+    o.activations !== undefined ||
+    o.kvCache !== undefined ||
+    o.lookupTables !== undefined
+  );
 }
 
 /**
  * The model's default formats with the user's overrides applied. Rules:
  * - **Weights W**: `weights = { dtype: W }` (no group-quant overhead) and `modules` is dropped, so every linear
  *   module (attention, MLP, experts, indexer, linear attention, n-gram projections) uses W; `residual_mixer`
- *   falls back to `highPrecision` as usual. Embeddings, the LM head and lookup tables keep their defaults.
+ *   falls back to `highPrecision` as usual. Embeddings and the LM head keep their defaults.
  *   Per-module `gemmInput`s go with `modules`, so GEMM inputs follow `activations`.
  * - **Weights `exl3`**: linear modules get `exl3Format(bpw)` (fractional bits, fp16 compute) and the LM head
  *   `exl3Format(headBpw)`, both from {@link effectiveBpw}; activations become fp16 unless overridden (exllamav3
@@ -64,9 +84,14 @@ export function hasQuantOverride(o: QuantOverrides): boolean {
  *   the weights are overridden too.
  * - **KV cache K**: `kvCache = { dtype: K }`, and `compressedKvCache` / `indexerKeyCache` are removed so they
  *   follow it (their documented default).
+ * - **Lookup tables L**: `lookupTables = { dtype: L }` (n-gram / Engram tables only; no effect on a model without).
  * Nothing else changes. Pure: returns a new object.
  */
-export function applyQuantOverride(defaults: QuantConfig, o: QuantOverrides, exl3?: QuantDefaults['exl3']): QuantConfig {
+export function applyQuantOverride(
+  defaults: QuantConfig,
+  o: QuantOverrides,
+  exl3?: QuantDefaults['exl3'],
+): QuantConfig {
   let q: QuantConfig = { ...defaults };
   if (o.weights !== undefined) {
     const { modules: _modules, ...rest } = q;
@@ -84,6 +109,7 @@ export function applyQuantOverride(defaults: QuantConfig, o: QuantOverrides, exl
     void _i;
     q = { ...rest, kvCache: { dtype: o.kvCache } };
   }
+  if (o.lookupTables !== undefined) q = { ...q, lookupTables: { dtype: o.lookupTables } };
   return q;
 }
 
@@ -100,7 +126,10 @@ export const REFERENCE_QUANT_DEFAULTS: QuantDefaults = {
  * A one-line label of the formats in use: the checkpoint's scheme when nothing is overridden, else the
  * overrides followed by the scheme they apply to, e.g. `'weights fp8_e4m3, KV fp8_e4m3 (over bf16 (unquantized))'`.
  */
-export function quantSummary(defaults: Pick<QuantDefaults, 'scheme' | 'exl3'>, o: QuantOverrides): string {
+export function quantSummary(
+  defaults: Pick<QuantDefaults, 'scheme' | 'exl3'>,
+  o: QuantOverrides,
+): string {
   const parts: string[] = [];
   if (o.weights === 'exl3') {
     const { bpw, headBpw } = effectiveBpw(o, defaults.exl3);
@@ -108,11 +137,12 @@ export function quantSummary(defaults: Pick<QuantDefaults, 'scheme' | 'exl3'>, o
   } else if (o.weights !== undefined) parts.push(`weights ${o.weights}`);
   if (o.activations !== undefined) parts.push(`activations ${o.activations}`);
   if (o.kvCache !== undefined) parts.push(`KV ${o.kvCache}`);
+  if (o.lookupTables !== undefined) parts.push(`lookup tables ${o.lookupTables}`);
   return parts.length === 0 ? defaults.scheme : `${parts.join(', ')} (over ${defaults.scheme})`;
 }
 
 /** Which quant field a default label describes. */
-export type QuantFieldKey = 'weights' | 'activations' | 'kvCache';
+export type QuantFieldKey = 'weights' | 'activations' | 'kvCache' | 'lookupTables';
 
 /** Display name of a tensor format: the dtype, or `exl3 <bpw>bpw` for a fractional-bit trellis format. */
 function formatName(f: TensorFormat): string {
@@ -144,6 +174,12 @@ export function resolvedDefault(
     for (const [mod, m] of Object.entries(q.modules ?? {})) {
       if (m.gemmInput !== undefined) parts.push({ name: m.gemmInput, where: `${mod} GEMM input` });
     }
+  } else if (field === 'lookupTables') {
+    // Mirrors the engine: `lookupTableFormat` = quant.lookupTables, else the embeddings format (high precision, bf16).
+    parts.push({
+      name: formatName(q.lookupTables ?? q.embeddings ?? { dtype: q.highPrecision ?? 'bf16' }),
+      where: 'lookup tables',
+    });
   } else {
     parts.push({ name: formatName(q.kvCache), where: 'KV cache' });
     if (q.compressedKvCache)
@@ -185,7 +221,11 @@ export function exl3PresetKey(bpw: number): string {
  * checkpoint's stated bpw, and `custom` whether the user picked `EXL3 custom…`. A bpw that is neither a
  * preset nor the checkpoint's shows as custom.
  */
-export function exl3PickerKey(bpw: number, checkpointBpw: number | undefined, custom: boolean): string {
+export function exl3PickerKey(
+  bpw: number,
+  checkpointBpw: number | undefined,
+  custom: boolean,
+): string {
   if (custom) return EXL3_CUSTOM_KEY;
   if (EXL3_BPW_PRESETS.includes(bpw)) return exl3PresetKey(bpw);
   if (checkpointBpw === bpw) return EXL3_MODEL_KEY;

@@ -121,7 +121,7 @@ describe('U-6 memory with routed experts offloaded (TINY_HYBRID on one RTX 5090,
     const base = run(undefined).memory;
     const m = run(0.5).memory;
     expect(base.perStage[0].weightBytes - m.perStage[0].weightBytes).toBe(6_291_456 / 2);
-    expect(m.tiers).toEqual([{ tier: 'host_ram', bytes: 6_291_456, capacityBytes: 96e9, fits: true }]);
+    expect(m.tiers).toEqual([{ tier: 'host_ram', bytes: 6_291_456, breakdown: { lookupTables: 0, routedExperts: 6_291_456, denseLayers: 0, draftExperts: 0 }, capacityBytes: 96e9, fits: true }]);
     // Prefill T = 128: U ≈ 8 = E, hits = C = 4, M_max = 4 (decode: U 2, M 1).
     expect(m.perStage[0].stagingBytes).toBe(2 * 4 * W_EXPERT);
     expect(run(0.5, 'none').memory.perStage[0].stagingBytes).toBe(4 * W_EXPERT);
@@ -148,7 +148,7 @@ describe('U-6 memory with routed experts offloaded (TINY_HYBRID on one RTX 5090,
       expect(r[phase].cycleSec).toBe(base[phase].cycleSec);
       expect(r[phase].tokensPerSec).toBe(base[phase].tokensPerSec);
     }
-    expect(r.memory.tiers).toEqual([{ tier: 'host_ram', bytes: 6_291_456, capacityBytes: 96e9, fits: true }]);
+    expect(r.memory.tiers).toEqual([{ tier: 'host_ram', bytes: 6_291_456, breakdown: { lookupTables: 0, routedExperts: 6_291_456, denseLayers: 0, draftExperts: 0 }, capacityBytes: 96e9, fits: true }]);
     expect(r.warnings).not.toEqual(base.warnings);
   });
 });
@@ -170,7 +170,7 @@ describe('dense layers offloaded and unified memory', () => {
     const r = dense(RTX_5090, 'host_ram');
     const base = simulate({ ...input(), hardware: { device: RTX_5090, topology: singleDevice(RTX_5090) } });
     expect(base.memory.perStage[0].weightBytes - r.memory.perStage[0].weightBytes).toBe(W_LAYER);
-    expect(r.memory.tiers).toEqual([{ tier: 'host_ram', bytes: W_LAYER, capacityBytes: 96e9, fits: true }]);
+    expect(r.memory.tiers).toEqual([{ tier: 'host_ram', bytes: W_LAYER, breakdown: { lookupTables: 0, routedExperts: 0, denseLayers: W_LAYER, draftExperts: 0 }, capacityBytes: 96e9, fits: true }]);
     expect(r.memory.perStage[0].stagingBytes).toBe(2 * W_LAYER);
     for (const phase of [r.decode, r.prefill]) {
       const fetch = phase.stages[0].layers.find((l) => l.layerIndex === 1)?.ops[0];

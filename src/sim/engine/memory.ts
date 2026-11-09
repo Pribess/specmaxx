@@ -23,7 +23,14 @@ import { moeLocalExpertBytes } from '../lower/moe';
 import { lookupTableFormat, ngramTableShardBytes, tableRowBytes } from '../lower/ngram';
 import { denseLayerPlacementAt, expertPlacementAt, tablePlacementAt } from '../lower/offload';
 import type { ResolvedHost } from './host';
-import type { DeviceMemory, MemoryReport, OffloadTier, SimOptions, TierMemory } from './types';
+import type {
+  DeviceMemory,
+  MemoryReport,
+  OffloadTier,
+  SimOptions,
+  TierBytes,
+  TierMemory,
+} from './types';
 
 /** Inputs of {@link memoryReport}. */
 export interface MemoryInput {
@@ -80,13 +87,22 @@ export function stageWeightBytes(model: ModelSpec, ctx: LoweringContext, s: numb
   for (let i = start; i < end; i++) {
     // Formula: W_layer = 0 for a layer streamed whole (denseLayers)
     if (denseLayerPlacementAt(ctx, i) !== undefined) continue;
-    for (const block of model.layers[i].blocks) layerBytes += blockResidentWeightBytes(block, ctx, i);
+    for (const block of model.layers[i].blocks)
+      layerBytes += blockResidentWeightBytes(block, ctx, i);
   }
   const embedBytes = s === 0 ? embeddingResidentWeightBytes(model, ctx) : 0;
   let headBytes = s === pp - 1 ? lmHeadResidentWeightBytes(model, ctx) : 0;
-  if (model.tieEmbeddings && pp === 1 && sameStoredFormat(embeddingFormat(ctx), lmHeadFormat(ctx))) {
+  if (
+    model.tieEmbeddings &&
+    pp === 1 &&
+    sameStoredFormat(embeddingFormat(ctx), lmHeadFormat(ctx))
+  ) {
     // The shared matrix is already counted by the embedding; keep only the final-norm part of the head.
-    const headMatrixBytes = matrixStoredBytes(lmHeadFormat(ctx), Math.ceil(model.vocab / ctx.parallel.tp), model.hidden);
+    const headMatrixBytes = matrixStoredBytes(
+      lmHeadFormat(ctx),
+      Math.ceil(model.vocab / ctx.parallel.tp),
+      model.hidden,
+    );
     headBytes -= headMatrixBytes;
   }
   // Formula: W_s = Σ_{blocks of s} W_block + [s = 0] W_emb + [s = pp−1] W_head   (tied, pp = 1, same format: matrix once)
@@ -95,11 +111,17 @@ export function stageWeightBytes(model: ModelSpec, ctx: LoweringContext, s: numb
 }
 
 /** Per-sequence state bytes on one device of stage `s` for `contextTokens` of context. Unit: bytes per sequence. */
-export function stageSequenceStateBytesPerSeq(model: ModelSpec, ctx: LoweringContext, s: number, contextTokens: number): number {
+export function stageSequenceStateBytesPerSeq(
+  model: ModelSpec,
+  ctx: LoweringContext,
+  s: number,
+  contextTokens: number,
+): number {
   const [start, end] = stageLayerRange(model.layers.length, ctx.parallel.pp, s);
   let bytes = 0;
   for (let i = start; i < end; i++) {
-    for (const block of model.layers[i].blocks) bytes += blockSequenceStateBytes(block, ctx, contextTokens);
+    for (const block of model.layers[i].blocks)
+      bytes += blockSequenceStateBytes(block, ctx, contextTokens);
   }
   // Formula: state_s = Σ_{blocks of s} blockSequenceStateBytes(ctxTokens)
   // See docs/simulation-model.md §8 ("Memory fit")
@@ -133,7 +155,8 @@ export function stageLookupTableBytes(model: ModelSpec, ctx: LoweringContext, s:
   const [start, end] = stageLayerRange(model.layers.length, ctx.parallel.pp, s);
   let bytes = 0;
   for (let i = start; i < end; i++) {
-    if (denseLayerPlacementAt(ctx, i) !== undefined || tablePlacementAt(ctx, i) !== undefined) continue;
+    if (denseLayerPlacementAt(ctx, i) !== undefined || tablePlacementAt(ctx, i) !== undefined)
+      continue;
     for (const block of model.layers[i].blocks) {
       if (block.kind === 'ngram_embedding') bytes += ngramTableShardBytes(block, ctx);
     }
@@ -149,7 +172,11 @@ export function stageLookupTableBytes(model: ModelSpec, ctx: LoweringContext, s:
  * expected misses round up) and its `usefulBytes` for table rows (the gathered rows, not the tier's pages).
  * 0 when nothing streams. Unit: bytes.
  */
-export function stageStagingBytes(lowered: LoweredModel[], s: number, offloadOverlap: SimOptions['offloadOverlap']): number {
+export function stageStagingBytes(
+  lowered: LoweredModel[],
+  s: number,
+  offloadOverlap: SimOptions['offloadOverlap'],
+): number {
   let largest = 0;
   for (const model of lowered) {
     for (const layer of model.stages[s].layers) {
@@ -157,7 +184,9 @@ export function stageStagingBytes(lowered: LoweredModel[], s: number, offloadOve
         if (op.kind !== 'transfer') continue;
         // Formula: buffer = lookup table: usefulBytes; else Σ ceil(count_i)·bytes_i
         const buffer =
-          op.group === 'lookup_table' ? op.usefulBytes : op.reads.reduce((sum, r) => sum + Math.ceil(r.count) * r.bytesEach, 0);
+          op.group === 'lookup_table'
+            ? op.usefulBytes
+            : op.reads.reduce((sum, r) => sum + Math.ceil(r.count) * r.bytesEach, 0);
         largest = Math.max(largest, buffer);
       }
     }
@@ -167,21 +196,39 @@ export function stageStagingBytes(lowered: LoweredModel[], s: number, offloadOve
   return (offloadOverlap === 'ideal' ? 2 : 1) * largest;
 }
 
+/** An all-zero {@link TierBytes}. */
+function emptyTierBytes(): TierBytes {
+  return { lookupTables: 0, routedExperts: 0, denseLayers: 0, draftExperts: 0 };
+}
+
+/** Sum of the categories of a {@link TierBytes}. Unit: bytes. */
+export function tierBytesTotal(b: TierBytes): number {
+  return b.lookupTables + b.routedExperts + b.denseLayers + b.draftExperts;
+}
+
 /**
- * Bytes one device of stage `s` places on each off-device tier (design doc §2.7): the FULL groups, since the device
- * cache is a copy: all local experts of each offloaded MoE layer, the whole weights of each `denseLayers` layer,
- * each off-device table shard; plus, for an NVMe table with `scaleLayout 'pinned_host'`, its scales
- * (`ceil(rows/tp)·scaleBytes`) on host RAM. Unit: bytes per device.
+ * Bytes one device of stage `s` places on each off-device tier, split by what they hold (design doc §2.7): the FULL
+ * groups, since the device cache is a copy: all local experts of each offloaded MoE layer (`routedExperts`), the
+ * whole weights of each `denseLayers` layer (`denseLayers`), each off-device table shard (`lookupTables`); plus, for
+ * an NVMe table with `scaleLayout 'pinned_host'`, its scales (`ceil(rows/tp)·scaleBytes`) on host RAM
+ * (`lookupTables`). The draft's own experts are `draftExperts`. Unit: bytes per device.
  */
-export function stageTierBytes(model: ModelSpec, ctx: LoweringContext, s: number): Record<OffloadTier, number> {
-  const bytes: Record<OffloadTier, number> = { host_ram: 0, nvme: 0 };
+export function stageTierBreakdown(
+  model: ModelSpec,
+  ctx: LoweringContext,
+  s: number,
+): Record<OffloadTier, TierBytes> {
+  const bytes: Record<OffloadTier, TierBytes> = {
+    host_ram: emptyTierBytes(),
+    nvme: emptyTierBytes(),
+  };
   const [start, end] = stageLayerRange(model.layers.length, ctx.parallel.pp, s);
   for (let i = start; i < end; i++) {
     const layer = model.layers[i];
     const dense = denseLayerPlacementAt(ctx, i);
     if (dense !== undefined) {
       // Formula: tier += W_layer
-      bytes[dense.tier] += layerWeightBytesOnDevice(layer, ctx);
+      bytes[dense.tier].denseLayers += layerWeightBytesOnDevice(layer, ctx);
       continue;
     }
     const experts = expertPlacementAt(ctx, i);
@@ -189,33 +236,51 @@ export function stageTierBytes(model: ModelSpec, ctx: LoweringContext, s: number
     for (const block of layer.blocks) {
       if (block.kind === 'moe' && experts !== undefined) {
         // Formula: tier += E_loc·W_expert
-        bytes[experts.tier] += moeLocalExpertBytes(block, ctx);
+        bytes[experts.tier].routedExperts += moeLocalExpertBytes(block, ctx);
       } else if (block.kind === 'ngram_embedding' && tables !== undefined) {
         const shard = ngramTableShardBytes(block, ctx);
         const { scaleBytes } = tableRowBytes(lookupTableFormat(ctx), block.rowDim);
         if (tables.scaleLayout === 'pinned_host' && scaleBytes > 0) {
           // Formula: nvme += shard − scales;  host_ram += ceil(rows/tp)·scaleBytes
           const scales = Math.ceil(block.tableRows / ctx.parallel.tp) * scaleBytes;
-          bytes[tables.tier] += shard - scales;
-          bytes.host_ram += scales;
+          bytes[tables.tier].lookupTables += shard - scales;
+          bytes.host_ram.lookupTables += scales;
         } else {
           // Formula: tier += ceil(rows/tp)·d·bpe(lookup)
-          bytes[tables.tier] += shard;
+          bytes[tables.tier].lookupTables += shard;
         }
       }
     }
   }
   // Spec-dec with includeDraft: the drafter's own MoE experts (last stage) live on the experts' tier too (design §3.8).
   const draftExperts = ctx.offload?.routedExperts;
-  if (s === ctx.parallel.pp - 1 && ctx.speculative !== undefined && draftExperts?.includeDraft === true) {
+  if (
+    s === ctx.parallel.pp - 1 &&
+    ctx.speculative !== undefined &&
+    draftExperts?.includeDraft === true
+  ) {
     for (const layer of draftLayerSpecs(ctx.speculative.draft)) {
       for (const block of layer.blocks) {
         // Formula: tier += E_loc·W_expert per drafter MoE block
-        if (block.kind === 'moe') bytes[draftExperts.tier] += moeLocalExpertBytes(block, ctx);
+        if (block.kind === 'moe')
+          bytes[draftExperts.tier].draftExperts += moeLocalExpertBytes(block, ctx);
       }
     }
   }
   return bytes;
+}
+
+/**
+ * Bytes one device of stage `s` places on each off-device tier: {@link stageTierBreakdown} summed over its
+ * categories. Unit: bytes per device.
+ */
+export function stageTierBytes(
+  model: ModelSpec,
+  ctx: LoweringContext,
+  s: number,
+): Record<OffloadTier, number> {
+  const b = stageTierBreakdown(model, ctx, s);
+  return { host_ram: tierBytesTotal(b.host_ram), nvme: tierBytesTotal(b.nvme) };
 }
 
 /** The drafter's decoder layers given as `LayerSpec`s: MTP modules, or a DeepSeek-V4-style drafter's `moeLayers`. */
@@ -229,7 +294,11 @@ function draftLayerSpecs(draft: DraftSpec): LayerSpec[] {
  * recurrent + conv, short convs, n-gram convs, GQA K/V convs) = their `blockSequenceStateBytes` at context 0. KV,
  * MLA and CSA caches are not snapshotted (rejected rows are overwritten). Unit: bytes per sequence.
  */
-export function stageSnapshotStateBytesPerSeq(model: ModelSpec, ctx: LoweringContext, s: number): number {
+export function stageSnapshotStateBytesPerSeq(
+  model: ModelSpec,
+  ctx: LoweringContext,
+  s: number,
+): number {
   const [start, end] = stageLayerRange(model.layers.length, ctx.parallel.pp, s);
   let bytes = 0;
   for (let i = start; i < end; i++) {
@@ -260,24 +329,32 @@ export function tierMemory(
   host: ResolvedHost,
 ): TierMemory[] {
   const { tp, dp, pp } = ctx.parallel;
-  const perStage = Array.from({ length: pp }, (_, s) => stageTierBytes(model, ctx, s));
+  const perStage = Array.from({ length: pp }, (_, s) => stageTierBreakdown(model, ctx, s));
   const ranks = tp * dp * pp;
   const nodes = Math.ceil(ranks / devicesPerNode);
   const tiers: TierMemory[] = [];
   for (const tier of ['host_ram', 'nvme'] as const) {
     let bytes = 0;
+    let breakdown = emptyTierBytes();
     for (let node = 0; node < nodes; node++) {
-      let nodeBytes = 0;
+      const nodeBreakdown = emptyTierBytes();
       for (let r = node * devicesPerNode; r < Math.min(ranks, (node + 1) * devicesPerNode); r++) {
         // Formula: bytes_node = Σ_{ranks r of the node} tierBytes(stage(r)),  stage(r) = floor(r / (tp·dp))
-        nodeBytes += perStage[Math.floor(r / (tp * dp))][tier];
+        const device = perStage[Math.floor(r / (tp * dp))][tier];
+        for (const k of Object.keys(nodeBreakdown) as (keyof TierBytes)[])
+          nodeBreakdown[k] += device[k];
       }
-      bytes = Math.max(bytes, nodeBytes);
+      const nodeBytes = tierBytesTotal(nodeBreakdown);
+      // The fullest node: its breakdown is the one reported, so the parts always sum to `bytes`.
+      if (nodeBytes > bytes) {
+        bytes = nodeBytes;
+        breakdown = nodeBreakdown;
+      }
     }
     if (bytes === 0) continue;
     const spec = tier === 'host_ram' ? host.ram : host.ssd;
     const capacityBytes = spec?.capacityBytes ?? 0;
-    tiers.push({ tier, bytes, capacityBytes, fits: bytes <= capacityBytes });
+    tiers.push({ tier, bytes, breakdown, capacityBytes, fits: bytes <= capacityBytes });
   }
   return tiers;
 }
@@ -312,7 +389,9 @@ export function memoryReport(input: MemoryInput): MemoryReport {
         draftStatePerSeqBytes = draftSequenceStateBytes(spec.draft, ctx, input.contextTokens);
         // Formula: draft_s = W_draft + B_r·S_draft(ctx)
         // See docs/simulation-model.md §13 ("Draft memory")
-        draftBytes = draftResidentWeightBytes(model, spec.draft, ctx) + input.sequencesPerReplica * draftStatePerSeqBytes;
+        draftBytes =
+          draftResidentWeightBytes(model, spec.draft, ctx) +
+          input.sequencesPerReplica * draftStatePerSeqBytes;
       }
       // Formula: specTransient_s = B_r·(k + 1)·snap_s
       snapshotPerSeqBytes = spec.stateSnapshots * stageSnapshotStateBytesPerSeq(model, ctx, s);
@@ -322,7 +401,12 @@ export function memoryReport(input: MemoryInput): MemoryReport {
     // See docs/simulation-model.md §8 ("Memory fit"), §12 ("Memory tiers"), §13 ("Draft memory")
     const sequenceStateBytes = input.sequencesPerReplica * statePerSeqBytes;
     const totalBytes =
-      weightBytes + sequenceStateBytes + activationPeakBytes + stagingBytes + draftBytes + speculativeTransientBytes;
+      weightBytes +
+      sequenceStateBytes +
+      activationPeakBytes +
+      stagingBytes +
+      draftBytes +
+      speculativeTransientBytes;
     perStage.push({
       stage: s,
       weightBytes,
@@ -338,7 +422,9 @@ export function memoryReport(input: MemoryInput): MemoryReport {
     });
     // Per-sequence bytes that grow with B_r, and the fixed bytes besides them (spec-dec terms 0 when off).
     const perSeqBytes =
-      spec === undefined ? statePerSeqBytes : statePerSeqBytes + draftStatePerSeqBytes + snapshotPerSeqBytes;
+      spec === undefined
+        ? statePerSeqBytes
+        : statePerSeqBytes + draftStatePerSeqBytes + snapshotPerSeqBytes;
     const fixedDraftBytes = draftBytes - input.sequencesPerReplica * draftStatePerSeqBytes;
     if (perSeqBytes > 0) {
       // Formula: maxSeq = floor(min_s (capacity − W_s − act_s − staging_s − W_draft) / (state_s + S_draft + (k+1)·snap_s))
@@ -347,12 +433,16 @@ export function memoryReport(input: MemoryInput): MemoryReport {
         spec === undefined
           ? capacityBytes - weightBytes - activationPeakBytes - stagingBytes
           : capacityBytes - weightBytes - activationPeakBytes - stagingBytes - fixedDraftBytes;
-      maxSequencesPerReplica = Math.min(maxSequencesPerReplica, Math.max(0, Math.floor(freeBytes / perSeqBytes)));
+      maxSequencesPerReplica = Math.min(
+        maxSequencesPerReplica,
+        Math.max(0, Math.floor(freeBytes / perSeqBytes)),
+      );
     } else if (weightBytes + activationPeakBytes + stagingBytes + fixedDraftBytes > capacityBytes) {
       maxSequencesPerReplica = 0;
     }
   }
-  const tiers = input.host === undefined ? [] : tierMemory(model, ctx, input.devicesPerNode ?? 1, input.host);
+  const tiers =
+    input.host === undefined ? [] : tierMemory(model, ctx, input.devicesPerNode ?? 1, input.host);
   // Formula: fits = ∀ s fits_s ∧ ∀ tiers (bytes ≤ capacity)
   const fits = perStage.every((d) => d.fits) && tiers.every((t) => t.fits);
   return { kind: input.kind, perStage, fits, maxSequencesPerReplica, tiers };

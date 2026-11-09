@@ -49,6 +49,9 @@ function w1(f: number | undefined, offloadOverlap: SimOptions['offloadOverlap'])
   return simulate(input);
 }
 
+/** A tier breakdown with every category empty; tests spread it and set the categories they expect. */
+const NO_TIER_BYTES = { lookupTables: 0, routedExperts: 0, denseLayers: 0, draftExperts: 0 };
+
 describe('W1 experts in DDR5 over PCIe 5.0 x16 (REF_MOE_30B_A3B, int4+0.5 routed experts, b 1, @8k)', () => {
   const baseline = w1(undefined, 'ideal');
   it('baseline (all resident): decode 2.46673 ms, prefill 377.580 ms', () => {
@@ -97,7 +100,7 @@ describe('W1 experts in DDR5 over PCIe 5.0 x16 (REF_MOE_30B_A3B, int4+0.5 routed
     expect(m.perStage[0].sequenceStateBytes).toBe(805_404_672);
     expect(m.perStage[0].activationPeakBytes).toBe(469_762_048);
     expect(m.perStage[0].totalBytes).toBe(5_036_830_720);
-    expect(m.tiers).toEqual([{ tier: 'host_ram', bytes: 16_307_453_952, capacityBytes: 96e9, fits: true }]);
+    expect(m.tiers).toEqual([{ tier: 'host_ram', bytes: 16_307_453_952, breakdown: { ...NO_TIER_BYTES, routedExperts: 16_307_453_952 }, capacityBytes: 96e9, fits: true }]);
     expect(m.fits).toBe(true);
   });
   it('memory f .5 ideal: W_s 11,235,913,728; staging 2·64·W 339,738,624; none halves the staging', () => {
@@ -130,7 +133,7 @@ describe('W1 experts in DDR5 over PCIe 5.0 x16 (REF_MOE_30B_A3B, int4+0.5 routed
       expectClose(d.activationPeakBytes, b.activationPeakBytes);
       expect(d.stagingBytes).toBe(0);
       expect(d.fits).toBe(b.fits);
-      expect(r.memory.tiers).toEqual([{ tier: 'host_ram', bytes: 16_307_453_952, capacityBytes: 96e9, fits: true }]);
+      expect(r.memory.tiers).toEqual([{ tier: 'host_ram', bytes: 16_307_453_952, breakdown: { ...NO_TIER_BYTES, routedExperts: 16_307_453_952 }, capacityBytes: 96e9, fits: true }]);
       expect(base.memory.tiers).toEqual([]);
       expect(r.warnings).not.toEqual(base.warnings);
     }
@@ -210,21 +213,21 @@ describe('W3/W4 n-gram tables off-device (fixtures, repo quant, RTX 5090, b 1, @
     const ram = tables(PLE, { tier: 'host_ram' }).memory;
     expect(ram.perStage[0].weightBytes).toBe(251_487_054_848);
     expect(ram.perStage[0].lookupTableBytes).toBe(0);
-    expect(ram.tiers).toEqual([{ tier: 'host_ram', bytes: 102_400_000_000, capacityBytes: 96e9, fits: false }]);
+    expect(ram.tiers).toEqual([{ tier: 'host_ram', bytes: 102_400_000_000, breakdown: { ...NO_TIER_BYTES, lookupTables: 102_400_000_000 }, capacityBytes: 96e9, fits: false }]);
     expect(ram.fits).toBe(false);
     const ssd = tables(PLE, { tier: 'nvme' }).memory;
-    expect(ssd.tiers).toEqual([{ tier: 'nvme', bytes: 102_400_000_000, capacityBytes: 2e12, fits: true }]);
+    expect(ssd.tiers).toEqual([{ tier: 'nvme', bytes: 102_400_000_000, breakdown: { ...NO_TIER_BYTES, lookupTables: 102_400_000_000 }, capacityBytes: 2e12, fits: true }]);
   });
 
   it('Engram memory: device 501,382,474,992 → 298,624,442,592; separate on RAM 202,758,032,400 B does not fit; pinned_host SSD fits', () => {
     expect(tables(ENGRAM, undefined).memory.perStage[0].weightBytes).toBe(501_382_474_992);
     const ram = tables(ENGRAM, { tier: 'host_ram' }).memory;
     expect(ram.perStage[0].weightBytes).toBe(298_624_442_592);
-    expect(ram.tiers).toEqual([{ tier: 'host_ram', bytes: 202_758_032_400, capacityBytes: 96e9, fits: false }]);
+    expect(ram.tiers).toEqual([{ tier: 'host_ram', bytes: 202_758_032_400, breakdown: { ...NO_TIER_BYTES, lookupTables: 202_758_032_400 }, capacityBytes: 96e9, fits: false }]);
     const ssd = tables(ENGRAM, { tier: 'nvme' }).memory;
     expect(ssd.tiers).toEqual([
-      { tier: 'host_ram', bytes: 6_144_182_800, capacityBytes: 96e9, fits: true },
-      { tier: 'nvme', bytes: 196_613_849_600, capacityBytes: 2e12, fits: true },
+      { tier: 'host_ram', bytes: 6_144_182_800, breakdown: { ...NO_TIER_BYTES, lookupTables: 6_144_182_800 }, capacityBytes: 96e9, fits: true },
+      { tier: 'nvme', bytes: 196_613_849_600, breakdown: { ...NO_TIER_BYTES, lookupTables: 196_613_849_600 }, capacityBytes: 2e12, fits: true },
     ]);
   });
 

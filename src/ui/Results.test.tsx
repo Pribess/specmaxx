@@ -327,8 +327,8 @@ it('annotates an offload result: chips, offload transfer bound, one memory bar p
     memory: {
       ...summary.memory,
       tiers: [
-        { tier: 'host_ram' as const, bytes: 16.3e9, capacityBytes: 96e9, fits: true },
-        { tier: 'nvme' as const, bytes: 2.2e12, capacityBytes: 2e12, fits: false },
+        { tier: 'host_ram' as const, bytes: 16.3e9, breakdown: { lookupTables: 0, routedExperts: 16.3e9, denseLayers: 0, draftExperts: 0 }, capacityBytes: 96e9, fits: true },
+        { tier: 'nvme' as const, bytes: 2.2e12, breakdown: { lookupTables: 0, routedExperts: 2.2e12, denseLayers: 0, draftExperts: 0 }, capacityBytes: 2e12, fits: false },
       ],
     },
   };
@@ -354,7 +354,7 @@ it('annotates an offload result: chips, offload transfer bound, one memory bar p
   expect(tiers[1].firstElementChild?.className).toBe('memory-danger');
   fireEvent.focus(tiers[0].querySelector('[data-chart-point]')!);
   expect(screen.getByRole('tooltip').textContent).toBe(
-    'Host RAM · Offloaded weights · 16.3GB @ 8k',
+    'Host RAM · Routed experts · 16.3GB @ 8k',
   );
   cleanup();
   const { container } = render(<BreakdownTable result={offload} />);
@@ -382,7 +382,7 @@ it('hatches an on-device n-gram table, offers to move it (to the SSD on unified 
       ...summary.memory,
       kind: 'unified' as const,
       stages: [{ ...stage, lookupTableBytes: 0.4 * stage.weightBytes }],
-      tiers: [{ tier: 'host_ram' as const, bytes: 16.3e9, capacityBytes: 128e9, fits: true }],
+      tiers: [{ tier: 'host_ram' as const, bytes: 16.3e9, breakdown: { lookupTables: 0, routedExperts: 16.3e9, denseLayers: 0, draftExperts: 0 }, capacityBytes: 128e9, fits: true }],
     },
   };
   const { container } = render(

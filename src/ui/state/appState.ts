@@ -46,6 +46,8 @@ export interface QuantOverrides {
   activations?: Dtype;
   /** KV-cache dtype (also the compressed-KV and indexer-key caches). */
   kvCache?: Dtype;
+  /** n-gram / Engram lookup-table storage dtype (`QuantConfig.lookupTables`); absent = the model's default. Only models with such tables show it. */
+  lookupTables?: Dtype;
 }
 
 /** Spec edits: absolute values (SI units, as the spec field defines them) at `numericLeafPaths` paths. */
@@ -155,7 +157,7 @@ export type AppAction =
    */
   | { type: 'setModel'; model: ModelChoice }
   /** Set (dtype) or clear (undefined) one quant override. */
-  | { type: 'setQuant'; field: 'weights' | 'activations' | 'kvCache'; dtype: Dtype | 'exl3' | undefined }
+  | { type: 'setQuant'; field: 'weights' | 'activations' | 'kvCache' | 'lookupTables'; dtype: Dtype | 'exl3' | undefined }
   /** Set one EXL3 bits-per-weight override (`bpw`: linear layers, `headBpw`: LM head). */
   | { type: 'setBpw'; field: 'bpw' | 'headBpw'; value: number }
   /** Clear every quant override. */

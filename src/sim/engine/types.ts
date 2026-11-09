@@ -370,6 +370,21 @@ export interface MemoryReport {
   tiers: TierMemory[];
 }
 
+/** What fills an off-device tier, by category. All fields are bytes; they sum to the tier's total. */
+export interface TierBytes {
+  /** n-gram lookup-table shards (PLE, Engram), plus pinned scales on host RAM. Unit: bytes. */
+  lookupTables: number;
+  /**
+   * ALL local routed experts of the offloaded MoE layers: the tier holds every expert, whatever
+   * `residentFraction` is (that is a device-side cache of a subset, a copy). Unit: bytes.
+   */
+  routedExperts: number;
+  /** Whole weights of the layers placed by `offload.denseLayers`. Unit: bytes. */
+  denseLayers: number;
+  /** The speculative drafter's own routed experts (`includeDraft`). Unit: bytes. */
+  draftExperts: number;
+}
+
 /** Bytes placed on one off-device storage tier of a node, against its capacity (design doc §2.7). */
 export interface TierMemory {
   /** Which tier. */
@@ -380,6 +395,8 @@ export interface TierMemory {
    * RAM. Unit: bytes (per node, summed over its devices).
    */
   bytes: number;
+  /** `bytes` by category, of the fullest node (its parts sum to `bytes`). Unit: bytes. */
+  breakdown: TierBytes;
   /** Installed capacity of the tier (`HostMemorySpec.capacityBytes` / `NvmeSpec.capacityBytes`). Unit: bytes. */
   capacityBytes: number;
   /** True if `bytes ≤ capacityBytes`. */

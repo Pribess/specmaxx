@@ -48,6 +48,25 @@ describe('quant picker defaults', () => {
   });
 });
 
+describe('lookup-table picker', () => {
+  it('shows only for models with n-gram tables and labels the resolved default', async () => {
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B');
+    mount();
+    await screen.findByText(/qwen:/);
+    await screen.findByTestId('prefill-tps');
+    expect(screen.queryAllByRole('combobox', { name: 'Lookup tables' })).toHaveLength(0);
+    cleanup();
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-Flash-Next&lt=nvfp4');
+    mount();
+    await screen.findByTestId('prefill-tps');
+    // The Quantization panel's picker comes before the offload panel's placement picker of the same name.
+    const picker = (await screen.findAllByRole('combobox', { name: 'Lookup tables' }))[0];
+    expect(picker.textContent).toMatch(/nvfp4/);
+    fireEvent.click(picker);
+    expect(await screen.findByRole('option', { name: /Model default \(bf16\)/ })).toBeTruthy();
+  });
+});
+
 describe('estimator inputs', () => {
   it('rejects TP and world-size errors without computing a result', async () => {
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B');

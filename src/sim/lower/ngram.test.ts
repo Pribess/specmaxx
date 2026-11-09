@@ -4,7 +4,7 @@ import { RTX_5090 } from '../hw/presets/nvidia';
 import { DDR5_6000_2CH, NVME_990_PRO_2TB } from '../hw/presets/storage';
 import type { ModelSpec, QuantConfig } from '../ir/model';
 import type { TransferOp } from '../ir/ops';
-import { stageTierBytes } from '../engine/memory';
+import { stageLookupTableBytes, stageTierBreakdown, stageTierBytes } from '../engine/memory';
 import { simulate } from '../engine/simulate';
 import { transferTime } from '../engine/transfer';
 import { fixtureRepoFiles } from '../models/__fixtures__/fixtures.testutil';
@@ -35,9 +35,14 @@ function decodeCtx(quant: QuantConfig, offload?: OffloadLowering): LoweringConte
 }
 
 /** Transfer ops of a decode step, with their layer index. */
-function fetches(m: { model: ModelSpec; quant: QuantConfig }, offload?: OffloadLowering): { layer: number | null; op: TransferOp }[] {
+function fetches(
+  m: { model: ModelSpec; quant: QuantConfig },
+  offload?: OffloadLowering,
+): { layer: number | null; op: TransferOp }[] {
   return lowerModel(m.model, decodeCtx(m.quant, offload)).stages.flatMap((s) =>
-    s.layers.flatMap((l) => l.ops.flatMap((op) => (op.kind === 'transfer' ? [{ layer: l.layerIndex, op }] : []))),
+    s.layers.flatMap((l) =>
+      l.ops.flatMap((op) => (op.kind === 'transfer' ? [{ layer: l.layerIndex, op }] : [])),
+    ),
   );
 }
 
@@ -48,9 +53,13 @@ describe('U-16 n-gram tables off-device: read layouts, tier bytes and PCIe bytes
   it('lookupTables absent ⇒ no transfer op', () => {
     // Both checkpoints ship their tables to live off-device (model cards); the flag drives the UI hint only.
     for (const m of [PLE, ENGRAM]) {
-      const tables = m.model.layers.flatMap((l) => l.blocks).filter((b) => b.kind === 'ngram_embedding');
+      const tables = m.model.layers
+        .flatMap((l) => l.blocks)
+        .filter((b) => b.kind === 'ngram_embedding');
       expect(tables.length).toBeGreaterThan(0);
-      expect(tables.every((b) => b.kind === 'ngram_embedding' && b.offDeviceByDesign === true)).toBe(true);
+      expect(
+        tables.every((b) => b.kind === 'ngram_embedding' && b.offDeviceByDesign === true),
+      ).toBe(true);
     }
     expect(fetches(PLE)).toEqual([]);
     expect(fetches(ENGRAM)).toEqual([]);
@@ -64,13 +73,19 @@ describe('U-16 n-gram tables off-device: read layouts, tier bytes and PCIe bytes
   });
 
   it('Engram (engram_layer_ids [1, 14], zero-based) at indices 1 and 14; useful 264 B per row (256 value + 8 scale)', () => {
-    expect(tableRowBytes({ dtype: 'mxfp8' }, 256)).toEqual({ valueBytes: 256, scaleBytes: 8, rowBytes: 264 });
+    expect(tableRowBytes({ dtype: 'mxfp8' }, 256)).toEqual({
+      valueBytes: 256,
+      scaleBytes: 8,
+      rowBytes: 264,
+    });
     const f = fetches(ENGRAM, { lookupTables: { tier: 'host_ram', scaleLayout: 'separate' } });
     expect(f.map((x) => x.layer)).toEqual([1, 14]);
   });
 
   it('Engram separate on DDR5: reads [{24, 256}, {24, 8}], bytes_tier 24·256 + 24·64 = 7,680, usefulBytes 6,336', () => {
-    const [{ op }] = fetches(ENGRAM, { lookupTables: { tier: 'host_ram', scaleLayout: 'separate' } });
+    const [{ op }] = fetches(ENGRAM, {
+      lookupTables: { tier: 'host_ram', scaleLayout: 'separate' },
+    });
     expect(op.reads).toEqual([
       { count: 24, bytesEach: 256 },
       { count: 24, bytesEach: 8 },
@@ -93,7 +108,9 @@ describe('U-16 n-gram tables off-device: read layouts, tier bytes and PCIe bytes
   });
 
   it('Engram interleaved: reads [{24, 264}], bytes_tier 98,304 on NVMe / 7,680 on DDR5, usefulBytes 6,336', () => {
-    const [{ op }] = fetches(ENGRAM, { lookupTables: { tier: 'nvme', scaleLayout: 'interleaved' } });
+    const [{ op }] = fetches(ENGRAM, {
+      lookupTables: { tier: 'nvme', scaleLayout: 'interleaved' },
+    });
     expect(op.reads).toEqual([{ count: 24, bytesEach: 264 }]);
     expect(op.usefulBytes).toBe(6_336);
     expect(transferTime(op.reads, op.usefulBytes, ssdPath).tierBytes).toBe(98_304);
@@ -110,10 +127,89 @@ describe('U-16 n-gram tables off-device: read layouts, tier bytes and PCIe bytes
         deployment: { offload: { lookupTables: { tier } } },
       });
     const reads = (tier: 'host_ram' | 'nvme') => {
-      const op = run(tier).decode.stages[0].layers.flatMap((l) => l.ops).find((o) => o.op.kind === 'transfer')?.op;
+      const op = run(tier)
+        .decode.stages[0].layers.flatMap((l) => l.ops)
+        .find((o) => o.op.kind === 'transfer')?.op;
       return op?.kind === 'transfer' ? op.reads.length : 0;
     };
     expect(reads('host_ram')).toBe(2);
     expect(reads('nvme')).toBe(1);
+  });
+
+  it('stageTierBreakdown splits tables from routed experts and sums to stageTierBytes', () => {
+    const offload: OffloadLowering = {
+      lookupTables: { tier: 'host_ram', scaleLayout: 'separate' },
+      routedExperts: {
+        tier: 'host_ram',
+        layers: { from: 0, to: 1000 },
+        residentFraction: 0.7,
+        hitRatio: 0.7,
+        includeDraft: false,
+      },
+    };
+    const ctx = decodeCtx(PLE.quant, offload);
+    const b = stageTierBreakdown(PLE.model, ctx, 0).host_ram;
+    expect(b.lookupTables).toBe(102_400_000_000);
+    expect(b.routedExperts).toBeGreaterThan(0);
+    expect(b.denseLayers).toBe(0);
+    expect(b.draftExperts).toBe(0);
+    expect(stageTierBytes(PLE.model, ctx, 0).host_ram).toBe(b.lookupTables + b.routedExperts);
+  });
+
+  describe('quant.lookupTables (the lookup-table format picker)', () => {
+    const NVFP4 = { dtype: 'nvfp4' } as const;
+    const withTables = (
+      m: { model: ModelSpec; quant: QuantConfig },
+      lookupTables: QuantConfig['lookupTables'],
+    ): QuantConfig => ({
+      ...m.quant,
+      lookupTables,
+    });
+    const tableParams = (m: { model: ModelSpec }) =>
+      m.model.layers
+        .flatMap((l) => l.blocks)
+        .reduce((n, b) => (b.kind === 'ngram_embedding' ? n + b.tableRows * b.rowDim : n), 0);
+
+    it('PLE nvfp4 table is 51.2e9 params × 4.5 bits / 8 = 28.8e9 B on host RAM; bf16 is 102.4e9 B', () => {
+      expect(tableParams(PLE)).toBe(51_200_000_000);
+      const off: OffloadLowering = { lookupTables: { tier: 'host_ram', scaleLayout: 'separate' } };
+      const bf16 = stageTierBytes(PLE.model, decodeCtx(PLE.quant, off), 0);
+      const nvfp4 = stageTierBytes(PLE.model, decodeCtx(withTables(PLE, NVFP4), off), 0);
+      expect(bf16.host_ram).toBe(102_400_000_000);
+      expect(nvfp4.host_ram).toBe(28_800_000_000);
+      // The scale-layout split follows the format: nvfp4 scales are 0.5 bit/elem of the table.
+      const pinned = stageTierBreakdown(
+        PLE.model,
+        decodeCtx(withTables(PLE, NVFP4), {
+          lookupTables: { tier: 'nvme', scaleLayout: 'pinned_host' },
+        }),
+        0,
+      );
+      expect(pinned.host_ram.lookupTables).toBe((51_200_000_000 * 0.5) / 8);
+      expect(pinned.nvme.lookupTables).toBe((51_200_000_000 * 4) / 8);
+    });
+
+    it('resident device bytes follow the override', () => {
+      const bf16 = stageLookupTableBytes(PLE.model, decodeCtx(PLE.quant), 0);
+      const nvfp4 = stageLookupTableBytes(PLE.model, decodeCtx(withTables(PLE, NVFP4)), 0);
+      expect(nvfp4 / bf16).toBeCloseTo(4.5 / 16, 6);
+    });
+
+    it('row bytes of the off-device gather follow the override (PLE d 160: bf16 320 B → nvfp4 90 B)', () => {
+      const f = fetches(
+        { model: PLE.model, quant: withTables(PLE, NVFP4) },
+        { lookupTables: { tier: 'host_ram', scaleLayout: 'interleaved' } },
+      );
+      expect(f[0].op.reads).toEqual([{ count: 16, bytesEach: 90 }]);
+      expect(f[0].op.usefulBytes).toBe(16 * 90);
+      const sep = fetches(
+        { model: PLE.model, quant: withTables(PLE, NVFP4) },
+        { lookupTables: { tier: 'host_ram', scaleLayout: 'separate' } },
+      );
+      expect(sep[0].op.reads).toEqual([
+        { count: 16, bytesEach: 80 },
+        { count: 16, bytesEach: 10 },
+      ]);
+    });
   });
 });

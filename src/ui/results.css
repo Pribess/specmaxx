@@ -365,6 +365,10 @@ svg [data-chart-point]:focus-visible { outline: none; stroke: var(--primary); st
     linear-gradient(90deg, var(--ink) 1px, transparent 1px) 0 0 / 4px 100%,
     var(--paper);
 }
+.allocation-tier-tables { background: repeating-linear-gradient(45deg, var(--ink) 0 1.5px, var(--paper) 1.5px 5px); }
+.allocation-tier-experts { background: color-mix(in srgb, var(--ink) 60%, var(--paper)); }
+.allocation-tier-dense { background: var(--ink); }
+.allocation-tier-draft { background: color-mix(in srgb, var(--ink) 35%, var(--paper)); }
 .allocation-offloaded { background: color-mix(in srgb, var(--ink) 60%, var(--paper)); }
 .memory-legend {
   display: flex;

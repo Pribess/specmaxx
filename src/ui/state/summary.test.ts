@@ -223,7 +223,7 @@ describe('summarize', () => {
     const result = structuredClone(base);
     result.decode.stages[0].layers[1].ops.unshift(transferOp(0.5e-3, 1.5e-3));
     result.decode.transfer = { sec: 2e-3, exposedSec: 1e-3, bytes: 300e6, requests: 40 };
-    result.memory.tiers = [{ tier: 'host_ram', bytes: 16.3e9, capacityBytes: 96e9, fits: true }];
+    result.memory.tiers = [{ tier: 'host_ram', bytes: 16.3e9, breakdown: { lookupTables: 0, routedExperts: 16.3e9, denseLayers: 0, draftExperts: 0 }, capacityBytes: 96e9, fits: true }];
     const input: SimInput = {
       ...built.input,
       deployment: {

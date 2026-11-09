@@ -24,6 +24,14 @@ describe('applyQuantOverride', () => {
   const nvfp4 = defaults('nvidia/Qwen3.8-27B-NVFP4', 'quant');
   const deepseek = defaults('deepseek-ai/DeepSeek-V4.1-Flash');
 
+  it('lookupTables: sets the table format only; the model default is the embeddings format (bf16)', () => {
+    const q = applyQuantOverride(deepseek.quant, { lookupTables: 'nvfp4' });
+    expect(q.lookupTables).toEqual({ dtype: 'nvfp4' });
+    expect(q.weights).toEqual(deepseek.quant.weights);
+    expect(resolvedDefault(nvfp4.quant, 'lookupTables').label).toBe('bf16');
+    expect(hasQuantOverride({ lookupTables: 'nvfp4' })).toBe(true);
+  });
+
   it('returns the defaults unchanged without overrides', () => {
     expect(applyQuantOverride(nvfp4.quant, {})).toEqual(nvfp4.quant);
   });

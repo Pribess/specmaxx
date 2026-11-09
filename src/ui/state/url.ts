@@ -7,6 +7,7 @@
  * |---|---|---|
  * | `m`, `rev` | HF repo id, revision (absent: the default model `Qwen/Qwen3.8-27B`; `rev` default `main`) | `m=zai-org/GLM-5.3` |
  * | `w`, `a`, `kv` | weight / activation / KV dtype overrides | `kv=fp8_e4m3` |
+ * | `lt` | lookup-table (n-gram / Engram) dtype override; absent = the model default | `lt=nvfp4` |
  * | `d` | device preset id (default `rtx-5090`) | `d=rtx-4090` |
  * | `u` | unlocks, `axis.option` comma list | `u=pcie-p2p.direct,vram-mod.48gb` |
  * | `eng`, `cap` | engine id, capacity option index | `cap=1` |
@@ -53,7 +54,7 @@ import {
 } from './deployment';
 import { currentLinkId, findDevice, findHostRam, findLink, findSsd, cablingOptions, isEditableDevicePath, normalizeCabling, normalizeLocalLink, resolveDevice, resolveLinks } from './hardware';
 import { CABLING_IDS } from '../../sim/hw/presets/catalog';
-import { isQuantDtype, isValidBpw, isValidHeadBpw, isWeightFormat } from './quant';
+import { isLookupTableDtype, isQuantDtype, isValidBpw, isValidHeadBpw, isWeightFormat } from './quant';
 
 /** Largest accepted devices-per-node and node count (keeps derived loops bounded). Count. */
 export const MAX_COUNT = 1024;
@@ -71,7 +72,7 @@ const OPTION_KEYS: [string, keyof SimOptions, readonly string[]][] = [
 
 /** Every key the codec knows, in encoding order. */
 export const URL_KEYS = [
-  'm', 'rev', 'w', 'bpw', 'hbpw', 'a', 'kv', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'fab', 'x', 'xi', 'xe',
+  'm', 'rev', 'w', 'bpw', 'hbpw', 'a', 'kv', 'lt', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'fab', 'x', 'xi', 'xe',
   'hr', 'hrc', 'ssd', 'hl', 'tp', 'pp', 'dp', 'ep', 'b', 'p', 'c', 'ov', 'fu', 'ar', 'oo',
   'ox', 'oxl', 'oxf', 'oxh', 'odl', 'odt', 'olt', 'ols', 'oqd', 'sd', 'sdr', 'sdk', 'sdu', 'sda',
 ] as const;
@@ -152,6 +153,7 @@ export function encodeState(s: AppState): string {
   }
   put('a', s.quant.activations);
   put('kv', s.quant.kvCache);
+  put('lt', s.quant.lookupTables);
   const hw = s.hw;
   if (hw.deviceId !== DEFAULT_HW.deviceId) put('d', hw.deviceId);
   const axisOrder = deviceUnlocks({ id: hw.deviceId }).map((a) => a.id);
@@ -334,10 +336,10 @@ export function decodeState(search: string): DecodedState {
 
   // Quant overrides.
   const quant: QuantOverrides = {};
-  for (const [key, field] of [['w', 'weights'], ['a', 'activations'], ['kv', 'kvCache']] as const) {
+  for (const [key, field] of [['w', 'weights'], ['a', 'activations'], ['kv', 'kvCache'], ['lt', 'lookupTables']] as const) {
     const v = get(key);
     if (v === undefined) continue;
-    if (field === 'weights' ? isWeightFormat(v) : isQuantDtype(v)) Object.assign(quant, { [field]: v });
+    if (field === 'weights' ? isWeightFormat(v) : field === 'lookupTables' ? isLookupTableDtype(v) : isQuantDtype(v)) Object.assign(quant, { [field]: v });
     else drop(key, v);
   }
   // EXL3 bits per weight; meaningful only with `w=exl3`.
