@@ -279,7 +279,12 @@ describe('DFlash 2 decode ops (U-9, Qwen3.8-27B-DFlash2 config, k 7, m_ctx 5)', 
         7,
       ),
     );
-    expect(tp2.filter((op) => op.kind === 'collective')).toHaveLength(11);
+    expect(
+      tp2.filter((op) => op.kind === 'collective' && op.collective === 'all_reduce'),
+    ).toHaveLength(11);
+    expect(
+      tp2.filter((op) => op.kind === 'collective' && op.collective === 'all_gather'),
+    ).toHaveLength(1);
     expect(find<GemmOp>(tp2, 'draft.q_proj').n).toBe(2048);
     expect(find<GemmOp>(tp2, 'draft.mlp.gate_up').n).toBe(17408);
     expect(find<GemmOp>(tp2, 'draft.lm_head').n).toBe(124160);
@@ -479,4 +484,41 @@ describe('hybrid verify snapshots (U-14, lowering half)', () => {
     const list = ops(lowerDraftDecode(TINY_HYBRID, hybridMtp, verify, 2, k));
     expect(list.some((op) => op.kind === 'recurrent' && 'stateSnapshots' in op)).toBe(false);
   });
+});
+
+describe('G1 sampling exchange on draft forwards, not just the target head', () => {
+  it('MTP tp2 b2 k3: three 2·2·8=32 B all-gathers; prefill has one 32 B gather', () => {
+    const ctx = { ...verifyCtx(1024, 3, 2), parallel: { ...P1, tp: 2 } };
+    const decode = ops(lowerDraftDecode(REF_DENSE_8B, MTP, ctx, 2, 3));
+    const prefill = ops(
+      lowerDraftPrefill(REF_DENSE_8B, MTP, { ...ctx, phase: 'prefill', qLen: 128, kvLen: 128 }),
+    );
+    const exchanges = (list: Op[]) => list.filter((op) => op.name === 'draft.sample_all_gather');
+    expect(exchanges(decode)).toHaveLength(3);
+    expect(exchanges(prefill)).toHaveLength(1);
+    for (const op of [...exchanges(decode), ...exchanges(prefill)])
+      expect(op).toMatchObject({
+        kind: 'collective',
+        collective: 'all_gather',
+        group: 'tp',
+        groupSize: 2,
+        messageBytes: 32,
+      });
+  });
+  it.each([
+    ['DFlash 2', DFLASH2],
+    ['DSpark', DSPARK],
+  ] as const)(
+    '%s tp2 b2 k7: block head gathers 2·7·2·8=224 B once, no prefill head',
+    (_name, draft) => {
+      const ctx = { ...verifyCtx(1024, 7, 2), parallel: { ...P1, tp: 2 } };
+      const list = ops(lowerDraftDecode(REF_DENSE_8B, draft, ctx, 2, 7));
+      const head = list.findIndex((op) => op.name === 'draft.lm_head');
+      expect(list[head + 1]).toMatchObject({ name: 'draft.sample_all_gather', messageBytes: 224 });
+      const prefill = ops(
+        lowerDraftPrefill(REF_DENSE_8B, draft, { ...ctx, phase: 'prefill', qLen: 128, kvLen: 128 }),
+      );
+      expect(prefill.some((op) => op.name === 'draft.sample_all_gather')).toBe(false);
+    },
+  );
 });

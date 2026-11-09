@@ -145,8 +145,8 @@ export interface Breakdown {
   /** By op kind (`gemm`, `attention`, `collective`, ...). */
   byKind: BreakdownRow[];
   /**
-   * By layer (`embed`, `layer.<i>`, `head`, `pp.send` for stage-to-stage sends, `draft.*` for drafter layers), in
-   * model order; in a speculative decode the `'verify'` rows come first, then the `'draft'` rows.
+   * By layer (`embed`, `layer.<i>`, `head`, `pp.send` for forward sends, `pp.return` for sampled-token return,
+   * `draft.*` for drafter layers), in model order; speculative decode lists verify rows before draft rows.
    */
   byLayer: BreakdownRow[];
   /** A speculative decode only: the `byLayer` rows summed per section, keys `'verify'` and `'draft'`. */
@@ -248,7 +248,7 @@ function phaseSummary(p: PhaseResult, contextTokens: number): PhaseSummary {
   };
 }
 
-/** Every op of a phase with the layer it belongs to (stage sends as layer `pp.send`). */
+/** Every phase op with its layer; forward sends use `pp.send`, the decode token return uses `pp.return`. */
 function phaseOps(p: PhaseResult): { layer: string; op: OpResult }[] {
   const out: { layer: string; op: OpResult }[] = [];
   for (const stage of p.stages) {
@@ -256,6 +256,7 @@ function phaseOps(p: PhaseResult): { layer: string; op: OpResult }[] {
       for (const op of layer.ops) out.push({ layer: layer.name, op });
     if (stage.sendToNext !== undefined) out.push({ layer: 'pp.send', op: stage.sendToNext });
   }
+  if (p.loopBack !== undefined) out.push({ layer: 'pp.return', op: p.loopBack });
   return out;
 }
 

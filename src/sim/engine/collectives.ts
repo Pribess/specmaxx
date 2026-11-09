@@ -71,6 +71,8 @@ export type CollectivePath =
        * busiest link. Count.
        */
       sendHops?: number;
+      /** Concurrent send/recv ranks sharing one host: min(devicesPerNode, tp·dp). Count; absent = 1. */
+      sendActiveDevices?: number;
     }
   | {
       kind: 'hierarchical';
@@ -89,7 +91,11 @@ export type CollectivePath =
 const NO_TIME: CollectiveTime = { latencySec: 0, bandwidthSec: 0, totalSec: 0, algorithm: 'none' };
 
 /** Builds a {@link CollectiveTime} from its α and β parts. */
-function time(latencySec: number, bandwidthSec: number, algorithm: CollectiveTime['algorithm']): CollectiveTime {
+function time(
+  latencySec: number,
+  bandwidthSec: number,
+  algorithm: CollectiveTime['algorithm'],
+): CollectiveTime {
   return { latencySec, bandwidthSec, totalSec: latencySec + bandwidthSec, algorithm };
 }
 
@@ -97,22 +103,32 @@ function time(latencySec: number, bandwidthSec: number, algorithm: CollectiveTim
  * α and β of `link` when `activeDevices` devices of a node transfer at once. A `'direct'` link is unchanged.
  * A `'host_bounce'` link stages every byte through host memory (written once, read once), so the host memory
  * bandwidth is shared by 2 · activeDevices streams, and each message pays the host copy latency.
- * `activeDevices` = group size for collectives, 1 for send/recv.
+ * `activeDevices` = group size for collectives; PP send/recv uses min(devicesPerNode, tp·dp).
  */
 export function effectiveLink(link: LinkSpec, activeDevices: number): EffectiveLink {
   if (link.p2p === 'direct' || link.hostBounce === undefined) {
-    return { bandwidthBytesPerSec: link.bandwidthPerDirectionBytesPerSec, latencySec: link.latencySec };
+    return {
+      bandwidthBytesPerSec: link.bandwidthPerDirectionBytesPerSec,
+      latencySec: link.latencySec,
+    };
   }
   // Formula: B_eff = min(B, hostMemBW / (2 · nActive));  α_eff = α + extraLatency
   // See docs/simulation-model.md §6 ("Host bounce")
   const hostShareBytesPerSec = link.hostBounce.hostMemBandwidthBytesPerSec / (2 * activeDevices);
-  const bandwidthBytesPerSec = Math.min(link.bandwidthPerDirectionBytesPerSec, hostShareBytesPerSec);
+  const bandwidthBytesPerSec = Math.min(
+    link.bandwidthPerDirectionBytesPerSec,
+    hostShareBytesPerSec,
+  );
   const latencySec = link.latencySec + link.hostBounce.extraLatencySec;
   return { bandwidthBytesPerSec, latencySec };
 }
 
 /** Ring all-reduce of S bytes over n devices on one link level. */
-export function ringAllReduceSec(messageBytes: number, n: number, link: EffectiveLink): CollectiveTime {
+export function ringAllReduceSec(
+  messageBytes: number,
+  n: number,
+  link: EffectiveLink,
+): CollectiveTime {
   if (n <= 1) return NO_TIME;
   // Formula: t = 2(n−1)·α + 2(n−1)/n · S/B
   // See docs/simulation-model.md §6 ("Flat collectives")
@@ -122,7 +138,11 @@ export function ringAllReduceSec(messageBytes: number, n: number, link: Effectiv
 }
 
 /** Tree (reduce + broadcast) all-reduce of S bytes over n devices on one link level. */
-export function treeAllReduceSec(messageBytes: number, n: number, link: EffectiveLink): CollectiveTime {
+export function treeAllReduceSec(
+  messageBytes: number,
+  n: number,
+  link: EffectiveLink,
+): CollectiveTime {
   if (n <= 1) return NO_TIME;
   // Formula: t = 2⌈log2 n⌉·α + 2·S/B
   // See docs/simulation-model.md §6 ("Flat collectives")
@@ -160,7 +180,11 @@ export function allReduceSec(
  * Ring all-gather (S = the full OUTPUT) or reduce-scatter (S = the full INPUT) over n devices: both move
  * (n−1)/n of S per device.
  */
-export function ringAllGatherSec(messageBytes: number, n: number, link: EffectiveLink): CollectiveTime {
+export function ringAllGatherSec(
+  messageBytes: number,
+  n: number,
+  link: EffectiveLink,
+): CollectiveTime {
   if (n <= 1) return NO_TIME;
   // Formula: t = (n−1)·α + (n−1)/n · S/B
   // See docs/simulation-model.md §6 ("Flat collectives")
@@ -170,7 +194,11 @@ export function ringAllGatherSec(messageBytes: number, n: number, link: Effectiv
 }
 
 /** Ring reduce-scatter of an S-byte INPUT over n devices (the mirror of {@link ringAllGatherSec}; same cost). */
-export function ringReduceScatterSec(messageBytes: number, n: number, link: EffectiveLink): CollectiveTime {
+export function ringReduceScatterSec(
+  messageBytes: number,
+  n: number,
+  link: EffectiveLink,
+): CollectiveTime {
   return ringAllGatherSec(messageBytes, n, link);
 }
 
@@ -256,7 +284,7 @@ export function hierarchicalReduceScatterSec(
 
 /**
  * Hierarchical all-to-all over n1 × n2 (n = n1 · n2): the intra-node and inter-node shares are sent
- * concurrently, so the slower one sets the β term; one inter-node α.
+ * concurrently, so the slower one sets the β term; the larger effective α remains exposed.
  */
 export function hierarchicalAllToAllSec(
   messageBytes: number,
@@ -267,16 +295,17 @@ export function hierarchicalAllToAllSec(
 ): CollectiveTime {
   const n = n1 * n2;
   if (n <= 1) return NO_TIME;
-  // Formula: t = α_inter + max((n1−1)/n · S/B_intra, (n−n1)/n · S/B_inter)
+  // Formula: t = max(α_intra, α_inter) + max((n1−1)/n · S/B_intra, (n−n1)/n · S/B_inter)
   // See docs/simulation-model.md §6 ("Hierarchical collectives")
   const intraSec = ((n1 - 1) / n) * (messageBytes / intra.bandwidthBytesPerSec);
   const interSec = ((n - n1) / n) * (messageBytes / inter.bandwidthBytesPerSec);
-  return time(inter.latencySec, Math.max(intraSec, interSec), 'hierarchical');
+  const latencySec = Math.max(intra.latencySec, inter.latencySec);
+  return time(latencySec, Math.max(intraSec, interSec), 'hierarchical');
 }
 
 /**
  * Cost of one collective of `kind` with S = `messageBytes` per device over `groupSize` devices on `path`.
- * Host-bounce links are applied with nActive = the devices of the group in one node (1 for send/recv).
+ * Host-bounce links use nActive = group devices per node; send/recv uses path.sendActiveDevices (default 1).
  * `algorithm` selects the all-reduce algorithm (flat, and the inter-node phase of hierarchical). A flat path with a
  * `fabric` is costed by `fabricCollectiveTime` (docs §6 "Fabric shapes"); a hierarchical path with an
  * oversubscribed `interFabric` runs the formulas below with the inter-node bandwidth divided by the oversubscription.
@@ -291,9 +320,21 @@ export function collectiveTime(
   if (path.kind === 'none') return NO_TIME;
   if (path.kind === 'flat') {
     if (path.fabric !== undefined) {
-      return fabricCollectiveTime(kind, messageBytes, groupSize, path.fabric, path.link, algorithm, path.sendHops);
+      return fabricCollectiveTime(
+        kind,
+        messageBytes,
+        groupSize,
+        path.fabric,
+        path.link,
+        algorithm,
+        path.sendHops,
+        path.sendActiveDevices,
+      );
     }
-    const link = effectiveLink(path.link, kind === 'send_recv' ? 1 : groupSize);
+    const link = effectiveLink(
+      path.link,
+      kind === 'send_recv' ? (path.sendActiveDevices ?? 1) : groupSize,
+    );
     switch (kind) {
       case 'all_reduce':
         return allReduceSec(messageBytes, groupSize, link, algorithm);
@@ -301,8 +342,15 @@ export function collectiveTime(
         return ringAllGatherSec(messageBytes, groupSize, link);
       case 'reduce_scatter':
         return ringReduceScatterSec(messageBytes, groupSize, link);
-      case 'all_to_all':
-        return allToAllSec(messageBytes, groupSize, link);
+      case 'all_to_all': {
+        // Formula (G4): host-bounce flat a2a α = (n−1)·α_eff; β retains the shared host-bandwidth cap.
+        // See docs/simulation-model.md §6 ("Host bounce"); ring/chain paths already charge each hop above.
+        const peerRounds = path.link.p2p === 'host_bounce' ? Math.max(1, groupSize - 1) : 1;
+        return allToAllSec(messageBytes, groupSize, {
+          ...link,
+          latencySec: peerRounds * link.latencySec,
+        });
+      }
       case 'send_recv':
         return sendRecvSec(messageBytes, link);
       default: {
@@ -312,14 +360,18 @@ export function collectiveTime(
     }
   }
   const { devicesPerNode: n1, nodes: n2 } = path;
-  if (n1 * n2 !== groupSize) throw new Error(`hierarchical path ${n1} × ${n2} does not match group size ${groupSize}`);
+  if (n1 * n2 !== groupSize)
+    throw new Error(`hierarchical path ${n1} × ${n2} does not match group size ${groupSize}`);
   const intra = effectiveLink(path.intra, n1);
   const interLink = effectiveLink(path.inter, n1);
   // Formula: B_inter = B_eff / o  (oversubscribed switch between nodes; o absent = 1 keeps the link untouched)
   const inter: EffectiveLink =
     path.interFabric === undefined
       ? interLink
-      : { ...interLink, bandwidthBytesPerSec: interLink.bandwidthBytesPerSec / path.interFabric.oversubscription };
+      : {
+          ...interLink,
+          bandwidthBytesPerSec: interLink.bandwidthBytesPerSec / path.interFabric.oversubscription,
+        };
   switch (kind) {
     case 'all_reduce':
       return hierarchicalAllReduceSec(messageBytes, n1, n2, intra, inter, algorithm);

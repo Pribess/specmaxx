@@ -179,6 +179,41 @@ describe('summarize', () => {
     expect(s.speculative).toBeUndefined();
   });
 
+  it.each(['ideal', 'none'] as const)(
+    'PP return appears once in decode breakdown and reconciles comm totals (%s overlap)',
+    (overlap) => {
+      const built = buildSimInput(multiDeviceState(), qwen());
+      if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));
+      const input: SimInput = {
+        ...built.input,
+        parallel: { ...built.input.parallel, tp: 1, pp: 2 },
+        options: { overlap },
+      };
+      const result = simulate(input);
+      const summary = summarize(result, input);
+      const returned = result.decode.loopBack!;
+      const decode = summary.breakdown.decode;
+      expect(decode.byLayer.find((r) => r.key === 'pp.return')).toMatchObject({
+        sec: returned.sec,
+        count: 1,
+        boundSec: {
+          commLatency: returned.commLatencySec,
+          commBandwidth: returned.commBandwidthSec,
+        },
+      });
+      expect(decode.byOp.find((r) => r.key === 'pp.sample_return')).toMatchObject({
+        count: 1,
+        sec: returned.sec,
+      });
+      const comm = decode.byKind.find((r) => r.key === 'collective')!;
+      expect(comm.boundSec.commLatency).toBeCloseTo(result.decode.comm.latencySec, 14);
+      expect(comm.boundSec.commBandwidth).toBeCloseTo(result.decode.comm.bandwidthSec, 14);
+      expect(summary.breakdown.prefill.byLayer.some((r) => r.key === 'pp.return')).toBe(false);
+      expectConsistent(decode);
+      expectConsistent(summary.breakdown.prefill);
+    },
+  );
+
   it('a hand-built offload result: transfer rows, tiers, chips, roofline without transfer ops', () => {
     const built = buildSimInput(DEFAULT_STATE, BUNDLED_DEFAULT_MODEL);
     if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));

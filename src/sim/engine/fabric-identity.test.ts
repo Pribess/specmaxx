@@ -1,8 +1,8 @@
 /**
- * Identity pin for fabric shapes (docs/simulation-model.md §6 "Fabric shapes"): every result of the topologies that
- * existed before `TopologySpec.interNodeFabric` must stay BIT-IDENTICAL when the fabric is absent (switched,
- * non-blocking). The fixture `__fixtures__/fabric-identity.json` was generated on the code BEFORE fabric shapes were
- * added; numbers are compared with exact equality (`Object.is`; JSON round-trips doubles exactly).
+ * Identity pin for fabric shapes (docs/simulation-model.md §6 "Fabric shapes"). Originally generated before
+ * fabric shapes; deliberately regenerated after latency-audit G1–G4/G7/G8 (design §4.3 records deltas).
+ * It now pins absent-fabric/switched results under the corrected engine, not the historical pre-audit timings.
+ * Numbers are compared with exact equality (Object.is; JSON round-trips doubles exactly).
  *
  * Three levels:
  * - collectives: every link preset × every collective kind × n ∈ {2, 3, 4, 8} × S ∈ {1e3, 1e6, 1e8} B on a flat path,

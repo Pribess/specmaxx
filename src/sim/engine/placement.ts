@@ -33,11 +33,17 @@ export interface GroupSpan {
  */
 export function groupSpanErrors(size: number, topo: TopologySpec): string[] {
   const dpn = topo.devicesPerNode;
-  if (!Number.isInteger(size) || size < 1) return [`group size must be an integer ≥ 1 (got ${size})`];
+  if (!Number.isInteger(size) || size < 1)
+    return [`group size must be an integer ≥ 1 (got ${size})`];
   if (size <= dpn && dpn % size === 0) return [];
   if (size % dpn === 0 && size / dpn <= topo.nodes) return [];
-  if (size % dpn === 0) return [`a group of ${size} needs ${size / dpn} nodes of ${dpn}; the topology has ${topo.nodes}`];
-  return [`a group of ${size} devices does not tile nodes of ${dpn} devices (needs size | ${dpn} or ${dpn} | size)`];
+  if (size % dpn === 0)
+    return [
+      `a group of ${size} needs ${size / dpn} nodes of ${dpn}; the topology has ${topo.nodes}`,
+    ];
+  return [
+    `a group of ${size} devices does not tile nodes of ${dpn} devices (needs size | ${dpn} or ${dpn} | size)`,
+  ];
 }
 
 /** Span of a contiguous group of `size` devices (TP and EP groups). Throws if {@link groupSpanErrors} reports any. */
@@ -53,14 +59,20 @@ export function groupSpan(size: number, topo: TopologySpec): GroupSpan {
 /**
  * True if the boundary between pipeline stage `stage` and `stage + 1` crosses nodes: some rank r of the stage
  * sends to r + tp·dp in another node (`floor(r / dpn)` differs).
+ * `destinationStage` is a zero-based stage index, default stage + 1; 0 selects the decode loop-back.
  */
-export function ppBoundaryIsInterNode(par: ParallelConfig, topo: TopologySpec, stage: number): boolean {
+export function ppBoundaryIsInterNode(
+  par: ParallelConfig,
+  topo: TopologySpec,
+  stage: number,
+  destinationStage = stage + 1,
+): boolean {
   const dpn = topo.devicesPerNode;
   const stride = par.tp * par.dp;
   for (let i = 0; i < stride; i++) {
     // Formula: r = tpIdx + tp·(dpIdx + dp·s) = s·tp·dp + i,  partner = r + tp·dp
     const rank = stage * stride + i;
-    const partner = rank + stride;
+    const partner = destinationStage * stride + i;
     if (Math.floor(rank / dpn) !== Math.floor(partner / dpn)) return true;
   }
   return false;
@@ -77,8 +89,10 @@ export function collectivePath(span: GroupSpan, topo: TopologySpec): CollectiveP
   if (span.n <= 1) return { kind: 'none' };
   const needIntra = span.devicesPerNodeInGroup > 1;
   const needInter = span.nodesSpanned > 1;
-  if (needIntra && topo.intraNode === undefined) throw new Error(`topology ${topo.id} has no intraNode link`);
-  if (needInter && topo.interNode === undefined) throw new Error(`topology ${topo.id} has no interNode link`);
+  if (needIntra && topo.intraNode === undefined)
+    throw new Error(`topology ${topo.id} has no intraNode link`);
+  if (needInter && topo.interNode === undefined)
+    throw new Error(`topology ${topo.id} has no interNode link`);
   const shape = topo.interNodeFabric;
   if (needIntra && needInter && topo.intraNode !== undefined && topo.interNode !== undefined) {
     const path: CollectivePath = {
@@ -89,12 +103,17 @@ export function collectivePath(span: GroupSpan, topo: TopologySpec): CollectiveP
       inter: topo.interNode,
     };
     if (isNonBlockingSwitched(shape) || shape === undefined) return path;
-    if (shape.kind !== 'switched') throw new Error(`topology ${topo.id}: a ${shape.kind} fabric needs one device per node`);
-    return { ...path, interFabric: { kind: 'switched', oversubscription: shape.oversubscription ?? 1 } };
+    if (shape.kind !== 'switched')
+      throw new Error(`topology ${topo.id}: a ${shape.kind} fabric needs one device per node`);
+    return {
+      ...path,
+      interFabric: { kind: 'switched', oversubscription: shape.oversubscription ?? 1 },
+    };
   }
   if (needInter && topo.interNode !== undefined) {
     const fabric = groupFabric(shape, span.nodesSpanned, topo.nodes);
-    if (isNonBlockingSwitched(fabric) || fabric === undefined) return { kind: 'flat', level: 'inter', link: topo.interNode };
+    if (isNonBlockingSwitched(fabric) || fabric === undefined)
+      return { kind: 'flat', level: 'inter', link: topo.interNode };
     return { kind: 'flat', level: 'inter', link: topo.interNode, fabric };
   }
   if (topo.intraNode !== undefined) return { kind: 'flat', level: 'intra', link: topo.intraNode };
@@ -105,16 +124,25 @@ export function collectivePath(span: GroupSpan, topo: TopologySpec): CollectiveP
  * Links the activation send after stage `stage` crosses on the inter-node fabric: the most over the stage's ranks r
  * of `nodeHops(node(r), node(r + tp·dp))`, node(r) = floor(r / dpn). 1 on a switch or mesh; on a ring or chain, 1 for
  * pure PP (stages on neighbours) and tp·dp for one device per node (e.g. tp 2 × pp 2 on a ring of 4: 2). Count.
+ * `destinationStage` is a zero-based stage index (default stage + 1); use 0 for the decode return.
  */
-export function ppSendHops(par: ParallelConfig, topo: TopologySpec, stage: number): number {
+export function ppSendHops(
+  par: ParallelConfig,
+  topo: TopologySpec,
+  stage: number,
+  destinationStage = stage + 1,
+): number {
   const dpn = topo.devicesPerNode;
   const stride = par.tp * par.dp;
   let hops = 0;
   for (let i = 0; i < stride; i++) {
-    // Formula: h = max_r nodeHops(floor(r/dpn), floor((r + tp·dp)/dpn))
+    // Formula: h = max_i nodeHops(floor((stage·tp·dp+i)/dpn), floor((destinationStage·tp·dp+i)/dpn))
     const rank = stage * stride + i;
-    const partner = rank + stride;
-    hops = Math.max(hops, nodeHops(topo.interNodeFabric, Math.floor(rank / dpn), Math.floor(partner / dpn), topo.nodes));
+    const partner = destinationStage * stride + i;
+    hops = Math.max(
+      hops,
+      nodeHops(topo.interNodeFabric, Math.floor(rank / dpn), Math.floor(partner / dpn), topo.nodes),
+    );
   }
   return hops;
 }
@@ -123,15 +151,38 @@ export function ppSendHops(par: ParallelConfig, topo: TopologySpec, stage: numbe
  * The flat path of the activation send from stage `stage` to `stage + 1` (intra- or inter-node link). Throws if
  * missing. An inter-node send carries the topology's fabric unless it is the non-blocking switch, and `sendHops`
  * ({@link ppSendHops}) when that is not 1.
+ * `destinationStage` is a zero-based stage index (default stage + 1); use 0 for the decode return.
  */
-export function ppSendPath(par: ParallelConfig, topo: TopologySpec, stage: number): CollectivePath {
-  const inter = ppBoundaryIsInterNode(par, topo, stage);
+export function ppSendPath(
+  par: ParallelConfig,
+  topo: TopologySpec,
+  stage: number,
+  destinationStage = stage + 1,
+): CollectivePath {
+  const inter = ppBoundaryIsInterNode(par, topo, stage, destinationStage);
   const link = inter ? topo.interNode : topo.intraNode;
-  if (link === undefined) throw new Error(`topology ${topo.id} has no ${inter ? 'interNode' : 'intraNode'} link for the PP boundary after stage ${stage}`);
+  if (link === undefined)
+    throw new Error(
+      `topology ${topo.id} has no ${inter ? 'interNode' : 'intraNode'} link for the PP boundary after stage ${stage}`,
+    );
   const fabric = topo.interNodeFabric;
-  if (!inter || isNonBlockingSwitched(fabric) || fabric === undefined) return { kind: 'flat', level: inter ? 'inter' : 'intra', link };
-  const sendHops = ppSendHops(par, topo, stage);
-  return { kind: 'flat', level: 'inter', link, fabric, ...(sendHops !== 1 ? { sendHops } : {}) };
+  // Formula (G8): nActive = min(devicesPerNode, tp·dp), for both forward activations and decode token return.
+  // See docs/simulation-model.md §6 "Host bounce".
+  const hostSharing =
+    link.p2p === 'host_bounce'
+      ? { sendActiveDevices: Math.min(topo.devicesPerNode, par.tp * par.dp) }
+      : {};
+  if (!inter || isNonBlockingSwitched(fabric) || fabric === undefined)
+    return { kind: 'flat', level: inter ? 'inter' : 'intra', link, ...hostSharing };
+  const sendHops = ppSendHops(par, topo, stage, destinationStage);
+  return {
+    kind: 'flat',
+    level: 'inter',
+    link,
+    fabric,
+    ...hostSharing,
+    ...(sendHops !== 1 ? { sendHops } : {}),
+  };
 }
 
 /** Result of {@link checkPlacement}: errors make the input invalid; warnings are informational lines. */
@@ -155,8 +206,12 @@ export function checkPlacement(par: ParallelConfig, topo: TopologySpec): Placeme
     errors.push(`tp·pp·dp = ${world} devices needed, the topology has ${devices}`);
     return { errors, warnings };
   }
-  if (world < devices) warnings.push(`${devices - world} of ${devices} devices are unused (tp·pp·dp = ${world})`);
-  for (const [name, size] of [['tp', par.tp], ['ep', par.ep]] as const) {
+  if (world < devices)
+    warnings.push(`${devices - world} of ${devices} devices are unused (tp·pp·dp = ${world})`);
+  for (const [name, size] of [
+    ['tp', par.tp],
+    ['ep', par.ep],
+  ] as const) {
     const spanErrors = groupSpanErrors(size, topo).map((e) => `${name}: ${e}`);
     errors.push(...spanErrors);
     if (spanErrors.length === 0) {

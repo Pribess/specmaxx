@@ -270,6 +270,8 @@ export interface PhaseResult {
   microbatchSize: number;
   /** Per-stage costs. */
   stages: StageResult[];
+  /** Decode-only last-stage → stage-0 uint32 sampled-token send (α and β seconds); absent for pp1 or prefill. */
+  loopBack?: OpResult;
   /** Pipeline cycle: time for every microbatch of a replica to pass one step (docs §7). Unit: seconds. */
   cycleSec: number;
   /** Prefill: time to first token of a replica batch; decode: time per output token. Unit: seconds. */
@@ -283,7 +285,8 @@ export interface PhaseResult {
    * numbers the engine already computes, display only (`cycleSec` does not depend on them):
    * `latencySec = Σ_s lat_s + Σ α_p2p`, `bandwidthSec = Σ_s bw_s + Σ β_p2p`,
    * `exposedSec = Σ_s exposedComm_s + the PP sends on the latency path (overlap 'ideal'; under 'none' they are
-   * already inside exposedComm_s)`. Unit: seconds.
+   * already inside exposedComm_s) + loopBack.sec`. The α/β sums also include loopBack, once, in both modes.
+   * Unit: seconds.
    */
   comm: { latencySec: number; bandwidthSec: number; exposedSec: number };
   /**

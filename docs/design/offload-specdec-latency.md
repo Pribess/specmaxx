@@ -3,10 +3,10 @@
 Status: implemented (revision 3: the design as built). Revision 2 (after review) was implemented by
 [`#specmaxx/implement-expert-offloading-speculative`](`ref://task:01a1bb13-6549-7100-b13a-254ffb2c32ec`); the sections
 below are updated to the code, and §10 lists where and why the implementation deviates from revision 2. The
-latency-audit corrections G1–G8 (§4.3) are not implemented (a separate follow-up). Companion of
+latency-audit follow-up now implements G1–G4, G7, G8 (§4.3); G6 remains out of scope. Companion of
 `docs/simulation-model.md` (cited as "model doc §N"; offload is its §12, speculative decoding its §13). Line
-numbers in code paths are relative to the repo root at `d4dba96` (the design's base); the goldens of §8.3 still hold
-after the implementation.
+numbers in historical audit §4.1 are relative to the repo root at `d4dba96` (the design's base).
+The goldens in §8.3 are the deliberately regenerated post-audit values.
 
 ## 0. Principle and contract
 
@@ -21,10 +21,9 @@ Offloading and speculative decoding are **opt-in deployment-scenario knobs, off 
   `SimOptions.offloadOverlap`, `HardwareStack.host?`, `ModelSpec.draft?`). Absent ⇒ no `TransferOp` is emitted, no
   `draft.*` layer is appended, the decode context keeps `qLen = 1`, the stage formula's new term is 0 and both
   branches reduce to today's expression, the memory fit adds 0 B, and `hardware.host` is never read.
-- **The interconnect-latency corrections (G1–G8, §4) are NOT part of this feature.** They change results with
-  every knob off (new messages, changed collective costs), so they are a separate, behaviour-changing follow-up
-  ("latency-audit corrections", §4.3) with per-fix numeric deltas; it updates the pinned goldens deliberately. Only
-  the **display-only** latency/bandwidth split of the breakdown (§4.2) is in this feature.
+- **The interconnect corrections were separate from the original deployment feature.** The completed audit
+  follow-up applies G1–G4, G7, G8 even with every knob off; §4.3 records each measured delta and §8.3 the updated
+  baseline. Deployment absent vs empty/off still remains bit-identical. G6 stays out of scope.
 - **A knob on ⇒ still the hardware/math upper bound given the stated parameters** (hit ratio h, acceptance α,
   overlap assumption, queue depth). The engine adds only bytes crossing a link, requests paying a latency, and the
   GEMM/attention/state work the draft and verify passes physically require. No scheduler, paged cache, predictor
@@ -43,20 +42,20 @@ quantities are **expected values per step** (real numbers; no integer rounding o
 
 ## 1. What exists today (verified in the code)
 
-| Area | Code | Fact relied on below |
-|---|---|---|
-| Per-op time | `engine/opTime.ts:58-62, 133-166` | `t_op = max(F/(peak·eff), bytes/memBW)`; collectives `α + β` with `commLatencySec` / `commBandwidthSec` |
-| Stage time | `engine/pipeline.ts:26-59` | `'ideal'`: `t_s = lat_s + max(compute_s, bw_s)`; `'none'`: `compute_s + lat_s + bw_s + p2p_s`; exhaustive `switch` + `never` |
-| Phase | `engine/pipeline.ts:109-153` | decode `cycle = max(m·b, Σt_s + Σp2p)`, `tok/s = dp·B_r/cycle` |
-| MoE routing | `lower/moe.ts:91-99, 161-166` | balanced worst case: `a = min(E_loc, T·k)` experts read from device memory; no expected-unique formula (model doc §9 lists `E·(1−(1−k/E)^T)` as future work) |
-| MoE residency | `lower/moe.ts:215-231` | all local experts resident |
-| Recurrent step | `ir/metrics.ts:388-400`, `lower/linearAttention.ts:141` | decode `'step'` mode reads and writes the state **once per step**, whatever `qLen` |
-| n-gram tables | `lower/ngram.ts:28-67, 74-83` | gather `T·g` rows of `d` (an `EmbeddingOp`); the whole table is counted VRAM-resident (`ceil(rows/tp)·d·bpe`) |
-| Memory fit | `engine/memory.ts:56-73, 112-142` | one tier (device); the embedding shard is counted on stage 0 only, the LM head on the last stage |
-| Hardware | `hw/types.ts:121-218` | `DeviceSpec` has no host link, host RAM or SSD; `singleDevice()` has no links; the only host number is `LinkSpec.hostBounce.hostMemBandwidthBytesPerSec` (`hw/presets/links.ts:49-54`) |
-| Overlap knob pattern | `engine/types.ts:35-48`, `simulate.ts:27`, `pipeline.ts:38-53`, `ui/state/url.ts:38-42`, `ui/components/AssumptionsPanel.tsx:9-43` | the pattern `offloadOverlap` copies |
-| MTP in the HF loader | `models/hf/families/{glmMoeDsa,glm5Next,qwen,inkling,deepseekV41,mistralLarge4}.ts`, `mlaCommon.ts:216-224` | the MTP `LayerSpec` is built, counted (`mtpParamsEstimate`) and discarded |
-| α/β split | `engine/types.ts:81-84, 121-126` | per op and per stage, not per phase, not in the UI (`ui/state/summary.ts:181-189`) |
+| Area                 | Code                                                                                                                               | Fact relied on below                                                                                                                                                                   |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Per-op time          | `engine/opTime.ts:58-62, 133-166`                                                                                                  | `t_op = max(F/(peak·eff), bytes/memBW)`; collectives `α + β` with `commLatencySec` / `commBandwidthSec`                                                                                |
+| Stage time           | `engine/pipeline.ts:26-59`                                                                                                         | `'ideal'`: `t_s = lat_s + max(compute_s, bw_s)`; `'none'`: `compute_s + lat_s + bw_s + p2p_s`; exhaustive `switch` + `never`                                                           |
+| Phase                | `engine/pipeline.ts:109-153`                                                                                                       | decode `cycle = max(m·b, Σt_s + Σp2p)`, `tok/s = dp·B_r/cycle`                                                                                                                         |
+| MoE routing          | `lower/moe.ts:91-99, 161-166`                                                                                                      | balanced worst case: `a = min(E_loc, T·k)` experts read from device memory; no expected-unique formula (model doc §9 lists `E·(1−(1−k/E)^T)` as future work)                           |
+| MoE residency        | `lower/moe.ts:215-231`                                                                                                             | all local experts resident                                                                                                                                                             |
+| Recurrent step       | `ir/metrics.ts:388-400`, `lower/linearAttention.ts:141`                                                                            | decode `'step'` mode reads and writes the state **once per step**, whatever `qLen`                                                                                                     |
+| n-gram tables        | `lower/ngram.ts:28-67, 74-83`                                                                                                      | gather `T·g` rows of `d` (an `EmbeddingOp`); the whole table is counted VRAM-resident (`ceil(rows/tp)·d·bpe`)                                                                          |
+| Memory fit           | `engine/memory.ts:56-73, 112-142`                                                                                                  | one tier (device); the embedding shard is counted on stage 0 only, the LM head on the last stage                                                                                       |
+| Hardware             | `hw/types.ts:121-218`                                                                                                              | `DeviceSpec` has no host link, host RAM or SSD; `singleDevice()` has no links; the only host number is `LinkSpec.hostBounce.hostMemBandwidthBytesPerSec` (`hw/presets/links.ts:49-54`) |
+| Overlap knob pattern | `engine/types.ts:35-48`, `simulate.ts:27`, `pipeline.ts:38-53`, `ui/state/url.ts:38-42`, `ui/components/AssumptionsPanel.tsx:9-43` | the pattern `offloadOverlap` copies                                                                                                                                                    |
+| MTP in the HF loader | `models/hf/families/{glmMoeDsa,glm5Next,qwen,inkling,deepseekV41,mistralLarge4}.ts`, `mlaCommon.ts:216-224`                        | the MTP `LayerSpec` is built, counted (`mtpParamsEstimate`) and discarded                                                                                                              |
+| α/β split            | `engine/types.ts:81-84, 121-126`                                                                                                   | per op and per stage, not per phase, not in the UI (`ui/state/summary.ts:181-189`)                                                                                                     |
 
 ---
 
@@ -68,11 +67,11 @@ A **placement** says which weight groups are not in device memory and where they
 kinds; each adds one `TransferOp` (§2.5) in front of the block that consumes the group, **only when it has bytes to
 move**.
 
-| Group kind | Covers | Selector | Resident on device | Streamed per step |
-|---|---|---|---|---|
-| `routed_experts` | `MoeBlock` routed experts of the selected layers | all MoE layers, or a layer range `[from, to)` (llama.cpp `--n-cpu-moe`, ik_llama `-ot`) | `C = f·E` experts per offloaded layer (pinned or LRU cache; the sim does not distinguish, the hit-ratio model does), router, shared experts, attention | the missed experts' weights (§2.4–2.5) |
-| `dense_layers` | every weight of whole decoder layers `[from, to)` (dense or MoE model) | layer range | all other layers | the full weight bytes of each offloaded layer, every step (no hit ratio: a dense layer is read once per step) |
-| `lookup_tables` | `NgramEmbeddingBlock` tables (Qwen PLE, DeepSeek Engram) | all tables of the model | projections, gate vectors, conv taps | the `T·g` gathered rows (§2.10) |
+| Group kind       | Covers                                                                 | Selector                                                                                | Resident on device                                                                                                                                     | Streamed per step                                                                                             |
+| ---------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `routed_experts` | `MoeBlock` routed experts of the selected layers                       | all MoE layers, or a layer range `[from, to)` (llama.cpp `--n-cpu-moe`, ik_llama `-ot`) | `C = f·E` experts per offloaded layer (pinned or LRU cache; the sim does not distinguish, the hit-ratio model does), router, shared experts, attention | the missed experts' weights (§2.4–2.5)                                                                        |
+| `dense_layers`   | every weight of whole decoder layers `[from, to)` (dense or MoE model) | layer range                                                                             | all other layers                                                                                                                                       | the full weight bytes of each offloaded layer, every step (no hit ratio: a dense layer is read once per step) |
+| `lookup_tables`  | `NgramEmbeddingBlock` tables (Qwen PLE, DeepSeek Engram)               | all tables of the model                                                                 | projections, gate vectors, conv taps                                                                                                                   | the `T·g` gathered rows (§2.10)                                                                               |
 
 Decisions:
 
@@ -103,7 +102,7 @@ New plain-data specs in `src/sim/hw/types.ts` (JSDoc in §7.2):
   `hostInterface` (SXM / OAM modules, SoCs) and without `host.link` is a **validation error** ("deployment.offload: no
   host link known for <id>; set hardware.host.link"). Link modifiers are not applied to the host link. `ram` absent
   with an off-device group on a dedicated-memory device ⇒ `DDR5_6000_2CH` with a warning. On **unified memory** host
-  RAM *is* the device pool: `'host_ram'` placement = `'device'` (no transfer), `link` ignored, only `ssd` is a tier,
+  RAM _is_ the device pool: `'host_ram'` placement = `'device'` (no transfer), `link` ignored, only `ssd` is a tier,
   and the default SSD is the device's own drive (Apple M5 → `apple-ssd-m5-pro-max`, other Apple →
   `apple-ssd-m3-m4-max-1tb`, DGX Spark → `dgx-spark-ssd-4tb`, Ryzen AI Max → `nvme-gen4-x4-generic`); dedicated-memory
   devices default to `nvme-990-pro-2tb`.
@@ -111,22 +110,22 @@ New plain-data specs in `src/sim/hw/types.ts` (JSDoc in §7.2):
 **Presets** (`src/sim/hw/presets/storage.ts`; every number in `sources[].fields` or `estimated[]`). Datasheet
 ceilings, no achieved fractions (Q3).
 
-| id | capacity | bandwidth | latency | random read (iops @ QD×T) | gran. | source | conf. |
-|---|---|---|---|---|---|---|---|
-| `ddr5-5600-2ch` | 96e9 (2×48 GB, est.) | 89.6e9 | 70e-9 (est.: the review measured 70 ns at 6000 MT/s) | — | 64 | AMD Ryzen 9 9950X spec (2 ch, DDR5-5600) https://www.amd.com/en/products/processors/desktops/ryzen/9000-series/amd-ryzen-9-9950x.html ; latency Chips and Cheese 9950X https://chipsandcheese.com/p/amds-ryzen-9950x-zen-5-on-desktop | high / est. |
-| `ddr5-6000-2ch` (**default host RAM**) | 96e9 (est.) | 96.0e9 | 70e-9 | — | 64 | same (EXPO 6000; the review quotes "theoretical 96 GB/s"); equals `links.ts:51` | high |
-| `ddr5-6400-2ch` | 96e9 (est.) | 102.4e9 | 100e-9 (est.) | — | 64 | derived `6400e6·8·2`; latency Arrow Lake review https://chipsandcheese.com/p/examining-intels-arrow-lake-at-the | medium |
-| `ddr5-6400-8ch` | 256e9 (est.) | 409.6e9 | 100e-9 (est.) | — | 64 | AMD Threadripper PRO 9995WX (8 ch, DDR5-6400) https://www.amd.com/en/products/processors/workstations/ryzen-threadripper/9000-wx-series/amd-ryzen-threadripper-pro-9995wx.html | high / est. |
-| `ddr5-4800-12ch` | 384e9 (est.) | 460.8e9 | 110e-9 (est.) | — | 64 | AMD EPYC 9654 "Per Socket Mem BW 460.8 GB/s" https://www.amd.com/en/products/processors/server/epyc/4th-generation-9004-and-8004-series/amd-epyc-9654.html | high |
-| `ddr5-6000-12ch` | 768e9 (est.) | 576e9 (est.: AMD rates the part at DDR5-6400) | 110e-9 (est.) | — | 64 | derived from EPYC 9575F (12 ch; 614 GB/s at 6400) https://www.amd.com/en/products/processors/server/epyc/9005-series/amd-epyc-9575f.html | high / est. |
-| `nvme-990-pro-2tb` (**default SSD**, dedicated memory) | 2e12 | 7.45e9 | **45.45e-6** (= 1/22,000 QD1 IOPS; the worked examples use a 45e-6 variant, §8.6) | 1.4e6 @ 32×16 | 4096 | Samsung 990 PRO datasheet Rev 1.0 https://download.semiconductor.samsung.com/resources/data-sheet/Samsung_NVMe_SSD_990_PRO_Datasheet_Rev.1.0.pdf | high |
-| `nvme-sn850x-2tb` | 2e12 | 7.3e9 | 50e-6 (est.) | 1.2e6 @ (unstated; 32×16 assumed, in `estimated[]`) | 4096 | Sandisk SN850X datasheet https://documents.sandisk.com/content/dam/asset-library/en_us/assets/public/sandisk/product/internal-drives/wd-black-ssd/data-sheet-wd-black-sn850x-nvme-ssd.pdf | high / low |
-| `nvme-9100-pro-4tb` | 4e12 | 14.8e9 | 45e-6 (est.) | 2.2e6 @ 256×32 | 4096 | Samsung 9100 PRO datasheet Rev 2.0 https://download.semiconductor.samsung.com/resources/data-sheet/Samsung_NVMe_SSD_9100_PRO_Datasheet_Rev.2.0.pdf | high / low |
-| `nvme-t705-2tb` | 2e12 | 14.5e9 | 45e-6 (est.) | 1.55e6 @ 512 (recorded as QD 512 × 1 thread: the vendor gives no split) | 4096 | Crucial T705 page footnote https://www.crucial.com/ssd/t705/ct2000t705ssd3 ; CDRLabs 1.41M @16×32 https://www.cdrlabs.com/reviews/crucial-t705-2tb-pcie-gen5-nvme-solid-state-drive/performance-anvil-s-storage-utilities-and-iometer.html | medium |
-| `apple-ssd-m3-m4-max-1tb` | 1e12 | 6.4e9 | 68e-6 (from QD1 ≈ 60 MB/s) | 2.5e5 @ 64 (derived) | 4096 | AmorphousDiskMark crowd medians (115 runs; `kind 'community'`) https://www.reddit.com/r/mac/comments/1rpsc1n/mac_ssd_speeds_overview_updated_with_m5_promax/ ; Apple ≥ 6 GiB/s linear (arXiv 2312.11514 §2) | medium |
-| `apple-ssd-m5-pro-max` | 2e12 | 13.1e9 | 65e-6 (derived) | 2.7e5 @ 64 (derived) | 4096 | same dataset, n = 1–3 | low |
-| `dgx-spark-ssd-4tb` | 4e12 | 12.2e9 (11.4 GiB/s GDSIO peak) | 50e-6 (**est.**: Gen5 2242 class, between the 990 Pro's 45 µs and the Apple drives' 65 µs) | 1.5e6 @ 32×16 (**est.**: between the 990 PRO 1.4e6 and the 9100 PRO 2.2e6; StorageReview published no random figure) | 4096 | StorageReview https://www.storagereview.com/review/nvidia-dgx-spark-review-the-ai-appliance-bringing-datacenter-capabilities-to-desktops ; NVIDIA https://docs.nvidia.com/dgx/dgx-spark/hardware.html ; both random fields in `estimated[]` | medium (seq) / low (random) |
-| `nvme-gen4-x4-generic` (Strix Halo boxes) | 2e12 | 7.0e9, `linkBandwidth` 7.88e9 | 50e-6 (est.) | 1.0e6 @ 512 (est.) | 4096 | Framework Desktop: 2× PCIe 4.0 x4 M.2 https://frame.work/desktop | medium |
+| id                                                     | capacity             | bandwidth                                     | latency                                                                                    | random read (iops @ QD×T)                                                                                            | gran. | source                                                                                                                                                                                                                                      | conf.                       |
+| ------------------------------------------------------ | -------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| `ddr5-5600-2ch`                                        | 96e9 (2×48 GB, est.) | 89.6e9                                        | 70e-9 (est.: the review measured 70 ns at 6000 MT/s)                                       | —                                                                                                                    | 64    | AMD Ryzen 9 9950X spec (2 ch, DDR5-5600) https://www.amd.com/en/products/processors/desktops/ryzen/9000-series/amd-ryzen-9-9950x.html ; latency Chips and Cheese 9950X https://chipsandcheese.com/p/amds-ryzen-9950x-zen-5-on-desktop       | high / est.                 |
+| `ddr5-6000-2ch` (**default host RAM**)                 | 96e9 (est.)          | 96.0e9                                        | 70e-9                                                                                      | —                                                                                                                    | 64    | same (EXPO 6000; the review quotes "theoretical 96 GB/s"); equals `links.ts:51`                                                                                                                                                             | high                        |
+| `ddr5-6400-2ch`                                        | 96e9 (est.)          | 102.4e9                                       | 100e-9 (est.)                                                                              | —                                                                                                                    | 64    | derived `6400e6·8·2`; latency Arrow Lake review https://chipsandcheese.com/p/examining-intels-arrow-lake-at-the                                                                                                                             | medium                      |
+| `ddr5-6400-8ch`                                        | 256e9 (est.)         | 409.6e9                                       | 100e-9 (est.)                                                                              | —                                                                                                                    | 64    | AMD Threadripper PRO 9995WX (8 ch, DDR5-6400) https://www.amd.com/en/products/processors/workstations/ryzen-threadripper/9000-wx-series/amd-ryzen-threadripper-pro-9995wx.html                                                              | high / est.                 |
+| `ddr5-4800-12ch`                                       | 384e9 (est.)         | 460.8e9                                       | 110e-9 (est.)                                                                              | —                                                                                                                    | 64    | AMD EPYC 9654 "Per Socket Mem BW 460.8 GB/s" https://www.amd.com/en/products/processors/server/epyc/4th-generation-9004-and-8004-series/amd-epyc-9654.html                                                                                  | high                        |
+| `ddr5-6000-12ch`                                       | 768e9 (est.)         | 576e9 (est.: AMD rates the part at DDR5-6400) | 110e-9 (est.)                                                                              | —                                                                                                                    | 64    | derived from EPYC 9575F (12 ch; 614 GB/s at 6400) https://www.amd.com/en/products/processors/server/epyc/9005-series/amd-epyc-9575f.html                                                                                                    | high / est.                 |
+| `nvme-990-pro-2tb` (**default SSD**, dedicated memory) | 2e12                 | 7.45e9                                        | **45.45e-6** (= 1/22,000 QD1 IOPS; the worked examples use a 45e-6 variant, §8.6)          | 1.4e6 @ 32×16                                                                                                        | 4096  | Samsung 990 PRO datasheet Rev 1.0 https://download.semiconductor.samsung.com/resources/data-sheet/Samsung_NVMe_SSD_990_PRO_Datasheet_Rev.1.0.pdf                                                                                            | high                        |
+| `nvme-sn850x-2tb`                                      | 2e12                 | 7.3e9                                         | 50e-6 (est.)                                                                               | 1.2e6 @ (unstated; 32×16 assumed, in `estimated[]`)                                                                  | 4096  | Sandisk SN850X datasheet https://documents.sandisk.com/content/dam/asset-library/en_us/assets/public/sandisk/product/internal-drives/wd-black-ssd/data-sheet-wd-black-sn850x-nvme-ssd.pdf                                                   | high / low                  |
+| `nvme-9100-pro-4tb`                                    | 4e12                 | 14.8e9                                        | 45e-6 (est.)                                                                               | 2.2e6 @ 256×32                                                                                                       | 4096  | Samsung 9100 PRO datasheet Rev 2.0 https://download.semiconductor.samsung.com/resources/data-sheet/Samsung_NVMe_SSD_9100_PRO_Datasheet_Rev.2.0.pdf                                                                                          | high / low                  |
+| `nvme-t705-2tb`                                        | 2e12                 | 14.5e9                                        | 45e-6 (est.)                                                                               | 1.55e6 @ 512 (recorded as QD 512 × 1 thread: the vendor gives no split)                                              | 4096  | Crucial T705 page footnote https://www.crucial.com/ssd/t705/ct2000t705ssd3 ; CDRLabs 1.41M @16×32 https://www.cdrlabs.com/reviews/crucial-t705-2tb-pcie-gen5-nvme-solid-state-drive/performance-anvil-s-storage-utilities-and-iometer.html  | medium                      |
+| `apple-ssd-m3-m4-max-1tb`                              | 1e12                 | 6.4e9                                         | 68e-6 (from QD1 ≈ 60 MB/s)                                                                 | 2.5e5 @ 64 (derived)                                                                                                 | 4096  | AmorphousDiskMark crowd medians (115 runs; `kind 'community'`) https://www.reddit.com/r/mac/comments/1rpsc1n/mac_ssd_speeds_overview_updated_with_m5_promax/ ; Apple ≥ 6 GiB/s linear (arXiv 2312.11514 §2)                                 | medium                      |
+| `apple-ssd-m5-pro-max`                                 | 2e12                 | 13.1e9                                        | 65e-6 (derived)                                                                            | 2.7e5 @ 64 (derived)                                                                                                 | 4096  | same dataset, n = 1–3                                                                                                                                                                                                                       | low                         |
+| `dgx-spark-ssd-4tb`                                    | 4e12                 | 12.2e9 (11.4 GiB/s GDSIO peak)                | 50e-6 (**est.**: Gen5 2242 class, between the 990 Pro's 45 µs and the Apple drives' 65 µs) | 1.5e6 @ 32×16 (**est.**: between the 990 PRO 1.4e6 and the 9100 PRO 2.2e6; StorageReview published no random figure) | 4096  | StorageReview https://www.storagereview.com/review/nvidia-dgx-spark-review-the-ai-appliance-bringing-datacenter-capabilities-to-desktops ; NVIDIA https://docs.nvidia.com/dgx/dgx-spark/hardware.html ; both random fields in `estimated[]` | medium (seq) / low (random) |
+| `nvme-gen4-x4-generic` (Strix Halo boxes)              | 2e12                 | 7.0e9, `linkBandwidth` 7.88e9                 | 50e-6 (est.)                                                                               | 1.0e6 @ 512 (est.)                                                                                                   | 4096  | Framework Desktop: 2× PCIe 4.0 x4 M.2 https://frame.work/desktop                                                                                                                                                                            | medium                      |
 
 Removed since revision 1: the quad-channel DDR5-6400 preset (no vendor citation for the channel count).
 Host-link presets: `hostPcieLink(generation, lanes)` (`HOST_PCIE_LINKS`, Gen3–5 × x4/x8/x16; Gen4 x16 31.5 GB/s,
@@ -166,7 +165,7 @@ t_path     = α_path + service
   non-offloading ranks. Per tier, a rank is a consumer in a step if its stage holds a group placed on the tier. Which
   stages run concurrently: under `offloadOverlap 'ideal'` every offloading stage can have a prefetch in flight, so
   **all offloading stages** count; under `'none'` a stage only streams while a microbatch occupies it, and `m =
-  min(pp, B_r)` microbatches circulate per replica, so **at most `m` offloading stages** stream at once. Among the
+min(pp, B_r)` microbatches circulate per replica, so **at most `m` offloading stages** stream at once. Among the
   offloading stages the engine takes the **optimistic schedule**: the `min(m, |S_tier|)` stages with the fewest
   consumers on this node (an explicit upper-bound choice; a pessimistic schedule would take the most).
 
@@ -186,6 +185,7 @@ t_path     = α_path + service
   stage ⇒ **2**, stages {0, 1} only ⇒ 2, stage 0 only ⇒ 1; `pp = 4, b = 4, 'none'` ⇒ 4. Tests U-12, U-17.
   **Across nodes** (as built): a stage spanning several nodes takes the largest `n_stream` of its nodes; the tier
   bytes of §2.7 report the fullest node; DP replicas on one node each count their own copy (no shared host copy).
+
 - **Expected values.** `R = M` (expected misses, a real number) and `bytes = M·s`; no `ceil`. Rounding the request
   count would bias the mean over steps; the memory staging buffer (§2.7) uses `ceil(M)` because capacity is not an
   average. `M = 0 ⇒ no TransferOp` (no α, no service, no staging).
@@ -228,12 +228,12 @@ resident, h must be 0"), and with `f = 1` `h` is ignored (M = 0).
 
 **Hit-ratio models** (`hitRatio`, §7.3):
 
-| model | h(f) | when | confidence |
-|---|---|---|---|
-| `uniform` (**default**) | `h = f` | exact for a well-balanced router on random inputs; the honest theoretical choice | exact |
-| `skewed_classic` | `h = f^0.55` | observed LRU locality of 2023–24 MoEs with E ≤ 64 | medium |
-| `skewed_fine_grained` | `h = f^0.2` | 2026 reports on E = 128–512 models | low |
-| `custom` | user `h ∈ [0, 1]` | | — |
+| model                   | h(f)              | when                                                                             | confidence |
+| ----------------------- | ----------------- | -------------------------------------------------------------------------------- | ---------- |
+| `uniform` (**default**) | `h = f`           | exact for a well-balanced router on random inputs; the honest theoretical choice | exact      |
+| `skewed_classic`        | `h = f^0.55`      | observed LRU locality of 2023–24 MoEs with E ≤ 64                                | medium     |
+| `skewed_fine_grained`   | `h = f^0.2`       | 2026 reports on E = 128–512 models                                               | low        |
+| `custom`                | user `h ∈ [0, 1]` |                                                                                  | —          |
 
 Data behind the fits in §5.2. Below `C < k` an LRU thrashes (h ≈ 0); the engine warns when `0 < C < k` and a
 skewed model is chosen.
@@ -242,11 +242,11 @@ skewed model is chosen.
 
 `TransferOp` (§7.1) is emitted by lowering **before** the consuming block, with concrete numbers, **iff `bytes > 0`**:
 
-| group | physical reads `{count, bytes}` | `usefulBytes` (crosses the link) | per step |
-|---|---|---|---|
-| routed experts | `[{ M, W_expert }]` (`M` from §2.4 with the phase's `T`; `W_expert = (gated ? 3 : 2)·h·fe·bpe(w_routed)/etp`, `gemmWeightBytes` incl. 2:4 metadata) | `M·W_expert` | expected value |
-| dense layer | `[{ 1, W_layer }]` (`blockResidentWeightBytes` of the layer's blocks; a layer in the range streams whole: no expert or table transfer on top) | `W_layer` | every step |
-| lookup table | per §2.10's scale layout, with **`valueBytes = d·elementBits/8`** (Engram 256 B, PLE 320 B) and **`scaleBytes = d·blockScaleBitsPerElem/8`** (Engram `256·0.25/8 = 8 B`, PLE 0); the logical row is `rowBytes = d·bytesPerElement(format) = valueBytes + scaleBytes` (Engram 264 B, counted **once**); rows per device `R = T·g/tp` (the table is row-parallel; `T·g` at tp 1): `interleaved` `[{ R, rowBytes }]`; `separate` `[{ R, valueBytes }, { R, scaleBytes }]`; `pinned_host` `[{ R, valueBytes }]` on the table's tier (the scale read comes from RAM and is not costed) | `R·rowBytes` (Engram 6,336 B per 24-row step, PLE 5,120 B per 16-row step at tp 1, whatever the layout) | §2.10 |
+| group          | physical reads `{count, bytes}`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | `usefulBytes` (crosses the link)                                                                        | per step       |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------- |
+| routed experts | `[{ M, W_expert }]` (`M` from §2.4 with the phase's `T`; `W_expert = (gated ? 3 : 2)·h·fe·bpe(w_routed)/etp`, `gemmWeightBytes` incl. 2:4 metadata)                                                                                                                                                                                                                                                                                                                                                                                                                               | `M·W_expert`                                                                                            | expected value |
+| dense layer    | `[{ 1, W_layer }]` (`blockResidentWeightBytes` of the layer's blocks; a layer in the range streams whole: no expert or table transfer on top)                                                                                                                                                                                                                                                                                                                                                                                                                                     | `W_layer`                                                                                               | every step     |
+| lookup table   | per §2.10's scale layout, with **`valueBytes = d·elementBits/8`** (Engram 256 B, PLE 320 B) and **`scaleBytes = d·blockScaleBitsPerElem/8`** (Engram `256·0.25/8 = 8 B`, PLE 0); the logical row is `rowBytes = d·bytesPerElement(format) = valueBytes + scaleBytes` (Engram 264 B, counted **once**); rows per device `R = T·g/tp` (the table is row-parallel; `T·g` at tp 1): `interleaved` `[{ R, rowBytes }]`; `separate` `[{ R, valueBytes }, { R, scaleBytes }]`; `pinned_host` `[{ R, valueBytes }]` on the table's tier (the scale read comes from RAM and is not costed) | `R·rowBytes` (Engram 6,336 B per 24-row step, PLE 5,120 B per 16-row step at tp 1, whatever the layout) | §2.10          |
 
 Op time (`opTime.ts`, new `case 'transfer'`): `t_path` of §2.3; result fields `transferLatencySec = α_path`,
 `transferBandwidthSec = service`, `sec = sum`, `bound: 'transfer'`, FLOP 0, HBM bytes 0.
@@ -346,9 +346,9 @@ mapper (`qwen.ts:90, 101`, `pleLayers.includes(i + 1)`) is correct. DeepSeek `en
     the trigger button would nest buttons); the memory card draws the table as its
     own hatched segment of the device bar labelled "n-gram table 102.4 GB"; the model summary lists "n-gram tables
     51.2 B" as a parameter line. Clicking the chip or the hatched segment sets Host RAM (one click, no prose; the
-    "?" explains). This is a *hint state* of the picker, not a different default: the simulator still runs at
+    "?" explains). This is a _hint state_ of the picker, not a different default: the simulator still runs at
     `'device'` until the click.
-- Q1: should the UI *start* these models at Host RAM? (As built: no; the hint state above, §9.)
+- Q1: should the UI _start_ these models at Host RAM? (As built: no; the hint state above, §9.)
 
 **Cost per step** (§2.3 with the read classes of §2.5 per table: `rowBytes = d·bytesPerElement(lookup)` is the whole
 logical row — 264 B for mxfp8 Engram since `bpe(mxfp8) = 1.03125` already carries the ue8m0 scales, 320 B for bf16 PLE —
@@ -359,6 +359,7 @@ split once into `valueBytes` 256 / 320 and `scaleBytes` 8 / 0; never add the sca
 usefulBytes/B_link)`; unified + SSD: no link terms.
 **Scale layout** (`lookupTables.scaleLayout`, concrete defaults, Engram only; PLE has no scales): the checkpoint stores
 the F8_E8M0 scales as a separate tensor (`embed.scale [rows, 8]`), so
+
 - **`'separate'` (default for `host_ram`)**: two physical reads per row on the same tier (`256 B` value, `8 B` scale);
   on DDR5 that is 4 + 1 cache lines = 320 B of tier bytes, the same as one 320 B read, so the DDR5 numbers of W4 do not
   depend on the layout; useful bytes stay 264 B/row;
@@ -367,9 +368,9 @@ the F8_E8M0 scales as a separate tensor (`embed.scale [rows, 8]`), so
   6,144,182,800 B for both tables) and the 8 B RAM read per row is not costed (< 0.1% of the page read);
 - **`'interleaved'`**: one 264 B read per row (a deployment that repacked the table); `requestsPerRow` of revision 2 is
   replaced by this field.
-Test U-16 checks tier bytes and PCIe bytes separately for all three layouts.
-Prefetch: `offloadOverlap` as for experts (ids known at step start; prefill knows all `P·g` rows up front). Decode is
-latency-bound (one `α` per table per step), prefill IOPS-bound on NVMe and link-bound on DDR5 (W3/W4).
+  Test U-16 checks tier bytes and PCIe bytes separately for all three layouts.
+  Prefetch: `offloadOverlap` as for experts (ids known at step start; prefill knows all `P·g` rows up front). Decode is
+  latency-bound (one `α` per table per step), prefill IOPS-bound on NVMe and link-bound on DDR5 (W3/W4).
 
 **Memory fit**: the table shard `ceil(rows/tp)·d·bpe(lookup)` per device counts against its tier (summed over the
 node's devices for the host tiers); projections, gate vectors and conv taps stay in `W_s`.
@@ -380,11 +381,11 @@ node's devices for the host tiers); projections, gate vectors and conv taps stay
 
 ### 3.1 Methods (primary sources)
 
-| method | drafter | draft passes per step | verify | own KV | sources |
-|---|---|---|---|---|---|
-| **MTP** (DeepSeek-V3/V4, GLM-4.5+, Qwen3-Next/3.5+/3.8, MiMo) | the checkpoint's `num_nextn_predict_layers` / `mtp_num_hidden_layers` module(s): shared embedding, `eh_proj` (2h → h) over `[norm(h_prev); norm(emb(token))]`, one target-shaped decoder layer, shared LM head | **k sequential** passes (each: 1 layer + head) | chain of k+1 | 1 layer, full context, per module | DeepSeek-V3 arXiv 2412.19437 §2.2; Qwen3.8-27B card ("MTP trained with multiple steps") |
-| **DFlash 2** (Inco AI / z-lab) | separate Qwen3-architecture drafter read from its own `config.json`; per `dflash/model.py`: `fc` (`len(target_layer_ids)·h → h`) + `hidden_norm` over the **newly committed tokens'** target features; each layer: q/k/v/o projections, q/k RMSNorm, gated MLP, with `k_proj`/`v_proj` applied to **both** the context features (`k_ctx`/`v_ctx`, appended to the draft cache) and the block hidden states; **two `GroupedDynamicCausalConv`** per layer (before attention and before the MLP), each a `kernel_projection` GEMM `h → 2·K·(h/g)` plus a 2-tap grouped conv; a `CandidateSelector` with two `V×r` codebooks and one `h → r` projection; shared frozen embedding and LM head; non-causal block attention with a sliding window | **1 parallel** pass over the block (anchor + k masks) + the selector's sequential walk over precomputed scores | chain of k+1 | per layer `2·KV·hd` elems/token over the window | https://github.com/z-lab/dflash/blob/main/dflash/model.py (`Qwen3DFlashAttention.forward`, `GroupedDynamicCausalConv`, `CandidateSelector`, `DFlashDraftModel.__init__`); config https://huggingface.co/incoai/Qwen3.8-27B-DFlash2/blob/main/config.json ; blog https://inco.ai/blog/dflash2/ (no paper) |
-| **DSpark** (PKU + DeepSeek) | DFlash-style parallel backbone (same `fc`, KV injection, shared embed/head; config `Qwen3DSparkModel`) **+ Markov head** `B(x_{j−1},·) = W1[x_{j−1}]·W2` (`markov_rank` 256, `V×r` and `r×V`) adding a prefix-dependent bias to the block logits, sampled left to right, **+ confidence head** (`enable_confidence_head`) driving a per-request verify length; DeepSeek-V4 production: 3 MoE layers under `mtp.*`, window 128 | 1 parallel pass + k sequential Markov steps | chain, ≤ k+1 per request | as DFlash (full attention in the released Qwen3 drafters; window 128 on V4) | arXiv 2607.05147 §3.1–3.2; config https://huggingface.co/deepseek-ai/dspark_qwen3_8b_block7/blob/main/config.json ; https://github.com/deepseek-ai/DeepSpec |
+| method                                                        | drafter                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | draft passes per step                                                                                          | verify                   | own KV                                                                      | sources                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------ | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **MTP** (DeepSeek-V3/V4, GLM-4.5+, Qwen3-Next/3.5+/3.8, MiMo) | the checkpoint's `num_nextn_predict_layers` / `mtp_num_hidden_layers` module(s): shared embedding, `eh_proj` (2h → h) over `[norm(h_prev); norm(emb(token))]`, one target-shaped decoder layer, shared LM head                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | **k sequential** passes (each: 1 layer + head)                                                                 | chain of k+1             | 1 layer, full context, per module                                           | DeepSeek-V3 arXiv 2412.19437 §2.2; Qwen3.8-27B card ("MTP trained with multiple steps")                                                                                                                                                                                                                  |
+| **DFlash 2** (Inco AI / z-lab)                                | separate Qwen3-architecture drafter read from its own `config.json`; per `dflash/model.py`: `fc` (`len(target_layer_ids)·h → h`) + `hidden_norm` over the **newly committed tokens'** target features; each layer: q/k/v/o projections, q/k RMSNorm, gated MLP, with `k_proj`/`v_proj` applied to **both** the context features (`k_ctx`/`v_ctx`, appended to the draft cache) and the block hidden states; **two `GroupedDynamicCausalConv`** per layer (before attention and before the MLP), each a `kernel_projection` GEMM `h → 2·K·(h/g)` plus a 2-tap grouped conv; a `CandidateSelector` with two `V×r` codebooks and one `h → r` projection; shared frozen embedding and LM head; non-causal block attention with a sliding window | **1 parallel** pass over the block (anchor + k masks) + the selector's sequential walk over precomputed scores | chain of k+1             | per layer `2·KV·hd` elems/token over the window                             | https://github.com/z-lab/dflash/blob/main/dflash/model.py (`Qwen3DFlashAttention.forward`, `GroupedDynamicCausalConv`, `CandidateSelector`, `DFlashDraftModel.__init__`); config https://huggingface.co/incoai/Qwen3.8-27B-DFlash2/blob/main/config.json ; blog https://inco.ai/blog/dflash2/ (no paper) |
+| **DSpark** (PKU + DeepSeek)                                   | DFlash-style parallel backbone (same `fc`, KV injection, shared embed/head; config `Qwen3DSparkModel`) **+ Markov head** `B(x_{j−1},·) = W1[x_{j−1}]·W2` (`markov_rank` 256, `V×r` and `r×V`) adding a prefix-dependent bias to the block logits, sampled left to right, **+ confidence head** (`enable_confidence_head`) driving a per-request verify length; DeepSeek-V4 production: 3 MoE layers under `mtp.*`, window 128                                                                                                                                                                                                                                                                                                               | 1 parallel pass + k sequential Markov steps                                                                    | chain, ≤ k+1 per request | as DFlash (full attention in the released Qwen3 drafters; window 128 on V4) | arXiv 2607.05147 §3.1–3.2; config https://huggingface.co/deepseek-ai/dspark_qwen3_8b_block7/blob/main/config.json ; https://github.com/deepseek-ai/DeepSpec                                                                                                                                              |
 
 Released drafter shapes (config.json, R): `incoai/Qwen3.8-27B-DFlash2`: 5 layers, h 5120, FFN 17408, 32 q / 8 kv
 heads, hd 128, all `sliding_attention` window 2048, `is_causal false`, `target_layer_ids [5, 19, 33, 47, 61]` of 64,
@@ -461,8 +462,8 @@ rolling state; transient memory `(k+1)·state_s` per sequence on the stage (`Dev
 Test U-14.
 
 **Draft**, appended to the last stage as layers `draft.<i>` (by `simulate.ts: withDraftLayers` after lowering, not
-by `lowerModel`, to avoid an import cycle; so stage sums, overlap and collectives need no new rule *within one
-stage*; PP > 1 is rejected, §3.6):
+by `lowerModel`, to avoid an import cycle; so stage sums, overlap and collectives need no new rule _within one
+stage_; PP > 1 is rejected, §3.6):
 
 - **MTP, catch-up pass + k−1 recursive passes.** The module keeps its own KV cache over the committed history, so each
   step it must first **advance that cache by the `τ` positions the target committed** (the accepted drafts plus the
@@ -471,17 +472,17 @@ stage*; PP > 1 is rejected, §3.6):
   embeddings; the output at the last position is the first draft token. Per step:
   1. **catch-up pass** (`qLen = m_ctx`): `embed` (`b·m_ctx` rows) → `norm_h`, `norm_e` (`b·m_ctx·h` each) → `eh_proj`
      GEMM (m `b·m_ctx`, n h, k 2h; module `attention`) → the module's layer(s) in decode context `qLen m_ctx, kvLen N +
-     k + 1` (causal over `past = N + k + 1 − m_ctx`; KV write of `m_ctx` tokens, the default `kvWriteTokens = qLen`;
+k + 1` (causal over `past = N + k + 1 − m_ctx`; KV write of `m_ctx` tokens, the default `kvWriteTokens = qLen`;
      hybrids: `stateSnapshots` default 1, since only the final state is kept) → `final_norm` and `lm_head` over the
      **last position only** (m b): the earlier positions' logits are not needed.
   2. **passes 2..k** (`qLen = 1` each): the same ops with one row, `kvLen` growing by one per pass (documented
      simplification: `N + k + 1` for all), producing draft tokens 2..k.
   3. **Tentative rows.** The KV rows the module wrote for draft positions (k−1 recursive passes, plus the catch-up
-     rows beyond the accepted prefix of the *previous* step) are **overwritten** by the next step's catch-up pass (the
+     rows beyond the accepted prefix of the _previous_ step) are **overwritten** by the next step's catch-up pass (the
      cache is cropped to the committed length, as `_crop_to` does for the block drafter); nothing is charged back.
-  The shared embedding and LM head are the target's: on the same device (pp = 1) they cost no extra memory and are
-  read once per pass (once-per-op). For k = 1 the step is exactly one pass of `qLen = m_ctx` (W2). With several MTP
-  modules (L > 1) the passes run as a chain: pass p uses module min(p, L).
+     The shared embedding and LM head are the target's: on the same device (pp = 1) they cost no extra memory and are
+     read once per pass (once-per-op). For k = 1 the step is exactly one pass of `qLen = m_ctx` (W2). With several MTP
+     modules (L > 1) the passes run as a chain: pass p uses module min(p, L).
 - **Block drafter (DFlash 2 / DSpark), one pass** over `B` block rows per sequence: DFlash 2 `B = k + 1` (anchor + k
   masks), DSpark `B = k` (anchor + k − 1 masks; §3.2 `blockSize`). Below, `k+1` stands for `B`:
   1. `draft.fc` GEMM (m `b·m_ctx`, n h, k `|targetLayerIds|·h`) + `draft.hidden_norm` (RMSNorm over `b·m_ctx·h`).
@@ -491,7 +492,7 @@ stage*; PP > 1 is rejected, §3.6):
      `q_proj` (m `b·(k+1)`, n `H·hd`, k h); `k_proj` and `v_proj` each as **one GEMM with m = `b·(m_ctx + k + 1)`**
      (applied to the context features and the block, weights read once, as in the code's two calls); `qk_norm`
      over `(k+1)·H + (m_ctx + k + 1)·KV` heads; `rope`; `attn.core`: `seqs b, heads H, kvHeads KV, qLen k+1, kvLen
-     min(N, W) + m_ctx + k + 1, causal false, kvSelection window W` (or full), `kvRead` `2·KV·hd` per key,
+min(N, W) + m_ctx + k + 1, causal false, kvSelection window W` (or full), `kvRead` `2·KV·hd` per key,
      **`kvWriteTokens = m_ctx`** (only the context K/V stay in the cache; new optional `AttentionOp` field, default
      `qLen`); DFlash 2: `attn_conv` `finish` elementwise (`4·K` FLOP/elem: base and dynamic taps are applied in both
      prepare and finish); `o_proj`; residual; `post_norm`; DFlash 2:
@@ -504,12 +505,12 @@ stage*; PP > 1 is rejected, §3.6):
      (`fn 'candidate_score'`) over `b·k·16·r` (2 FLOP/elem). Sequential walk: not costed.
   6. DSpark Markov head: `k` GEMMs `markov.W2` (m b, n V, k r), each preceded by an `EmbeddingOp` of b rows of r
      (`W1[x_{j−1}]`) and followed by an elementwise add over `b·V`; the confidence head is not costed.
-  **DeepSeek-V4.1 MoE drafter** (`moeLayers`, approximation): the context rows are added to the m of the CSA `wkv`
-  GEMM, the attention runs non-causally with `kvWriteTokens = m_ctx`, and the context rows' kv norm / RoPE are not
-  added.
-  All quantization follows `QuantConfig` through the module classes (`attention` for q/k/v/o and `fc`, `dense_mlp`
-  for the MLP, `lmHead` for the shared head, `embeddings` for codebooks and `W1`/`W2`, `residual_mixer` for the
-  conv kernel projections) — the drafters ship bf16; there is no draft-specific quant override (Q6, decided: none).
+     **DeepSeek-V4.1 MoE drafter** (`moeLayers`, approximation): the context rows are added to the m of the CSA `wkv`
+     GEMM, the attention runs non-causally with `kvWriteTokens = m_ctx`, and the context rows' kv norm / RoPE are not
+     added.
+     All quantization follows `QuantConfig` through the module classes (`attention` for q/k/v/o and `fc`, `dense_mlp`
+     for the MLP, `lmHead` for the shared head, `embeddings` for codebooks and `W1`/`W2`, `residual_mixer` for the
+     conv kernel projections) — the drafters ship bf16; there is no draft-specific quant override (Q6, decided: none).
 
 **Draft memory** (last stage; `blockResidentWeightBytes` over the draft layers + `fc`/`eh_proj` + conv kernels and
 projections + selector codebooks and projection + `W1`/`W2`; the shared embedding and LM head are **not** counted
@@ -610,7 +611,7 @@ with `includeDraft: true` (default false). Transfer time enters `xfer_s` of the 
 
 ## 4. Interconnect-latency audit
 
-### 4.1 Where α is applied today (verified), per crossing
+### 4.1 Historical audit: where α was applied before the corrections (verified), per crossing
 
 Convention for this section and for every new cost above: the engine counts **logical messages** per layer and per
 step; the per-message α and β (hop count, ring/tree/direct algorithm, host bounce, fabric shape) are whatever the cost
@@ -618,17 +619,17 @@ functions in `engine/collectives.ts` return for the group's `CollectivePath`. No
 the parallel fabric-shape task ([`#specmaxx`](`ref://task:01a1bb67-ba01-75d8-ba32-559c0e8f81a4`)) changes those
 functions, not these counts. The offload `TransferOp` is the one cost that does not go through them (host link, §2.3).
 
-| crossing | α applied at | per layer | per decode step | with spec-dec | gap |
-|---|---|---|---|---|---|
-| TP all-reduce (mixer, FFN, embed, n-gram) | `collectives.ts:82-99` (`2(n−1)α` ring / `2⌈log2 n⌉α` tree) via `tpAllReduce` `lower/common.ts:344-360` | 2 (+1 per n-gram block) | `2L + 1` | `+ k·(2·L_draft + 1)` MTP / `+ 2·L_draft + 1` block | **G7** `'best'` picks ring/tree by `totalSec` (`:116-118`), not by exposed α under `'ideal'` |
-| LM-head logits / sampling exchange | **none** (`head.ts:3-5` "treated as free") | — | 0 (should be ≥ 1 all-gather of top-k scalars when tp > 1) | ×(1 + passes) | **G1** |
-| EP all-to-all (mode B: dispatch + combine) | `:148-155` one α flat; `:228-242` `α_inter` only hierarchical | 2 | `2·L_moe` | `+ 2·L_moe,draft` | **G3** hierarchical drops `α_intra` (wrong with host-bounce intra, α_eff 13 µs); **G4** flat one α assumes a non-blocking fabric |
-| PP send/recv forward | `:158-162` `α + S/B`; `pipeline.ts:118-119, 125, 139` | — | `pp − 1` | same, `k+1` rows | **G5** the send's α/β are not in `StageResult.commLatencySec/commBandwidthSec` ⇒ no phase-level α total |
-| PP loop-back (sampled token → stage 0) | **none** (`lower/lower.ts:83-97`) | — | 0 (should be 1) | 1 (`k+1` ids) | **G2** |
-| PP host-bounce send β | `collectives.ts:258` `nActive = 1` | — | — | — | **G8** `tp·dp` ranks share one host |
-| DP | no collectives (model doc §5) | 0 | 0 | 0 | none |
-| cross-stage cross-layer data | **none**, warning (`simulate.ts:56-76`) | — | 0 | — | **G6** (out of scope) |
-| offload transfer | new `TransferOp` (§2.3): `α_tier + α_link` once per layer batch | 1 per group | `L_off` | `+ L_off,draft` | — (own fields) |
+| crossing                                   | α applied at                                                                                            | per layer               | per decode step                                           | with spec-dec                                       | gap                                                                                                                              |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------- | ----------------------- | --------------------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| TP all-reduce (mixer, FFN, embed, n-gram)  | `collectives.ts:82-99` (`2(n−1)α` ring / `2⌈log2 n⌉α` tree) via `tpAllReduce` `lower/common.ts:344-360` | 2 (+1 per n-gram block) | `2L + 1`                                                  | `+ k·(2·L_draft + 1)` MTP / `+ 2·L_draft + 1` block | **G7** `'best'` picks ring/tree by `totalSec` (`:116-118`), not by exposed α under `'ideal'`                                     |
+| LM-head logits / sampling exchange         | **none** (`head.ts:3-5` "treated as free")                                                              | —                       | 0 (should be ≥ 1 all-gather of top-k scalars when tp > 1) | ×(1 + passes)                                       | **G1**                                                                                                                           |
+| EP all-to-all (mode B: dispatch + combine) | `:148-155` one α flat; `:228-242` `α_inter` only hierarchical                                           | 2                       | `2·L_moe`                                                 | `+ 2·L_moe,draft`                                   | **G3** hierarchical drops `α_intra` (wrong with host-bounce intra, α_eff 13 µs); **G4** flat one α assumes a non-blocking fabric |
+| PP send/recv forward                       | `:158-162` `α + S/B`; `pipeline.ts:118-119, 125, 139`                                                   | —                       | `pp − 1`                                                  | same, `k+1` rows                                    | **G5** the send's α/β are not in `StageResult.commLatencySec/commBandwidthSec` ⇒ no phase-level α total                          |
+| PP loop-back (sampled token → stage 0)     | **none** (`lower/lower.ts:83-97`)                                                                       | —                       | 0 (should be 1)                                           | 1 (`k+1` ids)                                       | **G2**                                                                                                                           |
+| PP host-bounce send β                      | `collectives.ts:258` `nActive = 1`                                                                      | —                       | —                                                         | —                                                   | **G8** `tp·dp` ranks share one host                                                                                              |
+| DP                                         | no collectives (model doc §5)                                                                           | 0                       | 0                                                         | 0                                                   | none                                                                                                                             |
+| cross-stage cross-layer data               | **none**, warning (`simulate.ts:56-76`)                                                                 | —                       | 0                                                         | —                                                   | **G6** (out of scope)                                                                                                            |
+| offload transfer                           | new `TransferOp` (§2.3): `α_tier + α_link` once per layer batch                                         | 1 per group             | `L_off`                                                   | `+ L_off,draft`                                     | — (own fields)                                                                                                                   |
 
 ### 4.2 In this feature (display-only): the latency vs bandwidth split
 
@@ -643,25 +644,101 @@ puts **"draft"** (the `draft.*` layers) and **"verify"** (the rest of a spec-dec
 their per-layer rows. `Bound` becomes `'compute' | 'memory' | 'comm' | 'transfer'`. This closes G5 for display without
 changing any rate.
 
-### 4.3 Follow-up task "latency-audit corrections" (behaviour-changing, updates the goldens)
+### 4.3 Implemented latency-audit corrections (behaviour-changing, goldens updated)
 
-Note: the implementation task now also waits for the fabric-shape task
-([`#specmaxx`](`ref://task:01a1bb67-ba01-75d8-ba32-559c0e8f81a4`)); G3's `α_intra` and G4's multi-hop all-to-all
-may be **subsumed** by its per-hop costs, in which case the follow-up only verifies them.
+All of G1–G4, G7, G8 are applied, per the user's §9.7 decision. G6 is excluded. The table below preserves the
+**pre-implementation expected deltas**; measurements and corrections to its estimates follow it. Fixes were
+applied in order G1, G2, G3, G4, G7, G8, with `UPDATE_DEPLOYMENT_IDENTITY=1` regeneration and a JSON diff
+against the previous snapshot after each. No memory leaf or warning changed. "G-x" means a §8.3 golden ID.
 
-Each fix below changes results with every knob off. They are **not** in this feature; the follow-up applies them
-together, regenerates the goldens of §8.3 deliberately, and records the deltas. Expected deltas (per fix, derived
-from the formulas; "G-x" refers to the golden rows of §8.3):
+| fix                                 | change                                                                                                                                                                 | Δ per step (formula)                                                                          | numeric example                                                                                                                                                                                     |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1 sampling exchange                | after `lm_head`, one `all_gather(tp)` of `Tout·tp·8 B` per forward                                                                                                     | `+ (n−1)·α_eff` (flat ring) or `+ AG_inter + AG_intra` α (hierarchical) per step, both phases | G-b (tp 4, α 1 µs): decode `4.12076 ms → +3 µs` (−0.07%); G-i (tp 16 hierarchical, 8×2): `+ (1·5 + 7·1) = +12 µs` on 2.91067 ms (−0.41%); 4× M3 Ultra TB5 (α 50 µs): `+150 µs` on ≈ 19.3 ms (−0.8%) |
+| G2 decode loop-back                 | `send_recv` of `b·(k+1)·4 B` last → first stage, added to `Σ p2p` on the decode latency path                                                                           | `+ α_p2p + 4·b·(k+1)/B` per decode cycle (pp > 1)                                             | G-c (pp 2 intra): `8.41923 ms → +1.0 µs` (−0.01%); G-g (pp 2 inter α 5 µs): `2.43508 ms → +5 µs` (−0.21%); TB5 pp 4: `+50 µs`                                                                       |
+| G3 hierarchical a2a α               | `max(α_intra,eff, α_inter,eff)` instead of `α_inter`                                                                                                                   | `+ max(0, α_intra,eff − α_inter)` per all-to-all (2 per mode-B MoE layer)                     | SYNTH_CLUSTER (1 µs < 5 µs): 0; host-bounce PCIe box (13 µs) + IB (1 µs): `+12 µs` per a2a                                                                                                          |
+| G4 flat a2a on non-switched fabrics | per-hop α for ring / chain / host-bounce all-to-all (likely delivered by the fabric-shape task's `collectives.ts` changes; otherwise `(n−1)·α` on `host_bounce` links) | `+ (hops − 1)·α` per a2a                                                                      | G-e (ep 2): 0; ep 4 ring α 1.5 µs: `+3 µs` per a2a                                                                                                                                                  |
+| G7 overlap-aware `'best'`           | under `overlap 'ideal'` pick by exposed α when β hides                                                                                                                 | `− (2(n−1) − 2⌈log2 n⌉)·α` per all-reduce where ring was chosen by total                      | G-b prefill (ring chosen for S 33.5 MB): `−2 µs × 73 = −146 µs` on 180.2 ms (+0.08%); decode at b 1 already picks tree (no change)                                                                  |
+| G8 host-bounce send β               | `nActive = min(devicesPerNode, tp·dp)` for `send_recv`                                                                                                                 | `β_p2p × min(B, hostBW/2) / min(B, hostBW/(2·tp·dp))`                                         | SYNTH_CLUSTER (direct NVLink): 0; host-bounce Gen5 box tp 2: send β `×2` (48 → 24 GB/s cap)                                                                                                         |
+| G6                                  | out of scope                                                                                                                                                           | —                                                                                             | —                                                                                                                                                                                                   |
 
-| fix | change | Δ per step (formula) | numeric example |
-|---|---|---|---|
-| G1 sampling exchange | after `lm_head`, one `all_gather(tp)` of `Tout·tp·8 B` per forward | `+ (n−1)·α_eff` (flat ring) or `+ AG_inter + AG_intra` α (hierarchical) per step, both phases | G-b (tp 4, α 1 µs): decode `4.12076 ms → +3 µs` (−0.07%); G-i (tp 16 hierarchical, 8×2): `+ (1·5 + 7·1) = +12 µs` on 2.91067 ms (−0.41%); 4× M3 Ultra TB5 (α 50 µs): `+150 µs` on ≈ 19.3 ms (−0.8%) |
-| G2 decode loop-back | `send_recv` of `b·(k+1)·4 B` last → first stage, added to `Σ p2p` on the decode latency path | `+ α_p2p + 4·b·(k+1)/B` per decode cycle (pp > 1) | G-c (pp 2 intra): `8.41923 ms → +1.0 µs` (−0.01%); G-g (pp 2 inter α 5 µs): `2.43508 ms → +5 µs` (−0.21%); TB5 pp 4: `+50 µs` |
-| G3 hierarchical a2a α | `max(α_intra,eff, α_inter,eff)` instead of `α_inter` | `+ max(0, α_intra,eff − α_inter)` per all-to-all (2 per mode-B MoE layer) | SYNTH_CLUSTER (1 µs < 5 µs): 0; host-bounce PCIe box (13 µs) + IB (1 µs): `+12 µs` per a2a |
-| G4 flat a2a on non-switched fabrics | per-hop α for ring / chain / host-bounce all-to-all (likely delivered by the fabric-shape task's `collectives.ts` changes; otherwise `(n−1)·α` on `host_bounce` links) | `+ (hops − 1)·α` per a2a | G-e (ep 2): 0; ep 4 ring α 1.5 µs: `+3 µs` per a2a |
-| G7 overlap-aware `'best'` | under `overlap 'ideal'` pick by exposed α when β hides | `− (2(n−1) − 2⌈log2 n⌉)·α` per all-reduce where ring was chosen by total | G-b prefill (ring chosen for S 33.5 MB): `−2 µs × 73 = −146 µs` on 180.2 ms (+0.08%); decode at b 1 already picks tree (no change) |
-| G8 host-bounce send β | `nActive = min(devicesPerNode, tp·dp)` for `send_recv` | `β_p2p × min(B, hostBW/2) / min(B, hostBW/(2·tp·dp))` | SYNTH_CLUSTER (direct NVLink): 0; host-bounce Gen5 box tp 2: send β `×2` (48 → 24 GB/s cap) |
-| G6 | out of scope | — | — |
+#### Implementation and subsumption findings
+
+- **G1**: `src/sim/lower/head.ts: samplingExchangeOps` is used after target `lowerHead` and draft
+  `draft.ts: sharedLmHeadOps` forwards (MTP prefill/decode and block decode); no head means no exchange.
+  It applies with or without a final norm. Full logits are not gathered.
+- **G2**: `lower/lower.ts: lowerModel` emits `sendToFirst`; `engine/placement.ts: ppSendPath` resolves
+  last-stage → stage-0 endpoints; `engine/pipeline.ts: phaseResult, phaseComm` adds return α+β exactly once
+  under both overlap modes and return β as a link resource. `PhaseResult.loopBack` exposes its op cost.
+  Spec-dec × PP remains rejected; the lowerer nevertheless uses qLen = k+1.
+- **G3 not subsumed**: `collectives.ts: hierarchicalAllToAllSec` still used only inter-node α, including
+  oversubscribed paths. It now retains the larger effective intra/inter α. The regression proves 13 vs 1 µs
+  becomes 13 µs (+12 µs) with unchanged β.
+- **G4 partially subsumed**: `fabricCollectives.ts: fabricAllToAllSec` already charges
+  `lat(maxHops) = hops·α + (hops−1)·α_f` on ring/chain paths; tests verify this without another multiplier.
+  Ring4 has 2 shortest-path hops: at α 1.5 µs its increase over one-α is **1.5 µs**, not the table's 3 µs.
+  Chain4 has 3 hops and gives the estimated +3 µs. Flat host-bounce was not covered:
+  `collectives.ts: collectiveTime` now uses n−1 serialized peer rounds, so n4 α_eff 13 µs costs 39 µs
+  (+26 µs); n2 stays unchanged.
+- **G7**: `engine/simulate.ts: simulatePhase` compares three assignments by exact core stage score
+  `Σα + max(compute, Σβ)`: per-op min-total (mesh-direct included), uniform ring, uniform tree.
+  This bounded heuristic preserves explicit algorithms and no-overlap behavior and never worsens that core
+  score, but does not search all mixed assignments or optimize against the offload-transfer floor.
+- **G8**: `placement.ts: ppSendPath` sets `sendActiveDevices = min(devicesPerNode, tp·dp)` on host-bounce
+  paths; flat and fabric costs consume it. Tests cover TP, DP, node clamping and return β.
+- Formulas/code cross-links: `docs/simulation-model.md` §5 (head/PP), §6 (collectives/host bounce), §7
+  (stage selection/pipeline). Regression suites: `lower/head.test.ts`, `lower/draft.test.ts`, `engine/collectivesAudit.test.ts`,
+  `engine/latencyAudit.test.ts`. Each newly fixed regression failed on the preceding implementation,
+  then passed with its fix; already-subsumed ring/chain tests passed before editing.
+
+#### Expected versus measured per fix
+
+Times below are microseconds. Differences below 1e-9 µs are floating-point roundoff.
+
+| Fix | Original expected example                            | Measured                                                                | Explanation                                                                                                                                            |
+| --- | ---------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| G1  | G-b decode +3; G-i +12                               | +3; +12                                                                 | Match; β hides under ideal overlap.                                                                                                                    |
+| G2  | G-c decode ≈+1; G-g ≈+5                              | G-c **0**; G-g **+5.00008**                                             | G-c is resource-bound (`m·b` wins), hiding the return. G-g includes 4/50 GB/s β. Original G-c estimate omitted the pipeline max, not a missing return. |
+| G3  | SYNTH_CLUSTER 0; host-bounce 13 vs inter 1 ⇒ +12/a2a | 0 in goldens; +12/a2a unit test                                         | Match.                                                                                                                                                 |
+| G4  | G-e 0; ring4 α1.5 ⇒ +3/a2a                           | G-e 0; ring already +1.5 over one-α; chain already +3; host-bounce4 +26 | Ring/chain subsumed; ring example assumed too many hops. Host-bounce gap fixed here.                                                                   |
+| G7  | G-b prefill −146; decode 0                           | −146; 0                                                                 | Match. G-g also changes −288 cycle / −584 TTFT.                                                                                                        |
+| G8  | Direct links 0; tp2 host-bounce send β ×2            | 0 in goldens; β ×2 (48→24 GB/s), DP2 ×4, node-clamped ×4                | Match; forward and return both share host bandwidth.                                                                                                   |
+
+Every §8.3 row, per-fix measured **Δ decode cycle / prefill cycle / prefill TTFT**, in µs.
+`0` means all three unchanged. Contexts P/N are those in §8.3.
+
+| Golden | G1                  | G2               | G3  | G4  | G7              | G8  |
+| ------ | ------------------- | ---------------- | --- | --- | --------------- | --- |
+| G-a    | 0                   | 0                | 0   | 0   | 0               | 0   |
+| G-b    | +3 / +3 / +3        | 0                | 0   | 0   | 0 / −146 / −146 | 0   |
+| G-c    | +2 / +2 / +2        | 0                | 0   | 0   | 0               | 0   |
+| G-d    | 0                   | 0                | 0   | 0   | 0               | 0   |
+| G-e    | 0                   | 0                | 0   | 0   | 0               | 0   |
+| G-f    | +0.906424 / +2 / +2 | +1.00004 / 0 / 0 | 0   | 0   | 0               | 0   |
+| G-g    | +7 / +7 / +7        | +5.00008 / 0 / 0 | 0   | 0   | 0 / −288 / −584 | 0   |
+| G-i    | +12 / +12 / +12     | 0                | 0   | 0   | 0               | 0   |
+| G-h1   | 0                   | 0                | 0   | 0   | 0               | 0   |
+| G-h2   | 0                   | 0                | 0   | 0   | 0               | 0   |
+
+G1's per-head α is 1 µs in G-c/G-f; the resource term multiplies a stage increase by m = 2.
+G-f decode switches branches, yielding +0.906424 rather than +1 µs. G-g G7 saves 8 µs per AR:
+36 AR on stage 0 save 288 µs (cycle bottleneck), 37 AR on stage 1 save 296 µs.
+With m = 1, TTFT saves their sum 584 µs.
+
+Additional identity variants: G-a/overlap-none stays identical throughout. G-c/overlap-none G1:
+`+2.00016 / 0 / +1.00008` µs; G-f/overlap-none G1: `0 / 0 / +1.00008` µs.
+Their later fixes leave cycle/TTFT unchanged (resource branch wins); return α/β still enters comm.
+
+Changed leaves in the full identity fixture by fix: G1 **1280**, G2 **64**, G3 **0**, G4 **0**,
+G7 **139**, G8 **0**. Snapshots were retained in the implementer's scratchpad per comparison.
+The separate `fabric-identity.json` pin was deliberately regenerated with `UPDATE_FABRIC_IDENTITY=1`:
+96 collective leaves (host-bounce a2a α/total), 1477 simulation leaves, 120 UI leaves, 36 historical
+`uiDeliberate` leaves changed. The last category also compares pre-fabric cabling defaults, so those combined
+deltas are not solely this audit. Example unchanged-cabling deltas: RTX5090 TP2 decode/prefill cycle +13 µs
+(sampling); RTX5090 PP2 decode +13.000083333334 µs (return). Regeneration additionally includes 84 cases
+for the already-existing TB5 TCP link absent from the old pin (no preset values changed). A final regeneration
+after adding draft-head coverage reproduced both knobs-off fixtures exactly.
+The Spark fabric smoke test now expects slightly faster switched prefill (6988 vs ring 6987 tok/s @ 8k):
+G7 can use lower-α tree when β hides; the previous equality assertion is no longer valid.
 
 Magnitude today (audit probe, REF_DENSE_8B bf16 TP4 b 1 @1024): α is 3% of the step on 4× DGX Spark and **76%** on
 4× M3 Ultra over TB5, so G1/G2 matter for TB/USB/Ethernet clusters and are invisible on NVLink.
@@ -677,12 +754,12 @@ Inco's matched retrain, thinking k = 15, ranks DFlash 2 ≈ +0.5 τ above DSpark
 
 ### 5.1 Acceptance α per method × use case (T ≈ 1 sampling, chain)
 
-| method | default k | prose / chat | code (generation) | math | confidence | evidence (τ → α_iid) |
-|---|---|---|---|---|---|---|
-| MTP, multi-step head (Qwen3.5+/3.8, MiMo 3-layer, FastMTP-style) | 3 | **0.75** | **0.82** | **0.85** | medium (prose, math); low (code: .78–.93) | Qwen3.8-27B card k=7 T=1 xhigh: MT-Bench 3.74 / HumanEval 3.91, MBPP 3.99 / GSM8K 5.02, MATH 4.72 → .76 / .78–.79 / .84–.86 https://huggingface.co/incoai/Qwen3.8-27B-DFlash2 ; Qwen3.5-4B blog k=15: .75 / .76–.80 / .80–.81 https://inco.ai/blog/dflash2/ ; llama.cpp PR 27210 Qwen3.8-27B greedy k=3: prose 2.7 (.74), code 3.4 (.89), reasoning 2.5 (.69) https://github.com/ggml-org/llama.cpp/pull/27210 ; PR 22673 k=3: .76–.93 https://github.com/ggml-org/llama.cpp/pull/22673 |
-| MTP, single-step head (DeepSeek-V3/R1/V4 `num_nextn_predict_layers 1`, GLM-4.5/5) | 1 | **0.85** | 0.85 (I) | 0.87 (I) | high for k=1 overall; low per use case | DeepSeek-V3 report §5.4.3: 85–90% "across various generation topics" (R) https://arxiv.org/abs/2412.19437 ; FastMTP Table 1 MiMo vanilla K=1: MT 1.72 / code 1.73 / math 1.83 → .72/.73/.83 https://arxiv.org/abs/2509.18362 ; SGLang #3582 "~1.9 accept length for 2 draft tokens" (k ambiguous) https://github.com/sgl-project/sglang/pull/3582 ; k ≥ 2 tail α₂ ≈ 0.10 (vanilla) – 0.55 (fine-tuned) |
-| DFlash 2 | 7 (block 8); 15 for block-16 drafters | **0.79** | **0.83** | **0.87** | medium | Qwen3.8-27B card k=7: MT 4.10 / HE 4.39, MBPP 4.79 / GSM8K 5.46, MATH 5.28 → .80 / .82–.85 / .88–.89; Muse-Glimmer-30B card k=15: .78 / .82–.83 / .86 https://huggingface.co/incoai/Muse-Glimmer-30B-DFlash2 ; Qwen3.5-4B blog k=15: .82 / .82–.85 / .85–.87; per-position acceptance flat (blog Fig. 5: 88.3, 85.3, 85.0 … 86.5%) so i.i.d. fits |
-| DSpark | 7 (paper); 5 (DeepSeek-V4 production) | **0.76** | **0.84** | **0.88** | low–medium | DSpark paper Table 1 (DeepSeek-trained Qwen3-4/8/14B, k=7, T=1, non-thinking): MT 3.64–3.72 / HE 5.38–5.52, MBPP 5.13–5.26 / GSM8K 6.11–6.21, MATH 5.70–5.78 → .71–.76 / .87–.89 / .90–.93 https://arxiv.org/abs/2607.05147 ; Inco-trained Qwen3.5-4B k=15: .80 / .81–.84 / .83–.85; community RadixArk Qwen3.8-27B v2 k=7 thinking: .71–.72 / .72–.79 / .81–.83. Midpoint; the production gain (+57–85% per user) comes from the scheduler we do not model |
+| method                                                                            | default k                             | prose / chat | code (generation) | math     | confidence                                | evidence (τ → α_iid)                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------------------------------------------------------------- | ------------------------------------- | ------------ | ----------------- | -------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MTP, multi-step head (Qwen3.5+/3.8, MiMo 3-layer, FastMTP-style)                  | 3                                     | **0.75**     | **0.82**          | **0.85** | medium (prose, math); low (code: .78–.93) | Qwen3.8-27B card k=7 T=1 xhigh: MT-Bench 3.74 / HumanEval 3.91, MBPP 3.99 / GSM8K 5.02, MATH 4.72 → .76 / .78–.79 / .84–.86 https://huggingface.co/incoai/Qwen3.8-27B-DFlash2 ; Qwen3.5-4B blog k=15: .75 / .76–.80 / .80–.81 https://inco.ai/blog/dflash2/ ; llama.cpp PR 27210 Qwen3.8-27B greedy k=3: prose 2.7 (.74), code 3.4 (.89), reasoning 2.5 (.69) https://github.com/ggml-org/llama.cpp/pull/27210 ; PR 22673 k=3: .76–.93 https://github.com/ggml-org/llama.cpp/pull/22673 |
+| MTP, single-step head (DeepSeek-V3/R1/V4 `num_nextn_predict_layers 1`, GLM-4.5/5) | 1                                     | **0.85**     | 0.85 (I)          | 0.87 (I) | high for k=1 overall; low per use case    | DeepSeek-V3 report §5.4.3: 85–90% "across various generation topics" (R) https://arxiv.org/abs/2412.19437 ; FastMTP Table 1 MiMo vanilla K=1: MT 1.72 / code 1.73 / math 1.83 → .72/.73/.83 https://arxiv.org/abs/2509.18362 ; SGLang #3582 "~1.9 accept length for 2 draft tokens" (k ambiguous) https://github.com/sgl-project/sglang/pull/3582 ; k ≥ 2 tail α₂ ≈ 0.10 (vanilla) – 0.55 (fine-tuned)                                                                                  |
+| DFlash 2                                                                          | 7 (block 8); 15 for block-16 drafters | **0.79**     | **0.83**          | **0.87** | medium                                    | Qwen3.8-27B card k=7: MT 4.10 / HE 4.39, MBPP 4.79 / GSM8K 5.46, MATH 5.28 → .80 / .82–.85 / .88–.89; Muse-Glimmer-30B card k=15: .78 / .82–.83 / .86 https://huggingface.co/incoai/Muse-Glimmer-30B-DFlash2 ; Qwen3.5-4B blog k=15: .82 / .82–.85 / .85–.87; per-position acceptance flat (blog Fig. 5: 88.3, 85.3, 85.0 … 86.5%) so i.i.d. fits                                                                                                                                       |
+| DSpark                                                                            | 7 (paper); 5 (DeepSeek-V4 production) | **0.76**     | **0.84**          | **0.88** | low–medium                                | DSpark paper Table 1 (DeepSeek-trained Qwen3-4/8/14B, k=7, T=1, non-thinking): MT 3.64–3.72 / HE 5.38–5.52, MBPP 5.13–5.26 / GSM8K 6.11–6.21, MATH 5.70–5.78 → .71–.76 / .87–.89 / .90–.93 https://arxiv.org/abs/2607.05147 ; Inco-trained Qwen3.5-4B k=15: .80 / .81–.84 / .83–.85; community RadixArk Qwen3.8-27B v2 k=7 thinking: .71–.72 / .72–.79 / .81–.83. Midpoint; the production gain (+57–85% per user) comes from the scheduler we do not model                             |
 
 Extras (low confidence, offered as such): **reasoning trace (thinking on)**: MTP 0.70 (PR 27210 greedy 0.69),
 DFlash 2 / DSpark = prose + 0.02 (I). **Agentic code / editing**: DFlash SWE-bench Lite τ 2.82 at k=15 → 0.65
@@ -692,13 +769,13 @@ below HumanEval; T = 1 lowers τ by 5–15% vs greedy. Reference methods not in 
 
 ### 5.2 Expert hit ratio h vs resident fraction f (decode, batch 1, LRU-class cache, steady state)
 
-| f | 0 | 0.1 | 0.125 | 0.25 | 0.5 | 0.75 | 1 |
-|---|---|---|---|---|---|---|---|
-| `uniform` h = f (exact) | 0 | 0.10 | 0.125 | 0.25 | 0.50 | 0.75 | 1 |
-| `skewed_classic` h = f^0.55 | 0 | 0.28 (I) | 0.32 | 0.47 | 0.68 | 0.85 | 1 |
-| data, E ≤ 64 | | | 0.04–0.39 | 0.30–0.55 | 0.57–0.78 | 0.80–0.93 | |
-| `skewed_fine_grained` h = f^0.2 | 0 | 0.63 | 0.66 | 0.76 | 0.87 (I) | 0.94 (I) | 1 |
-| data, E ≥ 128 | | 0.67–0.77 (f 0.10–0.16) | 0.67 | 0.71–0.81; 0.89 at 0.28 | > 0.90 at 0.625 | — | |
+| f                               | 0   | 0.1                     | 0.125     | 0.25                    | 0.5             | 0.75      | 1   |
+| ------------------------------- | --- | ----------------------- | --------- | ----------------------- | --------------- | --------- | --- |
+| `uniform` h = f (exact)         | 0   | 0.10                    | 0.125     | 0.25                    | 0.50            | 0.75      | 1   |
+| `skewed_classic` h = f^0.55     | 0   | 0.28 (I)                | 0.32      | 0.47                    | 0.68            | 0.85      | 1   |
+| data, E ≤ 64                    |     |                         | 0.04–0.39 | 0.30–0.55               | 0.57–0.78       | 0.80–0.93 |     |
+| `skewed_fine_grained` h = f^0.2 | 0   | 0.63                    | 0.66      | 0.76                    | 0.87 (I)        | 0.94 (I)  | 1   |
+| data, E ≥ 128                   |     | 0.67–0.77 (f 0.10–0.16) | 0.67      | 0.71–0.81; 0.89 at 0.28 | > 0.90 at 0.625 | —         |     |
 
 Sources: Mixtral-8x7B (8, 2) 0.37/0.60/0.82 at f 0.25/0.5/0.75 (Skliar et al. arXiv 2412.00099 Fig. 11; figure-read
 ±0.03), 0.31/0.57/0.80 (ProMoE arXiv 2410.22134 Fig. 5b), 0.302/≈0.58/0.806 (HybriMoE arXiv 2504.05897 §VI-D),
@@ -721,30 +798,30 @@ headings/results; standard terms ("compute bound", "bandwidth bound", "latency b
 
 ### 6.1 Workload → "Speculative decoding"
 
-| knob | control | default | range | "?" help |
-|---|---|---|---|---|
-| Method | picker: Off · MTP (model's head) · DFlash 2 · DSpark | Off | MTP only when `model.draft` exists; at pp > 1 the picker offers only "Off" (the reason in its "?") | "Draft-then-verify decoding. Only the extra memory and compute/bandwidth of the draft and verify passes are modelled, with the acceptance ratio below; no engine overhead. Not available with pipeline parallelism yet." |
-| Drafter | picker: repo id (text with validation) · Hypothetical (5 layers, 32/8 heads, window 2048) | repo id when known for the target, else Hypothetical (badge "hypothetical" in results) | DFlash 2 / DSpark only | "The drafter's architecture from its Hugging Face config.json. 'Hypothetical' is a stand-in with fixed defaults, not a released model." |
-| Draft length k | number | per method (§5.1); 1 for single-step MTP | 1–16 | "Tokens drafted per step; the verify pass runs the model over k+1 tokens. Expected accepted tokens per step = (1−α^(k+1))/(1−α)." (warning icon when k > the head's reliable depth) |
-| Use case | picker: prose · code · math · reasoning · agentic code | prose | | "Pre-fills the acceptance ratio from published measurements for this method. Code = code generation." |
-| Acceptance α | number, 2 decimals | from table | 0.00–0.99 | "Per-token probability that the target accepts a drafted token, assumed independent per position; measured at ~temperature 1 on short-context benchmarks." Editing sets the use case to "custom". |
+| knob           | control                                                                                   | default                                                                                | range                                                                                              | "?" help                                                                                                                                                                                                                 |
+| -------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Method         | picker: Off · MTP (model's head) · DFlash 2 · DSpark                                      | Off                                                                                    | MTP only when `model.draft` exists; at pp > 1 the picker offers only "Off" (the reason in its "?") | "Draft-then-verify decoding. Only the extra memory and compute/bandwidth of the draft and verify passes are modelled, with the acceptance ratio below; no engine overhead. Not available with pipeline parallelism yet." |
+| Drafter        | picker: repo id (text with validation) · Hypothetical (5 layers, 32/8 heads, window 2048) | repo id when known for the target, else Hypothetical (badge "hypothetical" in results) | DFlash 2 / DSpark only                                                                             | "The drafter's architecture from its Hugging Face config.json. 'Hypothetical' is a stand-in with fixed defaults, not a released model."                                                                                  |
+| Draft length k | number                                                                                    | per method (§5.1); 1 for single-step MTP                                               | 1–16                                                                                               | "Tokens drafted per step; the verify pass runs the model over k+1 tokens. Expected accepted tokens per step = (1−α^(k+1))/(1−α)." (warning icon when k > the head's reliable depth)                                      |
+| Use case       | picker: prose · code · math · reasoning · agentic code                                    | prose                                                                                  |                                                                                                    | "Pre-fills the acceptance ratio from published measurements for this method. Code = code generation."                                                                                                                    |
+| Acceptance α   | number, 2 decimals                                                                        | from table                                                                             | 0.00–0.99                                                                                          | "Per-token probability that the target accepts a drafted token, assumed independent per position; measured at ~temperature 1 on short-context benchmarks." Editing sets the use case to "custom".                        |
 
 ### 6.2 Hardware → "Offload" (dedicated memory) / "Storage" (unified)
 
-| knob | control | default | range | "?" help |
-|---|---|---|---|---|
-| Routed experts | picker: Device · Host RAM · SSD | Device | MoE models | "Where the routed expert weights live. Misses stream to the GPU over PCIe at the hardware ceiling; the GPU computes." |
-| Offloaded layers | number "from layer" | 0 (all) | 0–L | "Experts of layers ≥ this index are offloaded (llama.cpp --n-cpu-moe keeps the first layers on the device)." |
-| Resident fraction f | number field, % (as the other numeric knobs) | 0% | 0–100 | "Share of each offloaded layer's experts kept in device memory (pinned or cache), counted in the memory fit." |
-| Hit-ratio model | picker: Uniform (h = f) · Skewed, ≤ 64 experts · Skewed, ≥ 128 experts · Custom | Uniform | | "Probability that a needed expert is already on the device, per unique expert per layer per step at batch 1. Uniform is exact for balanced routing; skewed presets fit measured LRU locality (h = f^0.55, f^0.2). Bounded by the resident count." |
-| Hit ratio h | number | from model | 0–1 | shown when Custom, else read-only |
-| Queue depth | number (Advanced) | 0 = the tier's rated outstanding requests | 0–tier max | "Outstanding read requests the deployment keeps in flight; 1 serializes every request behind its latency." |
-| Dense layers on device | number | all | 0–L | dense models: "Layers beyond this count are streamed from the tier every step." |
-| Lookup tables (Advanced) | picker: Device · Host RAM · SSD; a "Host RAM ↗" chip button next to the picker (not inside the trigger: no nested buttons) when the model's table is designed off-device | Device (hint state for PLE/Engram; pre-filled Host RAM once offload is turned on) | n-gram models | "Where the hashed n-gram tables live. Only the rows a token needs are gathered: ~1 µs per step from RAM, latency-bound from SSD. Counted against that tier's capacity. This model ships its table to be kept off-device." |
-| Host RAM | picker with fuzzy search (6 presets) + capacity | DDR5-6000 ×2 (96 GB) | | "Host memory: theoretical channel bandwidth and capacity (datasheet values); shared by every GPU of the node." |
-| SSD | picker with fuzzy search (8 presets) | Samsung 990 PRO 2TB; on unified memory the device's own drive (§2.2) | | "NVMe drive: sequential read, QD1 latency and max random-read IOPS from the datasheet; shared by every GPU of the node." |
-| Host link | read-only from the device preset ("PCIe 5.0 x16, 63.0 GB/s") + picker to override gen/lanes | from `hostInterface` | Gen3–5, x4–x16 | "GPU-to-host PCIe link per direction; with host RAM bandwidth, the streaming ceiling." |
-| Assumptions: Offload overlap | picker ideal / none (as the other Assumptions) | ideal | | "ideal: the next layer's transfers overlap this layer's compute (prefetch, perfect prediction); none: fetched on demand, serialized." |
+| knob                         | control                                                                                                                                                                   | default                                                                           | range          | "?" help                                                                                                                                                                                                                                          |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Routed experts               | picker: Device · Host RAM · SSD                                                                                                                                           | Device                                                                            | MoE models     | "Where the routed expert weights live. Misses stream to the GPU over PCIe at the hardware ceiling; the GPU computes."                                                                                                                             |
+| Offloaded layers             | number "from layer"                                                                                                                                                       | 0 (all)                                                                           | 0–L            | "Experts of layers ≥ this index are offloaded (llama.cpp --n-cpu-moe keeps the first layers on the device)."                                                                                                                                      |
+| Resident fraction f          | number field, % (as the other numeric knobs)                                                                                                                              | 0%                                                                                | 0–100          | "Share of each offloaded layer's experts kept in device memory (pinned or cache), counted in the memory fit."                                                                                                                                     |
+| Hit-ratio model              | picker: Uniform (h = f) · Skewed, ≤ 64 experts · Skewed, ≥ 128 experts · Custom                                                                                           | Uniform                                                                           |                | "Probability that a needed expert is already on the device, per unique expert per layer per step at batch 1. Uniform is exact for balanced routing; skewed presets fit measured LRU locality (h = f^0.55, f^0.2). Bounded by the resident count." |
+| Hit ratio h                  | number                                                                                                                                                                    | from model                                                                        | 0–1            | shown when Custom, else read-only                                                                                                                                                                                                                 |
+| Queue depth                  | number (Advanced)                                                                                                                                                         | 0 = the tier's rated outstanding requests                                         | 0–tier max     | "Outstanding read requests the deployment keeps in flight; 1 serializes every request behind its latency."                                                                                                                                        |
+| Dense layers on device       | number                                                                                                                                                                    | all                                                                               | 0–L            | dense models: "Layers beyond this count are streamed from the tier every step."                                                                                                                                                                   |
+| Lookup tables (Advanced)     | picker: Device · Host RAM · SSD; a "Host RAM ↗" chip button next to the picker (not inside the trigger: no nested buttons) when the model's table is designed off-device | Device (hint state for PLE/Engram; pre-filled Host RAM once offload is turned on) | n-gram models  | "Where the hashed n-gram tables live. Only the rows a token needs are gathered: ~1 µs per step from RAM, latency-bound from SSD. Counted against that tier's capacity. This model ships its table to be kept off-device."                         |
+| Host RAM                     | picker with fuzzy search (6 presets) + capacity                                                                                                                           | DDR5-6000 ×2 (96 GB)                                                              |                | "Host memory: theoretical channel bandwidth and capacity (datasheet values); shared by every GPU of the node."                                                                                                                                    |
+| SSD                          | picker with fuzzy search (8 presets)                                                                                                                                      | Samsung 990 PRO 2TB; on unified memory the device's own drive (§2.2)              |                | "NVMe drive: sequential read, QD1 latency and max random-read IOPS from the datasheet; shared by every GPU of the node."                                                                                                                          |
+| Host link                    | read-only from the device preset ("PCIe 5.0 x16, 63.0 GB/s") + picker to override gen/lanes                                                                               | from `hostInterface`                                                              | Gen3–5, x4–x16 | "GPU-to-host PCIe link per direction; with host RAM bandwidth, the streaming ceiling."                                                                                                                                                            |
+| Assumptions: Offload overlap | picker ideal / none (as the other Assumptions)                                                                                                                            | ideal                                                                             |                | "ideal: the next layer's transfers overlap this layer's compute (prefetch, perfect prediction); none: fetched on demand, serialized."                                                                                                             |
 
 ### 6.3 Results
 
@@ -916,8 +993,13 @@ export interface SimOptions {
   offloadOverlap: 'ideal' | 'none';
 }
 /** Deployment-scenario knobs; every field optional and off by default (absent or {} ⇒ today's results, bit for bit). */
-export interface DeploymentConfig { offload?: OffloadConfig; speculative?: SpecDecodeConfig; }
-export interface SimInput { /* …as today… */ deployment?: DeploymentConfig; }
+export interface DeploymentConfig {
+  offload?: OffloadConfig;
+  speculative?: SpecDecodeConfig;
+}
+export interface SimInput {
+  /* …as today… */ deployment?: DeploymentConfig;
+}
 
 export interface OffloadConfig {
   /** `'transfer'` (default): misses stream to the device; `'cpu_compute'`: designed hook, rejected by validation for now. */
@@ -931,7 +1013,11 @@ export interface OffloadConfig {
     /** Fraction f of each offloaded layer's experts kept in device memory, in [0, 1]. Dimensionless. */
     residentFraction: number;
     /** Hit-ratio model h(f) (§2.4); `custom` gives h per unique expert per layer per step at batch 1; clamped to the physical bounds. */
-    hitRatio: { kind: 'uniform' } | { kind: 'skewed_classic' } | { kind: 'skewed_fine_grained' } | { kind: 'custom'; h: number };
+    hitRatio:
+      | { kind: 'uniform' }
+      | { kind: 'skewed_classic' }
+      | { kind: 'skewed_fine_grained' }
+      | { kind: 'custom'; h: number };
     /** Also offload the drafter's own MoE experts (DeepSeek-V4 DSpark); default false. */
     includeDraft?: boolean;
   };
@@ -941,14 +1027,17 @@ export interface OffloadConfig {
    * n-gram table placement; absent = `'device'` (identity). `scaleLayout` (block-scaled tables only, §2.10): default
    * `'separate'` on host RAM, `'pinned_host'` on NVMe (scales counted in the host-RAM tier), `'interleaved'` for a repacked table.
    */
-  lookupTables?: { tier: 'device' | 'host_ram' | 'nvme'; scaleLayout?: 'separate' | 'pinned_host' | 'interleaved' };
+  lookupTables?: {
+    tier: 'device' | 'host_ram' | 'nvme';
+    scaleLayout?: 'separate' | 'pinned_host' | 'interleaved';
+  };
 }
 export interface SpecDecodeConfig {
   /** `'mtp'` needs `model.draft.kind === 'mtp'`; block methods need `drafter`. Rejected when pp > 1. */
   method: 'mtp' | 'dflash2' | 'dspark';
   /** The block drafter: read from a repo, or the labelled hypothetical. Ignored for MTP. */
   drafter?:
-    | { kind: 'repo'; repoId: string; spec: Extract<DraftSpec, { kind: 'block_drafter' }> }   // the loader parsed the repo's config.json
+    | { kind: 'repo'; repoId: string; spec: Extract<DraftSpec, { kind: 'block_drafter' }> } // the loader parsed the repo's config.json
     | { kind: 'hypothetical'; spec: Extract<DraftSpec, { kind: 'block_drafter' }> };
   /** Draft tokens per step k (verify width k + 1; ≤ blockSize − 1 for block drafters). Count. */
   draftLength: number;
@@ -964,25 +1053,33 @@ export interface SpecDecodeConfig {
 
 ```ts
 export type Bound = 'compute' | 'memory' | 'comm' | 'transfer';
-export interface OpResult { /* …as today… */
+export interface OpResult {
+  /* …as today… */
   /** Off-device read latency terms α_tier + α_link; 0 for other ops. Unit: seconds. */
   transferLatencySec: number;
   /** Off-device service term (max of Little's-law, IOPS, tier-, host- and link-bandwidth terms); 0 for other ops. Unit: seconds. */
   transferBandwidthSec: number;
 }
-export interface StageResult { /* …as today… */
+export interface StageResult {
+  /* …as today… */
   /** Σ transfer op times (latency + service). Unit: seconds. */
   transferSec: number;
   /** Transfer time not hidden under `offloadOverlap`: t_s − (exposed_s + core_s). Unit: seconds. */
   exposedTransferSec: number;
 }
-export interface PhaseResult { /* …as today… */
+export interface PhaseResult {
+  /* …as today… */
   /** Communication on the critical path: Σ α (incl. PP sends), Σ β, and the part not hidden. Sums of existing numbers. Unit: seconds. */
   comm: { latencySec: number; bandwidthSec: number; exposedSec: number };
   /** Off-device transfers on the critical path; absent when nothing is offloaded. */
   transfer?: { sec: number; exposedSec: number; bytes: number; requests: number };
   /** Decode with spec-dec: draft and verify shares of the step, E[τ], and the speedup over spec-dec off. */
-  speculative?: { draftSec: number; verifySec: number; expectedTokensPerStep: number; speedup: number };
+  speculative?: {
+    draftSec: number;
+    verifySec: number;
+    expectedTokensPerStep: number;
+    speedup: number;
+  };
 }
 export interface TierMemory {
   tier: 'host_ram' | 'nvme';
@@ -991,7 +1088,8 @@ export interface TierMemory {
   capacityBytes: number;
   fits: boolean;
 }
-export interface DeviceMemory { /* …as today… */
+export interface DeviceMemory {
+  /* …as today… */
   /** Staging buffer(s) for streamed groups (double-buffered under ideal overlap; 0 when nothing streams). Unit: bytes. */
   stagingBytes: number;
   /** Draft weights and draft KV (spec-dec on). Unit: bytes. */
@@ -999,7 +1097,9 @@ export interface DeviceMemory { /* …as today… */
   /** Per-position recurrent/conv state snapshots of a k+1-token verify, × B_r (spec-dec on, hybrid models). Unit: bytes. */
   speculativeTransientBytes: number;
 }
-export interface MemoryReport { /* …as today… */ tiers: TierMemory[]; }
+export interface MemoryReport {
+  /* …as today… */ tiers: TierMemory[];
+}
 ```
 
 ---
@@ -1015,62 +1115,65 @@ export interface MemoryReport { /* …as today… */ tiers: TierMemory[]; }
   derived from existing sums (no change to `cycleSec`, `tokensPerSec`); `E[τ] = 1`.
 - Memory: `staging = draftBytes = speculativeTransientBytes = 0`, `tiers = []`, lookup tables at `'device'` ⇒
   `fits` and every byte count unchanged, including PLE/Engram models.
-- `hardware.host` absent and nothing off-device ⇒ never read. G1–G8 are not applied (§4.3).
+- `hardware.host` absent and nothing off-device ⇒ never read. The audit corrections now apply equally with
+  deployment absent or empty; identity means deployment-off equivalence against the updated §8.3 baseline.
 
 ### 8.2 Test plan (vitest, co-located; hand-derived numbers in `it` titles and comments; `expectClose` rel 1e-9 for
+
 exact formulas; bands for engine totals)
 
-| id | file | what |
-|---|---|---|
-| ID-1 | `engine/identity.test.ts` | the goldens of §8.3 (decode/prefill `cycleSec`, `tokensPerSec`, `latencySec`, per-stage `totalBytes`, `fits`) reproduced to rel 1e-9 by `simulate()` with `deployment` absent, with `deployment: {}`, and with `options: { offloadOverlap: 'ideal' }`; deep-equal of the three results |
-| ID-2 | same | every `reference.ts` model and every HF fixture on `SYNTH_GPU` (tp 1) and `SYNTH_CLUSTER` (tp 2, pp 2, ep 2 dp 2 where valid): result with `deployment` absent deep-equals `deployment: {}` and `lookupTables: { tier: 'device' }` |
-| U-1 | `engine/transfer.test.ts` | `uniqueExperts(E, k, T)`: `U(1) = k`; E 128 k 8: `U(2) = 15.5`, `U(4) = 29.123046875`, `U(8) = 51.61990735…`, `U(16) = 82.4225113…`, `U(32) = 111.771035…`, `U(8192) = 128` |
-| U-2 | same | hits/misses with E 128: `(U 8, h .5, f .5) → hits 4, M 4`; `(U 128, h .87, f .5) → hits 64`; `(U 128, h .1, f .5) → hits 64` (lower bound); `(U 8, h .1, f .5) → hits 0.8, M 7.2` (custom below f allowed); `(f 0, any h ≤ 0) → M = U`; `(f 1, h .3) → M 0`; `(U 100, h .2, f .5) → lo = 36, hits 36` |
-| U-3 | same | validation: `f 0, custom h .2` rejected; `f 1` with any h accepted and no TransferOp emitted; hit models at f .25: `.25 / .25^.55 = .46651… / .25^.2 = .75785…` |
-| U-4 | same | `transferTime` host RAM → PCIe5: reads `[{8, 2,654,208}]`: `α 1.07e-6`, `service = 21,233,664/63,015,384,615.38 = 3.36960e-4` (link-bound; DRAM term 2.2120e-4, Little 7.66e-9); NVMe → host → device, reads `[{16, 320}]`, QD 512, n 1: `bytes_tier 65,536`, `usefulBytes 5,120`, `α 46e-6`, `service = max(15·45e-6/512 = 1.318e-6, 16/1.4e6 = 1.1429e-5, 65,536/7.45e9 = 8.797e-6, 65,536/48e9 = 1.365e-6, 5,120/63.0e9 = 8.1e-8) = 1.1429e-5`; an `NvmeSpec` without `randomRead` (Spark-like, `maxOutstanding 512`, lat 50e-6): the IOPS term is absent, `service = max(15·50e-6/512, 65,536/12.2e9, …)` and a warning is emitted |
-| U-5 | `engine/pipeline.test.ts` | stage formula: `compute 2, bw 1, lat 0.5, xfer 3` ⇒ ideal/ideal 3.5, ideal/none 5.5, none/ideal 3.5 + p2p, none/none 6.5 + p2p; `xfer 0` ⇒ today's values |
-| U-6 | `engine/memory.test.ts` | TINY_HYBRID experts on host, f .5: device `W` drops by half the expert bytes; `tiers[host_ram].bytes` = all expert bytes; staging `2·ceil(M_max)·W_expert` under ideal; **f 1**: `stagingBytes 0`, no `TransferOp`, `perStage[*].weightBytes / sequenceStateBytes / activationPeakBytes / fits` and every `decode`/`prefill` rate and op time equal the all-device baseline, while `tiers[host_ram].bytes` still holds the full expert allocation and `warnings` differ (the named-field contract of W1) |
-| U-7 | `engine/specdec.test.ts` | `expectedTokens`: iid α .85 k 1 → 1.85; α .79 k 7 → `(1 − .79^8)/.21 = 4.03948…`; per-position `[.854, .803, .794, .783, .775, .759, .729]` → 4.275 (DFlash 2 blog: 4.27) |
-| U-8 | same | verify lowering REF_DENSE_8B k 1 @ N 8192: every GEMM `m = 2`, `attn.core` `qLen 2, kvLen 8194`, `lm_head m = 2` |
-| U-9 | same | op lists: MTP k 1 = one catch-up pass `embed (⌈E[τ]⌉ rows), 2 norms, eh_proj (m ⌈E[τ]⌉, n 4096, k 8192), layer ops (qLen ⌈E[τ]⌉), final_norm (1 row), lm_head (m 1)`; MTP k 3 = that pass + 2 one-row passes; DFlash 2 (Qwen3.8-27B-DFlash2 config, k 7, m_ctx 5): `fc (m 5, n 5120, k 25600)`, per layer `attn_conv.kernel_proj (m 8, n 1280, k 5120)`, `q_proj (8, 4096, 5120)`, `k_proj`/`v_proj (m 13, n 1024, k 5120)`, `attn.core (qLen 8, kvLen min(N, 2048) + 13, window 2048, causal false, kvWriteTokens 5)`, `mlp_conv.kernel_proj`, `mlp.gate_up (8, 34816, 5120)`, `lm_head (m 7)`, `selector.hidden_proj (7, 256, 5120)`, `selector.codebooks 119 rows`; DSpark (dspark_qwen3_8b config): + 7 × `markov.W2 (1, 151936, 256)` and no convs/selector |
-| U-10 | same | parameter counts (§3.3): DFlash 2 drafter 1,924,404,480 (± 0.1%); DSpark drafter 2,371,077,376 incl. its embedding/head copies (± 1%) |
-| U-11 | `engine/transfer.test.ts` | QD: Qwen rows from the 990 Pro (45 µs variant), reads `[{16, 320}]`: QD 512 ⇒ 57.429 µs; **QD 1 ⇒ 46 + 15·45 = 721 µs**; QD 4 ⇒ 46 + max(168.75, 11.43, …) = 214.75 µs (the real preset, α = 1/22,000 s: QD 1 ⇒ 46.4545 + 15·45.4545 = 728.27 µs) |
-| U-12 | same | shared SSD, genuine four consumers (`tp 4`, one node, every stage offloads): Qwen rows `[{16, 320}]`: `service = max(1.318e-6, 16/(1.4e6/4) = 4.571e-5, 65,536/(7.45e9/4) = 3.519e-5, 65,536/(96e9/8) = 5.46e-6)` ⇒ `46 + 45.71 = 91.71 µs` (vs 57.43 µs alone); experts `[{8, 2,654,208}]` from SSD: alone `46 µs + 2.8502 ms`, with n 4 `46 µs + 11.4006 ms` |
-| U-13 | `engine/validate.test.ts` | spec-dec with pp 2 rejected with the §3.6 message; `cpu_compute` rejected; `k + 1 > blockSize` rejected |
-| U-14 | `engine/specdec.test.ts` | hybrid verify: TINY_HYBRID k 3 ⇒ each GDN `RecurrentOp.stateSnapshots = 4`, state write bytes 4× the decode step's, conv `stateWriteBytes` 4×; `speculativeTransientBytes = 4 · state_s · B_r` |
-| U-15 | same | spec-enabled prefill. MTP (REF_DENSE_8B, P 8192): the prefill's `draft.*` ops equal an independently lowered module at `qLen = kvLen = 8192` (`eh_proj m 8192`, `attn.core` writing 8192 KV tokens, `lm_head m 1`). Block drafter (Qwen3.8-27B-DFlash2 config, P 8192): the `draft.*` op-name multiset is **exactly** `{ draft.fc, draft.hidden_norm } ∪ 5 × { k_proj, v_proj, qk_norm, rope, kv_cache_write }`: `k_proj`/`v_proj (m 8192, n 1024, k 5120)`, `kv_cache_write` `elems 2048·2·8·128 = 4,194,304`, `kvWriteBytes 8,388,608` (bf16), `activationReadBytes 8,388,608`, FLOP 4,194,304; **no** `attn.core`, `q_proj`, `o_proj`, `mlp.*`, `lm_head`, `selector.*`, `markov.*` |
-| U-16 | `lower/ngram.test.ts` | PLE at index 1 (config `[2]`), Engram at 1 and 14; useful bytes 320 / 264 per row; Engram decode `T 1`: `separate` ⇒ `reads [{24, 256}, {24, 8}]`, DDR5 `bytes_tier 24·256 + 24·64 = 7,680`, `usefulBytes 6,336`; `pinned_host` on NVMe ⇒ `reads [{24, 256}]`, `bytes_tier 98,304`, `usefulBytes 6,336`, host-RAM tier gains `384,006,168·8 = 3,072,049,344 B` (table 1) and `3,072,133,456 B` (table 2); `interleaved` ⇒ `reads [{24, 264}]`, `bytes_tier 98,304` on NVMe / 7,680 on DDR5, `usefulBytes 6,336`; `lookupTables` absent ⇒ no op |
-| U-17 | `engine/transfer.test.ts` | `n_stream` (one node, `tp = dp = 1` unless said): (a) `b = 1, pp = 4`, `offloadOverlap 'none'`, a `dense_layers` range on stage 0 only ⇒ 1 (service equals the single-device value); (b) same with `'ideal'` ⇒ 1; (c) `pp 4, b 1, 'ideal'`, experts offloaded on every stage ⇒ 4; (d) `pp 4, b 1, 'none'`, every stage ⇒ 1; **(e) `pp 4, b 2 (m = 2), 'none'`, every stage ⇒ 2; (f) `pp 4, b 2, 'none'`, experts offloaded on stages {0, 1} only ⇒ 2; (g) `pp 4, b 2, 'none'`, stage 0 only ⇒ 1;** (h) `pp 4, b 4 (m = 4), 'none'`, every stage ⇒ 4; (i) one node, `tp 4`, every stage ⇒ 4 (= U-12) |
-| U-18 | `engine/specdec.test.ts` | MTP cache advance: REF_DENSE_8B k 1, `acceptance { per_position, alphas [1] }` (all accepted, `E[τ] = 2`) ⇒ the draft pass has `qLen 2`, `attn.core.kvWriteBytes = 2·4096 = 8,192 B`, `eh_proj m 2`, `lm_head m 1`; three consecutive steps advance the module's committed length by 2 each (`kvLen` of step i = N + 2i + … in the test's explicit stepping helper); `alphas [0]` (rejected, `E[τ] = 1`) ⇒ `qLen 1`, `kvWriteBytes 4,096`, the tentative row of the previous step counted as overwritten (no extra write) |
-| F-1 | (future, blocked on the G2 follow-up) | PP > 1 spec-dec with `targetLayerIds` spanning stages: feature `send_recv`s and embedding copy |
-| S-1 | `__sanity__/reports.test.ts` | lm-09 (MTP k 8), lm-36 (DSpark k 5 at the reported E[τ] 2.85), lm-39 (DFlash 2 k 7) with spec-dec on, and the offload rows web-52 (PR 29887, 5090, 67.8 tok/s @ h .89) and web-53 (ubergarm Qwen3-235B, 10 tok/s), `simulated ≥ 0.9 × reported`; as built, web-53's decode is a known exception (CPU-compute offload, §10) and its prefill is asserted; ratios in docs/sanity-check.md |
-| W-1…W-4 | `engine/e2e.test.ts` | §8.4–8.6: exact (rel 1e-6) on the hand-derived transfer/draft terms, within **0.1%** on the quoted tok/s |
+| id      | file                                  | what                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ID-1    | `engine/identity.test.ts`             | the goldens of §8.3 (decode/prefill `cycleSec`, `tokensPerSec`, `latencySec`, per-stage `totalBytes`, `fits`) reproduced to rel 1e-9 by `simulate()` with `deployment` absent, with `deployment: {}`, and with `options: { offloadOverlap: 'ideal' }`; deep-equal of the three results                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ID-2    | same                                  | every `reference.ts` model and every HF fixture on `SYNTH_GPU` (tp 1) and `SYNTH_CLUSTER` (tp 2, pp 2, ep 2 dp 2 where valid): result with `deployment` absent deep-equals `deployment: {}` and `lookupTables: { tier: 'device' }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| U-1     | `engine/transfer.test.ts`             | `uniqueExperts(E, k, T)`: `U(1) = k`; E 128 k 8: `U(2) = 15.5`, `U(4) = 29.123046875`, `U(8) = 51.61990735…`, `U(16) = 82.4225113…`, `U(32) = 111.771035…`, `U(8192) = 128`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| U-2     | same                                  | hits/misses with E 128: `(U 8, h .5, f .5) → hits 4, M 4`; `(U 128, h .87, f .5) → hits 64`; `(U 128, h .1, f .5) → hits 64` (lower bound); `(U 8, h .1, f .5) → hits 0.8, M 7.2` (custom below f allowed); `(f 0, any h ≤ 0) → M = U`; `(f 1, h .3) → M 0`; `(U 100, h .2, f .5) → lo = 36, hits 36`                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| U-3     | same                                  | validation: `f 0, custom h .2` rejected; `f 1` with any h accepted and no TransferOp emitted; hit models at f .25: `.25 / .25^.55 = .46651… / .25^.2 = .75785…`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| U-4     | same                                  | `transferTime` host RAM → PCIe5: reads `[{8, 2,654,208}]`: `α 1.07e-6`, `service = 21,233,664/63,015,384,615.38 = 3.36960e-4` (link-bound; DRAM term 2.2120e-4, Little 7.66e-9); NVMe → host → device, reads `[{16, 320}]`, QD 512, n 1: `bytes_tier 65,536`, `usefulBytes 5,120`, `α 46e-6`, `service = max(15·45e-6/512 = 1.318e-6, 16/1.4e6 = 1.1429e-5, 65,536/7.45e9 = 8.797e-6, 65,536/48e9 = 1.365e-6, 5,120/63.0e9 = 8.1e-8) = 1.1429e-5`; an `NvmeSpec` without `randomRead` (Spark-like, `maxOutstanding 512`, lat 50e-6): the IOPS term is absent, `service = max(15·50e-6/512, 65,536/12.2e9, …)` and a warning is emitted                                                                                                                           |
+| U-5     | `engine/pipeline.test.ts`             | stage formula: `compute 2, bw 1, lat 0.5, xfer 3` ⇒ ideal/ideal 3.5, ideal/none 5.5, none/ideal 3.5 + p2p, none/none 6.5 + p2p; `xfer 0` ⇒ today's values                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| U-6     | `engine/memory.test.ts`               | TINY_HYBRID experts on host, f .5: device `W` drops by half the expert bytes; `tiers[host_ram].bytes` = all expert bytes; staging `2·ceil(M_max)·W_expert` under ideal; **f 1**: `stagingBytes 0`, no `TransferOp`, `perStage[*].weightBytes / sequenceStateBytes / activationPeakBytes / fits` and every `decode`/`prefill` rate and op time equal the all-device baseline, while `tiers[host_ram].bytes` still holds the full expert allocation and `warnings` differ (the named-field contract of W1)                                                                                                                                                                                                                                                         |
+| U-7     | `engine/specdec.test.ts`              | `expectedTokens`: iid α .85 k 1 → 1.85; α .79 k 7 → `(1 − .79^8)/.21 = 4.03948…`; per-position `[.854, .803, .794, .783, .775, .759, .729]` → 4.275 (DFlash 2 blog: 4.27)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| U-8     | same                                  | verify lowering REF_DENSE_8B k 1 @ N 8192: every GEMM `m = 2`, `attn.core` `qLen 2, kvLen 8194`, `lm_head m = 2`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| U-9     | same                                  | op lists: MTP k 1 = one catch-up pass `embed (⌈E[τ]⌉ rows), 2 norms, eh_proj (m ⌈E[τ]⌉, n 4096, k 8192), layer ops (qLen ⌈E[τ]⌉), final_norm (1 row), lm_head (m 1)`; MTP k 3 = that pass + 2 one-row passes; DFlash 2 (Qwen3.8-27B-DFlash2 config, k 7, m_ctx 5): `fc (m 5, n 5120, k 25600)`, per layer `attn_conv.kernel_proj (m 8, n 1280, k 5120)`, `q_proj (8, 4096, 5120)`, `k_proj`/`v_proj (m 13, n 1024, k 5120)`, `attn.core (qLen 8, kvLen min(N, 2048) + 13, window 2048, causal false, kvWriteTokens 5)`, `mlp_conv.kernel_proj`, `mlp.gate_up (8, 34816, 5120)`, `lm_head (m 7)`, `selector.hidden_proj (7, 256, 5120)`, `selector.codebooks 119 rows`; DSpark (dspark_qwen3_8b config): + 7 × `markov.W2 (1, 151936, 256)` and no convs/selector |
+| U-10    | same                                  | parameter counts (§3.3): DFlash 2 drafter 1,924,404,480 (± 0.1%); DSpark drafter 2,371,077,376 incl. its embedding/head copies (± 1%)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| U-11    | `engine/transfer.test.ts`             | QD: Qwen rows from the 990 Pro (45 µs variant), reads `[{16, 320}]`: QD 512 ⇒ 57.429 µs; **QD 1 ⇒ 46 + 15·45 = 721 µs**; QD 4 ⇒ 46 + max(168.75, 11.43, …) = 214.75 µs (the real preset, α = 1/22,000 s: QD 1 ⇒ 46.4545 + 15·45.4545 = 728.27 µs)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| U-12    | same                                  | shared SSD, genuine four consumers (`tp 4`, one node, every stage offloads): Qwen rows `[{16, 320}]`: `service = max(1.318e-6, 16/(1.4e6/4) = 4.571e-5, 65,536/(7.45e9/4) = 3.519e-5, 65,536/(96e9/8) = 5.46e-6)` ⇒ `46 + 45.71 = 91.71 µs` (vs 57.43 µs alone); experts `[{8, 2,654,208}]` from SSD: alone `46 µs + 2.8502 ms`, with n 4 `46 µs + 11.4006 ms`                                                                                                                                                                                                                                                                                                                                                                                                   |
+| U-13    | `engine/validate.test.ts`             | spec-dec with pp 2 rejected with the §3.6 message; `cpu_compute` rejected; `k + 1 > blockSize` rejected                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| U-14    | `engine/specdec.test.ts`              | hybrid verify: TINY_HYBRID k 3 ⇒ each GDN `RecurrentOp.stateSnapshots = 4`, state write bytes 4× the decode step's, conv `stateWriteBytes` 4×; `speculativeTransientBytes = 4 · state_s · B_r`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| U-15    | same                                  | spec-enabled prefill. MTP (REF_DENSE_8B, P 8192): the prefill's `draft.*` ops equal an independently lowered module at `qLen = kvLen = 8192` (`eh_proj m 8192`, `attn.core` writing 8192 KV tokens, `lm_head m 1`). Block drafter (Qwen3.8-27B-DFlash2 config, P 8192): the `draft.*` op-name multiset is **exactly** `{ draft.fc, draft.hidden_norm } ∪ 5 × { k_proj, v_proj, qk_norm, rope, kv_cache_write }`: `k_proj`/`v_proj (m 8192, n 1024, k 5120)`, `kv_cache_write` `elems 2048·2·8·128 = 4,194,304`, `kvWriteBytes 8,388,608` (bf16), `activationReadBytes 8,388,608`, FLOP 4,194,304; **no** `attn.core`, `q_proj`, `o_proj`, `mlp.*`, `lm_head`, `selector.*`, `markov.*`                                                                           |
+| U-16    | `lower/ngram.test.ts`                 | PLE at index 1 (config `[2]`), Engram at 1 and 14; useful bytes 320 / 264 per row; Engram decode `T 1`: `separate` ⇒ `reads [{24, 256}, {24, 8}]`, DDR5 `bytes_tier 24·256 + 24·64 = 7,680`, `usefulBytes 6,336`; `pinned_host` on NVMe ⇒ `reads [{24, 256}]`, `bytes_tier 98,304`, `usefulBytes 6,336`, host-RAM tier gains `384,006,168·8 = 3,072,049,344 B` (table 1) and `3,072,133,456 B` (table 2); `interleaved` ⇒ `reads [{24, 264}]`, `bytes_tier 98,304` on NVMe / 7,680 on DDR5, `usefulBytes 6,336`; `lookupTables` absent ⇒ no op                                                                                                                                                                                                                   |
+| U-17    | `engine/transfer.test.ts`             | `n_stream` (one node, `tp = dp = 1` unless said): (a) `b = 1, pp = 4`, `offloadOverlap 'none'`, a `dense_layers` range on stage 0 only ⇒ 1 (service equals the single-device value); (b) same with `'ideal'` ⇒ 1; (c) `pp 4, b 1, 'ideal'`, experts offloaded on every stage ⇒ 4; (d) `pp 4, b 1, 'none'`, every stage ⇒ 1; **(e) `pp 4, b 2 (m = 2), 'none'`, every stage ⇒ 2; (f) `pp 4, b 2, 'none'`, experts offloaded on stages {0, 1} only ⇒ 2; (g) `pp 4, b 2, 'none'`, stage 0 only ⇒ 1;** (h) `pp 4, b 4 (m = 4), 'none'`, every stage ⇒ 4; (i) one node, `tp 4`, every stage ⇒ 4 (= U-12)                                                                                                                                                              |
+| U-18    | `engine/specdec.test.ts`              | MTP cache advance: REF_DENSE_8B k 1, `acceptance { per_position, alphas [1] }` (all accepted, `E[τ] = 2`) ⇒ the draft pass has `qLen 2`, `attn.core.kvWriteBytes = 2·4096 = 8,192 B`, `eh_proj m 2`, `lm_head m 1`; three consecutive steps advance the module's committed length by 2 each (`kvLen` of step i = N + 2i + … in the test's explicit stepping helper); `alphas [0]` (rejected, `E[τ] = 1`) ⇒ `qLen 1`, `kvWriteBytes 4,096`, the tentative row of the previous step counted as overwritten (no extra write)                                                                                                                                                                                                                                        |
+| F-1     | (future, blocked on the G2 follow-up) | PP > 1 spec-dec with `targetLayerIds` spanning stages: feature `send_recv`s and embedding copy                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| S-1     | `__sanity__/reports.test.ts`          | lm-09 (MTP k 8), lm-36 (DSpark k 5 at the reported E[τ] 2.85), lm-39 (DFlash 2 k 7) with spec-dec on, and the offload rows web-52 (PR 29887, 5090, 67.8 tok/s @ h .89) and web-53 (ubergarm Qwen3-235B, 10 tok/s), `simulated ≥ 0.9 × reported`; as built, web-53's decode is a known exception (CPU-compute offload, §10) and its prefill is asserted; ratios in docs/sanity-check.md                                                                                                                                                                                                                                                                                                                                                                           |
+| W-1…W-4 | `engine/e2e.test.ts`                  | §8.4–8.6: exact (rel 1e-6) on the hand-derived transfer/draft terms, within **0.1%** on the quoted tok/s                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
-### 8.3 Numeric goldens from today's code (pinned by ID-1; the follow-up of §4.3 regenerates them)
+### 8.3 Numeric goldens after the latency audit (pinned by ID-1; measured deltas in §4.3)
 
 bf16 weights/activations/KV, fp32 accumulate, default options. `SYNTH_CLUSTER` = 8 `SYNTH_GPU` per node × 2 nodes,
 intra `SYNTH_NVLINK` (100 GB/s, α 1 µs), inter `SYNTH_IB` (50 GB/s, α 5 µs) (`__fixtures__/synthetic.ts`). Workload
 batch `b`, prompt `P`, decode context `N`. Cycle times in seconds, rates in tok/s, memory in bytes per device of each
 stage (`totalBytes`).
 
-| id | config | decode cycle | decode tok/s @N | prefill cycle | prefill TTFT | prefill tok/s @P | memory per stage | fits |
-|---|---|---|---|---|---|---|---|---|
-| G-a | REF_DENSE_8B, RTX 5090, tp 1, b 1, P 4096, N 1024 | 8.538328428571402e-3 | 117.118942936623 | 0.31770528850866675 | same | 12892.451426373611 | [17,287,440,384] | true |
-| G-b | REF_DENSE_8B, cluster, tp 4, b 1, P 4096, N 1024 | 4.120760767999988e-3 | 242.6736363259812 | 0.18019574180722692 | same | 22730.83680513324 | [4,347,488,256] | true |
-| G-c | REF_DENSE_8B, cluster, tp 2 pp 2, b 2, P 4096, N 1024 | 8.419233535999987e-3 | 237.55131526500074 | 0.34323570569445416 | 0.5146366971656813 | 23866.980806747582 | [4,548,502,528, 4,548,510,720] | true |
-| G-d | REF_DENSE_8B, cluster, pp 2, b 4, P 4096, N 1024 | 1.670985011199998e-2 | 239.3797654191672 | 1.3158195622538693 | 1.9732903249488039 | 12451.555266389125 | [10,002,670,592, 10,002,678,784] | true |
-| G-e | TINY_HYBRID, cluster, tp 1 ep 2 dp 2, b 4, P 512, N 1024 (mode B all-to-alls) | 2.1208831999999997e-5 | 188600.67353072535 | 2.4009366387548636e-4 | same | 8530004.361389985 | [9,757,120] | true |
-| G-f | TINY_HYBRID, cluster, tp 2 pp 2, b 2, P 512, N 1024 | 2.9557392e-5 | 67664.96854661602 | 1.8710956775097273e-4 | 2.798100477509727e-4 | 5472729.2265612995 | [3,323,008, 3,958,592] | true |
-| G-g | REF_DENSE_8B, cluster, tp 8 pp 2 (inter-node PP), b 1, P 4096, N 1024 | 2.4350845760000017e-3 | 410.6633543064252 | 4.852454397980686e-2 | 9.765063224761372e-2 | 84410.89115035313 | [1,162,519,552, 1,162,527,744] | true |
-| G-i | REF_DENSE_8B, cluster, tp 16 (hierarchical 8×2), b 1, P 4096, N 1024 | 2.9106749920000006e-3 | 343.5629201984087 | 6.070928018780688e-2 | same | 67469.09183124623 | [1,238,329,344] | true |
-| G-h1 | Qwen/Qwen3.8-Flash-Next fixture (repo quant), RTX 5090, tp 1, b 1, P 8192, N 8192 | 8.356467181537718e-3 | 119.66779480799501 | 0.6093556337025076 | same | 13443.709300305578 | [354,839,488,512] | false |
-| G-h2 | deepseek-ai/DeepSeek-V4.1-Flash fixture (repo quant), same | 8.979504281438205e-3 | 111.3647222227099 | 0.8779083600783636 | same | 9331.270064757975 | [502,483,014,272] | false |
+| id   | config                                                                            | decode cycle            | decode tok/s @N    | prefill cycle          | prefill TTFT          | prefill tok/s @P   | memory per stage                 | fits  |
+| ---- | --------------------------------------------------------------------------------- | ----------------------- | ------------------ | ---------------------- | --------------------- | ------------------ | -------------------------------- | ----- |
+| G-a  | REF_DENSE_8B, RTX 5090, tp 1, b 1, P 4096, N 1024                                 | 0.008538328428571402    | 117.118942936623   | 0.31770528850866675    | same                  | 12892.451426373611 | [17,287,440,384]                 | true  |
+| G-b  | REF_DENSE_8B, cluster, tp 4, b 1, P 4096, N 1024                                  | 0.004123760767999988    | 242.49709337164026 | 0.1800527418072269     | same                  | 22748.889902411895 | [4,347,488,256]                  | true  |
+| G-c  | REF_DENSE_8B, cluster, tp 2 pp 2, b 2, P 4096, N 1024                             | 0.008421233535999988    | 237.4948980396027  | 0.34323770569445416    | 0.5146386971656812    | 23866.84173705675  | [4,548,502,528, 4,548,510,720]   | true  |
+| G-d  | REF_DENSE_8B, cluster, pp 2, b 4, P 4096, N 1024                                  | 0.01670985011199998     | 239.3797654191672  | 1.3158195622538693     | 1.9732903249488039    | 12451.555266389125 | [10,002,670,592, 10,002,678,784] | true  |
+| G-e  | TINY_HYBRID, cluster, tp 1 ep 2 dp 2, b 4, P 512, N 1024 (mode B all-to-alls)     | 0.000021208831999999997 | 188600.67353072535 | 0.00024009366387548636 | same                  | 8530004.361389985  | [9,757,120]                      | true  |
+| G-f  | TINY_HYBRID, cluster, tp 2 pp 2, b 2, P 512, N 1024                               | 0.000031463856          | 63564.999788964196 | 0.00018910956775097272 | 0.0002818100477509727 | 5414850.301749119  | [3,323,008, 3,958,592]           | true  |
+| G-g  | REF_DENSE_8B, cluster, tp 8 pp 2 (inter-node PP), b 1, P 4096, N 1024             | 0.0024470846560000017   | 408.6495322293416  | 0.04824354397980686    | 0.09707363224761373   | 84902.55197077664  | [1,162,519,552, 1,162,527,744]   | true  |
+| G-i  | REF_DENSE_8B, cluster, tp 16 (hierarchical 8×2), b 1, P 4096, N 1024              | 0.002922674992000001    | 342.15231003694157 | 0.060721280187806884   | same                  | 67455.75829974837  | [1,238,329,344]                  | true  |
+| G-h1 | Qwen/Qwen3.8-Flash-Next fixture (repo quant), RTX 5090, tp 1, b 1, P 8192, N 8192 | 0.008356467181537718    | 119.66779480799501 | 0.6093556337025076     | same                  | 13443.709300305578 | [354,839,488,512]                | false |
+| G-h2 | deepseek-ai/DeepSeek-V4.1-Flash fixture (repo quant), same                        | 0.008979504281438205    | 111.3647222227099  | 0.8779083600783636     | same                  | 9331.270064757975  | [502,483,014,272]                | false |
 
-α bookkeeping of the same runs (for `PhaseResult.comm` and the §4.3 deltas): G-b decode `Σ lat_s = 292 µs`
-(73 all-reduces, tree, `2·2·1 µs` each), `Σ bw_s = 11.96 µs`; G-c decode `lat 146 µs`, send `α 1 µs + β 0.08 µs`;
-G-g decode `lat 438 µs`, send `α 5 µs`; G-i decode `lat 1752 µs` (hierarchical: `RS_intra 7 + AR_inter 2 + AG_intra
-7 = 16 ring steps`... `24 µs`/AR); G-e decode `lat 8 µs` (4 dispatch + 4 combine a2a, α 1 µs); G-f decode `lat 18 µs`
-(9 all-reduces), send `α 1 µs`.
+α bookkeeping after the audit (`PhaseResult.comm` includes forward and return): G-b decode stage α =
+`295 µs` (292 AR + 3 sampling AG), β = `11.96056 µs`; G-c stage α `147 µs`, forward α 1 µs + β 0.08192 µs,
+return α 1 µs + β 0.00004 µs, total α `149 µs`. G-g stage α `445 µs` (438 AR + 7 AG), forward and return
+α 5 µs each, total `455 µs`. G-i stage α `1764 µs` (1752 AR + 12 hierarchical AG).
+G-e stays α `8 µs` (4 dispatch + 4 combine); G-f stage α `19 µs` (18 AR + 1 AG), forward and return α 1 µs
+each, total `21 µs`. The resource branch of the pipeline maximum can hide loop-back time (§4.3).
 
 ### 8.4 Worked example W1: Qwen3-30B-A3B-class MoE on one RTX 5090, experts in DDR5 over PCIe 5.0 x16
 
@@ -1088,15 +1191,15 @@ Hardware `RTX_5090`, `singleDevice`, host link PCIe 5.0 x16 (`B_link = 63,015,38
   4,299,377,664 B / 1.792e12 = 2.3992 ms plus the compute-bound 128-wide router GEMMs and vector ops); prefill
   cycle **377.580 ms** (21,696 tok/s @ 8k). No collectives ⇒ `core_s` = these cycles, `lat_s = 0`.
 - Decode `T = 1`: `U = 8`. Prefill `T = 8192`: `U = 128`. Hits per §2.4 with `C = 64` at f .5: decode `clamp(4, 0, 8)
-  = 4`; prefill `clamp(64, 64, 64) = 64`.
+= 4`; prefill `clamp(64, 64, 64) = 64`.
 - Per layer `t_path = 1.07 µs + max((M−1)·70e-9/64, M·W/96e9, M·W/63.015e9)` = link-bound.
 
-| case | f = h | M | bytes/layer | service | `t_path`/layer | `xfer = 48·t_path` | `'ideal'`: `max(core, xfer)` | `'none'`: `core + xfer` |
-|---|---|---|---|---|---|---|---|---|
-| decode @ 8k | 0 | 8 | 21,233,664 | 336.960 µs | 338.030 µs | 16.2254 ms | 16.2254 ms → **61.63 tok/s @ 8k** | 18.6922 ms → **53.50 tok/s @ 8k** |
-| decode @ 8k | 0.5 | 4 | 10,616,832 | 168.480 µs | 169.550 µs | 8.1384 ms | 8.1384 ms → **122.87 tok/s @ 8k** | 10.6051 ms → **94.29 tok/s @ 8k** |
-| prefill @ 8k | 0 | 128 | 339,738,624 | 5.39136 ms | 5.39243 ms | 258.837 ms | 377.580 ms → **21,696 tok/s @ 8k** | 636.417 ms → **12,872 tok/s @ 8k** |
-| prefill @ 8k | 0.5 | 64 | 169,869,312 | 2.69568 ms | 2.69675 ms | 129.444 ms | 377.580 ms → **21,696 tok/s @ 8k** | 507.024 ms → **16,157 tok/s @ 8k** |
+| case         | f = h | M   | bytes/layer | service    | `t_path`/layer | `xfer = 48·t_path` | `'ideal'`: `max(core, xfer)`       | `'none'`: `core + xfer`            |
+| ------------ | ----- | --- | ----------- | ---------- | -------------- | ------------------ | ---------------------------------- | ---------------------------------- |
+| decode @ 8k  | 0     | 8   | 21,233,664  | 336.960 µs | 338.030 µs     | 16.2254 ms         | 16.2254 ms → **61.63 tok/s @ 8k**  | 18.6922 ms → **53.50 tok/s @ 8k**  |
+| decode @ 8k  | 0.5   | 4   | 10,616,832  | 168.480 µs | 169.550 µs     | 8.1384 ms          | 8.1384 ms → **122.87 tok/s @ 8k**  | 10.6051 ms → **94.29 tok/s @ 8k**  |
+| prefill @ 8k | 0     | 128 | 339,738,624 | 5.39136 ms | 5.39243 ms     | 258.837 ms         | 377.580 ms → **21,696 tok/s @ 8k** | 636.417 ms → **12,872 tok/s @ 8k** |
+| prefill @ 8k | 0.5   | 64  | 169,869,312 | 2.69568 ms | 2.69675 ms     | 129.444 ms         | 377.580 ms → **21,696 tok/s @ 8k** | 507.024 ms → **16,157 tok/s @ 8k** |
 
 Memory (f 0, ideal): device `W_s = 19,389,640,704 − 16,307,453,952 = 3,082,186,752 B`, staging `2·128·2,654,208 =
 679,477,248 B` (prefill misses all 128), KV at 8193 tokens 805,404,672 B, activation peak 469,762,048 B ⇒
@@ -1150,16 +1253,16 @@ max(Little, IOPS, tier, host, link)` per table.
 45 µs variant of the preset. With the preset itself every SSD `α` is 0.4545 µs larger and the Little's-law terms
 1% larger, e.g. the PLE decode path 57.883 µs instead of 57.429 µs.)
 
-| | Qwen3.8-Flash-Next (PLE) | DeepSeek-V4.1-Flash (Engram) |
-|---|---|---|
-| table | 1 at layer index 1: 320,000,000 rows × 160 bf16 = 320 B/row; 102,400,000,000 B | 2 at indices 1, 14: 384,006,168 + 384,016,682 rows × 256 mxfp8 (1.03125 B/elem) = 264 B/row (320 B in 64 B lines; one 4 KiB page); 202,758,032,400 B |
-| rows per step | decode `R = 16`; prefill `R = 131,072` (one 320 B read per row) | per table decode `R = 24` rows (DDR5 `separate`: 48 physical reads; SSD `pinned_host`: 24 page reads); prefill `R = 196,608` rows (393,216 / 196,608 reads) |
-| baseline | decode 8.356467 ms (119.668 tok/s @ 8k); prefill 609.356 ms (13,443.7 tok/s @ 8k) | decode 8.979504 ms (111.365 tok/s @ 8k); prefill 877.908 ms (9,331.3 tok/s @ 8k) |
-| **DDR5, decode** | `α 1.07 µs`; terms: Little `15·70e-9/64 = 16 ns`, tier `5,120/96e9 = 53 ns`, link `5,120/63.015e9 = 81 ns` ⇒ **1.1513 µs** ⇒ 8.357618 ms → **119.651 tok/s** | per table `α 1.07 µs` + max(Little `47·70e-9/64 = 51 ns`, tier `(24·256 + 24·64)/96e9 = 80 ns`, link `6,336/63.015e9 = 100.5 ns`) = 1.1705 µs; two tables **2.3411 µs** ⇒ 8.981845 ms → **111.336 tok/s** |
-| **DDR5, prefill** | terms: Little 143.4 µs, tier `41,943,040/96e9 = 436.9 µs`, link `41,943,040/63.015e9 = 665.6 µs` ⇒ **0.66667 ms** ⇒ 610.023 ms → **13,429.0 tok/s @ 8k** | per table max(Little `393,215·70e-9/64 = 430.1 µs`, tier `196,608·320/96e9 = 655.4 µs`, link `51,904,512/63.015e9 = 823.7 µs`) + 1.07 µs = 0.82475 ms; two tables **1.6495 ms** ⇒ 879.558 ms → **9,313.8 tok/s @ 8k** |
-| **990 Pro, decode** | `α 46 µs`; terms: Little `15·45e-6/512 = 1.32 µs`, IOPS `16/1.4e6 = 11.43 µs`, tier `65,536/7.45e9 = 8.80 µs`, host `65,536/48e9 = 1.37 µs`, link 0.08 µs ⇒ **57.429 µs** ⇒ 8.413896 ms → **118.851 tok/s** | per table `46 µs` + max(2.02 µs, `24/1.4e6 = 17.14 µs`, `98,304/7.45e9 = 13.20 µs`, 2.05 µs, 0.1 µs) = 63.143 µs; two tables **126.286 µs** ⇒ 9.105790 ms → **109.820 tok/s** |
-| **990 Pro, prefill** | terms: Little 11.52 ms, IOPS `131,072/1.4e6 = 93.623 ms`, tier `536,870,912/7.45e9 = 72.06 ms`, host 11.18 ms, link 0.67 ms ⇒ **93.669 ms** ⇒ 703.025 ms → **11,652.5 tok/s @ 8k** | per table max(17.28 ms, `196,608/1.4e6 = 140.43 ms`, 108.1 ms, 16.78 ms, 0.82 ms) + 46 µs = 140.480 ms; two tables **280.96 ms** ⇒ 1,158.87 ms → **7,069.0 tok/s @ 8k** |
-| memory | device weights 353,887,054,848 → 251,487,054,848 B; `tiers[host_ram] = 102.4e9 > 96e9` ⇒ **host tier does not fit** (128 GB or an int8 table needed); `nvme` 102.4e9 ≤ 2e12 fits | device 501,382,474,992 → 298,624,442,592 B; host RAM: `separate` 202,758,032,400 B > 96e9 does not fit; SSD with `pinned_host`: `tiers[nvme] = 196,613,849,600 B` (values) fits, `tiers[host_ram] = 6,144,182,800 B` (scales) fits |
+|                      | Qwen3.8-Flash-Next (PLE)                                                                                                                                                                                    | DeepSeek-V4.1-Flash (Engram)                                                                                                                                                                                                       |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| table                | 1 at layer index 1: 320,000,000 rows × 160 bf16 = 320 B/row; 102,400,000,000 B                                                                                                                              | 2 at indices 1, 14: 384,006,168 + 384,016,682 rows × 256 mxfp8 (1.03125 B/elem) = 264 B/row (320 B in 64 B lines; one 4 KiB page); 202,758,032,400 B                                                                               |
+| rows per step        | decode `R = 16`; prefill `R = 131,072` (one 320 B read per row)                                                                                                                                             | per table decode `R = 24` rows (DDR5 `separate`: 48 physical reads; SSD `pinned_host`: 24 page reads); prefill `R = 196,608` rows (393,216 / 196,608 reads)                                                                        |
+| baseline             | decode 8.356467 ms (119.668 tok/s @ 8k); prefill 609.356 ms (13,443.7 tok/s @ 8k)                                                                                                                           | decode 8.979504 ms (111.365 tok/s @ 8k); prefill 877.908 ms (9,331.3 tok/s @ 8k)                                                                                                                                                   |
+| **DDR5, decode**     | `α 1.07 µs`; terms: Little `15·70e-9/64 = 16 ns`, tier `5,120/96e9 = 53 ns`, link `5,120/63.015e9 = 81 ns` ⇒ **1.1513 µs** ⇒ 8.357618 ms → **119.651 tok/s**                                                | per table `α 1.07 µs` + max(Little `47·70e-9/64 = 51 ns`, tier `(24·256 + 24·64)/96e9 = 80 ns`, link `6,336/63.015e9 = 100.5 ns`) = 1.1705 µs; two tables **2.3411 µs** ⇒ 8.981845 ms → **111.336 tok/s**                          |
+| **DDR5, prefill**    | terms: Little 143.4 µs, tier `41,943,040/96e9 = 436.9 µs`, link `41,943,040/63.015e9 = 665.6 µs` ⇒ **0.66667 ms** ⇒ 610.023 ms → **13,429.0 tok/s @ 8k**                                                    | per table max(Little `393,215·70e-9/64 = 430.1 µs`, tier `196,608·320/96e9 = 655.4 µs`, link `51,904,512/63.015e9 = 823.7 µs`) + 1.07 µs = 0.82475 ms; two tables **1.6495 ms** ⇒ 879.558 ms → **9,313.8 tok/s @ 8k**              |
+| **990 Pro, decode**  | `α 46 µs`; terms: Little `15·45e-6/512 = 1.32 µs`, IOPS `16/1.4e6 = 11.43 µs`, tier `65,536/7.45e9 = 8.80 µs`, host `65,536/48e9 = 1.37 µs`, link 0.08 µs ⇒ **57.429 µs** ⇒ 8.413896 ms → **118.851 tok/s** | per table `46 µs` + max(2.02 µs, `24/1.4e6 = 17.14 µs`, `98,304/7.45e9 = 13.20 µs`, 2.05 µs, 0.1 µs) = 63.143 µs; two tables **126.286 µs** ⇒ 9.105790 ms → **109.820 tok/s**                                                      |
+| **990 Pro, prefill** | terms: Little 11.52 ms, IOPS `131,072/1.4e6 = 93.623 ms`, tier `536,870,912/7.45e9 = 72.06 ms`, host 11.18 ms, link 0.67 ms ⇒ **93.669 ms** ⇒ 703.025 ms → **11,652.5 tok/s @ 8k**                          | per table max(17.28 ms, `196,608/1.4e6 = 140.43 ms`, 108.1 ms, 16.78 ms, 0.82 ms) + 46 µs = 140.480 ms; two tables **280.96 ms** ⇒ 1,158.87 ms → **7,069.0 tok/s @ 8k**                                                            |
+| memory               | device weights 353,887,054,848 → 251,487,054,848 B; `tiers[host_ram] = 102.4e9 > 96e9` ⇒ **host tier does not fit** (128 GB or an int8 table needed); `nvme` 102.4e9 ≤ 2e12 fits                            | device 501,382,474,992 → 298,624,442,592 B; host RAM: `separate` 202,758,032,400 B > 96e9 does not fit; SSD with `pinned_host`: `tiers[nvme] = 196,613,849,600 B` (values) fits, `tiers[host_ram] = 6,144,182,800 B` (scales) fits |
 
 The `interleaved` layout gives the same numbers as above on both tiers for these two models (320 B = 256 + 64 on DDR5;
 one page either way on the SSD); `separate` on the SSD would double the Engram page reads (IOPS term 34.3 µs per table
@@ -1171,21 +1274,22 @@ in decode) while `usefulBytes` stays 6,336 B. Test: the transfer op's `sec` equa
 ## 9. Open questions (for the user), with the decisions the implementation took
 
 1. **Lookup-table UI start state.** The simulator defaults to `'device'` (strict identity); the UI shows the hint chip
-   and pre-fills Host RAM once offload is turned on. Should the UI *start* PLE/Engram models at Host RAM instead?
-   *Built: no; `'device'` with the hint chip.*
+   and pre-fills Host RAM once offload is turned on. Should the UI _start_ PLE/Engram models at Host RAM instead?
+   _Built: no; `'device'` with the hint chip._
 2. **Prefill with offloaded experts under `'ideal'`:** the transfer hides behind the (large) prefill compute, so a
    transfer-bound prefill only shows under `'none'`. Acceptable as the upper bound, or should prefill always
-   serialize (llama.cpp copies per ubatch synchronously)? *Built: accepted as the upper bound; the "?" help says so.*
+   serialize (llama.cpp copies per ubatch synchronously)? _Built: accepted as the upper bound; the "?" help says so._
 3. **Achieved vs theoretical rates.** Presets store datasheet ceilings (PCIe 5 x16 63.0 GB/s vs ≈ 50–53 GB/s measured).
-   Keep the "theoretical" stance with the `linkBandwidth` modifier, or add an `achievedFraction` knob? *Built:
-   theoretical (datasheet) rates.*
-4. **Hit-ratio default** `uniform` (exact lower bound) vs `skewed_classic` (typical observed)? *Built: `uniform`.*
-5. **CPU-compute mode**: hook only (this doc) or a first version with a user-entered host matmul peak? *Built: hook
-   only; validation rejects `'cpu_compute'`.*
-6. **Drafter quantization**: drafters ship bf16; should a draft-specific `QuantConfig` override be offered? *Built: no
-   override.*
+   Keep the "theoretical" stance with the `linkBandwidth` modifier, or add an `achievedFraction` knob? _Built:
+   theoretical (datasheet) rates._
+4. **Hit-ratio default** `uniform` (exact lower bound) vs `skewed_classic` (typical observed)? _Built: `uniform`._
+5. **CPU-compute mode**: hook only (this doc) or a first version with a user-entered host matmul peak? _Built: hook
+   only; validation rejects `'cpu_compute'`._
+6. **Drafter quantization**: drafters ship bf16; should a draft-specific `QuantConfig` override be offered? _Built: no
+   override._
 7. **Latency-audit corrections (§4.3)**: implement all of G1–G4, G7, G8 in the follow-up, or only the clear omissions
-   G1/G2/G3/G8 (G4/G7 are judgments about fabrics and algorithm choice)? *Open: none is in this feature.*
+   G1/G2/G3/G8 (G4/G7 are judgments about fabrics and algorithm choice)? _Decision: apply ALL of G1–G4, G7, G8.
+   Implemented in the latency-audit follow-up (§4.3); G6 remains out of scope._
 8. Research gaps accepted as is: no Reddit access; no primary citation for DeepSeek-R1-from-NVMe runs; no LRU curve for
    DeepSeek-V3/R1; DFlash 2 numbers come from the vendor (no paper); Gen5 SSD QD1 latency, M3 Ultra SSD speed and the
    DSpark confidence-head layout are estimates; vLLM support for the n-gram models unverified.
@@ -1249,7 +1353,7 @@ Where the code differs from revision 2 of this design, and why. The sections abo
 **Speculative decoding**
 
 20. DSpark block semantics: DeepSpec's `block_size` counts draft positions, so the loader stores `blockSize =
-    block_size + 1`; a DSpark pass embeds k rows (anchor + k − 1 masks) and takes logits at all k, a DFlash 2 pass
+block_size + 1`; a DSpark pass embeds k rows (anchor + k − 1 masks) and takes logits at all k, a DFlash 2 pass
     k + 1 rows. DeepSeek-V4.1: `dspark_block_size 5` ⇒ blockSize 6, default k 5 (the design said blockSize 5);
     Qwen3-8B DSpark: blockSize 8, k 7 (§3.2, §3.3).
 21. The DFlash 2 conv `finish` step costs 4·K FLOP/elem, not 2·K: the code applies the base and the dynamic taps in

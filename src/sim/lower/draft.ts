@@ -41,7 +41,7 @@ import {
   tpAllReduce,
 } from './common';
 import { embeddingFormat } from './embedding';
-import { lmHeadFormat } from './head';
+import { lmHeadFormat, samplingExchangeOps } from './head';
 import {
   blockResidentWeightBytes,
   blockSequenceStateBytes,
@@ -121,22 +121,26 @@ function sharedEmbedOps(
 }
 
 /** The shared LM head over `rows` rows: m = rows, n = ceil(V/tp), k = h, in the LM-head format. */
-function sharedLmHead(
+function sharedLmHeadOps(
   name: string,
   hidden: number,
   vocab: number,
   rows: number,
   ctx: LoweringContext,
-): Op {
+): Op[] {
   // Formula: lm_head: m = rows, n = ceil(V/tp), k = h
   // See docs/simulation-model.md §13 "Draft ops"
   const format = {
     weights: lmHeadFormat(ctx),
     gemmInput: ctx.quant.lmHeadGemmInput ?? ctx.quant.activations,
   };
-  return linearGemm(name, { m: rows, n: Math.ceil(vocab / ctx.parallel.tp), k: hidden }, ctx, {
-    format,
-  });
+  const head = linearGemm(
+    name,
+    { m: rows, n: Math.ceil(vocab / ctx.parallel.tp), k: hidden },
+    ctx,
+    { format },
+  );
+  return [head, ...samplingExchangeOps(rows, ctx, 'draft.sample_all_gather')];
 }
 
 /** A residual add over `elems` activations: read 2·elems, write elems. */
@@ -409,7 +413,7 @@ function mtpPassOps(
     ...mtpInputOps(model, draft, layerCtx.qLen, layerCtx),
     ...asDraftOps(module.blocks.flatMap((block) => lowerBlock(block, layerCtx, moduleIndex))),
     mtpFinalNorm(model, headRows, layerCtx),
-    sharedLmHead('draft.lm_head', model.hidden, model.vocab, headRows, layerCtx),
+    ...sharedLmHeadOps('draft.lm_head', model.hidden, model.vocab, headRows, layerCtx),
   ];
 }
 
@@ -474,7 +478,7 @@ function lowerMtpPrefill(
   // Formula: head over Tout = seqs (last prompt position)
   last.ops.push(
     mtpFinalNorm(model, ctx.seqs, layerCtx),
-    sharedLmHead('draft.lm_head', model.hidden, model.vocab, ctx.seqs, layerCtx),
+    ...sharedLmHeadOps('draft.lm_head', model.hidden, model.vocab, ctx.seqs, layerCtx),
   );
   return layers;
 }
@@ -724,7 +728,7 @@ function blockHeadOps(draft: BlockDraftSpec, s: BlockShape, ctx: LoweringContext
   const emb = { format: { weights: embeddingFormat(ctx) } };
   const ops: Op[] = [
     normOp('draft.norm', 'rmsnorm', s.blockRows, h, ctx),
-    sharedLmHead('draft.lm_head', h, draft.vocab, s.headRows, ctx),
+    ...sharedLmHeadOps('draft.lm_head', h, draft.vocab, s.headRows, ctx),
   ];
   const sel = draft.selector;
   if (sel !== undefined) {

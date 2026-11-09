@@ -44,16 +44,16 @@ what the hardware and the math allow, not what a particular inference engine ach
 `tflops`, `gbPerSec`, `tbPerSec`, `gb`, `mb`, `usec`). Times are seconds, rates tokens/s, sizes bytes or
 elements as the field name says.
 
-| Quantity | Convention |
-|---|---|
-| Matmul peak (`MatmulPeak.flopsPerSec`) | per device; keyed by (input format, accumulator, sparsity); FLOP/s (OP/s for integers) |
-| 2:4 sparse peak | dense-equivalent FLOP/s (vendor convention); op FLOP counts are never halved |
-| Memory bandwidth (`MemorySpec.bandwidthBytesPerSec`) | per device, read + write combined, as vendors quote it |
-| Link bandwidth (`LinkSpec.bandwidthPerDirectionBytesPerSec`) | per device, **per direction** (unidirectional injection rate), never the bidirectional sum |
-| Link latency (`latencySec`) | α per message / algorithm step |
-| `CollectiveOp.messageBytes` | per device: all_reduce = the full buffer; all_gather = the full OUTPUT; reduce_scatter = the full INPUT; all_to_all = the total sent incl. the self share; send_recv = bytes sent |
-| Op bytes (`ByteBreakdown`) | per device, per microbatch step |
-| `tokensPerSec` | aggregate over DP replicas; `perSequenceTokensPerSec` is what one sequence sees |
+| Quantity                                                     | Convention                                                                                                                                                                        |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Matmul peak (`MatmulPeak.flopsPerSec`)                       | per device; keyed by (input format, accumulator, sparsity); FLOP/s (OP/s for integers)                                                                                            |
+| 2:4 sparse peak                                              | dense-equivalent FLOP/s (vendor convention); op FLOP counts are never halved                                                                                                      |
+| Memory bandwidth (`MemorySpec.bandwidthBytesPerSec`)         | per device, read + write combined, as vendors quote it                                                                                                                            |
+| Link bandwidth (`LinkSpec.bandwidthPerDirectionBytesPerSec`) | per device, **per direction** (unidirectional injection rate), never the bidirectional sum                                                                                        |
+| Link latency (`latencySec`)                                  | α per message / algorithm step                                                                                                                                                    |
+| `CollectiveOp.messageBytes`                                  | per device: all_reduce = the full buffer; all_gather = the full OUTPUT; reduce_scatter = the full INPUT; all_to_all = the total sent incl. the self share; send_recv = bytes sent |
+| Op bytes (`ByteBreakdown`)                                   | per device, per microbatch step                                                                                                                                                   |
+| `tokensPerSec`                                               | aggregate over DP replicas; `perSequenceTokensPerSec` is what one sequence sees                                                                                                   |
 
 ---
 
@@ -68,7 +68,7 @@ The builders (`src/sim/ir/builders.ts`: `decoderLayer`, `decoderModel`, `repeatL
 pre-norm decoder layers from `MixerParams` + `FfnParams` (+ optional `residual`, `ngram`, `shortConv`):
 
 - plain residual: `[ngram] → norm → mixer → [short_conv] → [post-norm] → residual → norm → ffn → [short_conv] →
-  [post-norm] → residual`;
+[post-norm] → residual`;
 - hyper-connections (`residual.kind: 'hyper'`, N streams): each `norm … residual` pair becomes
   `hc_pre → [norm if subNorms] … hc_post`. DeepSeek-V4.1 and GLM-5.3-Flash keep the sub-norms, Qwen4Exp does not.
 - `decoderModel({ beforeHead })` appends blocks (the final hyper-connection collapse) to the LAST layer, so they are
@@ -157,21 +157,21 @@ scale or zero point outside the dtype goes into `extraBitsPerElem`, amortized pe
   elements: `extra = (s + z)/g` (`groupScaleBits`).
 - Per-channel and per-tensor scales are ≈ 0 and are left out.
 
-| Scheme | Storage dtype | Overhead (bits/element) | Reader |
-|---|---|---|---|
-| fp8 block 128×128, fp32 scales (DeepSeek-V3 / GLM / Qwen FP8, ModelOpt `FP8_PB_WO`, `FP8_BLOCK_SCALES`) | `fp8_e4m3` | 32/16384 ≈ 0.00195 | `fp8.ts`, `modelopt.ts`, `compressedTensors.ts`, `quark.ts` |
-| fp8 block 32×32, ue8m0 scales (DeepSeek-V4.1, Quark `float8_e8m0fnu`) | `fp8_e4m3` | 8/1024 ≈ 0.0078 | `fp8.ts`, `quark.ts` |
-| fp8 per-tensor / per-channel (`FP8`, `float-quantized` channel) | `fp8_e4m3` | ≈ 0 | `modelopt.ts`, `compressedTensors.ts` |
-| mxfp8 (block 1×32 e8m0, `mxfp8-quantized`, ModelOpt `MXFP8`) | `mxfp8` | in the dtype: 8/32 = 0.25 | `fp8.ts`, `compressedTensors.ts`, `modelopt.ts`, `mlx.ts` |
-| mxfp4 (e2m1, g32 e8m0; Quark fp4 g32 e8m0, `mxfp4-pack-quantized`, DeepSeek `expert_dtype: fp4`) | `mxfp4` | in the dtype: 8/32 = 0.25 | `fp8.ts`, `compressedTensors.ts`, `modelopt.ts`, `quark.ts`, `gptq.ts`, `mlx.ts` |
-| nvfp4 (e2m1, g16 e4m3 + an fp32 per-tensor `weight_scale_2`) | `nvfp4` | in the dtype: 8/16 = 0.5; the per-tensor scale ≈ 0 | `modelopt.ts`, `compressedTensors.ts`, `quark.ts`, `gptq.ts`, `mlx.ts` |
-| GPTQ / AWQ / AutoRound int`b` g`g` (fp16 scale + packed `b`-bit `qzeros`, also when symmetric) | `int4` / `int8` | (16 + b)/g: g128 0.15625, g32 0.625; `group_size -1` ≈ 0 | `gptq.ts` |
-| compressed-tensors int`b` group (`scale_dtype`, default bf16; zero point `zp_dtype` only when `symmetric: false`) | `int4` / `int8` | (16 + z)/g: sym g128 0.125, asym g32 int8 zp 0.75 | `compressedTensors.ts` |
-| ModelOpt `INT4_AWQ` / `W4A16_AWQ` / `W4A8_AWQ` | `int4` | 16/g | `modelopt.ts` |
-| Quark int4 / uint4 per_group g | `int4` | (16 + z)/g, z = 4 when asymmetric or uint | `quark.ts` |
-| bitsandbytes NF4 / FP4, absmax per 64 (codes stored as `int4`) | `int4` | fp32 absmax 32/64 = 0.5; double quant 8/64 + 32/(64·256) ≈ 0.127 | `bnb.ts` |
-| bitsandbytes int8 (LLM.int8(), per-row fp32 scale; fp16 outlier columns not modeled) | `int8` | ≈ 0 | `bnb.ts` |
-| MLX affine `b`-bit g`g` (16-bit scale + 16-bit bias per group) | `int4` / `int8` (widths without a dtype round up, noted) | 32/g: g64 0.5 | `mlx.ts` |
+| Scheme                                                                                                            | Storage dtype                                            | Overhead (bits/element)                                          | Reader                                                                           |
+| ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| fp8 block 128×128, fp32 scales (DeepSeek-V3 / GLM / Qwen FP8, ModelOpt `FP8_PB_WO`, `FP8_BLOCK_SCALES`)           | `fp8_e4m3`                                               | 32/16384 ≈ 0.00195                                               | `fp8.ts`, `modelopt.ts`, `compressedTensors.ts`, `quark.ts`                      |
+| fp8 block 32×32, ue8m0 scales (DeepSeek-V4.1, Quark `float8_e8m0fnu`)                                             | `fp8_e4m3`                                               | 8/1024 ≈ 0.0078                                                  | `fp8.ts`, `quark.ts`                                                             |
+| fp8 per-tensor / per-channel (`FP8`, `float-quantized` channel)                                                   | `fp8_e4m3`                                               | ≈ 0                                                              | `modelopt.ts`, `compressedTensors.ts`                                            |
+| mxfp8 (block 1×32 e8m0, `mxfp8-quantized`, ModelOpt `MXFP8`)                                                      | `mxfp8`                                                  | in the dtype: 8/32 = 0.25                                        | `fp8.ts`, `compressedTensors.ts`, `modelopt.ts`, `mlx.ts`                        |
+| mxfp4 (e2m1, g32 e8m0; Quark fp4 g32 e8m0, `mxfp4-pack-quantized`, DeepSeek `expert_dtype: fp4`)                  | `mxfp4`                                                  | in the dtype: 8/32 = 0.25                                        | `fp8.ts`, `compressedTensors.ts`, `modelopt.ts`, `quark.ts`, `gptq.ts`, `mlx.ts` |
+| nvfp4 (e2m1, g16 e4m3 + an fp32 per-tensor `weight_scale_2`)                                                      | `nvfp4`                                                  | in the dtype: 8/16 = 0.5; the per-tensor scale ≈ 0               | `modelopt.ts`, `compressedTensors.ts`, `quark.ts`, `gptq.ts`, `mlx.ts`           |
+| GPTQ / AWQ / AutoRound int`b` g`g` (fp16 scale + packed `b`-bit `qzeros`, also when symmetric)                    | `int4` / `int8`                                          | (16 + b)/g: g128 0.15625, g32 0.625; `group_size -1` ≈ 0         | `gptq.ts`                                                                        |
+| compressed-tensors int`b` group (`scale_dtype`, default bf16; zero point `zp_dtype` only when `symmetric: false`) | `int4` / `int8`                                          | (16 + z)/g: sym g128 0.125, asym g32 int8 zp 0.75                | `compressedTensors.ts`                                                           |
+| ModelOpt `INT4_AWQ` / `W4A16_AWQ` / `W4A8_AWQ`                                                                    | `int4`                                                   | 16/g                                                             | `modelopt.ts`                                                                    |
+| Quark int4 / uint4 per_group g                                                                                    | `int4`                                                   | (16 + z)/g, z = 4 when asymmetric or uint                        | `quark.ts`                                                                       |
+| bitsandbytes NF4 / FP4, absmax per 64 (codes stored as `int4`)                                                    | `int4`                                                   | fp32 absmax 32/64 = 0.5; double quant 8/64 + 32/(64·256) ≈ 0.127 | `bnb.ts`                                                                         |
+| bitsandbytes int8 (LLM.int8(), per-row fp32 scale; fp16 outlier columns not modeled)                              | `int8`                                                   | ≈ 0                                                              | `bnb.ts`                                                                         |
+| MLX affine `b`-bit g`g` (16-bit scale + 16-bit bias per group)                                                    | `int4` / `int8` (widths without a dtype round up, noted) | 32/g: g64 0.5                                                    | `mlx.ts`                                                                         |
 
 #### EXL3 (ExLlamaV3, fractional bits per weight)
 
@@ -186,11 +186,11 @@ scale or zero point outside the dtype goes into `extraBitsPerElem`, amortized pe
   per-tensor allocation (and `--recipe` files) are not in `config.json`, so the simulation applies the average to
   every linear layer.
 - `config.json` `quantization_config`: `{ quant_method: "exl3", version, bits, head_bits, calibration, out_scales,
-  codebook, mtp_bits, vision_bits, original_quantization_config? }`. The average key is `bits` (turboderp,
+codebook, mtp_bits, vision_bits, original_quantization_config? }`. The average key is `bits` (turboderp,
   converter `-b`), `bpw` or `avg_bits` (community mixed-precision optimizers); `head_bits` (converter default 6;
   16 = unquantized) is the LM head; `mtp_bits` / `vision_bits` concern parts outside the IR;
   `original_quantization_config` describes the source checkpoint and is ignored. A community `scope:
-  "…routed_experts_only"` quantizes only the routed experts. turboderp publishes one repo per model with a branch
+"…routed_experts_only"` quantizes only the routed experts. turboderp publishes one repo per model with a branch
   per bitrate (`SC_4.00bpw_H5_V6`, `sc_3.10bpw`), each with its own `config.json`.
 - Scope: attention, MLP, shared and routed experts, indexer and linear-attention projections at `bits`; LM head at
   `head_bits`; embeddings, routers, norms, hyper-connection mixers and n-gram lookup tables stay unquantized
@@ -234,7 +234,7 @@ totals (unsharded), used to sanity-check mappers against published sizes.
   `2·h·hd + hd` for r > 1, `h·hd + hd` for r = 1; + the global selection's indexer (q input rq). DeepSeek-V4.1:
   126.6 M per layer without compressor and indexer.
 - indexer: `qIn·H_I·hd_I` + [ownsKeys] `kIn·hd_I + 2·hd_I` (key norm γ, β) + [keyPoolGate] `h·hd_I + p·hd_I`
-  + [headWeights] `h·H_I`. A `'reuse'` selection has 0.
+  - [headWeights] `h·H_I`. A `'reuse'` selection has 0.
 - linear_attention: in_proj `h·(2·qkH·dk + vH·dv·(gate?2:1) + 2·vH)`, conv `(2·qkH·dk + vH·dv)·K`, `2·vH`
   (A_log, dt_bias), `dv` (out norm), out_proj `vH·dv·h`.
 - kda: `h·(2·qkH·dk + vH·dv)` (q, k, v) + `h·vH` (β) + `h·r + r·vH·dk` (forget gate) + `h·r + r·vH·dv` (output
@@ -253,25 +253,25 @@ totals (unsharded), used to sanity-check mappers against published sizes.
 
 ### First-class vs expressed
 
-| Feature | How it is expressed | New op kind? |
-|---|---|---|
-| Sliding window | `KvSelection {window}` on `AttentionOp` | no |
-| Top-k sparse attention | `KvSelection {topk}` + `IndexerOp` (no V, own key cache, emits indices) | **yes: indexer** |
-| MLA | GEMMs (incl. per-head absorb GEMMs) + `AttentionOp` with `kvHeads = 1`, qk ≠ v dims, latent `kvRead`/`kvWrite`; block `mla_attention` | no |
-| GatedDeltaNet / Mamba2 / linear attention | `RecurrentOp` (fixed-size state, chunked vs step) + `causal_conv1d`, `gated_rmsnorm`; block `linear_attention` | **yes: recurrent** |
-| Gated attention output | `sigmoid_mul` + a wider q projection | no |
-| MoE shared experts, dense first layers | `MoeBlock.sharedExperts`; heterogeneous `layers[]` | no |
-| Attention sinks (gpt-oss) | ignored (negligible cost) | no |
-| DeepSeek-V4.1 CSA (K = V, window + compressed top-k, grouped low-rank output) | block `csa_attention`; one `AttentionOp` with `secondaryKv` (§5 "CSA") | no |
-| Hyper-connections (Qwen Gated Residual, mHC) | blocks `hc_pre` / `hc_post` → GEMMs + `hc_collapse`, `hc_expand`, `sinkhorn`; `ModelSpec.residualStreams` | no |
-| n-gram / Engram tables | block `ngram_embedding` → `EmbeddingOp` gather + GEMMs + `ngram_gate`; `QuantConfig.lookupTables` | no |
-| Short convs on branch outputs / K, V (Inkling) | block `short_conv`; `GqaAttentionBlock.kvConvKernel` → `causal_conv1d` | no |
-| Relative-position bias (Inkling) | `GqaAttentionBlock.relativeBias` → two GEMMs | no |
-| KDA (low-rank gates, per-channel decay) | `LinearAttentionBlock.variant 'kda'` + `gateRank` → GEMMs + `RecurrentOp` (`gateElemsPerTokenPerHead`) | no |
-| Pooled / gated / foreign-key / bounded indexers | `IndexerSpec` optional fields → `IndexerOp.{keyPoolTokens, maxScoredKeys, keyWriteElemsPerToken, headWeights}` + `kv_pool` | no |
-| Shared top-k (indexer reuse) | `SparseSelection {kind: 'reuse'}`: `KvSelection {topk}`, no `IndexerOp` | no |
-| Cross-layer KV sharing | `MlaAttentionBlock.kvCacheFromLayer`, `CsaGlobalSpec.kvCacheFromLayer`: no producer GEMMs, `kvWrite` 0 | no |
-| Per-module weight formats (NVFP4 experts, FP8 attention, BF16 hyper-connections) | `QuantConfig.modules` per `WeightModule`, `linearGemm({ module })` | no |
+| Feature                                                                          | How it is expressed                                                                                                                   | New op kind?       |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| Sliding window                                                                   | `KvSelection {window}` on `AttentionOp`                                                                                               | no                 |
+| Top-k sparse attention                                                           | `KvSelection {topk}` + `IndexerOp` (no V, own key cache, emits indices)                                                               | **yes: indexer**   |
+| MLA                                                                              | GEMMs (incl. per-head absorb GEMMs) + `AttentionOp` with `kvHeads = 1`, qk ≠ v dims, latent `kvRead`/`kvWrite`; block `mla_attention` | no                 |
+| GatedDeltaNet / Mamba2 / linear attention                                        | `RecurrentOp` (fixed-size state, chunked vs step) + `causal_conv1d`, `gated_rmsnorm`; block `linear_attention`                        | **yes: recurrent** |
+| Gated attention output                                                           | `sigmoid_mul` + a wider q projection                                                                                                  | no                 |
+| MoE shared experts, dense first layers                                           | `MoeBlock.sharedExperts`; heterogeneous `layers[]`                                                                                    | no                 |
+| Attention sinks (gpt-oss)                                                        | ignored (negligible cost)                                                                                                             | no                 |
+| DeepSeek-V4.1 CSA (K = V, window + compressed top-k, grouped low-rank output)    | block `csa_attention`; one `AttentionOp` with `secondaryKv` (§5 "CSA")                                                                | no                 |
+| Hyper-connections (Qwen Gated Residual, mHC)                                     | blocks `hc_pre` / `hc_post` → GEMMs + `hc_collapse`, `hc_expand`, `sinkhorn`; `ModelSpec.residualStreams`                             | no                 |
+| n-gram / Engram tables                                                           | block `ngram_embedding` → `EmbeddingOp` gather + GEMMs + `ngram_gate`; `QuantConfig.lookupTables`                                     | no                 |
+| Short convs on branch outputs / K, V (Inkling)                                   | block `short_conv`; `GqaAttentionBlock.kvConvKernel` → `causal_conv1d`                                                                | no                 |
+| Relative-position bias (Inkling)                                                 | `GqaAttentionBlock.relativeBias` → two GEMMs                                                                                          | no                 |
+| KDA (low-rank gates, per-channel decay)                                          | `LinearAttentionBlock.variant 'kda'` + `gateRank` → GEMMs + `RecurrentOp` (`gateElemsPerTokenPerHead`)                                | no                 |
+| Pooled / gated / foreign-key / bounded indexers                                  | `IndexerSpec` optional fields → `IndexerOp.{keyPoolTokens, maxScoredKeys, keyWriteElemsPerToken, headWeights}` + `kv_pool`            | no                 |
+| Shared top-k (indexer reuse)                                                     | `SparseSelection {kind: 'reuse'}`: `KvSelection {topk}`, no `IndexerOp`                                                               | no                 |
+| Cross-layer KV sharing                                                           | `MlaAttentionBlock.kvCacheFromLayer`, `CsaGlobalSpec.kvCacheFromLayer`: no producer GEMMs, `kvWrite` 0                                | no                 |
+| Per-module weight formats (NVFP4 experts, FP8 attention, BF16 hyper-connections) | `QuantConfig.modules` per `WeightModule`, `linearGemm({ module })`                                                                    | no                 |
 
 ---
 
@@ -360,20 +360,20 @@ State per sequence = `heads·dk·dv` elements.
 `F = elems·flopsPerElem`; bytes are the op's explicit fields (activation read/write, weights, state, and
 `kvWriteBytes` for a write-only cache op, counted as KV writes).
 
-| fn | FLOP / elem | fn | FLOP / elem |
-|---|---|---|---|
-| rmsnorm | 4 | layernorm | 8 |
-| residual_add | 1 | rope | 3 |
-| qk_norm | 4 | silu | 4 |
-| silu_mul | 5 | gelu_mul | 9 |
-| gelu | 8 | relu | 1 |
-| relu_mul | 2 | sigmoid_mul | 5 |
-| gated_rmsnorm | 9 | causal_conv1d | 2·kernelWidth |
-| router_topk | 5 per logit | moe_combine | 2 |
-| hc_collapse | 2·N per output elem | hc_expand | 2N + 2 (mixing), else 2 |
-| sinkhorn | 4·iters per T·N² elem | ngram_gate | 8 (two norm statistics, dot, sigmoid, fused add) |
-| kv_pool | 4 (softmax weight, multiply, add) | causal_conv1d (+ residual) | 2·K + 1 |
-| kv_cache_write | 1 (cast to the KV format; §13 "Draft-cache prefill") | candidate_score | 2 (DFlash 2 selector multiply-add) |
+| fn             | FLOP / elem                                          | fn                         | FLOP / elem                                      |
+| -------------- | ---------------------------------------------------- | -------------------------- | ------------------------------------------------ |
+| rmsnorm        | 4                                                    | layernorm                  | 8                                                |
+| residual_add   | 1                                                    | rope                       | 3                                                |
+| qk_norm        | 4                                                    | silu                       | 4                                                |
+| silu_mul       | 5                                                    | gelu_mul                   | 9                                                |
+| gelu           | 8                                                    | relu                       | 1                                                |
+| relu_mul       | 2                                                    | sigmoid_mul                | 5                                                |
+| gated_rmsnorm  | 9                                                    | causal_conv1d              | 2·kernelWidth                                    |
+| router_topk    | 5 per logit                                          | moe_combine                | 2                                                |
+| hc_collapse    | 2·N per output elem                                  | hc_expand                  | 2N + 2 (mixing), else 2                          |
+| sinkhorn       | 4·iters per T·N² elem                                | ngram_gate                 | 8 (two norm statistics, dot, sigmoid, fused add) |
+| kv_pool        | 4 (softmax weight, multiply, add)                    | causal_conv1d (+ residual) | 2·K + 1                                          |
+| kv_cache_write | 1 (cast to the KV format; §13 "Draft-cache prefill") | candidate_score            | 2 (DFlash 2 selector multiply-add)               |
 
 The DFlash 2 dynamic convs (§13 "Draft ops") are `causal_conv1d` ops with an explicit `flopsPerElem = 4·K` (base
 and dynamic taps, applied in both the prepare and the finish step).
@@ -488,14 +488,14 @@ A variant (VRAM mod, tensor-rate unlock, power limit, P2P driver) is **a base sp
 partial overrides**, not a copied spec. Device and link modifiers are separate unions, because P2P is a
 property of the link.
 
-| Kind | Effect | Paths its provenance covers |
-|---|---|---|
-| `memoryCapacity` | replaces `memory.capacityOptionsBytes` | `memory.capacityOptionsBytes` |
-| `memoryBandwidth` | replaces `memory.bandwidthBytesPerSec` | `memory.bandwidthBytesPerSec` |
-| `peakScale` | multiplies every matmul peak matching ALL given filters (engineId, input, accumulate, sparsity) by `factor`; must match ≥ 1 peak | `engines.<i>.matmulPeaks` |
-| `clockScale` | multiplies all matmul AND vector peaks of an engine (default all) by `factor`; memory bandwidth unchanged | `engines.<i>.matmulPeaks`, `engines.<i>.vectorFlopsPerSec` |
-| link `p2p` | sets `p2p`; `'direct'` drops `hostBounce`, `'host_bounce'` requires it | `p2p`, `hostBounce` |
-| link `linkBandwidth` | replaces `bandwidthPerDirectionBytesPerSec` | `bandwidthPerDirectionBytesPerSec` |
+| Kind                 | Effect                                                                                                                           | Paths its provenance covers                                |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `memoryCapacity`     | replaces `memory.capacityOptionsBytes`                                                                                           | `memory.capacityOptionsBytes`                              |
+| `memoryBandwidth`    | replaces `memory.bandwidthBytesPerSec`                                                                                           | `memory.bandwidthBytesPerSec`                              |
+| `peakScale`          | multiplies every matmul peak matching ALL given filters (engineId, input, accumulate, sparsity) by `factor`; must match ≥ 1 peak | `engines.<i>.matmulPeaks`                                  |
+| `clockScale`         | multiplies all matmul AND vector peaks of an engine (default all) by `factor`; memory bandwidth unchanged                        | `engines.<i>.matmulPeaks`, `engines.<i>.vectorFlopsPerSec` |
+| link `p2p`           | sets `p2p`; `'direct'` drops `hostBounce`, `'host_bounce'` requires it                                                           | `p2p`, `hostBounce`                                        |
+| link `linkBandwidth` | replaces `bandwidthPerDirectionBytesPerSec`                                                                                      | `bandwidthPerDirectionBytesPerSec`                         |
 
 - Applied **in list order**; scales compose multiplicatively (`clockScale 0.8` then `peakScale ×2` on bf16 =
   209.5 · 0.8 · 2 = 335.2 TFLOP/s).
@@ -514,16 +514,16 @@ property of the link.
 checked by `src/sim/hw/presets.test.ts` (every preset) and one `<vendor>.test.ts` per file (vendor ratios and
 spot values against the datasheet).
 
-| File | Covers | Export |
-|---|---|---|
-| `presets/nvidia.ts` | GeForce RTX 3090, 4090, 5090 and their unlock axes | `NVIDIA_CONSUMER_DEVICE_PRESETS`, `RTX_3090_UNLOCKS`, `RTX_4090_UNLOCKS`, `RTX_5090_UNLOCKS` |
-| `presets/nvidia-datacenter.ts` | DGX Spark (GB10), H100 SXM, H200 SXM, B200, B300 | `NVIDIA_DATACENTER_DEVICE_PRESETS` |
-| `presets/apple.ts` | M5 Ultra, M5 Max, M4 Max, M3 Ultra, M3 Max; binned GPU-core counts as separate SKUs | `APPLE_DEVICE_PRESETS` |
-| `presets/amd.ts` | Radeon AI PRO R9700, RX 9070 XT, Ryzen AI Max+ 395 (Strix Halo iGPU), Instinct MI300X / MI325X / MI355X / MI455X | `AMD_DEVICE_PRESETS` |
-| `presets/intel.ts` | Arc Pro B70, B65, B60, Arc B580 | `INTEL_DEVICE_PRESETS` |
-| `presets/links.ts` | PCIe, NVLink bridge / NVLink 4 / 5, InfiniBand, ConnectX-7, xGMI, Thunderbolt, USB4, Ethernet | `LINK_PRESETS`, `HOST_BOUNCE_PCIE_LINKS` |
-| `presets/topologies.ts` | PCIe boxes, SoC clusters (with the inter-node fabric shape), HGX nodes, MI300X xGMI node | `TOPOLOGY_PRESETS`, `pcieBox`, `socCluster`, `hgxCluster`, `nodeTopology`, `fabricIdSuffix` |
-| `presets/catalog.ts` | The setup catalog: what each device composes into (GPUs per machine, machines, local and network links, cabling), validation, `composeTopology`, SKU labels, the popular setups | `setupOptionsFor`, `allowedCablings`, `defaultCabling`, `setupErrors`, `composeTopology`, `setupLabel`, `POPULAR_SETUPS` |
+| File                           | Covers                                                                                                                                                                          | Export                                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `presets/nvidia.ts`            | GeForce RTX 3090, 4090, 5090 and their unlock axes                                                                                                                              | `NVIDIA_CONSUMER_DEVICE_PRESETS`, `RTX_3090_UNLOCKS`, `RTX_4090_UNLOCKS`, `RTX_5090_UNLOCKS`                             |
+| `presets/nvidia-datacenter.ts` | DGX Spark (GB10), H100 SXM, H200 SXM, B200, B300                                                                                                                                | `NVIDIA_DATACENTER_DEVICE_PRESETS`                                                                                       |
+| `presets/apple.ts`             | M5 Ultra, M5 Max, M4 Max, M3 Ultra, M3 Max; binned GPU-core counts as separate SKUs                                                                                             | `APPLE_DEVICE_PRESETS`                                                                                                   |
+| `presets/amd.ts`               | Radeon AI PRO R9700, RX 9070 XT, Ryzen AI Max+ 395 (Strix Halo iGPU), Instinct MI300X / MI325X / MI355X / MI455X                                                                | `AMD_DEVICE_PRESETS`                                                                                                     |
+| `presets/intel.ts`             | Arc Pro B70, B65, B60, Arc B580                                                                                                                                                 | `INTEL_DEVICE_PRESETS`                                                                                                   |
+| `presets/links.ts`             | PCIe, NVLink bridge / NVLink 4 / 5, InfiniBand, ConnectX-7, xGMI, Thunderbolt, USB4, Ethernet                                                                                   | `LINK_PRESETS`, `HOST_BOUNCE_PCIE_LINKS`                                                                                 |
+| `presets/topologies.ts`        | PCIe boxes, SoC clusters (with the inter-node fabric shape), HGX nodes, MI300X xGMI node                                                                                        | `TOPOLOGY_PRESETS`, `pcieBox`, `socCluster`, `hgxCluster`, `nodeTopology`, `fabricIdSuffix`                              |
+| `presets/catalog.ts`           | The setup catalog: what each device composes into (GPUs per machine, machines, local and network links, cabling), validation, `composeTopology`, SKU labels, the popular setups | `setupOptionsFor`, `allowedCablings`, `defaultCabling`, `setupErrors`, `composeTopology`, `setupLabel`, `POPULAR_SETUPS` |
 
 `DEVICE_PRESET_GROUPS` is the display order: consumer / prosumer first (GeForce, Apple, AMD Radeon and Strix
 Halo, Intel Arc, DGX Spark), datacenter last; `DEVICE_PRESETS` is the groups flattened. Within a group: newest
@@ -575,16 +575,16 @@ never copied and every number keeps its provenance.
 
 Axes per consumer card (`src/sim/hw/presets/nvidia.ts`):
 
-| Card | Axis (`id`) | Option: modifiers | Source class |
-|---|---|---|---|
-| RTX 3090 | `tensor-rate` | `full-rate`: `peakScale ×2` on fp16 / bf16 / tf32 with fp32 accumulate (dense and 2:4) | community (Zagitta gpu-unlock, listed stable) |
-| RTX 3090 | `pcie-p2p` | `direct`: link `p2p → 'direct'` (bandwidth and latency kept) | community (patched open kernel driver) |
-| RTX 4090 | `tensor-rate` | as the 3090 | community (listed experimental) |
-| RTX 4090 | `vram-mod` | `48gb`: `memoryCapacity [48 GB]` (bandwidth unchanged: unverified) | review + community (teardown, GPU Lab) |
-| RTX 4090 | `pcie-p2p` | as the 3090 | community (tinygrad driver) |
-| RTX 4090 | `memory-overclock` | `1545mhz`: `memoryBandwidth` 1545 MHz × 16 × 384 bit / 8 = 1186.56 GB/s (theoretical bus peak) | review (TechPowerUp OC table) |
-| RTX 5090 | `pcie-p2p` | as the 3090 | community (tinygrad driver) |
-| RTX 5090 | `power-clock` | `575w`: `clockScale` 2768 / 2407 ≈ 1.150; `400w`: `clockScale` 2465 / 2407 ≈ 1.024 (measured sustained SM clocks under an AI load, relative to the 2407 MHz boost clock the vendor peaks assume; memory unchanged) | community (measured SM clocks) |
+| Card     | Axis (`id`)        | Option: modifiers                                                                                                                                                                                                  | Source class                                  |
+| -------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| RTX 3090 | `tensor-rate`      | `full-rate`: `peakScale ×2` on fp16 / bf16 / tf32 with fp32 accumulate (dense and 2:4)                                                                                                                             | community (Zagitta gpu-unlock, listed stable) |
+| RTX 3090 | `pcie-p2p`         | `direct`: link `p2p → 'direct'` (bandwidth and latency kept)                                                                                                                                                       | community (patched open kernel driver)        |
+| RTX 4090 | `tensor-rate`      | as the 3090                                                                                                                                                                                                        | community (listed experimental)               |
+| RTX 4090 | `vram-mod`         | `48gb`: `memoryCapacity [48 GB]` (bandwidth unchanged: unverified)                                                                                                                                                 | review + community (teardown, GPU Lab)        |
+| RTX 4090 | `pcie-p2p`         | as the 3090                                                                                                                                                                                                        | community (tinygrad driver)                   |
+| RTX 4090 | `memory-overclock` | `1545mhz`: `memoryBandwidth` 1545 MHz × 16 × 384 bit / 8 = 1186.56 GB/s (theoretical bus peak)                                                                                                                     | review (TechPowerUp OC table)                 |
+| RTX 5090 | `pcie-p2p`         | as the 3090                                                                                                                                                                                                        | community (tinygrad driver)                   |
+| RTX 5090 | `power-clock`      | `575w`: `clockScale` 2768 / 2407 ≈ 1.150; `400w`: `clockScale` 2465 / 2407 ≈ 1.024 (measured sustained SM clocks under an AI load, relative to the 2407 MHz boost clock the vendor peaks assume; memory unchanged) | community (measured SM clocks)                |
 
 Rejected as UI choices (no capacity test or debunked; listed with links at the end of `nvidia.ts`): 3090 48 GB,
 4090 96 GB, 5090 64 / 96 / 128 GB, a Blackwell tensor unlock. The 3090 NVLink bridge is a topology
@@ -766,8 +766,11 @@ gamma `dim·bpe(hp)` (×2 for layernorm); replicated on every TP rank (no sequen
 `lower/embedding.ts: lowerEmbedding, embeddingResidentWeightBytes`; `lower/head.ts: lowerHead, headTokens,
 lmHeadResidentWeightBytes`. Embedding (stage 0) is vocab-parallel: `ceil(vocab/tp)` rows per rank, then an
 `all_reduce` of `T·h`. Head (last stage): final norm, then `lm_head m = Tout, n = ceil(vocab/tp), k = h`.
-**Prefill computes logits only for the last position** (`Tout = seqs`); decode `Tout = seqs·qLen`. No logits
-gather: cross-shard sampling exchanges O(Tout·tp) scalars, treated as free.
+**Prefill computes logits only for the last position** (`Tout = seqs`); decode `Tout = seqs·qLen`.
+No full-logits gather: when tp > 1, cross-shard sampling adds one `all_gather(tp)` after `lm_head`,
+with full output `S = Tout·tp·8 B` (one fp32 score + uint32 token ID per rank and output position).
+Both phases and every draft head use `lower/head.ts: samplingExchangeOps` (`lowerHead` and
+`lower/draft.ts: sharedLmHeadOps`; audit G1). Block-drafter prefill has no head, hence no exchange.
 
 ### MLA forms
 
@@ -823,7 +826,7 @@ the one K = V vector per token, the compressor, the indexer and all caches are r
 4. The selection: indexer ops (qIn = rq, keys from the hd-wide latent, `p = r`), or nothing for `reuse`.
 5. One `AttentionOp`: `kvHeads 1`, `qk = v = hd`, `kvSelection {window, W}`, `kvRead = kvWrite = {kvCache, hd}`
    (K = V, so one vector), and `secondaryKv {r, topk(topK entries), kvRead {compressedKvCache, hd},
-   kvWrite {compressedKvCache, owner ? hd/r : 0}}` (§3 "Attention").
+kvWrite {compressedKvCache, owner ? hd/r : 0}}` (§3 "Attention").
 6. Inverse rope over `T·Hl·dr` → `csa.wo_a` grouped (batch Gl, m T, n R_o, k H·hd/G) → `csa.wo_b` (n h, k Gl·R_o)
    → all_reduce(tp).
 
@@ -918,6 +921,12 @@ stage 0 adds the embedding, the last stage the head. Every stage but the last se
 shared indexer keys) on an earlier stage than its consumer produces a `simulate` warning
 (`engine/simulate.ts: crossStageWarnings`); its transfer is not costed (§9).
 
+Decode with pp > 1 additionally returns sampled uint32 IDs from the last stage to stage 0:
+`S_return = b_mb·qLen·4 B = b_mb·(k+1)·4 B` (plain decode k = 0). One `send_recv`,
+not one per intermediate stage; prefill has none (`lower/lower.ts: sendToFirst`, audit G2).
+`engine/placement.ts: ppSendPath(..., destinationStage = 0)` resolves the actual return endpoints,
+including node crossings and ring/chain hop counts.
+
 ### DP
 
 DP replicas are independent and not lowered separately: `B_r = batch/dp` (must divide), aggregate tok/s = dp ×
@@ -954,14 +963,14 @@ bandwidth, α latency. Each result splits α terms (`latencySec`) from β terms 
 `ringAllReduceSec, treeAllReduceSec, allReduceSec, ringAllGatherSec, ringReduceScatterSec, allToAllSec,
 sendRecvSec`.
 
-| Collective | Time |
-|---|---|
-| ring all-reduce | `2(n−1)·α + 2(n−1)/n·S/B` |
-| tree all-reduce | `2⌈log2 n⌉·α + 2·S/B` |
-| all-reduce `'best'` (default) | min(ring, tree) |
-| ring all-gather (S = output) / reduce-scatter (S = input) | `(n−1)·α + (n−1)/n·S/B` |
-| all-to-all (direct, concurrent) | `α + (n−1)/n·S/B` |
-| send/recv | `α + S/B` |
+| Collective                                                | Time                                                            |
+| --------------------------------------------------------- | --------------------------------------------------------------- |
+| ring all-reduce                                           | `2(n−1)·α + 2(n−1)/n·S/B`                                       |
+| tree all-reduce                                           | `2⌈log2 n⌉·α + 2·S/B`                                           |
+| all-reduce `'best'` (per-op candidate)                    | min(ring, tree); stage-aware selection under ideal overlap (§7) |
+| ring all-gather (S = output) / reduce-scatter (S = input) | `(n−1)·α + (n−1)/n·S/B`                                         |
+| all-to-all (direct, concurrent)                           | `α + (n−1)/n·S/B`                                               |
+| send/recv                                                 | `α + S/B`                                                       |
 
 ### Hierarchical collectives
 
@@ -970,14 +979,22 @@ A group of n1 devices per node × n2 nodes:
 
 - all-reduce = `RS_intra(S, n1) + AR_inter(S/n1, n2, algorithm) + AG_intra(S, n1)`
 - all-gather = `AG_inter(S/n1, n2) + AG_intra(S, n1)`; reduce-scatter = `RS_intra(S, n1) + RS_inter(S/n1, n2)`
-- all-to-all = `α_inter + max((n1−1)/n·S/B_intra, (n−n1)/n·S/B_inter)`
+- all-to-all = `max(α_intra,eff, α_inter,eff) + max((n1−1)/n·S/B_intra, (n−n1)/n·S/B_inter)`
+  (audit G3: concurrent messages retain the larger effective latency floor, including host bounce).
 
 ### Host bounce
 
 `effectiveLink`. A `'host_bounce'` link (e.g. GeForce without P2P) stages every byte through host memory once
 written, once read: `B_eff = min(B, hostMemBW / (2·nActive))`, `α_eff = α + extraLatencySec`, with
-`nActive = n` for collectives and 1 for send/recv. In two-level collectives, the devices sharing host memory are
-the group's devices per node, at both levels. PCIe switch / shared-uplink topologies are not modeled.
+`nActive = n` for flat collectives; PP send/recv uses `min(devicesPerNode, tp·dp)` for both forward
+activations and sampled-token returns (`placement.ts: ppSendPath`, `CollectivePath.sendActiveDevices`, audit G8).
+Standalone send/recv paths default to one active device. Two-level collectives use the group's devices per node
+at both levels.
+
+Flat host-bounce all-to-all without an explicit fabric uses `n−1` serialized peer rounds:
+`latency = (n−1)·α_eff`, `bandwidth = (n−1)/n·S/B_eff` (`collectives.ts: collectiveTime`, audit G4).
+Ring/chain paths already use `lat(maxHops)` below; no second hop multiplier is added.
+PCIe switch / shared-uplink topologies are not modeled.
 
 Also not modeled: NVLS / SHARP in-switch reduction, the memory traffic of collectives, and contention between
 communication and compute for memory.
@@ -1008,15 +1025,15 @@ Two rules give every formula:
   busiest node's egress, its own bytes plus those it relays (ingress is symmetric in every pattern here). Relays go
   through the host (no switching inside these NICs), so relayed bytes count against C.
 
-| collective | switched, o > 1 | full_mesh (k), N ≥ 3 | ring | chain |
-|---|---|---|---|---|
-| ring-class AR | `2(N−1)α + 2(N−1)/N·S/(B_L/o)` | `2(N−1)α + 2(N−1)/N·S/B_two` | `2(N−1)α + 2(N−1)/N·S/min(2B_L, C)` | `RS_chain + AG_chain` |
-| tree AR | `2⌈log2 N⌉α + 2S/(B_L/o)` | `2⌈log2 N⌉α + 2S/B_one` | `2·Σ_k lat(h_k) + 2S/B_one` | same, chain hops |
-| direct AR | — | `2α + 2(N−1)/N·S/B_mesh` | — | — |
-| AR `'best'` | min(ring, tree) | min(ring, direct, tree) | min(ring, tree) | min(ring, tree) |
-| AG / RS | `(N−1)α + (N−1)/N·S/(B_L/o)` | direct: `α + (N−1)/N·S/B_mesh` | `(N−1)α + (N−1)/N·S/min(2B_L, C)` | RS: `(N−1)α + (N−1)/N·S/min(B_L, C)`; AG: `(N−1)α + max((N−1)/N·S/B_L, (N+1)/N·S/C)` |
-| all-to-all | `α + (N−1)/N·S/(B_L/o)` | `α + (N−1)/N·S/B_mesh` | `lat(⌊N/2⌋) + ⌊N²/4⌋/N·S/min(2B_L, C)` | `lat(N−1) + max(⌊N²/4⌋/N·S/B_L, E_N/N·S/C)` |
-| send/recv (h hops) | `α + S/(B_L/o)` | `α + S/B_one` | `lat(h) + h·S/B_one` | `lat(h) + h·S/B_one` |
+| collective         | switched, o > 1                | full_mesh (k), N ≥ 3           | ring                                   | chain                                                                                |
+| ------------------ | ------------------------------ | ------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------ |
+| ring-class AR      | `2(N−1)α + 2(N−1)/N·S/(B_L/o)` | `2(N−1)α + 2(N−1)/N·S/B_two`   | `2(N−1)α + 2(N−1)/N·S/min(2B_L, C)`    | `RS_chain + AG_chain`                                                                |
+| tree AR            | `2⌈log2 N⌉α + 2S/(B_L/o)`      | `2⌈log2 N⌉α + 2S/B_one`        | `2·Σ_k lat(h_k) + 2S/B_one`            | same, chain hops                                                                     |
+| direct AR          | —                              | `2α + 2(N−1)/N·S/B_mesh`       | —                                      | —                                                                                    |
+| AR `'best'`        | min(ring, tree)                | min(ring, direct, tree)        | min(ring, tree)                        | min(ring, tree)                                                                      |
+| AG / RS            | `(N−1)α + (N−1)/N·S/(B_L/o)`   | direct: `α + (N−1)/N·S/B_mesh` | `(N−1)α + (N−1)/N·S/min(2B_L, C)`      | RS: `(N−1)α + (N−1)/N·S/min(B_L, C)`; AG: `(N−1)α + max((N−1)/N·S/B_L, (N+1)/N·S/C)` |
+| all-to-all         | `α + (N−1)/N·S/(B_L/o)`        | `α + (N−1)/N·S/B_mesh`         | `lat(⌊N/2⌋) + ⌊N²/4⌋/N·S/min(2B_L, C)` | `lat(N−1) + max(⌊N²/4⌋/N·S/B_L, E_N/N·S/C)`                                          |
+| send/recv (h hops) | `α + S/(B_L/o)`                | `α + S/B_one`                  | `lat(h) + h·S/B_one`                   | `lat(h) + h·S/B_one`                                                                 |
 
 h_k = `treeStepHops` (binomial tree, step-k partners 2^k apart): ring `min(2^k, N−2^k)`, chain `2^k`.
 E_N = `(N−1) + 2⌊(N−1)²/4⌋`. **Two nodes** on a mesh or chain are one (striped) link: the switched formulas at
@@ -1058,16 +1075,16 @@ Derivations (backed by a brute-force routing test, `fabricCollectives.test.ts`):
 Worked examples (`fabricCollectives.test.ts`): B_L = 1e10 B/s, α = 2 µs, α_f = 1 µs, S = 8e6 B (S/B_L = 800 µs),
 N = 4; each cell α + β in µs.
 
-| collective | switched | switched o=2 | ring C=∞ | ring C=B_L | chain C=∞ | chain C=B_L | mesh k=1 C=∞ | mesh k=1 C=B_L | mesh k=2 C=∞ |
-|---|---|---|---|---|---|---|---|---|---|
-| ring AR | 12 + 1200 | 12 + 2400 | 12 + 600 | 12 + 1200 (= switched) | 12 + 1200 | 12 + 1600 | 12 + 600 | 12 + 1200 | 12 + 300 |
-| tree AR | 8 + 1600 | 8 + 3200 | 14 + 1600 | 14 + 1600 | 14 + 1600 | 14 + 1600 | 8 + 1600 | 8 + 1600 | 8 + 800 |
-| direct AR | — | — | — | — | — | — | 4 + 400 | 4 + 1200 | 4 + 200 |
-| AG | 6 + 600 | 6 + 1200 | 6 + 300 | 6 + 600 | 6 + 600 | 6 + 1000 | 2 + 200 | 2 + 600 | 2 + 100 |
-| RS | 6 + 600 | 6 + 1200 | 6 + 300 | 6 + 600 | 6 + 600 | 6 + 600 | 2 + 200 | 2 + 600 | 2 + 100 |
-| all-to-all | 2 + 600 | 2 + 1200 | 5 + 400 | 5 + 800 | 8 + 800 | 8 + 1400 | 2 + 200 | 2 + 600 | 2 + 100 |
-| send h=1 | 2 + 800 | 2 + 1600 | 2 + 800 | 2 + 800 | 2 + 800 | 2 + 800 | 2 + 800 | 2 + 800 | 2 + 400 |
-| send h=2 | — | — | 5 + 1600 | 5 + 1600 | 5 + 1600 | 5 + 1600 | — | — | — |
+| collective | switched  | switched o=2 | ring C=∞  | ring C=B_L             | chain C=∞ | chain C=B_L | mesh k=1 C=∞ | mesh k=1 C=B_L | mesh k=2 C=∞ |
+| ---------- | --------- | ------------ | --------- | ---------------------- | --------- | ----------- | ------------ | -------------- | ------------ |
+| ring AR    | 12 + 1200 | 12 + 2400    | 12 + 600  | 12 + 1200 (= switched) | 12 + 1200 | 12 + 1600   | 12 + 600     | 12 + 1200      | 12 + 300     |
+| tree AR    | 8 + 1600  | 8 + 3200     | 14 + 1600 | 14 + 1600              | 14 + 1600 | 14 + 1600   | 8 + 1600     | 8 + 1600       | 8 + 800      |
+| direct AR  | —         | —            | —         | —                      | —         | —           | 4 + 400      | 4 + 1200       | 4 + 200      |
+| AG         | 6 + 600   | 6 + 1200     | 6 + 300   | 6 + 600                | 6 + 600   | 6 + 1000    | 2 + 200      | 2 + 600        | 2 + 100      |
+| RS         | 6 + 600   | 6 + 1200     | 6 + 300   | 6 + 600                | 6 + 600   | 6 + 600     | 2 + 200      | 2 + 600        | 2 + 100      |
+| all-to-all | 2 + 600   | 2 + 1200     | 5 + 400   | 5 + 800                | 8 + 800   | 8 + 1400    | 2 + 200      | 2 + 600        | 2 + 100      |
+| send h=1   | 2 + 800   | 2 + 1600     | 2 + 800   | 2 + 800                | 2 + 800   | 2 + 800     | 2 + 800      | 2 + 800        | 2 + 400      |
+| send h=2   | —         | —            | 5 + 1600  | 5 + 1600               | 5 + 1600  | 5 + 1600    | —            | —              | —            |
 
 At a decode-sized S = 1e4 B, `'best'` all-reduce picks the tree on the switch (8 + 2 = 10 µs), the ring algorithm on
 the ring (12 + 1.5 = 13.5 µs with C = B_L; the tree's 2-hop step makes it 14 + 2) and direct on the k = 1 mesh (4 +
@@ -1085,13 +1102,13 @@ equal.
 `src/sim/engine/opTime.ts: opTime, roofline, engineMemBandwidthBytesPerSec, elementwiseBytesUnderFusion`.
 One exhaustive switch on `op.kind`. `memBW = min(memory.bandwidthBytesPerSec, engine.memBandwidthCapBytesPerSec ?? ∞)`.
 
-| Op | Compute term | Memory term |
-|---|---|---|
-| gemm, attention, indexer, recurrent (chunked) | `F / (peak·efficiency)`; peak from §4 "Peak lookup and fallback" for the op's (math, accumulate, sparsity); efficiency from §4 "Shape efficiency" with the tiling of the format actually used | `bytes/memBW` |
-| recurrent (step), elementwise | `F / vectorPeak(dtype)` (state dtype for the step) | `bytes/memBW` |
-| embedding | 0 | `bytes/memBW` |
-| collective | §6 on the group's path (TP group, EP group, or this stage's PP boundary) | — |
-| transfer (off-device read, deployment `offload`) | — | the tier/link model of §12 (latency `transferLatencySec` + service `transferBandwidthSec`); `bound = 'transfer'`. No FLOP, no device-memory bytes |
+| Op                                               | Compute term                                                                                                                                                                                  | Memory term                                                                                                                                       |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| gemm, attention, indexer, recurrent (chunked)    | `F / (peak·efficiency)`; peak from §4 "Peak lookup and fallback" for the op's (math, accumulate, sparsity); efficiency from §4 "Shape efficiency" with the tiling of the format actually used | `bytes/memBW`                                                                                                                                     |
+| recurrent (step), elementwise                    | `F / vectorPeak(dtype)` (state dtype for the step)                                                                                                                                            | `bytes/memBW`                                                                                                                                     |
+| embedding                                        | 0                                                                                                                                                                                             | `bytes/memBW`                                                                                                                                     |
+| collective                                       | §6 on the group's path (TP group, EP group, or this stage's PP boundary)                                                                                                                      | —                                                                                                                                                 |
+| transfer (off-device read, deployment `offload`) | —                                                                                                                                                                                             | the tier/link model of §12 (latency `transferLatencySec` + service `transferBandwidthSec`); `bound = 'transfer'`. No FLOP, no device-memory bytes |
 
 `t = max(compute, memory)`; the larger term is the op's `bound` (a tie counts as compute). A tensor op whose
 lookup falls back to the vector peak keeps the efficiency term (conservative).
@@ -1124,21 +1141,31 @@ under `overlap 'ideal'` and `compute_s + bw_s + p2p_s` under `'none'`:
 - `exposedTransferSec = t_s − t_core,s`. With `xfer_s = 0` both give `t_s = t_core,s` exactly (the code keeps
   today's expression for that case, so the results are bit-identical).
 
+Under `overlap 'ideal'` and `collectiveAlgorithm 'best'`, `engine/simulate.ts: simulatePhase` compares
+three assignments per stage: (a) each all-reduce's min-total choice (including mesh-direct where applicable),
+(b) all ring, and (c) all tree. It picks the minimum exact core score `Σα + max(compute_s, Σβ)`;
+ties preserve the original assignment. With β hidden this prefers exposed α, rather than total α+β
+(audit G7). Explicit ring/tree choices and `overlap 'none'` are unchanged. This is a **bounded heuristic**,
+not a search over every mixed ring/tree assignment. It cannot worsen the candidate core time; it does not
+optimize algorithm assignment against the independent offload-transfer overlap floor.
+
 ### Comm latency vs bandwidth split
 
 `src/sim/engine/pipeline.ts: phaseComm, phaseTransfer` → `PhaseResult.comm`, `PhaseResult.transfer`. Display only:
 sums of numbers the engine already computes, so no rate depends on them (design doc §4.2).
 
-- `comm.latencySec = Σ_s lat_s + Σ α_p2p` (every collective α on the critical path, PP sends included).
-- `comm.bandwidthSec = Σ_s bw_s + Σ β_p2p`.
+- `comm.latencySec = Σ_s lat_s + Σ α_forward + α_return` (return 0 for pp1 or prefill).
+- `comm.bandwidthSec = Σ_s bw_s + Σ β_forward + β_return`.
 - `comm.exposedSec = Σ_s exposedComm_s + Σ p2p` under `overlap 'ideal'` (the sends are on the latency path, not
-  in `t_s`); under `'none'` each send is already inside `t_s`, hence inside `exposedComm_s`, and is not added again.
+  in `t_s`); under `'none'` each forward send is already inside `t_s` and is not added again.
+  Return α+β is added in both modes (never inside a stage). `PhaseResult.loopBack` exposes its op cost.
 - `transfer = { sec: Σ_s xfer_s, exposedSec: Σ_s exposedTransfer_s, bytes: Σ usefulBytes, requests: Σ reads.count }`
   for one microbatch through every stage; absent when no stage has a transfer op.
 - Example (`pipeline.test.ts`, design doc §8.3): REF_DENSE_8B on `SYNTH_CLUSTER`, decode @ 1024. tp 4: 73 tree
-  all-reduces of `2·⌈log2 4⌉·1 µs` give `latencySec = 292 µs`, `bandwidthSec = 11.96 µs`. tp 2 pp 2 (b 2):
-  `146 µs` in the stages + the send's `α = 1 µs` = `147 µs`; the send's `β = 0.08192 µs` goes into
-  `bandwidthSec`.
+  all-reduces of `2·⌈log2 4⌉·1 µs` plus sampling AG give `latencySec = 295 µs`,
+  `bandwidthSec = 11.96056 µs`. tp 2 pp 2 (b 2): `147 µs` in stages (146 AR + 1 AG)
+  - forward α 1 µs + return α 1 µs = `149 µs`; forward β 0.08192 µs and return β 0.00004 µs
+    both enter `bandwidthSec`.
 
 ### Pipeline and DP
 
@@ -1150,9 +1177,12 @@ sums of numbers the engine already computes, so no rate depends on them (design 
 - **Resources.** Each stage and each PP boundary link is a resource every microbatch occupies once per cycle:
   stage s for `t_s`, the link after stage s for the send's bandwidth time `βp2p_s = bytes/B` (α is latency,
   not occupancy). Overlapping a send with compute does not let the link carry more bytes than its bandwidth, so
-  the bottleneck per microbatch is `b = max(max_s t_s, max_s βp2p_s)`. (Under `'none'`, t_s ≥ βp2p_s already.)
-- **Decode**: `cycle = max(m·b, Σ_s t_s + Σ p2p)` (a microbatch cannot start its next token before the
-  previous one left the last stage). `tokensPerSec = dp·B_r/cycle`, `perSequenceTokensPerSec = 1/cycle`,
+  the bottleneck per microbatch is `b = max(max_s t_s, max_s βp2p_s, β_return)`.
+  The decode return is another link resource; prefill has β_return = 0.
+  (Under `'none'`, t_s ≥ the forward βp2p_s already.)
+- **Decode**: `cycle = max(m·b, Σ_s t_s + Σ p2p + return_p2p)` (the sampled IDs must return to stage 0).
+  `return_p2p = α_return + β_return` in both overlap modes; it can be hidden by the `m·b` branch,
+  so adding it need not increase cycle time. `tokensPerSec = dp·B_r/cycle`, `perSequenceTokensPerSec = 1/cycle`,
   `latency = cycle`.
 - **Prefill** (a steady stream of replica batches; the bottleneck resource bounds it): `cycle = m·b`,
   `tokensPerSec = dp·B_r·promptLen/cycle`, `latency (TTFT of a replica batch) = Σ t_s + Σ p2p + (m−1)·b`,
@@ -1162,9 +1192,9 @@ sums of numbers the engine already computes, so no rate depends on them (design 
   microbatch → `cycle = 1,024 s`.
 - **Context of each rate** (`src/sim/engine/simulate.ts: simulate`, `types.ts: Workload`). Every rate is quoted
   at the context it applies to ("33.9 tok/s @ 8k"):
-  - **Prefill @ P** (`promptLen = P`): the whole P-token prompt from an *empty* KV cache, so `past = 0` and
+  - **Prefill @ P** (`promptLen = P`): the whole P-token prompt from an _empty_ KV cache, so `past = 0` and
     `qLen = kvLen = P`. Prefill tok/s @ P = `P / latency` per sequence (`dp·B_r·P/cycle` aggregate).
-  - **Decode @ N** (`decodeContextLen = N`): one decode step with N tokens *already* in the KV cache. The new
+  - **Decode @ N** (`decodeContextLen = N`): one decode step with N tokens _already_ in the KV cache. The new
     token's query also sees its own key, so `qLen = 1` and `kvLen = past + qLen = N + 1`. Attention FLOP
     (`2·seqs·heads·(N + 1)·(qk + v)`) and KV reads (`seqs·(N + 1)·elemsPerToken·bpe(kv)`) grow linearly in N
     (full attention; a window or top-k selection caps both, §3 "Attended pairs").
@@ -1230,7 +1260,7 @@ Excluded on purpose (only hardware and math limits are modeled):
 - Clock throttling beyond an explicit `clockScale` modifier.
 - NVLS / SHARP in-switch reduction; PCIe switch / shared-uplink contention; the memory traffic of collectives
   and comm/compute contention for memory.
-- Sequence parallelism; logits gather; attention sinks; expected-value MoE routing for the grouped expert GEMMs
+- Sequence parallelism; full-logits gather (small sampling exchange is included); attention sinks; expected-value MoE routing for the grouped expert GEMMs
   (`E·(1−(1−k/E)^T)` distinct experts is used only for the offload transfers, §12 "Expert hit ratio"; the GEMMs
   keep balanced routing); the OS memory reservation.
 
@@ -1376,11 +1406,11 @@ tablePlacementAt`; `lower/moe.ts: expertFetchOp`; `lower/lower.ts: denseLayerFet
 `lower/ngram.ts: tableFetchOp`. Three weight groups, each lowered to one `TransferOp` (§3 op catalogue: `kind
 'transfer'`) in front of the block that consumes it, **only when it has bytes to move**:
 
-| group | selector | stays on device | `reads` / `usefulBytes` per step |
-|---|---|---|---|
-| `routed_experts` (`moe.expert_fetch`) | MoE layers in `layers` (default all) | `C = f·E_loc` experts, router, shared experts | `[{ M, W_expert }]` / `M·W_expert` |
-| `dense_layer` (`layer.fetch`) | layers `[from, to)` | nothing of the layer | `[{ 1, W_layer }]` / `W_layer` |
-| `lookup_table` (`<block>.row_fetch`) | every n-gram table | projections, gate vectors, conv taps | per scale layout, below / `R·rowBytes` |
+| group                                 | selector                             | stays on device                               | `reads` / `usefulBytes` per step       |
+| ------------------------------------- | ------------------------------------ | --------------------------------------------- | -------------------------------------- |
+| `routed_experts` (`moe.expert_fetch`) | MoE layers in `layers` (default all) | `C = f·E_loc` experts, router, shared experts | `[{ M, W_expert }]` / `M·W_expert`     |
+| `dense_layer` (`layer.fetch`)         | layers `[from, to)`                  | nothing of the layer                          | `[{ 1, W_layer }]` / `W_layer`         |
+| `lookup_table` (`<block>.row_fetch`)  | every n-gram table                   | projections, gate vectors, conv taps          | per scale layout, below / `R·rowBytes` |
 
 - `W_expert = gemmWeightBytes(gated ? 3 : 2, h, fe/etp, w_routed)` (`moe.ts: expertWeightBytes`); the grouped
   expert GEMMs keep their `a` active experts, so the device-memory bytes of the step are unchanged.

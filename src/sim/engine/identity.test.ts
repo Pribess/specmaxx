@@ -1,6 +1,6 @@
 /**
  * Deployment identity pin (design/offload-specdec-latency.md §8.2 ID-1/ID-2).
- * Generated BEFORE any deployment engine changes, on 68ae0f4 (EXL3 + fabric shapes merged).
+ * Originally generated on 68ae0f4; deliberately regenerated for audit G1/G2/G3/G4/G7/G8.
  * JSON round-trips finite IEEE-754 doubles exactly; every selected leaf uses Object.is, not a tolerance.
  * New result fields intentionally do not enter this projection. Never regenerate to hide a regression.
  * Regenerate deliberately: UPDATE_DEPLOYMENT_IDENTITY=1 bun run test src/sim/engine/identity.test.ts
@@ -272,7 +272,7 @@ const inputs = cases();
 const DESIGN_GOLDENS: [string, number, number, number, number, number, number[], boolean][] = [
   [
     'G-a',
-    8.538328428571402e-3,
+    0.008538328428571402,
     117.118942936623,
     0.31770528850866675,
     0.31770528850866675,
@@ -282,27 +282,27 @@ const DESIGN_GOLDENS: [string, number, number, number, number, number, number[],
   ],
   [
     'G-b',
-    4.120760767999988e-3,
-    242.6736363259812,
-    0.18019574180722692,
-    0.18019574180722692,
-    22730.83680513324,
+    0.004123760767999988,
+    242.49709337164026,
+    0.1800527418072269,
+    0.1800527418072269,
+    22748.889902411895,
     [4347488256],
     true,
   ],
   [
     'G-c',
-    8.419233535999987e-3,
-    237.55131526500074,
-    0.34323570569445416,
-    0.5146366971656813,
-    23866.980806747582,
+    0.008421233535999988,
+    237.4948980396027,
+    0.34323770569445416,
+    0.5146386971656812,
+    23866.84173705675,
     [4548502528, 4548510720],
     true,
   ],
   [
     'G-d',
-    1.670985011199998e-2,
+    0.01670985011199998,
     239.3797654191672,
     1.3158195622538693,
     1.9732903249488039,
@@ -312,47 +312,47 @@ const DESIGN_GOLDENS: [string, number, number, number, number, number, number[],
   ],
   [
     'G-e',
-    2.1208831999999997e-5,
+    0.000021208831999999997,
     188600.67353072535,
-    2.4009366387548636e-4,
-    2.4009366387548636e-4,
+    0.00024009366387548636,
+    0.00024009366387548636,
     8530004.361389985,
     [9757120],
     true,
   ],
   [
     'G-f',
-    2.9557392e-5,
-    67664.96854661602,
-    1.8710956775097273e-4,
-    2.798100477509727e-4,
-    5472729.2265612995,
+    0.000031463856,
+    63564.999788964196,
+    0.00018910956775097272,
+    0.0002818100477509727,
+    5414850.301749119,
     [3323008, 3958592],
     true,
   ],
   [
     'G-g',
-    2.4350845760000017e-3,
-    410.6633543064252,
-    4.852454397980686e-2,
-    9.765063224761372e-2,
-    84410.89115035313,
+    0.0024470846560000017,
+    408.6495322293416,
+    0.04824354397980686,
+    0.09707363224761373,
+    84902.55197077664,
     [1162519552, 1162527744],
     true,
   ],
   [
     'G-i',
-    2.9106749920000006e-3,
-    343.5629201984087,
-    6.070928018780688e-2,
-    6.070928018780688e-2,
-    67469.09183124623,
+    0.002922674992000001,
+    342.15231003694157,
+    0.060721280187806884,
+    0.060721280187806884,
+    67455.75829974837,
     [1238329344],
     true,
   ],
   [
     'G-h1',
-    8.356467181537718e-3,
+    0.008356467181537718,
     119.66779480799501,
     0.6093556337025076,
     0.6093556337025076,
@@ -362,7 +362,7 @@ const DESIGN_GOLDENS: [string, number, number, number, number, number, number[],
   ],
   [
     'G-h2',
-    8.979504281438205e-3,
+    0.008979504281438205,
     111.3647222227099,
     0.8779083600783636,
     0.8779083600783636,
@@ -376,7 +376,7 @@ function expectClose(actual: number, expected: number, rel = 1e-9): void {
   expect(Math.abs(actual - expected)).toBeLessThanOrEqual(rel * Math.abs(expected));
 }
 
-describe('deployment identity, knobs absent (before deployment engine changes)', () => {
+describe('deployment identity, knobs absent (after latency audit G1–G8, G6 excluded)', () => {
   if (UPDATE) {
     it('writes the baseline fixture, deliberately', async () => {
       const fs = (await import(/* @vite-ignore */ 'node:fs' as string)) as {
@@ -444,13 +444,18 @@ describe('deployment identity, knobs absent (before deployment engine changes)',
     (key, value) => {
       const absent = simulate(value);
       const empty = simulate({ ...value, deployment: {} });
-      const offloadIdeal = simulate({ ...value, options: { ...value.options, offloadOverlap: 'ideal' } });
+      const offloadIdeal = simulate({
+        ...value,
+        options: { ...value.options, offloadOverlap: 'ideal' },
+      });
       for (const r of [empty, offloadIdeal]) {
         expect(mismatches(fixture[key], pin(r))).toEqual([]);
         expect(r).toEqual(absent);
       }
       // With nothing offloaded, offloadOverlap 'none' changes nothing either (xfer_s = 0).
-      expect(simulate({ ...value, options: { ...value.options, offloadOverlap: 'none' } })).toEqual(absent);
+      expect(simulate({ ...value, options: { ...value.options, offloadOverlap: 'none' } })).toEqual(
+        absent,
+      );
       // The new fields are derived sums or absent: no transfer, no spec-dec, zero deployment memory.
       for (const phase of [absent.prefill, absent.decode]) {
         expect(phase.transfer).toBeUndefined();
@@ -468,7 +473,9 @@ describe('deployment identity, knobs absent (before deployment engine changes)',
       const absent = simulate(value);
       expect(simulate({ ...value, deployment: {} })).toEqual(absent);
       expect(simulate({ ...value, deployment: { offload: {} } })).toEqual(absent);
-      expect(simulate({ ...value, deployment: { offload: { lookupTables: { tier: 'device' } } } })).toEqual(absent);
+      expect(
+        simulate({ ...value, deployment: { offload: { lookupTables: { tier: 'device' } } } }),
+      ).toEqual(absent);
     },
   );
 });

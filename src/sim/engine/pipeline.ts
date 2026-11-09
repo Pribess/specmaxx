@@ -122,13 +122,18 @@ export interface PhaseShape {
    * token per step (today's rule, bit for bit). Count (real, ≥ 1).
    */
   tokensPerStep?: number;
+  /** Decode-only last-stage → stage-0 token-ID send; α + β seconds on the dependency path, never hidden. */
+  loopBack?: OpResult;
 }
 
 /**
  * Microbatching of one replica: `m = min(pp, B_r)` microbatches of `b_mb = ceil(B_r / m)` sequences.
  * Counts (no unit).
  */
-export function microbatching(pp: number, sequencesPerReplica: number): { microbatches: number; microbatchSize: number } {
+export function microbatching(
+  pp: number,
+  sequencesPerReplica: number,
+): { microbatches: number; microbatchSize: number } {
   // Formula: m = min(pp, B_r);  b_mb = ceil(B_r / m)
   // See docs/simulation-model.md §7 ("Pipeline and DP")
   const microbatches = Math.min(pp, sequencesPerReplica);
@@ -142,17 +147,33 @@ export function microbatching(pp: number, sequencesPerReplica: number): { microb
  *   bandwidth = Σ_s bw_s + Σ β_p2p
  *   exposed   = Σ_s exposedComm_s + [overlap 'ideal'] Σ p2p   (under 'none' each send is already inside t_s,
  *               hence inside exposedComm_s)
+ * The decode-only loopBack adds its α, β and full time to the respective sums in both overlap modes.
  * Unit: seconds.
  */
-export function phaseComm(stages: StageResult[], overlap: SimOptions['overlap']): PhaseResult['comm'] {
+export function phaseComm(
+  stages: StageResult[],
+  overlap: SimOptions['overlap'],
+  loopBack?: OpResult,
+): PhaseResult['comm'] {
   // Formula: latency = Σ_s lat_s + Σ α_p2p;  bandwidth = Σ_s bw_s + Σ β_p2p
   // See docs/simulation-model.md §7 ("Comm latency vs bandwidth split")
-  const latencySec = stages.reduce((s, st) => s + st.commLatencySec + (st.sendToNext?.commLatencySec ?? 0), 0);
-  const bandwidthSec = stages.reduce((s, st) => s + st.commBandwidthSec + (st.sendToNext?.commBandwidthSec ?? 0), 0);
+  const latencySec = stages.reduce(
+    (s, st) => s + st.commLatencySec + (st.sendToNext?.commLatencySec ?? 0),
+    0,
+  );
+  const bandwidthSec = stages.reduce(
+    (s, st) => s + st.commBandwidthSec + (st.sendToNext?.commBandwidthSec ?? 0),
+    0,
+  );
   // Formula: exposed = Σ_s exposedComm_s + [ideal] Σ p2p_s
-  const sendsOnPathSec = overlap === 'ideal' ? stages.reduce((s, st) => s + (st.sendToNext?.sec ?? 0), 0) : 0;
+  const sendsOnPathSec =
+    overlap === 'ideal' ? stages.reduce((s, st) => s + (st.sendToNext?.sec ?? 0), 0) : 0;
   const exposedSec = stages.reduce((s, st) => s + st.exposedCommSec, 0) + sendsOnPathSec;
-  return { latencySec, bandwidthSec, exposedSec };
+  return {
+    latencySec: latencySec + (loopBack?.commLatencySec ?? 0),
+    bandwidthSec: bandwidthSec + (loopBack?.commBandwidthSec ?? 0),
+    exposedSec: exposedSec + (loopBack?.sec ?? 0),
+  };
 }
 
 /**
@@ -188,46 +209,59 @@ export function phaseTransfer(stages: StageResult[]): PhaseResult['transfer'] {
  * cycle: stage s for t_s, the link after stage s for its bandwidth (β) time `βp2p_s = bytes / B` (α is
  * latency, not occupancy). Even when the sends overlap compute (`'ideal'`), a link cannot move more bytes than
  * its bandwidth allows, so the bottleneck per microbatch is
- *   b = max(max_s t_s, max_s βp2p_s).
- * Under `'none'` each t_s already contains its send, so the β term never wins there.
+ *   b = max(max_s t_s, max_s βp2p_s, β_return).
+ * Under 'none' each t_s contains its forward send. Decode return β is a separate link resource.
  *
  * Decode (every sequence makes one token per cycle; a microbatch cannot start its next step before its
- * previous one left the last stage):
- *   cycle = max(m · b, Σ_s t_s + Σ p2p);  tokens/s = dp · B_r / cycle;  per sequence 1/cycle; latency = cycle.
+ * sampled IDs have returned to stage 0):
+ *   cycle = max(m · b, Σ_s t_s + Σ p2p + return_p2p); tokens/s = dp · B_r / cycle; per sequence 1/cycle.
+ *   return_p2p = α_return + β_return is present under both overlap modes (G2); latency = cycle.
  *   With speculative decoding each step commits E[τ] tokens per sequence: tokens/s = dp · B_r · E[τ] / cycle;
  *   per sequence E[τ]/cycle; latency (time per output token) = cycle / E[τ].
  * Prefill (a steady stream of replica batches; the bottleneck resource bounds it):
  *   cycle = m · b;  tokens/s = dp · B_r · promptLen / cycle;
  *   latency (TTFT of a replica batch) = Σ t_s + Σ p2p + (m − 1) · b;  per sequence promptLen / latency.
  * Σ p2p is the PP sends' full time (α + β) when `overlap = 'ideal'` (they are not inside t_s); 0 under
- * `'none'`, where each t_s already contains its send.
+ * 'none', where each t_s already contains its forward send. Return is never inside a stage.
  */
 export function phaseResult(stages: StageResult[], shape: PhaseShape): PhaseResult {
   const m = shape.microbatches;
   const maxStageSec = Math.max(...stages.map((s) => s.sec));
   // Formula: βp2p_s = bandwidth (β) time of the send after stage s, per microbatch
-  const maxLinkServiceSec = Math.max(0, ...stages.map((s) => s.sendToNext?.commBandwidthSec ?? 0));
+  const loopBack = shape.phase === 'decode' ? shape.loopBack : undefined;
+  const maxLinkServiceSec = Math.max(
+    loopBack?.commBandwidthSec ?? 0,
+    ...stages.map((s) => s.sendToNext?.commBandwidthSec ?? 0),
+  );
   // Formula: b = max(max_s t_s, max_s βp2p_s)   (bottleneck resource time per microbatch)
   // See docs/simulation-model.md §7 ("Pipeline and DP")
   const bottleneckSec = Math.max(maxStageSec, maxLinkServiceSec);
   const sumStageSec = stages.reduce((s, st) => s + st.sec, 0);
   const p2pOnPathSec =
     shape.overlap === 'ideal' ? stages.reduce((s, st) => s + (st.sendToNext?.sec ?? 0), 0) : 0;
-  const base: Pick<PhaseResult, 'phase' | 'microbatches' | 'microbatchSize' | 'stages' | 'comm' | 'transfer'> = {
+  const base: Pick<
+    PhaseResult,
+    'phase' | 'microbatches' | 'microbatchSize' | 'stages' | 'comm' | 'transfer' | 'loopBack'
+  > = {
     phase: shape.phase,
     microbatches: m,
     microbatchSize: shape.microbatchSize,
     stages,
-    comm: phaseComm(stages, shape.overlap),
+    comm: phaseComm(stages, shape.overlap, loopBack),
   };
+  if (loopBack !== undefined) base.loopBack = loopBack;
   const transfer = phaseTransfer(stages);
   if (transfer !== undefined) base.transfer = transfer;
   switch (shape.phase) {
     case 'decode': {
-      // Formula: cycle = max(m·b, Σ t_s + Σ p2p); tokens/s = dp·B_r/cycle; perSeq = 1/cycle
+      // Formula: cycle = max(m·b, Σ t_s + Σ forward_p2p + return_p2p); tokens/s = dp·B_r/cycle
       // Formula (spec-dec): tokens/s = dp·B_r·E[τ]/cycle; perSeq = E[τ]/cycle; latency = cycle/E[τ]
       // See docs/simulation-model.md §7 ("Pipeline and DP"), §13 ("Accepted tokens")
-      const cycleSec = Math.max(m * bottleneckSec, sumStageSec + p2pOnPathSec);
+      // Formula (G2): cycle = max(m·b, Σ t_s + Σ forward_p2p + return_p2p).
+      const cycleSec = Math.max(
+        m * bottleneckSec,
+        sumStageSec + p2pOnPathSec + (loopBack?.sec ?? 0),
+      );
       const E = shape.tokensPerStep;
       return {
         ...base,

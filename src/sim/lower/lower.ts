@@ -8,7 +8,14 @@
 
 import { opBytes } from '../ir/metrics';
 import type { CollectiveOp, Op, TransferOp } from '../ir/ops';
-import type { BlockSpec, DraftSpec, LayerSpec, ModelSpec, ParallelConfig, QuantConfig } from '../ir/model';
+import type {
+  BlockSpec,
+  DraftSpec,
+  LayerSpec,
+  ModelSpec,
+  ParallelConfig,
+  QuantConfig,
+} from '../ir/model';
 import { actBpe, stepTokens } from './common';
 import { csaSequenceStateBytes, lowerCsa } from './csa';
 import { lowerEmbedding } from './embedding';
@@ -75,7 +82,10 @@ export interface OffloadLowering {
   /** Whole decoder layers `[from, to)` streamed from `tier` every step. */
   denseLayers?: { tier: 'host_ram' | 'nvme'; layers: { from: number; to: number } };
   /** n-gram lookup tables read row by row from `tier` (absent = on the device), with their scale layout (design doc §2.10). */
-  lookupTables?: { tier: 'host_ram' | 'nvme'; scaleLayout: 'separate' | 'pinned_host' | 'interleaved' };
+  lookupTables?: {
+    tier: 'host_ram' | 'nvme';
+    scaleLayout: 'separate' | 'pinned_host' | 'interleaved';
+  };
 }
 
 /**
@@ -117,6 +127,8 @@ export interface LoweredStage {
   layers: LoweredLayer[];
   /** Activation send to the next stage (absent on the last stage). */
   sendToNext?: CollectiveOp;
+  /** Decode-only sampled uint32 token IDs returned from the last stage to stage 0 (b_mb·qLen·4 bytes). */
+  sendToFirst?: CollectiveOp;
 }
 
 /** A model lowered for one phase step: per-stage, per-device ops. */
@@ -129,7 +141,8 @@ export interface LoweredModel {
 export function lowerModel(model: ModelSpec, ctx: LoweringContext): LoweredModel {
   const pp = ctx.parallel.pp;
   const L = model.layers.length;
-  if (pp < 1 || pp > L) throw new Error(`pp (${pp}) must be between 1 and the number of layers (${L})`);
+  if (pp < 1 || pp > L)
+    throw new Error(`pp (${pp}) must be between 1 and the number of layers (${L})`);
   const stages: LoweredStage[] = [];
   for (let s = 0; s < pp; s++) {
     const layers: LoweredLayer[] = [];
@@ -144,6 +157,19 @@ export function lowerModel(model: ModelSpec, ctx: LoweringContext): LoweredModel
     const stage: LoweredStage = { index: s, layers };
     if (s === pp - 1) {
       layers.push({ name: 'head', layerIndex: null, ops: lowerHead(model, ctx) });
+      if (pp > 1 && ctx.phase === 'decode') {
+        // Formula: S_return = b_mb·(k+1)·4 B; plain decode has qLen = 1.
+        // See docs/simulation-model.md §5 "PP split" (audit G2).
+        stage.sendToFirst = {
+          kind: 'collective',
+          name: 'pp.sample_return',
+          collective: 'send_recv',
+          group: 'pp',
+          groupSize: 2,
+          messageBytes: stepTokens(ctx) * 4,
+          dtype: 'int32',
+        };
+      }
     } else {
       // Formula: send_recv S = T·(N·h)·bpe(act), N = residualStreams (default 1)
       // See docs/simulation-model.md §5 "PP split"
@@ -176,7 +202,11 @@ export function layerWeightBytesOnDevice(layer: LayerSpec, ctx: LoweringContext)
  * The whole-layer fetch of a layer in the `denseLayers` range (design doc §2.5): `reads [{ 1, W_layer }]`,
  * `usefulBytes = W_layer`, every step (no hit ratio). Undefined when the layer is on the device or has no weights.
  */
-export function denseLayerFetchOp(layer: LayerSpec, layerIndex: number, ctx: LoweringContext): TransferOp | undefined {
+export function denseLayerFetchOp(
+  layer: LayerSpec,
+  layerIndex: number,
+  ctx: LoweringContext,
+): TransferOp | undefined {
   const placement = denseLayerPlacementAt(ctx, layerIndex);
   if (placement === undefined) return undefined;
   const W_layer = layerWeightBytesOnDevice(layer, ctx);
@@ -242,7 +272,11 @@ export function lowerBlock(block: BlockSpec, ctx: LoweringContext, layerIndex?: 
  * {@link ngramResidentWeightBytes}), which also drop the off-device part of an offloaded layer `layerIndex`. A layer
  * of a `denseLayers` range is handled by the caller (resident 0).
  */
-export function blockResidentWeightBytes(block: BlockSpec, ctx: LoweringContext, layerIndex?: number): number {
+export function blockResidentWeightBytes(
+  block: BlockSpec,
+  ctx: LoweringContext,
+  layerIndex?: number,
+): number {
   switch (block.kind) {
     case 'moe':
       return moeResidentWeightBytes(block, ctx, layerIndex);
@@ -275,7 +309,11 @@ export function blockResidentWeightBytes(block: BlockSpec, ctx: LoweringContext,
  * indexer-key caches × contextTokens, plus the fixed recurrent and conv1d state. Hyper-connection steps keep
  * none. Unit: bytes per sequence.
  */
-export function blockSequenceStateBytes(block: BlockSpec, ctx: LoweringContext, contextTokens: number): number {
+export function blockSequenceStateBytes(
+  block: BlockSpec,
+  ctx: LoweringContext,
+  contextTokens: number,
+): number {
   switch (block.kind) {
     case 'gqa_attention':
       return gqaSequenceStateBytes(block, ctx, contextTokens);

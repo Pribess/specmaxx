@@ -12,12 +12,23 @@
  * 5. Memory fit (device and the off-device tiers).
  */
 
-import { applyDeviceModifiers, applyLinkModifiers, describeDeviceModifier, describeLinkModifier } from '../hw/modifiers';
+import {
+  applyDeviceModifiers,
+  applyLinkModifiers,
+  describeDeviceModifier,
+  describeLinkModifier,
+} from '../hw/modifiers';
 import type { DeviceSpec, HardwareStack, TopologySpec } from '../hw/types';
 import { crossLayerReferences } from '../ir/validateModel';
 import type { ModelSpec } from '../ir/model';
 import { lowerDraftDecode, lowerDraftPrefill } from '../lower/draft';
-import { lowerModel, stageLayerRange, type LoweredLayer, type LoweredModel, type LoweringContext } from '../lower/lower';
+import {
+  lowerModel,
+  stageLayerRange,
+  type LoweredLayer,
+  type LoweredModel,
+  type LoweringContext,
+} from '../lower/lower';
 import type { AllReduceAlgorithm, CollectivePath } from './collectives';
 import { offloadTiers, resolveHost, resolveOffload, transferPath, type ResolvedHost } from './host';
 import { memoryReport } from './memory';
@@ -55,10 +66,13 @@ export function effectiveHardware(hardware: HardwareStack): EffectiveHardware {
   const deviceMods = hardware.deviceModifiers ?? [];
   const intraMods = hardware.linkModifiers?.intraNode ?? [];
   const interMods = hardware.linkModifiers?.interNode ?? [];
-  const device = deviceMods.length > 0 ? applyDeviceModifiers(hardware.device, deviceMods) : hardware.device;
+  const device =
+    deviceMods.length > 0 ? applyDeviceModifiers(hardware.device, deviceMods) : hardware.device;
   const topology: TopologySpec = { ...hardware.topology };
-  if (topology.intraNode !== undefined && intraMods.length > 0) topology.intraNode = applyLinkModifiers(topology.intraNode, intraMods);
-  if (topology.interNode !== undefined && interMods.length > 0) topology.interNode = applyLinkModifiers(topology.interNode, interMods);
+  if (topology.intraNode !== undefined && intraMods.length > 0)
+    topology.intraNode = applyLinkModifiers(topology.intraNode, intraMods);
+  if (topology.interNode !== undefined && interMods.length > 0)
+    topology.interNode = applyLinkModifiers(topology.interNode, interMods);
   const notes = [
     ...deviceMods.map(describeDeviceModifier),
     ...intraMods.map((m) => `intraNode ${describeLinkModifier(m)}`),
@@ -117,7 +131,14 @@ function stageTransferPaths(
       st.layers.some((l) => l.ops.some((op) => op.kind === 'transfer' && op.source === tier)),
     );
     if (!streams[s]) continue;
-    const n = stageNStream(input.parallel, topology.devicesPerNode, streams, s, options.offloadOverlap, microbatches);
+    const n = stageNStream(
+      input.parallel,
+      topology.devicesPerNode,
+      streams,
+      s,
+      options.offloadOverlap,
+      microbatches,
+    );
     paths[tier] = transferPath(tier, offload.host, offload.queueDepth, n);
   }
   return paths;
@@ -135,9 +156,12 @@ function simulatePhase(
   offload: PhaseOffload | undefined,
   tokensPerStep?: number,
 ): PhaseResult {
+  let loopBack: ReturnType<typeof opTime> | undefined;
   const stages = lowered.stages.map((stage) => {
     const ppPath: CollectivePath =
-      stage.sendToNext === undefined ? { kind: 'none' } : ppSendPath(input.parallel, topology, stage.index);
+      stage.sendToNext === undefined
+        ? { kind: 'none' }
+        : ppSendPath(input.parallel, topology, stage.index);
     const ctx: OpTimeContext = {
       engine: base.engine,
       memBandwidthBytesPerSec: base.memBandwidthBytesPerSec,
@@ -147,11 +171,71 @@ function simulatePhase(
       warnings: base.warnings,
     };
     if (offload !== undefined) {
-      ctx.transferPaths = stageTransferPaths(lowered, stage.index, offload, input, topology, options, shape.microbatches);
+      ctx.transferPaths = stageTransferPaths(
+        lowered,
+        stage.index,
+        offload,
+        input,
+        topology,
+        options,
+        shape.microbatches,
+      );
     }
-    const layers = stage.layers.map((l) => layerResult(l.name, l.layerIndex, l.ops.map((op) => opTime(op, ctx))));
+    const layers = stage.layers.map((l) =>
+      layerResult(
+        l.name,
+        l.layerIndex,
+        l.ops.map((op) => opTime(op, ctx)),
+      ),
+    );
     const send = stage.sendToNext === undefined ? undefined : opTime(stage.sendToNext, ctx);
-    return stageResult(stage.index, layers, send, options.overlap, options.offloadOverlap);
+    if (stage.sendToFirst !== undefined) {
+      const returnPath = ppSendPath(input.parallel, topology, stage.index, 0);
+      loopBack = opTime(stage.sendToFirst, {
+        ...ctx,
+        collectivePaths: { ...ctx.collectivePaths, pp: returnPath },
+      });
+    }
+    const original = stageResult(
+      stage.index,
+      layers,
+      send,
+      options.overlap,
+      options.offloadOverlap,
+    );
+    if (options.overlap !== 'ideal' || options.collectiveAlgorithm !== 'best') return original;
+    // Formula (G7): choose min_assignment [Σα + max(compute_s, Σβ)].
+    // Bounded heuristic: compare per-op min-total, uniform ring, uniform tree; ties keep the original.
+    // See docs/simulation-model.md §7 "Stage time and overlap". Explicit algorithms are never overridden.
+    let best = original;
+    let bestCoreSec = best.commLatencySec + Math.max(best.computeSec, best.commBandwidthSec);
+    for (const collectiveAlgorithm of ['ring', 'tree'] as const) {
+      const candidateLayers = layers.map((layer) =>
+        layerResult(
+          layer.name,
+          layer.layerIndex,
+          layer.ops.map((r) =>
+            r.op.kind === 'collective' && r.op.collective === 'all_reduce'
+              ? opTime(r.op, { ...ctx, collectiveAlgorithm })
+              : r,
+          ),
+        ),
+      );
+      const candidate = stageResult(
+        stage.index,
+        candidateLayers,
+        send,
+        options.overlap,
+        options.offloadOverlap,
+      );
+      const coreSec =
+        candidate.commLatencySec + Math.max(candidate.computeSec, candidate.commBandwidthSec);
+      if (coreSec < bestCoreSec) {
+        best = candidate;
+        bestCoreSec = coreSec;
+      }
+    }
+    return best;
   });
   const phaseShape: PhaseShape = {
     phase,
@@ -163,6 +247,7 @@ function simulatePhase(
     overlap: options.overlap,
   };
   if (tokensPerStep !== undefined) phaseShape.tokensPerStep = tokensPerStep;
+  if (loopBack !== undefined) phaseShape.loopBack = loopBack;
   return phaseResult(stages, phaseShape);
 }
 
@@ -173,7 +258,9 @@ function simulatePhase(
  */
 function withDraftLayers(lowered: LoweredModel, draftLayers: LoweredLayer[]): LoweredModel {
   const stages = lowered.stages.map((stage, s) =>
-    s === lowered.stages.length - 1 ? { ...stage, layers: [...stage.layers, ...draftLayers] } : stage,
+    s === lowered.stages.length - 1
+      ? { ...stage, layers: [...stage.layers, ...draftLayers] }
+      : stage,
   );
   return { stages };
 }
@@ -183,7 +270,11 @@ function withDraftLayers(lowered: LoweredModel, draftLayers: LoweredLayer[]): Lo
  * layers, `verifySec` = Σ of every other layer (the verify pass), both without overlap (seconds); E[τ]; and the
  * speedup over the same input with speculative decoding off (tokens/s ratio, dimensionless).
  */
-function speculativeSummary(decode: PhaseResult, expectedTokensPerStep: number, offTokensPerSec: number): NonNullable<PhaseResult['speculative']> {
+function speculativeSummary(
+  decode: PhaseResult,
+  expectedTokensPerStep: number,
+  offTokensPerSec: number,
+): NonNullable<PhaseResult['speculative']> {
   let draftSec = 0;
   let verifySec = 0;
   for (const stage of decode.stages) {
@@ -194,7 +285,12 @@ function speculativeSummary(decode: PhaseResult, expectedTokensPerStep: number, 
   }
   // Formula: speedup = tokens/s(spec-dec) / tokens/s(off)
   // See docs/simulation-model.md §13 ("Accepted tokens")
-  return { draftSec, verifySec, expectedTokensPerStep, speedup: decode.tokensPerSec / offTokensPerSec };
+  return {
+    draftSec,
+    verifySec,
+    expectedTokensPerStep,
+    speedup: decode.tokensPerSec / offTokensPerSec,
+  };
 }
 
 /**
@@ -211,7 +307,9 @@ export function simulate(input: SimInput): SimResult {
   // 2. Modifiers, engine, memory bandwidth, collective paths.
   const hw = effectiveHardware(input.hardware);
   const device = hw.device;
-  const engine = device.engines.find((e) => e.id === (input.hardware.engineId ?? device.engines[0].id));
+  const engine = device.engines.find(
+    (e) => e.id === (input.hardware.engineId ?? device.engines[0].id),
+  );
   if (engine === undefined) throw new Error(`engine '${input.hardware.engineId}' not found`);
   const warnings: string[] = [
     ...hw.notes,
@@ -221,7 +319,10 @@ export function simulate(input: SimInput): SimResult {
   const algorithm: AllReduceAlgorithm = options.collectiveAlgorithm;
   const base = {
     engine,
-    memBandwidthBytesPerSec: engineMemBandwidthBytesPerSec(engine, device.memory.bandwidthBytesPerSec),
+    memBandwidthBytesPerSec: engineMemBandwidthBytesPerSec(
+      engine,
+      device.memory.bandwidthBytesPerSec,
+    ),
     collectiveAlgorithm: algorithm,
     elementwiseFusion: options.elementwiseFusion,
     warnings,
@@ -230,7 +331,12 @@ export function simulate(input: SimInput): SimResult {
   };
 
   // 3. Offload placement and host (docs §12). Nothing off-device ⇒ offload undefined, hardware.host never read.
-  const resolved = resolveOffload(model, input.deployment?.offload, device.memory.kind, parallel.ep);
+  const resolved = resolveOffload(
+    model,
+    input.deployment?.offload,
+    device.memory.kind,
+    parallel.ep,
+  );
   warnings.push(...resolved.warnings);
   let phaseOffload: PhaseOffload | undefined;
   if (resolved.offload !== undefined) {
@@ -258,7 +364,12 @@ export function simulate(input: SimInput): SimResult {
   // Decode @ N: N tokens are already in the KV cache and one new token is generated, so the new token's query
   // sees its own key too.  Formula: qLen = 1; kvLen = past + qLen = N + 1  (docs §7 "Pipeline and DP").
   const decodePastTokens = workload.decodeContextLen;
-  const plainDecodeCtx: LoweringContext = { ...prefillCtx, phase: 'decode', qLen: 1, kvLen: decodePastTokens + 1 };
+  const plainDecodeCtx: LoweringContext = {
+    ...prefillCtx,
+    phase: 'decode',
+    qLen: 1,
+    kvLen: decodePastTokens + 1,
+  };
   // Verify @ N (spec-dec): the k + 1 positions are the bonus token and k drafts.
   // Formula: qLen = k + 1; kvLen = N + k + 1  (docs §13 "Verify")
   const decodeCtx: LoweringContext =
@@ -275,9 +386,21 @@ export function simulate(input: SimInput): SimResult {
   if (spec !== undefined) {
     const { draft, contextRows, draftLength } = spec.lowering;
     prefillLowered = withDraftLayers(prefillLowered, lowerDraftPrefill(model, draft, prefillCtx));
-    decodeLowered = withDraftLayers(decodeLowered, lowerDraftDecode(model, draft, decodeCtx, contextRows, draftLength));
+    decodeLowered = withDraftLayers(
+      decodeLowered,
+      lowerDraftDecode(model, draft, decodeCtx, contextRows, draftLength),
+    );
   }
-  const prefill = simulatePhase(prefillLowered, 'prefill', base, input, hw.topology, options, shape, phaseOffload);
+  const prefill = simulatePhase(
+    prefillLowered,
+    'prefill',
+    base,
+    input,
+    hw.topology,
+    options,
+    shape,
+    phaseOffload,
+  );
   const decode = simulatePhase(
     decodeLowered,
     'decode',
@@ -291,7 +414,16 @@ export function simulate(input: SimInput): SimResult {
   );
   if (spec !== undefined) {
     // The same decode with speculative decoding off, for the speedup.
-    const off = simulatePhase(lowerModel(model, plainDecodeCtx), 'decode', base, input, hw.topology, options, shape, phaseOffload);
+    const off = simulatePhase(
+      lowerModel(model, plainDecodeCtx),
+      'decode',
+      base,
+      input,
+      hw.topology,
+      options,
+      shape,
+      phaseOffload,
+    );
     decode.speculative = speculativeSummary(decode, spec.expectedTokensPerStep, off.tokensPerSec);
   }
 
@@ -312,7 +444,9 @@ export function simulate(input: SimInput): SimResult {
     ...(phaseOffload === undefined ? {} : { host: phaseOffload.host }),
   });
   if (device.memory.kind === 'unified') {
-    warnings.push('memory: unified memory — capacity is shared with the CPU/OS; the usable fraction is OS-dependent and not modeled');
+    warnings.push(
+      'memory: unified memory — capacity is shared with the CPU/OS; the usable fraction is OS-dependent and not modeled',
+    );
   }
 
   return {

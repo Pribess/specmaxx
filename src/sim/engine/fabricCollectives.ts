@@ -428,6 +428,7 @@ export function fabricSendRecvSec(
 /**
  * Cost of one collective of `kind` with S = `messageBytes` per device over `groupSize` nodes (one device each) of the
  * fabric `shape` (the group's view, `groupFabric`), on `link`. `sendHops` = links a send_recv crosses (default 1).
+ * `sendActiveDevices` = simultaneous send/recv ranks per host (count, default 1; PP uses min(dpn, tp·dp)).
  * Two nodes on a full mesh or a chain are one (striped) link at B_one: the switched formulas at that bandwidth, so a
  * single cable with C ≥ B_L gives exactly the switched result.
  */
@@ -439,8 +440,9 @@ export function fabricCollectiveTime(
   link: LinkSpec,
   algorithm: AllReduceAlgorithm,
   sendHops = 1,
+  sendActiveDevices = 1,
 ): CollectiveTime {
-  const p = fabricLinkParams(link, shape, kind === 'send_recv' ? 1 : groupSize);
+  const p = fabricLinkParams(link, shape, kind === 'send_recv' ? sendActiveDevices : groupSize);
   if (
     shape.kind !== 'switched' &&
     shape.kind !== 'ring' &&
