@@ -139,6 +139,15 @@ export interface DeviceSpec {
    * `HardwareStack.host.link` is set). See docs/simulation-model.md §4 ("Host and storage tiers").
    */
   hostInterface?: HostInterfaceSpec;
+  /**
+   * Dedicated-memory devices: whether an RDMA NIC may DMA straight into this device's memory (NVIDIA GPUDirect
+   * RDMA: data-center and RTX/Quadro parts, not GeForce; AMD Instinct: PeerDirect). `false` ⇒ every inter-node
+   * message is staged through host memory, whatever the link (docs/simulation-model.md §6 "Inter-node host
+   * staging", `engine/staging.ts`). Absent on unified-memory devices (the NIC reads the shared pool, nothing to
+   * stage). Absent on a dedicated device = true, the convention before host staging was modelled; every dedicated
+   * preset sets it (enforced by a test). A capability flag, no unit.
+   */
+  gpuDirectRdma?: boolean;
   /** Citations covering the numeric fields. */
   sources: SourceRef[];
   /** Numbers no vendor publishes, with reasons. */
@@ -207,6 +216,16 @@ export interface LinkSpec {
    * `chain`), on top of that hop's `latencySec`. Absent = 0 (cut-through relay: the hardware floor). Unit: seconds.
    */
   forwardingLatencySec?: number;
+  /**
+   * Inter-node links: whether this transport can move a message straight between the NIC and an accelerator's
+   * dedicated memory (GPUDirect RDMA / AMD PeerDirect on an RDMA NIC). TCP transports never can: NCCL's socket
+   * transport takes host pointers only (`net_socket.cc`, `ptrSupport = NCCL_PTR_HOST`), as do Gloo and MLX.
+   * `false` ⇒ a dedicated-memory device stages each message through host memory (docs/simulation-model.md §6
+   * "Inter-node host staging"). Ignored on intra-node links and on unified-memory devices. Absent = true, the
+   * convention before host staging was modelled; every inter-node preset sets it (enforced by a test). A
+   * capability flag, no unit.
+   */
+  gpuDirectRdma?: boolean;
   /** Citations covering the numeric fields. */
   sources: SourceRef[];
   /** Numbers no vendor publishes, with reasons. */

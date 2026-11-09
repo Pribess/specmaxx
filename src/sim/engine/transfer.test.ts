@@ -177,22 +177,27 @@ describe('U-17 n_stream (one node, tp = dp = 1 unless said)', () => {
     ['(h) pp 4, b 4 (m 4), none, every stage', pp4, all, 'none', 4, 4],
     ['(i) tp 4, every stage', { tp: 4, dp: 1, pp: 1 }, [true], 'ideal', 1, 4],
   ] as const)('%s ⇒ %d', (_name, parallel, streams, overlap, m, expected) => {
-    expect(stageNStream(parallel, 8, streams, 0, overlap, m)).toBe(expected);
+    // 'ideal' = prefetching on (p > 0), 'none' = off (p = 0).
+    expect(stageNStream(parallel, 8, streams, 0, overlap === 'ideal', m)).toBe(expected);
   });
   it('the optimistic schedule takes the fewest consumers, but never fewer than the stage itself', () => {
     expect(nStream([4, 1, 2, 0], 1, 2)).toBe(3); // 1 + 2
     expect(nStream([4, 1, 2, 0], 0, 2)).toBe(4); // at least its own 4
   });
-  it('(e) end to end: REF_DENSE_8B pp 4, b 2, dense layers on the SSD, offloadOverlap none ⇒ tier term / 2 consumers', () => {
-    const run = (offloadOverlap: 'ideal' | 'none') =>
+  it('(e) end to end: REF_DENSE_8B pp 4, b 2, dense layers on the SSD, prefetch accuracy 0 ⇒ tier term / 2 consumers', () => {
+    const run = (prefetch: 'ideal' | 'none') =>
       simulate({
         model: REF_DENSE_8B,
         quant: { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } },
         parallel: { tp: 1, pp: 4, dp: 1, ep: 1 },
         workload: { batch: 2, promptLen: 128, decodeContextLen: 128 },
         hardware: { device: SYNTH_GPU, topology: SYNTH_CLUSTER, host: { link: PCIE5, ssd: SSD_45US, ram: DDR5_6000_2CH } },
-        options: { offloadOverlap },
-        deployment: { offload: { denseLayers: { tier: 'nvme', layers: { from: 0, to: 32 } } } },
+        deployment: {
+          offload: {
+            prefetchAccuracy: prefetch === 'ideal' ? 1 : 0,
+            denseLayers: { tier: 'nvme', layers: { from: 0, to: 32 } },
+          },
+        },
       });
     for (const [overlap, n] of [['none', 2], ['ideal', 4]] as const) {
       const fetch = run(overlap).decode.stages[1].layers[0].ops[0];

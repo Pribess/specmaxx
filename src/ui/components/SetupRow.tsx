@@ -12,7 +12,9 @@ import {
   type AppState,
   type BuildResult,
 } from '../state';
+import { needsHostStaging } from '../../sim/engine/staging';
 import { HelpIcon } from './HelpIcon';
+import { networkLinkHelp } from './linkHelp';
 import { Picker } from './Picker';
 import type { PickerOption } from './fuzzy';
 import { Segmented, type Segment } from './Segmented';
@@ -112,6 +114,11 @@ export function SetupRow({
   const network = linkOptions(options.networks, links.inter);
   const cablings = cablingOptions(hw);
   const cabling = effectiveCabling(hw);
+  // The Network link's "?": the TCP links explain their latency (and host staging for a GPU), others the generic text.
+  const interLink = built.hardware?.topology.interNode;
+  const staged =
+    device !== undefined && built.hardware !== undefined && needsHostStaging(device.device, built.hardware.topology);
+  const networkHelp = (interLink !== undefined ? networkLinkHelp(interLink, staged) : undefined) ?? HELP.network;
   const totalText = (
     <span data-testid="device-total">
       = {total} {unit === 'GPUs' ? 'GPUs' : 'devices'} total
@@ -119,7 +126,7 @@ export function SetupRow({
   );
   const linkField = (level: 'intra' | 'inter', opts: PickerOption[], value: string | undefined) => {
     const label = level === 'intra' ? 'Local link' : 'Network link';
-    const help = level === 'intra' ? HELP.local : HELP.network;
+    const help = level === 'intra' ? HELP.local : networkHelp;
     if (opts.length === 1 && value === opts[0].value) {
       return (
         <StaticField label={label} help={help}>

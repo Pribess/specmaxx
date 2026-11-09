@@ -395,7 +395,9 @@ No FLOP, no memory traffic (`opBytes` returns zeros); its time is `messageBytes`
 `ir/ops.ts: TransferOp` (deployment knob `offload`, §12). A read of off-device weight bytes in front of the op
 that needs them: physical read classes `reads [{ count, bytesEach }]` (expected counts, real) and the `usefulBytes`
 that cross the host link. No FLOP and no device-memory traffic (`opBytes` returns zeros; the DMA write into device
-memory is a documented approximation); its time is the tier/link model of §12 "Transfer path".
+memory is a documented approximation); its time is the tier/link model of §12 "Transfer path". Its
+`prefetchedFraction` q in [0, 1] is the share of that time that may hide behind the stage's compute (§12 "Expert
+prefetch").
 
 ---
 
@@ -608,6 +610,49 @@ costed in §6
   estimated: replace for the actual host) and `extraLatencySec` 12 µs (community P2P matrices). The
   `pcie-p2p` unlock switches the link to `'direct'`; Intel Arc Pro boxes use the `_DIRECT` links (stock driver).
   The cost is §6 "Host bounce".
+- **GPUDirect RDMA capability** (`LinkSpec.gpuDirectRdma`, `DeviceSpec.gpuDirectRdma`; `src/sim/engine/staging.ts:
+needsHostStaging`; device citations in `src/sim/hw/presets/gpudirect.ts`). Whether an inter-node transport can move
+  a message straight between the NIC and an accelerator's dedicated memory. A dedicated-memory device on an
+  inter-node path stages every message through host memory when the link or the device lacks it (§6 "Inter-node host
+  staging"). TCP never has it: NCCL's socket transport takes host pointers only (`net_socket.cc:57`, `ptrSupport =
+NCCL_PTR_HOST`), and so do Gloo (`cuda_allreduce_ring.cc:82,102`) and MLX. On RDMA, both ends must support it.
+  Absent = capable, the pre-staging convention, so every earlier result is unchanged; every inter-node link preset
+  and every dedicated device preset sets the field (a test), and unified-memory devices must leave it absent
+  (`validateDevice`).
+
+  | preset                                                                       | `gpuDirectRdma` | source                                                                                                  |
+  | ---------------------------------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------- |
+  | `ETHERNET_5G_TCP`, `ETHERNET_10G_TCP`, `TB4_TCP`, `TB5_TCP`, `USB4_HALO_TCP` | false           | NCCL `net_socket.cc:57` (commit 3e46c089f4ae); Gloo `cuda_allreduce_ring.cc:82,102`                     |
+  | `TB5_RDMA`, `USB4_HALO_RDMA`                                                 | false           | RDMA into host / unified memory only (Apple TN3205; Strix Halo notes); no effect: SoCs only             |
+  | `SPARK_CONNECTX_7`                                                           | false           | NVIDIA forum 352051/2: "GPUDirect RDMA technology is not supported" on Spark; no effect: unified memory |
+  | `IB_NDR_400`, `IB_XDR_800`                                                   | true            | CUDA GPUDirect RDMA doc (https://docs.nvidia.com/cuda/gpudirect-rdma/index.html); ROCm PeerDirect       |
+  | RTX 5090 / 4090 / 3090                                                       | false           | NVIDIA forums 154509/5 ("RDMA is not supported on geforce"), 157984/2                                   |
+  | H100 SXM, H200 SXM, B200, B300                                               | true            | CUDA GPUDirect RDMA doc                                                                                 |
+  | MI300X / MI325X / MI355X / MI455X                                            | true            | ROCm "GPU-enabled MPI" (PeerDirect), https://rocm.docs.amd.com/en/latest/how-to/gpu-enabled-mpi.html    |
+  | R9700, RX 9070 XT, Arc Pro B70 / B65 / B60, Arc B580                         | false           | estimated: no RDMA source found; moot on TCP, where they stage anyway                                   |
+  | DGX Spark, Apple M-series, Ryzen AI Max+ 395                                 | absent          | unified memory: the NIC reads the shared pool                                                           |
+
+  PXB caveat: NCCL uses GPUDirect by default only when the GPU and the NIC sit under the same PCIe switch
+  (`src/graph/paths.cc:511-536`). HGX nodes meet this (DGX B200: 8 ConnectX-7, one per GPU); a workstation NIC on
+  another root port would not, which no preset models.
+
+- **TCP link latencies** (rechecked; `src/sim/hw/presets/links.ts`, `ui/components/linkHelp.tsx`). Each is a one-way
+  hardware / OS floor between two machines (half a tuned TCP ping-pong round trip, or an upper bound derived from a
+  measured collective), not what a socket collective library achieves:
+
+  | link                 | old   | new                  | evidence                                                                                                                                                                                                                                                                                                                                                                         |
+  | -------------------- | ----- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `TB4_TCP`, `TB5_TCP` | 70 µs | **45 µs**, estimated | MLX PR 2808 (https://github.com/ml-explore/mlx/pull/2808): a 4-Mac TCP-ring all-reduce takes 290–300 µs, 6 steps of ≈ 48 µs including reduction and dispatch. At 70 µs the engine's best 4-node all-reduce (tree, 4α = 280 µs) would equal the measured software, so 70 µs was no floor. The 0.142 ms ICMP minimum RTT (MacBook Air ↔ Linux PC, untuned) stays as context only. |
+  | `ETHERNET_10G_TCP`   | 10 µs | 10 µs, estimated     | No 10GbE desktop ping-pong found: carried over from the 5GbE direct measurement. Cross-checks: 10GBASE-T PHY 2–4 µs; IX (OSDI'14) Linux 10GbE one-way 24 µs through a switch with epoll; switched ≈ 15 µs.                                                                                                                                                                       |
+  | `ETHERNET_5G_TCP`    | 10 µs | 10 µs                | Level1Techs (Framework Desktop built-in 5GbE, tuned 1-byte ping-pong): direct min RTT 19.9 µs. Through a 10G switch the same port measured 29.4–32.3 µs (≈ 15 µs one way), a switched figure (the note that called it "10GbE" was corrected).                                                                                                                                    |
+  | `USB4_HALO_TCP`      | 10 µs | 10 µs                | Level1Techs: min RTT 14.1–17.4 µs; 10 µs keeps it above the 8 µs RDMA preset.                                                                                                                                                                                                                                                                                                    |
+
+  What a collective library over sockets measures in practice, for scale (the Network link's "?" says so too): NCCL
+  on sockets 57–64 µs for a small all-reduce between two nodes of 4 GH200 over Slingshot TCP
+  (https://github.com/eth-cscs/cray-network-stack/issues/6), 118–130 µs for 2 × H100 over AWS ENA
+  (https://github.com/dstackai/dstack/issues/3069); MLX's TCP ring 290–300 µs for 4 Macs over Thunderbolt. That is
+  5–10× the floor: software, which the bound leaves out.
+
 - **xGMI aggregate**: `XGMI_MI300X_8_GPU` (used by `MI300X_XGMI_8`) is 7 peers × 64 GB/s = 448 GB/s per
   direction, the full-mesh injection ceiling, because the collective formulas treat B as a device's aggregate
   injection; it is optimistic for subgroups and send/recv. `XGMI_MI300X_PER_PEER` (64 GB/s) is the one-peer link.
@@ -667,10 +712,11 @@ costed in §6
   application is responsible for forwarding"): physically 2 hops = 2 × 7 + 3 = 17 µs and 3 hops = 27 µs; with this
   preset's 50 µs `latencySec`, kept in this task although ~7 µs was measured (see the latency-audit follow-up), 103
   and 156 µs. `TB5_TCP` (new: the Thunderbolt bridge on TB5 ports at the 80 Gb/s = 10 GB/s per-direction line rate,
-  Intel's TB5 brief; not an achieved goodput, none is cleanly measured) and `TB4_TCP` (40 Gb/s, the M3 Max): α 70 µs
-  (half the bridge's 142 µs ICMP RTT) and α_f = 20 µs, the user-space receive-to-send turnaround, about a third of the
-  ~48–70 µs one-way TCP time that is itself almost all software (MLX TCP ring ~48 µs per step; TN3205: the bridge
-  forwards in software); 2 hops 160 µs, 3 hops 250 µs. `USB4_HALO_RDMA` α_f = 3 µs (as TB5 RDMA; 2 hops 19 µs, 3 hops
+  Intel's TB5 brief; not an achieved goodput, none is cleanly measured) and `TB4_TCP` (40 Gb/s, the M3 Max): α 45 µs
+  (estimated, ≤ the ≈ 48 µs MLX TCP-ring step; see "TCP link latencies" above) and α_f = 20 µs, the user-space
+  receive-to-send turnaround, about a third of the ~45–48 µs one-way TCP time that is itself almost all software
+  (MLX TCP ring ~48 µs per step; TN3205: the bridge forwards in software); 2 hops 2 × 45 + 20 = 110 µs, 3 hops
+  3 × 45 + 2 × 20 = 175 µs. `USB4_HALO_RDMA` α_f = 3 µs (as TB5 RDMA; 2 hops 19 µs, 3 hops
   30 µs), `USB4_HALO_TCP` 5 µs (the kernel's forwarding turnaround on a tuned stack, half the 10 µs one-way; 25 /
   40 µs). `presets.test.ts` pins these hop examples. No link was renamed; `LEGACY_LINK_IDS` (empty) is where a rename
   would be recorded for old URLs, and a TB5 Mac URL naming the TB4 bridge still resolves to that link.
@@ -999,6 +1045,98 @@ PCIe switch / shared-uplink topologies are not modeled.
 Also not modeled: NVLS / SHARP in-switch reduction, the memory traffic of collectives, and contention between
 communication and compute for memory.
 
+### Inter-node host staging
+
+`src/sim/engine/staging.ts: needsHostStaging`; `collectives.ts: effectiveLink, stagedStageRates, stagedLink,
+stagingBandwidthCapBytesPerSec, collectiveTime`; `fabricCollectives.ts: fabricLinkParams, fabricCollectiveTime,
+fabricAllReduceSec`; `placement.ts: collectivePath, ppSendPath, hasInterNodeTraffic`. A device with dedicated memory
+cannot hand device memory to a NIC
+without GPUDirect RDMA, so each inter-node message is staged through host memory.
+
+**When.** `staged ⇔ device.memory.kind = 'dedicated' ∧ nodes > 1 ∧ (interNode.gpuDirectRdma = false ∨
+device.gpuDirectRdma = false)` (§4 "Links and topologies" for the fields and the capability table). So every
+dedicated GPU over TCP stages; on InfiniBand only a GPU without GPUDirect (a GeForce card) does. It does not apply
+to unified memory (Mac, DGX Spark, Strix Halo: the NIC reads the shared pool), to GPUDirect paths, or to intra-node
+links (those are "Host bounce" above). Only inter-node paths carry it (`CollectivePath.interStaging`: flat
+`level: 'inter'`, the inter phase of hierarchical collectives, PP sends whose boundary crosses nodes). One info
+warning per run, when some message crosses nodes.
+
+**Mechanism.** NCCL's network transport without GDR keeps its send and receive buffers in pinned host memory mapped
+into the GPU (`src/transport/net.cc:936`, `:1121`, `ncclCudaHostCalloc`; commit 3e46c089f4ae): the GPU kernel writes
+the message and a flag into host memory, a CPU proxy thread makes the socket call, and the receiving GPU polls and
+reads host memory over PCIe. No `cudaMemcpy`, no stream sync. A message larger than one buffer step pipelines GPU
+copy, wire and GPU copy; one within a step pays them one after another.
+
+**Parameters** (`HostStaging`, no new free number):
+
+| symbol   | meaning                                    | value                                                                                                   |
+| -------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `B_pcie` | the device's PCIe host link, per direction | `hardware.host.link ?? hostPcieLink(device.hostInterface)`, else PCIe 5.0 x16 with a warning            |
+| `α_pcie` | one PCIe crossing                          | that link's `latencySec`, 1 µs (estimated)                                                              |
+| `B_host` | node DRAM, read + write combined           | `hardware.host.ram ?? DEFAULT_HOST_RAM` (DDR5-6000 2ch, 96 GB/s)                                        |
+| `c`      | one pipeline step of the staging buffer    | `HOST_STAGING_STEP_BYTES` = 4 MiB / 8 = 512 KiB (NCCL `NCCL_BUFFSIZE` default 4 MiB / `NCCL_STEPS` = 8) |
+| `n_stg`  | devices of one node staging at once        | `min(devicesPerNode, tp·dp)`                                                                            |
+
+**Formula** (`stagedStageRates`, `stagedLink`, applied inside `effectiveLink` after the host-bounce lines), in α-β
+terms. A staged message crosses three stages: GPU → pinned host buffer (PCIe), the wire, host buffer → GPU (PCIe).
+In a collective every node sends and receives at once, so each stage's rate, per device and per direction, is:
+
+```
+r_copy = min(B_pcie, B_host / n_stg)            GPU ↔ host buffer: 1 DRAM access per byte per device
+r_net  = min(B, B_host / (2·n_stg))             wire: NIC read at the sender + NIC write at the receiver
+B_hj   = B_host / (4·n_stg)                     all stages at once (the pipelined steady state): 4 accesses
+B_eff  = min(r_copy, r_net, B_hj) = min(B, B_pcie, B_host / (4·n_stg))          β rate
+
+s = min(m, c),  k = m / s steps                  m = the message of one step
+t_pipe = Σ_i s/r_i + (k − 1)·s/B_eff = m/B_eff + (2·s/r_copy + s/r_net − s/B_eff)
+α_eff = α + 2·α_pcie + (2·s/r_copy + s/r_net − s/B_eff)
+```
+
+- `2·α_pcie` = α_stage = 2 µs (estimated): one PCIe write plus flag at the sender, one PCIe poll / read at the
+  receiver. Sources: GDRCopy README (https://github.com/NVIDIA/gdrcopy), `gdrcopy_pplat` CPU↔GPU mapped-memory round
+  trip 1.09 µs; Neugebauer et al., SIGCOMM'18 pcie-bench, 64 B DMA read median 547 ns. For contrast, the Gloo path
+  (`cudaMemcpy` + sync, `cuda_allreduce_ring.cc`) costs "6-7us" per copy (GDRCopy README): engine overhead here.
+- Host memory: the PCIe copies take one DRAM access per byte per device, the wire two (NIC read at the sender, NIC
+  write at the receiver), and the steady state of all three stages at once four. Each cap enters its own stage rate,
+  and the four-access share bounds the pipelined β.
+- The fill / drain term is one step through every stage except the one that sets B_eff (it is ≥ 0, since
+  Σ 1/r_i ≥ 1/B_eff), so nothing is counted twice when PCIe or host memory binds. A small message (`m ≤ c`, one
+  step) pays the serial sum `m/r_copy + m/r_net + m/r_copy`. NIC-bound with host memory not binding, the fill is
+  `2·s/B_pcie`. The fill is serial with the step chain, so it goes into α (latency), never β.
+- Worked checks (`collectives.test.ts`): a 50 GB/s NIC, α 1 µs, PCIe 3.0 x16, host memory not binding: a 4 KiB send
+  costs 3.60192 µs (serial); an 8 MiB send costs `3 µs + m/B_pcie + c/B + c/B_pcie` = 579.24576 µs. Host-bound
+  (50 GB/s NIC, PCIe 5.0 x16, 96 GB/s, n_stg 1): β = m / 24 GB/s, fill = `2c/63.015 GB/s + c/48 GB/s − c/24 GB/s`.
+- `m` per step, chosen per algorithm before the ring / tree / best comparison, so each candidate gets its own staged
+  α (`collectiveTime`, `fabricCollectiveTime`):
+  - flat: ring all-reduce, all-gather, reduce-scatter and all-to-all `S/n`; tree all-reduce `S`; send/recv `S`;
+  - hierarchical inter phase: ring `(S/n1)/n2 = S/n`; tree `S/n1`;
+  - fabric shapes: ring, mesh-direct, all-gather, reduce-scatter and all-to-all `S/N`; tree `S`; send `S` (the
+    2-node shortcut likewise).
+
+  Example: S = 64 KiB, n = 4, PCIe 5.0 x16, 10GbE: an explicit tree costs `α = 4·(10 + 2 + 2·S/B_pcie) µs` =
+  56.32 µs. At n = 4, `best` switches from tree to ring at `S* = 24 µs / (5/B_pcie + 0.5/B)` ≈ 50 KB.
+
+- Staging is not host bounce: the flat all-to-all keeps one α (no `(n−1)·α` rule). On an oversubscribed
+  hierarchical switch, staging applies after the `B/o` reduction (its caps are the device's own).
+- Fabric shapes (`fabricLinkParams`): every hop gets the staging α, and `B_L = min(B_L, B_stg)`, `C = min(C,
+B_stg)`, with `B_stg = stagingBandwidthCapBytesPerSec = min(B_pcie, B_host/(4·n_stg))` (the staging bandwidth is per
+  device, whatever the port count). A relay already holds the bytes in host
+  memory, so charging the staging α per hop over-counts relays: a documented approximation; no dedicated-memory preset
+  uses a ring or chain.
+- The α terms land in `CollectiveTime.latencySec` (→ `PhaseResult.comm.latencySec`), the β terms in `bandwidthSec`,
+  so the UI's comm latency / bandwidth split shows staging with no UI change.
+- On TCP the bandwidth terms never bind (PCIe 5.0 x16 63 GB/s, a 96 GB/s host's share 24 GB/s for one device, vs
+  1.25 GB/s for 10GbE); the 2 µs per message is what counts.
+- **Known inconsistency**: intra-node host bounce keeps 12 µs (the `cudaMemcpyPeer` driver path, community P2P
+  matrices), while inter-node staging uses the 2 µs mapped-memory floor that NCCL's SHM and NET transports reach.
+  Revisiting the intra-node value is a follow-up.
+
+Example (`src/ui/state/urlScenario.test.ts`): 2 machines × 1 RTX 5090 over 10GbE TCP, TP 2, Qwen3.8-Flash-Next
+nvfp4, experts offloaded with f 0.7. Decode @ 8k: comm α 1.970 → 2.380 ms per token (≈ 205 inter-node message steps ×
+(2 µs + a fill of ≈ 0.04–0.08 µs)), 193.0 → 178.8 tok/s @ 8k; the TCP latency recheck leaves 10GbE at 10 µs (no
+change); the default prefetch accuracy (§12 "Expert prefetch") then takes it to 162.0 tok/s @ 8k (exposed transfer
+0.31 → 0.89 ms). Prefill @ 8k: 2489.7 → 2487.0 tok/s, unchanged by prefetch.
+
 ### Fabric shapes
 
 `src/sim/engine/fabricCollectives.ts: fabricCollectiveTime, fabricLinkParams, pathLatencySec,
@@ -1132,14 +1270,21 @@ First the core time `t_core,s`:
   latency path and, as a link resource, bounds the cycle (below).
 - `exposedCommSec = t_core,s − compute_s`.
 
-Then the off-device transfers (`SimOptions.offloadOverlap`, design doc §2.6), with `core_s = max(compute_s, bw_s)`
-under `overlap 'ideal'` and `compute_s + bw_s + p2p_s` under `'none'`:
+Then the off-device transfers, by their prefetched share (§12 "Expert prefetch"). Each transfer op carries
+`q = prefetchedFraction`, set by lowering from the prefetch accuracy p. With `core_s = max(compute_s, bw_s)` under
+`overlap 'ideal'` and `compute_s + bw_s + p2p_s` under `'none'`:
 
-- `offloadOverlap = 'ideal'` (**default**): `t_s = lat_s + max(core_s, xfer_s)` (the next layer's transfers are
-  prefetched while this layer computes; prediction accuracy is not modelled).
-- `offloadOverlap = 'none'`: `t_s = t_core,s + xfer_s` (demand fetch, serialized).
-- `exposedTransferSec = t_s − t_core,s`. With `xfer_s = 0` both give `t_s = t_core,s` exactly (the code keeps
-  today's expression for that case, so the results are bit-identical).
+```
+pbar_s = Σ_ops q·t_xfer / xfer_s                          time-weighted mean of q over the stage's transfer ops
+t_s    = lat_s + core_s + xfer_s − pbar_s·min(core_s, xfer_s)
+```
+
+- `pbar_s = 1` (p = 1, perfect prediction): `t_s = lat_s + max(core_s, xfer_s)`, the former `offloadOverlap
+'ideal'`.
+- `pbar_s = 0` (p = 0, no prefetching): `t_s = t_core,s + xfer_s`, the former `'none'`.
+- Always `lat_s + max(core_s, xfer_s) ≤ t_s ≤ t_core,s + xfer_s`.
+- `exposedTransferSec = t_s − t_core,s`. With `xfer_s = 0`, `t_s = t_core,s` exactly. The code computes `xfer_s = 0`
+  and both endpoints with their own (former) expressions, so those results are bit-identical to before.
 
 Under `overlap 'ideal'` and `collectiveAlgorithm 'best'`, `engine/simulate.ts: simulatePhase` compares
 three assignments per stage: (a) each all-reduce's min-total choice (including mesh-direct where applicable),
@@ -1287,8 +1432,9 @@ Documented approximations (each isolated in one constant or rule):
   stay switched (`XGMI_MI300X_8_GPU` encodes its full mesh as aggregate injection under the switched formulas, which
   equals the mesh's direct β but keeps the ring's 2(n−1)α; re-modelling it is a follow-up).
 - Offload (§12): the DMA write of streamed bytes into device memory is not charged to its bandwidth; expected
-  misses and requests are real numbers (no rounding; the staging buffer rounds up); under `offloadOverlap 'ideal'`
-  prefetch is perfect; the host link takes no link modifiers.
+  misses and requests are real numbers (no rounding; the staging buffer rounds up); the prefetch window is the whole
+  stage's core time and wrong guesses cost only otherwise idle link time (§12 "Expert prefetch"); the host link
+  takes no link modifiers.
 - Speculative decoding (§13): `m_ctx = ⌈E[τ]⌉` context rows; every MTP pass reads `N + k + 1` keys; rejected KV
   rows and tentative MTP rows are overwritten, not charged back; the selector's and Markov head's sequential walks
   are not costed; the DeepSeek-V4.1 MoE drafter adds its context rows to the compressed-KV GEMM and runs its
@@ -1396,8 +1542,8 @@ These checklists are binding for later tasks. TypeScript's exhaustive `never` ch
 Deployment knob `SimInput.deployment.offload` (design: `docs/design/offload-specdec-latency.md` §2). Off by
 default: absent, `{}` or `lookupTables: { tier: 'device' }` emit no transfer op, add no memory, never read
 `hardware.host`, and give bit-identical results (`engine/identity.test.ts`). With it on, the result is still the
-hardware/math bound given the stated hit ratio, queue depth and overlap: only bytes crossing the host link and
-requests paying a latency are added. Worked examples W1, W3, W4 are tests in `engine/e2e-offload.test.ts`.
+hardware/math bound given the stated hit ratio, queue depth and prefetch accuracy: only bytes crossing the host link
+and requests paying a latency are added. Worked examples W1, W3, W4 are tests in `engine/e2e-offload.test.ts`.
 
 ### Placement
 
@@ -1456,9 +1602,9 @@ into device memory is not charged to the device's memory bandwidth (≤ `B_link/
 
 **Sharing** (`stageNStream, nStream, streamSlots, stageDevicesOnNode`): a tier is shared by its concurrent
 consumers on the node. `consumers(s)` = devices of stage s on the node (rank layout of §5) if stage s has a
-transfer op from the tier in this phase, else 0; `slots = offloadOverlap 'ideal' ? |S| : min(m, |S|)` over the
-streaming stages S; `n_stream = max(consumers(this stage), Σ of the slots smallest consumers)` (the optimistic
-schedule). A stage spanning several nodes takes the largest of its nodes' values.
+transfer op from the tier in this phase, else 0; `slots = p > 0 ? |S| : min(m, |S|)` (p the prefetch accuracy)
+over the streaming stages S; `n_stream = max(consumers(this stage), Σ of the slots smallest consumers)` (the
+optimistic schedule). A stage spanning several nodes takes the largest of its nodes' values.
 
 ### Expert hit ratio
 
@@ -1477,12 +1623,86 @@ M     = U − hits                               expected missed experts (no rou
 h. f = 1 ⇒ M = 0 exactly (no op); f = 0 ⇒ M = U. Decode `T = b_mb`, prefill `T = b_mb·P` (so prefill streams
 every non-resident expert once per step). Skewed models with `0 < C < k` warn (an LRU cache thrashes there).
 
-### Offload overlap
+### Expert prefetch
 
-`SimOptions.offloadOverlap` (default `'ideal'`): the stage formula of §7 "Stage time and overlap" with
-`xfer_s = Σ transfer op sec` (`pipeline.ts: stageResult`): `'ideal'` `t_s = lat_s + max(core_s, xfer_s)`,
-`'none'` `t_s = t_core,s + xfer_s`. `PhaseResult.transfer` sums the stages (`pipeline.ts: phaseTransfer`).
-Under `'ideal'` a prefill's transfers usually hide behind its compute (the upper bound assumes perfect prefetch).
+`src/sim/lower/offload.ts: prefetchedFraction`; `engine/pipeline.ts: stageResult`; `engine/transfer.ts:
+DEFAULT_PREFETCH_ACCURACY`. Deployment knob `OffloadConfig.prefetchAccuracy` = **p**, dimensionless, in [0, 1]:
+the predictor's measured recall one layer ahead, i.e. the share of the needed experts it picks (from the previous
+layer's hidden state, with a predicted set the size of the real one). It replaces the former
+`SimOptions.offloadOverlap`.
+
+Each transfer op gets a prefetched share **q** (`TransferOp.prefetchedFraction`):
+
+```
+q = 0                                           p = 0, every group  (no prefetching at all)
+q = max(p, M/(E_loc − C))                        routed experts, p > 0
+q = 1                                           dense layers and table rows, p > 0
+```
+
+The stage formula of §7 "Stage time and overlap" then gives
+`t_s = lat_s + core_s + xfer_s − pbar_s·min(core_s, xfer_s)`, pbar_s being the time-weighted mean of q.
+`PhaseResult.transfer` sums the stages (`pipeline.ts: phaseTransfer`).
+
+- **Physical reading.** During the window (the stage's core time) the link copies predicted experts, for
+  `min(core_s, xfer_s)` of copy time: it cannot copy longer than the window, nor more than the misses need. A share
+  p of those copies are experts the step really needs, so `pbar_s·min(core_s, xfer_s)` of the transfer is hidden.
+  Wrong guesses use link time inside the window that would otherwise sit idle, so they cost nothing extra. The rest of
+  the misses, `xfer_s − pbar_s·min(core_s, xfer_s)`, are copied after the router, on the critical path. Never
+  issuing a prefetch longer than the window avoids HOBBIT's non-cancellable-copy slowdown. Bounds:
+  `lat_s + max(core_s, xfer_s) ≤ t_s ≤ t_core,s + xfer_s`.
+- **q for experts = max(p, M/(E_loc − C)).** The engine takes the better of two strategies: prefetch its
+  predictions, of which a share p are needed; or, when nearly every non-resident expert is needed, copy them
+  unconditionally, of which a share `M/(E_loc − C)` are needed. At batch 1 `M ≪ E_loc − C`, so q = p exactly, the
+  measured recall (128 experts, top-8, nothing resident: 8/128 = 0.0625 < p; Mixtral top-2 of 8: 0.25 < 0.84). In
+  prefill `M = E_loc − C`, so q = 1: every expert is needed and prediction is trivially exact (HOBBIT arXiv
+  2411.01433 §5; Madan et al. arXiv 2603.19289 §5.2). In between, e.g. 32 decode tokens on 128 experts top-8, the
+  unconditional copy wins once `M/(E_loc − C)` passes p (0.873 there). Taking the better strategy is the upper
+  bound; no chance overlap of wrong guesses is added to the recall.
+- **Endpoint rule.** Dense layers and table rows are deterministic transfers: every streamed layer is needed, and
+  table rows follow from the token ids. An engine that prefetches at all prefetches these, so q = 1 for any p > 0.
+  p = 0 means no prefetching at all, so q = 0 everywhere. Both former modes stay reachable bit for bit: **p = 1 ≡
+  `'ideal'`** and **p = 0 ≡ `'none'`** (`pipeline.test.ts`, `e2e-offload.test.ts`). The price is a jump at p = 0:
+  p → 0⁺ still prefetches dense layers and tables.
+- **Window.** The prefetch window is the whole stage's core time, not one layer's: the same relaxation as the
+  former `'ideal'`. A per-layer form would be more pessimistic at p = 1 whenever layers differ, and would no longer
+  reproduce `'ideal'`.
+- **Default p = 0.8 (estimated).** The middle of what a training-free, exact-output predictor with the same set
+  size k achieves one layer ahead (the next layer's gate applied to the current hidden state):
+  - Mixtral 8×7B: 0.84 (DAOP arXiv 2501.10375 Fig. 5), ≈0.9 (AdapMoE arXiv 2408.10284 §6), ≈0.85 (Eliseev & Mazur
+    arXiv 2312.17238 Fig. 2);
+  - Qwen1.5-MoE: 0.79 (Fate arXiv 2502.12224 §4.2);
+  - Qwen2-57B-A14B: 0.67 (ProMoE arXiv 2410.22134 §4.2);
+  - Qwen3-30B-A3B: ≈0.9 beyond the first two layers (Madan et al. arXiv 2603.19289 §3.3).
+
+  Learned predictors reach 0.85–0.95 (ProMoE 84.7%; SeqMoE arXiv 2609.12978 §9.4, 86–91% fetching k + 3), and
+  0.97–0.99 only by fetching extra experts. Papers define accuracy differently (top-1, recall at k).
+
+- p > 0 also lets every streaming stage prefetch at once (`slots` in "Transfer path") and double-buffers an op with
+  q > 0 ("Memory tiers").
+- UI: Hardware → Advanced → "Prefetch accuracy %"; URL key `opf`. An old URL's `oo=ideal` / `oo=none` maps to
+  `opf=1` / `opf=0` when something is offloaded.
+
+**Is the former `'ideal'` default realistic?** Not quite. What real systems do:
+
+- **llama.cpp** does not predict experts in decode. `--n-cpu-moe` / `-cmoe` computes host-resident experts on the
+  CPU (`common/arg.cpp`); host weights are copied to the GPU only for batches of ≥ 32 tokens
+  (`GGML_OP_OFFLOAD_MIN_BATCH`). The GPU expert cache (https://github.com/ggml-org/llama.cpp/pull/29887) uploads
+  misses on demand, after the router. A one-split-ahead prefetch
+  (https://github.com/ggml-org/llama.cpp/pull/28414) was prefill-only and closed unmerged ("decode is flat").
+- **ktransformers** (SOSP'25) and **Fiddler** (ICLR'25, arXiv 2402.07033) compute cold experts on the CPU, so only
+  activations cross PCIe (the designed-but-rejected `mode: 'cpu_compute'` here).
+- **Prefetching systems** (Mixtral-offloading arXiv 2312.17238 §3.2, MoE-Infinity arXiv 2401.14361, ProMoE,
+  HOBBIT, AdapMoE, DAOP, Fate, ExpertFlow arXiv 2410.17954, SeqMoE) predict 0.67–0.9 of the experts one layer ahead
+  with the same k. Pre-gated MoE (ISCA'24, arXiv 2308.12066) knows the routing a layer ahead only by retraining the
+  gate, so it does not apply to off-the-shelf checkpoints.
+
+How much transfer time is hidden: little when the copy dominates, whatever the accuracy, because one layer's compute
+is all a prefetch can hide behind. Madan et al. (Qwen3-30B-A3B, A6000, PCIe 4.0): the copy is 84–88% of the token
+time and prefetching saves 9–14% (5–8% on A100 / GH200), matching their Σ min(t_copy, t_compute) bound. SeqMoE
+(RTX 4090): one layer's compute covers 1.39 of the 8 experts needed. HOBBIT (Mixtral, RTX 4090): 1.01× in FP16.
+MoE-Infinity reports that inaccurate prefetching can be slower than loading on demand. The `min(core_s, xfer_s)`
+term already caps the gain there, so p = 0.8 instead of 1 costs a few percent. It matters more when compute is at
+least as long as the copy: many experts resident, or a fast link (GH200 C2C, unified memory).
 
 ### Memory tiers
 
@@ -1493,7 +1713,7 @@ ngramTableShardBytes`.
 ```
 W_s        = resident weights: offloaded MoE layer C·W_expert (+ router, shared); dense-layer range 0;
              off-device table: the non-table part
-staging_s  = (offloadOverlap 'ideal' ? 2 : 1)·max_{phase, transfer op} buffer,
+staging_s  = max_{phase, transfer op} (q > 0 ? 2 : 1)·buffer          (double buffer for a prefetched op),
              buffer = experts / layers: Σ ceil(count)·bytes;  tables: usefulBytes
 total_s    = W_s + B_r·state_s + act_s + staging_s ≤ capacity
 tier bytes = max over nodes of Σ_{devices of the node} (full groups: E_loc·W_expert per offloaded layer, W_layer,

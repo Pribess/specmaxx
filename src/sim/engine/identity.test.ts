@@ -440,20 +440,20 @@ describe('deployment identity, knobs absent (after latency audit G1–G8, G6 exc
   it('REF_MOE_30B_A3B has exactly 30,532,122,624 parameters', () =>
     expect(countParams(REF_MOE_30B_A3B)).toBe(30_532_122_624));
   it.each(Object.entries(inputs))(
-    'ID-1 %s: deployment {} and options.offloadOverlap ideal reproduce the pin and deep-equal absent deployment',
+    'ID-1 %s: deployment {} and a prefetch accuracy with nothing offloaded reproduce the pin and deep-equal absent deployment',
     (key, value) => {
       const absent = simulate(value);
       const empty = simulate({ ...value, deployment: {} });
       const offloadIdeal = simulate({
         ...value,
-        options: { ...value.options, offloadOverlap: 'ideal' },
+        deployment: { offload: { prefetchAccuracy: 1 } },
       });
       for (const r of [empty, offloadIdeal]) {
         expect(mismatches(fixture[key], pin(r))).toEqual([]);
         expect(r).toEqual(absent);
       }
-      // With nothing offloaded, offloadOverlap 'none' changes nothing either (xfer_s = 0).
-      expect(simulate({ ...value, options: { ...value.options, offloadOverlap: 'none' } })).toEqual(
+      // With nothing offloaded, prefetch accuracy 0 changes nothing either (xfer_s = 0).
+      expect(simulate({ ...value, deployment: { offload: { prefetchAccuracy: 0 } } })).toEqual(
         absent,
       );
       // The new fields are derived sums or absent: no transfer, no spec-dec, zero deployment memory.

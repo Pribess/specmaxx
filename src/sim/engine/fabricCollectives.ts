@@ -23,6 +23,7 @@ import {
   allReduceSec,
   allToAllSec,
   effectiveLink,
+  stagingBandwidthCapBytesPerSec,
   ringAllGatherSec,
   ringAllReduceSec,
   ringReduceScatterSec,
@@ -35,14 +36,21 @@ import type {
   CollectiveTime,
   EffectiveLink,
 } from './collectives';
+import type { HostStaging } from './staging';
 
 /** The link and shape parameters a fabric collective uses. */
 export interface FabricLinkParams {
-  /** B_L: one port's (one cable's) per-direction bandwidth, after host-bounce effects (`effectiveLink`). Unit: B/s. */
+  /**
+   * B_L: one port's (one cable's) per-direction bandwidth, after host-bounce and host-staging effects
+   * (`effectiveLink`). Unit: B/s.
+   */
   portBandwidthBytesPerSec: number;
-  /** C: what one node can send (and, separately, receive) over all its ports at once; Infinity when uncapped. Unit: B/s. */
+  /**
+   * C: what one node can send (and, separately, receive) over all its ports at once, capped by host staging's
+   * B_stg when the path stages; Infinity when uncapped. Unit: B/s.
+   */
   allPortsCapBytesPerSec: number;
-  /** α: latency of one hop (one message on one link), after host-bounce effects. Unit: seconds. */
+  /** α: latency of one hop (one message on one link), after host-bounce and host-staging effects. Unit: seconds. */
   hopLatencySec: number;
   /** α_f: extra latency of each relaying node on a multi-hop path (0 when the link gives none). Unit: seconds. */
   forwardingLatencySec: number;
@@ -54,17 +62,27 @@ export interface FabricLinkParams {
 
 /**
  * {@link FabricLinkParams} of `link` in `shape`, with `activeDevices` as in `effectiveLink` (group size for
- * collectives, 1 for send/recv).
+ * collectives, 1 for send/recv). With `staging` (inter-node host staging, docs §6 "Inter-node host staging") every
+ * hop pays the staging α (`stagedLink`, m = `stepMessageBytes`), and both B_L and C are capped by
+ * B_stg = min(B_pcie, B_host/(4·n_stg)): staging bandwidth is the device's own, whatever the port count.
+ * Documented approximation: a relay already holds the bytes in host memory, so charging the staging α on every hop
+ * over-counts per relay; no dedicated-memory preset uses a ring or chain.
  */
 export function fabricLinkParams(
   link: LinkSpec,
   shape: FabricShape,
   activeDevices: number,
+  staging?: HostStaging,
+  stepMessageBytes = 0,
 ): FabricLinkParams {
-  const eff = effectiveLink(link, activeDevices);
+  const eff = effectiveLink(link, activeDevices, staging, stepMessageBytes);
+  const linkCapBytesPerSec = link.allPortsCapPerDirectionBytesPerSec ?? Infinity;
+  // Formula: C = min(C_link, B_stg) when staged, else C_link
+  const allPortsCapBytesPerSec =
+    staging === undefined ? linkCapBytesPerSec : Math.min(linkCapBytesPerSec, stagingBandwidthCapBytesPerSec(staging));
   return {
     portBandwidthBytesPerSec: eff.bandwidthBytesPerSec,
-    allPortsCapBytesPerSec: link.allPortsCapPerDirectionBytesPerSec ?? Infinity,
+    allPortsCapBytesPerSec,
     hopLatencySec: eff.latencySec,
     forwardingLatencySec: link.forwardingLatencySec ?? 0,
     cablesPerPair: cablesPerPairOf(shape),
@@ -270,6 +288,8 @@ export function meshDirectAllReduceSec(
 /**
  * All-reduce on a fabric with the chosen algorithm. `'best'` = the fastest of ring and tree, and on a full mesh of
  * N ≥ 3 also direct (ties keep ring, then direct).
+ * `treeP` (default `p`) are the link parameters of the tree when they differ from the ring's: on a host-staged path
+ * a tree step moves S, a ring (or direct) step S/N, so each algorithm is staged with its own message (docs §6).
  */
 export function fabricAllReduceSec(
   messageBytes: number,
@@ -277,10 +297,11 @@ export function fabricAllReduceSec(
   shape: FabricShape,
   p: FabricLinkParams,
   algorithm: AllReduceAlgorithm,
+  treeP: FabricLinkParams = p,
 ): CollectiveTime {
   if (n <= 1) return NO_TIME;
   const ring = fabricRingAllReduceSec(messageBytes, n, shape, p);
-  const tree = fabricTreeAllReduceSec(messageBytes, n, shape, p);
+  const tree = fabricTreeAllReduceSec(messageBytes, n, shape, treeP);
   switch (algorithm) {
     case 'ring':
       return ring;
@@ -430,7 +451,9 @@ export function fabricSendRecvSec(
  * fabric `shape` (the group's view, `groupFabric`), on `link`. `sendHops` = links a send_recv crosses (default 1).
  * `sendActiveDevices` = simultaneous send/recv ranks per host (count, default 1; PP uses min(dpn, tp·dp)).
  * Two nodes on a full mesh or a chain are one (striped) link at B_one: the switched formulas at that bandwidth, so a
- * single cable with C ≥ B_L gives exactly the switched result.
+ * single cable with C ≥ B_L gives exactly the switched result. `staging` is the path's inter-node host staging
+ * (absent = none), applied per algorithm with the message one step moves: S/N (ring, direct, all-gather,
+ * reduce-scatter, all-to-all), S (tree all-reduce, send/recv); see {@link fabricLinkParams}.
  */
 export function fabricCollectiveTime(
   kind: CollectiveKind,
@@ -441,8 +464,14 @@ export function fabricCollectiveTime(
   algorithm: AllReduceAlgorithm,
   sendHops = 1,
   sendActiveDevices = 1,
+  staging?: HostStaging,
 ): CollectiveTime {
-  const p = fabricLinkParams(link, shape, kind === 'send_recv' ? sendActiveDevices : groupSize);
+  const activeDevices = kind === 'send_recv' ? sendActiveDevices : groupSize;
+  // Formula: m = S/N per ring / direct / peer step;  m = S per tree step and per send
+  const paramsFor = (stepMessageBytes: number): FabricLinkParams =>
+    fabricLinkParams(link, shape, activeDevices, staging, stepMessageBytes);
+  const p = paramsFor(kind === 'send_recv' ? messageBytes : messageBytes / groupSize);
+  const treeP = kind === 'all_reduce' && staging !== undefined ? paramsFor(messageBytes) : p;
   if (
     shape.kind !== 'switched' &&
     shape.kind !== 'ring' &&
@@ -453,7 +482,13 @@ export function fabricCollectiveTime(
     const single = asLink(onePairBandwidthBytesPerSec(p), p);
     switch (kind) {
       case 'all_reduce':
-        return allReduceSec(messageBytes, groupSize, single, algorithm);
+        return allReduceSec(
+          messageBytes,
+          groupSize,
+          single,
+          algorithm,
+          asLink(onePairBandwidthBytesPerSec(treeP), treeP),
+        );
       case 'all_gather':
         return ringAllGatherSec(messageBytes, groupSize, single);
       case 'reduce_scatter':
@@ -464,7 +499,7 @@ export function fabricCollectiveTime(
   }
   switch (kind) {
     case 'all_reduce':
-      return fabricAllReduceSec(messageBytes, groupSize, shape, p, algorithm);
+      return fabricAllReduceSec(messageBytes, groupSize, shape, p, algorithm, treeP);
     case 'all_gather':
     case 'reduce_scatter':
       return fabricAllGatherOrReduceScatterSec(kind, messageBytes, groupSize, shape, p);

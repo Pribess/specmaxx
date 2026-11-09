@@ -45,14 +45,6 @@ export interface SimOptions {
   elementwiseFusion: 'none' | 'ideal';
   /** All-reduce algorithm: `'best'` (default; min of ring and tree), `'ring'` or `'tree'`. */
   collectiveAlgorithm: 'best' | 'ring' | 'tree';
-  /**
-   * Overlap of off-device transfers (deployment `offload`) with compute. `'ideal'` (default): the next layer's
-   * transfers are issued while this layer computes (prefetch), so a stage pays the larger of its core time and its
-   * total transfer time, `t_s = exposed_s + max(core_s, xfer_s)`; `'none'`: demand fetch, serialized,
-   * `t_s = exposed_s + core_s + xfer_s`. Prediction accuracy is not modelled (the bound assumes 100%). No effect
-   * when nothing is offloaded (`xfer_s = 0`). See docs/simulation-model.md §7 and design doc §2.6.
-   */
-  offloadOverlap: 'ideal' | 'none';
 }
 
 /**
@@ -103,6 +95,16 @@ export interface OffloadConfig {
    * `maxOutstanding`. 1 serializes the reads. Integer ≥ 1. Count.
    */
   queueDepth?: number;
+  /**
+   * Prefetch accuracy p: the predictor's recall one layer ahead, the share of the needed routed experts it picks from
+   * the previous layer's hidden state. While a stage computes, the link copies predicted experts; a share p of them are
+   * needed, the rest of the misses are copied after the router, on the critical path.
+   * `0` = no prefetching at all (dense layers and table rows are fetched on demand too: the former
+   * `offloadOverlap 'none'`); `1` = perfect prediction (the former `'ideal'`). Absent = {@link
+   * DEFAULT_PREFETCH_ACCURACY} (0.8, estimated). Dimensionless, in [0, 1]. See docs/simulation-model.md §12
+   * ("Expert prefetch").
+   */
+  prefetchAccuracy?: number;
   /** Routed experts of MoE layers kept partly off-device, with a resident expert cache. */
   routedExperts?: {
     /** Tier holding the full expert set of each offloaded layer. */
@@ -249,12 +251,12 @@ export interface StageResult {
   exposedCommSec: number;
   /**
    * Stage time per microbatch, docs §7: `t_core,s` (`ideal`: lat + max(compute, bw); `none`: compute + lat + bw
-   * + p2p) extended by the transfers under `offloadOverlap`. Unit: seconds.
+   * + p2p) extended by the transfers not hidden by prefetching (docs §12 "Expert prefetch"). Unit: seconds.
    */
   sec: number;
   /** Σ transfer op times (latency + service) of the stage, `xfer_s`. Unit: seconds. */
   transferSec: number;
-  /** Transfer time not hidden under `offloadOverlap`: `t_s − t_core,s` (0 when nothing is offloaded). Unit: seconds. */
+  /** Transfer time not hidden by prefetching: `t_s − t_core,s` (0 when nothing is offloaded). Unit: seconds. */
   exposedTransferSec: number;
   /** Cost of the activation send to the next stage (absent on the last stage). */
   sendToNext?: OpResult;
@@ -328,7 +330,7 @@ export interface DeviceMemory {
    */
   activationPeakBytes: number;
   /**
-   * Staging buffer(s) for streamed weight groups (double-buffered under `offloadOverlap: 'ideal'`; design doc §2.7);
+   * Staging buffer(s) for streamed weight groups (double-buffered for prefetched transfers, `q > 0`; design doc §2.7);
    * 0 when nothing streams. Unit: bytes.
    */
   stagingBytes: number;

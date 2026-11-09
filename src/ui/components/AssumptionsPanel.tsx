@@ -35,15 +35,6 @@ const SWITCHES = [
       { value: 'tree', label: 'tree' },
     ],
   },
-  {
-    key: 'offloadOverlap',
-    label: 'Offload overlap',
-    help: "Ideal: the next layer's transfers overlap this layer's compute (prefetch, perfect prediction); in prefill this can hide expert transfers entirely. None: fetched on demand, serialized. Only matters when weights are offloaded.",
-    options: [
-      { value: 'ideal', label: 'ideal' },
-      { value: 'none', label: 'none' },
-    ],
-  },
 ] as const satisfies readonly {
   key: keyof typeof DEFAULT_SIM_OPTIONS;
   label: string;

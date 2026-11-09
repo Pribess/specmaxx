@@ -153,7 +153,7 @@ function engineErrors(e: ComputeEngine, label: string): string[] {
  * input has an fp32-accumulate entry, tiles are multiples of the MMA shape; `capacityOptionsBytes` non-empty
  * and positive; memory bandwidth > 0; every rate used as a divisor (matmul and vector peaks, an engine's memory
  * cap) > 0, and a vector fp32 peak present (the end of the peak fallback chain); a `hostInterface`, when present,
- * names a PCIe generation 3/4/5 and 4/8/16 lanes.
+ * names a PCIe generation 3/4/5 and 4/8/16 lanes; `gpuDirectRdma` only on dedicated memory.
  */
 export function validateDevice(d: DeviceSpec): string[] {
   const label = `device ${d.id}`;
@@ -169,6 +169,9 @@ export function validateDevice(d: DeviceSpec): string[] {
   if (d.memory.capacityOptionsBytes.some((c) => c <= 0)) errors.push(`${label}: memory.capacityOptionsBytes must be > 0`);
   if (!(d.memory.bandwidthBytesPerSec > 0)) errors.push(`${label}: memory.bandwidthBytesPerSec must be > 0`);
   if (d.hostInterface !== undefined) errors.push(...hostInterfaceErrors(d.hostInterface, `${label}.hostInterface`));
+  if (d.memory.kind === 'unified' && d.gpuDirectRdma !== undefined) {
+    errors.push(`${label}: gpuDirectRdma applies to dedicated memory only (unified memory never stages); leave it absent`);
+  }
   return errors;
 }
 

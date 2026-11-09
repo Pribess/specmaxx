@@ -268,8 +268,9 @@ describe('preset library: links and topologies', () => {
     const measured = { ...tb5, latencySec: 7e-6 };
     expect(us(lat(measured, 2))).toBe(17);
     expect(us(lat(measured, 3))).toBe(27);
-    // Thunderbolt bridge (TCP): 2 hops 160 µs, 3 hops 250 µs. USB4 RDMA: 19 / 30 µs. USB4 TCP: 25 / 40 µs.
-    expect([2, 3].map((h) => us(lat(byId('thunderbolt-5-bridge-tcp'), h)))).toEqual([160, 250]);
+    // Thunderbolt bridge (TCP, α 45 µs): 2 hops 110 µs, 3 hops 175 µs. USB4 RDMA: 19 / 30 µs. USB4 TCP: 25 / 40 µs.
+    expect([2, 3].map((h) => us(lat(byId('thunderbolt-5-bridge-tcp'), h)))).toEqual([110, 175]);
+    expect([2, 3].map((h) => us(lat(byId('thunderbolt-4-bridge-tcp'), h)))).toEqual([110, 175]);
     expect([2, 3].map((h) => us(lat(byId('strix-halo-usb4-native-rdma-20-gb-s-negotiated'), h)))).toEqual([19, 30]);
     expect([2, 3].map((h) => us(lat(byId('strix-halo-usb4-tcp-20-gb-s-negotiated'), h)))).toEqual([25, 40]);
     // The relay handling is always smaller than the hop it sits between: it excludes the wire.

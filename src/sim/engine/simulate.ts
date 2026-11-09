@@ -34,21 +34,27 @@ import { offloadTiers, resolveHost, resolveOffload, transferPath, type ResolvedH
 import { memoryReport } from './memory';
 import { engineMemBandwidthBytesPerSec, opTime, type OpTimeContext } from './opTime';
 import { layerResult, microbatching, phaseResult, stageResult, type PhaseShape } from './pipeline';
-import { checkPlacement, collectivePath, groupSpan, ppSendPath } from './placement';
+import {
+  checkPlacement,
+  collectivePath,
+  groupSpan,
+  hasInterNodeTraffic,
+  ppSendPath,
+} from './placement';
 import { resolveSpeculative } from './specdec';
+import { resolveHostStaging, type HostStaging } from './staging';
 import { stageNStream, type TransferPath } from './transfer';
 import type { OffloadTier, PhaseResult, SimInput, SimOptions, SimResult } from './types';
 import { validateInput } from './validate';
 
 /**
- * The defaults of {@link SimOptions}: no elementwise fusion, ideal comm/compute overlap, best all-reduce, ideal
- * offload-transfer overlap (no effect without offloading).
+ * The defaults of {@link SimOptions}: no elementwise fusion, ideal comm/compute overlap, best all-reduce. (Offload
+ * prefetching is a deployment knob, `OffloadConfig.prefetchAccuracy`.)
  */
 export const DEFAULT_SIM_OPTIONS: SimOptions = {
   overlap: 'ideal',
   elementwiseFusion: 'none',
   collectiveAlgorithm: 'best',
-  offloadOverlap: 'ideal',
 };
 
 /** The hardware after modifiers: the device and topology the engine actually simulates, plus info lines. */
@@ -109,12 +115,14 @@ interface PhaseOffload {
   host: ResolvedHost;
   /** The deployment's queue depth request (capped per tier). Count. */
   queueDepth: number | undefined;
+  /** Prefetching on, i.e. prefetch accuracy p > 0 (more stages stream at once; docs §12 "Expert prefetch"). */
+  prefetching: boolean;
 }
 
 /**
  * Transfer paths of stage `s` per tier this phase streams from (design doc §2.3): a tier is shared by the
  * concurrently streaming stages of the node ({@link stageNStream}), which depends on which stages hold a transfer op
- * of that tier in this phase, the offload overlap and the microbatches `m`.
+ * of that tier in this phase, whether prefetching is on (p > 0) and the microbatches `m`.
  */
 function stageTransferPaths(
   lowered: LoweredModel,
@@ -122,7 +130,6 @@ function stageTransferPaths(
   offload: PhaseOffload,
   input: SimInput,
   topology: TopologySpec,
-  options: SimOptions,
   microbatches: number,
 ): Partial<Record<OffloadTier, TransferPath>> {
   const paths: Partial<Record<OffloadTier, TransferPath>> = {};
@@ -136,7 +143,7 @@ function stageTransferPaths(
       topology.devicesPerNode,
       streams,
       s,
-      options.offloadOverlap,
+      offload.prefetching,
       microbatches,
     );
     paths[tier] = transferPath(tier, offload.host, offload.queueDepth, n);
@@ -148,7 +155,12 @@ function stageTransferPaths(
 function simulatePhase(
   lowered: LoweredModel,
   phase: 'prefill' | 'decode',
-  base: Omit<OpTimeContext, 'collectivePaths'> & { tpPath: CollectivePath; epPath: CollectivePath },
+  base: Omit<OpTimeContext, 'collectivePaths'> & {
+    tpPath: CollectivePath;
+    epPath: CollectivePath;
+    /** The run's inter-node host staging (`staging.ts`), for the PP sends; absent = none. */
+    interStaging?: HostStaging;
+  },
   input: SimInput,
   topology: TopologySpec,
   options: SimOptions,
@@ -161,7 +173,7 @@ function simulatePhase(
     const ppPath: CollectivePath =
       stage.sendToNext === undefined
         ? { kind: 'none' }
-        : ppSendPath(input.parallel, topology, stage.index);
+        : ppSendPath(input.parallel, topology, stage.index, stage.index + 1, base.interStaging);
     const ctx: OpTimeContext = {
       engine: base.engine,
       memBandwidthBytesPerSec: base.memBandwidthBytesPerSec,
@@ -177,7 +189,6 @@ function simulatePhase(
         offload,
         input,
         topology,
-        options,
         shape.microbatches,
       );
     }
@@ -190,7 +201,7 @@ function simulatePhase(
     );
     const send = stage.sendToNext === undefined ? undefined : opTime(stage.sendToNext, ctx);
     if (stage.sendToFirst !== undefined) {
-      const returnPath = ppSendPath(input.parallel, topology, stage.index, 0);
+      const returnPath = ppSendPath(input.parallel, topology, stage.index, 0, base.interStaging);
       loopBack = opTime(stage.sendToFirst, {
         ...ctx,
         collectivePaths: { ...ctx.collectivePaths, pp: returnPath },
@@ -201,7 +212,6 @@ function simulatePhase(
       layers,
       send,
       options.overlap,
-      options.offloadOverlap,
     );
     if (options.overlap !== 'ideal' || options.collectiveAlgorithm !== 'best') return original;
     // Formula (G7): choose min_assignment [Σα + max(compute_s, Σβ)].
@@ -226,7 +236,6 @@ function simulatePhase(
         candidateLayers,
         send,
         options.overlap,
-        options.offloadOverlap,
       );
       const coreSec =
         candidate.commLatencySec + Math.max(candidate.computeSec, candidate.commBandwidthSec);
@@ -316,6 +325,13 @@ export function simulate(input: SimInput): SimResult {
     ...checkPlacement(parallel, hw.topology).warnings,
     ...crossStageWarnings(model, parallel.pp),
   ];
+  // Inter-node host staging (docs §6 "Inter-node host staging"): a dedicated-memory device without a GPUDirect path
+  // over the inter-node link stages every inter-node message through host memory. Absent ⇒ the paths of before.
+  const hostStaging = resolveHostStaging(device, hw.topology, input.hardware, parallel);
+  const interStaging = hostStaging.staging;
+  if (interStaging !== undefined && hasInterNodeTraffic(parallel, hw.topology)) {
+    warnings.push(...hostStaging.warnings);
+  }
   const algorithm: AllReduceAlgorithm = options.collectiveAlgorithm;
   const base = {
     engine,
@@ -326,8 +342,9 @@ export function simulate(input: SimInput): SimResult {
     collectiveAlgorithm: algorithm,
     elementwiseFusion: options.elementwiseFusion,
     warnings,
-    tpPath: collectivePath(groupSpan(parallel.tp, hw.topology), hw.topology),
-    epPath: collectivePath(groupSpan(parallel.ep, hw.topology), hw.topology),
+    tpPath: collectivePath(groupSpan(parallel.tp, hw.topology), hw.topology, interStaging),
+    epPath: collectivePath(groupSpan(parallel.ep, hw.topology), hw.topology, interStaging),
+    ...(interStaging === undefined ? {} : { interStaging }),
   };
 
   // 3. Offload placement and host (docs §12). Nothing off-device ⇒ offload undefined, hardware.host never read.
@@ -342,7 +359,11 @@ export function simulate(input: SimInput): SimResult {
   if (resolved.offload !== undefined) {
     const host = resolveHost(input.hardware, device, offloadTiers(resolved.offload));
     warnings.push(...host.warnings);
-    phaseOffload = { host, queueDepth: input.deployment?.offload?.queueDepth };
+    phaseOffload = {
+      host,
+      queueDepth: input.deployment?.offload?.queueDepth,
+      prefetching: resolved.offload.prefetchAccuracy > 0,
+    };
   }
   // 4. Speculative decoding (docs §13). Absent ⇒ plain decode, no draft layers.
   const spec = resolveSpeculative(model, input.deployment?.speculative);
@@ -439,7 +460,6 @@ export function simulate(input: SimInput): SimResult {
     lowered: [prefillLowered, decodeLowered],
     capacityBytes,
     kind: device.memory.kind,
-    offloadOverlap: options.offloadOverlap,
     devicesPerNode: hw.topology.devicesPerNode,
     ...(phaseOffload === undefined ? {} : { host: phaseOffload.host }),
   });

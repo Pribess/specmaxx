@@ -23,14 +23,7 @@ import { moeLocalExpertBytes } from '../lower/moe';
 import { lookupTableFormat, ngramTableShardBytes, tableRowBytes } from '../lower/ngram';
 import { denseLayerPlacementAt, expertPlacementAt, tablePlacementAt } from '../lower/offload';
 import type { ResolvedHost } from './host';
-import type {
-  DeviceMemory,
-  MemoryReport,
-  OffloadTier,
-  SimOptions,
-  TierBytes,
-  TierMemory,
-} from './types';
+import type { DeviceMemory, MemoryReport, OffloadTier, TierBytes, TierMemory } from './types';
 
 /** Inputs of {@link memoryReport}. */
 export interface MemoryInput {
@@ -51,8 +44,6 @@ export interface MemoryInput {
   capacityBytes: number;
   /** Memory kind of the modified device. */
   kind: 'dedicated' | 'unified';
-  /** Offload overlap (double-buffered staging under `'ideal'`); default `'ideal'`. */
-  offloadOverlap?: SimOptions['offloadOverlap'];
   /** Devices per node (the host tiers are shared by a node's devices); default 1. Count. */
   devicesPerNode?: number;
   /** The resolved host side when something is offloaded (tier capacities); absent otherwise. */
@@ -167,16 +158,13 @@ export function stageLookupTableBytes(model: ModelSpec, ctx: LoweringContext, s:
 
 /**
  * Staging buffer of stage `s` for streamed weight groups (design doc §2.7): the largest single transfer of the stage
- * over the given phases, double-buffered under `offloadOverlap 'ideal'` (one buffer fills while the other is read).
+ * over the given phases, double-buffered when it is prefetched (`prefetchedFraction > 0`: one buffer fills while the
+ * other is read), single otherwise.
  * A transfer's buffer is `Σ ceil(count)·bytesEach` for experts and dense layers (capacity is not an average, so
  * expected misses round up) and its `usefulBytes` for table rows (the gathered rows, not the tier's pages).
  * 0 when nothing streams. Unit: bytes.
  */
-export function stageStagingBytes(
-  lowered: LoweredModel[],
-  s: number,
-  offloadOverlap: SimOptions['offloadOverlap'],
-): number {
+export function stageStagingBytes(lowered: LoweredModel[], s: number): number {
   let largest = 0;
   for (const model of lowered) {
     for (const layer of model.stages[s].layers) {
@@ -187,13 +175,15 @@ export function stageStagingBytes(
           op.group === 'lookup_table'
             ? op.usefulBytes
             : op.reads.reduce((sum, r) => sum + Math.ceil(r.count) * r.bytesEach, 0);
-        largest = Math.max(largest, buffer);
+        // Formula: slots = q > 0 ? 2 : 1   (double buffer for a prefetched transfer)
+        const slots = op.prefetchedFraction > 0 ? 2 : 1;
+        largest = Math.max(largest, slots * buffer);
       }
     }
   }
-  // Formula: staging_s = (offloadOverlap = ideal ? 2 : 1) · max_{phase, transfer} buffer
+  // Formula: staging_s = max_{phase, transfer} (q > 0 ? 2 : 1)·buffer
   // See docs/simulation-model.md §12 ("Memory tiers")
-  return (offloadOverlap === 'ideal' ? 2 : 1) * largest;
+  return largest;
 }
 
 /** An all-zero {@link TierBytes}. */
@@ -368,7 +358,6 @@ export function tierMemory(
  */
 export function memoryReport(input: MemoryInput): MemoryReport {
   const { model, ctx, capacityBytes } = input;
-  const offloadOverlap = input.offloadOverlap ?? 'ideal';
   const perStage: DeviceMemory[] = [];
   let maxSequencesPerReplica = Infinity;
   for (let s = 0; s < ctx.parallel.pp; s++) {
@@ -377,7 +366,7 @@ export function memoryReport(input: MemoryInput): MemoryReport {
     const statePerSeqBytes = stageSequenceStateBytesPerSeq(model, ctx, s, input.contextTokens);
     const activationPeakBytes = stageActivationPeakBytes(input.lowered, s);
     // Deployment terms (design doc §2.7, §3.3): 0 with nothing offloaded / spec-dec off.
-    const stagingBytes = stageStagingBytes(input.lowered, s, offloadOverlap);
+    const stagingBytes = stageStagingBytes(input.lowered, s);
     // Spec-dec (last stage): draft weights (shared embedding / head excluded) + B_r · draft KV/state at the context;
     // every stage: the verify's (k + 1) per-position state snapshots × B_r.
     const spec = ctx.speculative;

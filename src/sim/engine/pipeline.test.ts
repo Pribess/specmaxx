@@ -253,47 +253,85 @@ const FETCH: TransferOp = {
     { count: 0.5, bytesEach: 64 },
   ],
   usefulBytes: 21_233_664,
+  prefetchedFraction: 1,
 };
 
 describe('U-5 stage formula with transfers: compute 2, bw 1, lat 0.5, xfer 3, p2p 0.25 (seconds)', () => {
   // core_s = max(compute, bw) under overlap ideal, compute + bw + p2p under none; exposed_s = lat_s.
-  const layers = (xfer: number) => [
+  /** The stage's layer with a transfer of `xfer` seconds whose prefetched share is q. */
+  const layers = (xfer: number, q = 1) => [
     layerResult('layer.0', 0, [
       result(ELEMENTWISE, { sec: 2 }),
       result(ALL_REDUCE, { sec: 1.5, lat: 0.5, bw: 1 }),
-      ...(xfer > 0 ? [result(FETCH, { sec: xfer, xferLat: 1e-6, xferBw: xfer - 1e-6 })] : []),
+      ...(xfer > 0
+        ? [
+            result(
+              { ...FETCH, prefetchedFraction: q },
+              { sec: xfer, xferLat: 1e-6, xferBw: xfer - 1e-6 },
+            ),
+          ]
+        : []),
     ]),
   ];
   const send = result(SEND, { sec: 0.25, lat: 0.2, bw: 0.05 });
+  /** Local copies of the former offloadOverlap formulas: 'ideal' t = lat + max(core, xfer), 'none' t = t_core + xfer. */
+  const formerIdeal = (lat: number, core: number, xfer: number) => lat + Math.max(core, xfer);
+  const formerNone = (tCore: number, xfer: number) => tCore + xfer;
   const cases = [
-    // [overlap, offloadOverlap, t_s, exposedTransfer_s]
-    ['ideal', 'ideal', 3.5, 1], // 0.5 + max(max(2, 1), 3)
-    ['ideal', 'none', 5.5, 3], // 0.5 + max(2, 1) + 3
-    ['none', 'ideal', 3.75, 0], // 0.5 + max(2 + 1 + 0.25, 3) = 3.5 + p2p: core 3.25 hides xfer 3
-    ['none', 'none', 6.75, 3], // 2 + 0.5 + 1 + 0.25 + 3 = 6.5 + p2p
+    // [overlap, q, t_s, exposedTransfer_s]
+    ['ideal', 1, formerIdeal(0.5, 2, 3), 1], // 0.5 + max(max(2, 1), 3) = 3.5
+    ['ideal', 0, formerNone(2.5, 3), 3], // 0.5 + max(2, 1) + 3 = 5.5
+    ['none', 1, formerIdeal(0.5, 3.25, 3), 0], // 0.5 + max(2 + 1 + 0.25, 3) = 3.75: core 3.25 hides xfer 3
+    ['none', 0, formerNone(3.75, 3), 3], // 2 + 0.5 + 1 + 0.25 + 3 = 6.75
+    ['ideal', 0.5, 4.5, 2], // 0.5 + 2 + 3 − 0.5·min(2, 3)
+    ['none', 0.5, 5.25, 1.5], // 0.5 + 3.25 + 3 − 0.5·min(3.25, 3)
   ] as const;
-  it.each(cases)(
-    'overlap %s, offloadOverlap %s: t_s = %s, exposedTransfer = %s',
-    (overlap, offloadOverlap, t, exposed) => {
-      const s = stageResult(0, layers(3), send, overlap, offloadOverlap);
-      expect(s.sec).toBe(t);
-      expect(s.computeSec).toBe(2); // the transfer op is not compute
-      expect(s.transferSec).toBe(3);
-      expect(s.exposedTransferSec).toBe(exposed);
-      // exposed comm is the transfer-free core's: ideal 0.5 + 2 − 2; none 0.5 + 1 + 0.25
-      expect(s.exposedCommSec).toBe(overlap === 'ideal' ? 0.5 : 1.75);
-    },
-  );
-  it('xfer 0 reproduces the transfer-free stage bit for bit under both offloadOverlap values', () => {
+  it.each(cases)('overlap %s, q %s: t_s = %s, exposedTransfer = %s', (overlap, q, t, exposed) => {
+    const s = stageResult(0, layers(3, q), send, overlap);
+    expect(s.sec).toBe(t);
+    expect(s.computeSec).toBe(2); // the transfer op is not compute
+    expect(s.transferSec).toBe(3);
+    expect(s.exposedTransferSec).toBe(exposed);
+    // exposed comm is the transfer-free core's: ideal 0.5 + 2 − 2; none 0.5 + 1 + 0.25
+    expect(s.exposedCommSec).toBe(overlap === 'ideal' ? 0.5 : 1.75);
+  });
+  it('q 0.8 (the default p at batch 1): t_s = 0.5 + 2 + 3 − 0.8·2 = 3.9', () => {
+    expect(stageResult(0, layers(3, 0.8), send, 'ideal').sec).toBeCloseTo(3.9, 12);
+  });
+  it('mixed q: a dense fetch (q 1, 1 s) and an expert fetch (q 0.5, 2 s) give pbar = 2/3', () => {
+    const mixed = [
+      layerResult('layer.0', 0, [
+        result(ELEMENTWISE, { sec: 2 }),
+        result(ALL_REDUCE, { sec: 1.5, lat: 0.5, bw: 1 }),
+        result(
+          { ...FETCH, group: 'dense_layer', prefetchedFraction: 1 },
+          { sec: 1, xferLat: 0, xferBw: 1 },
+        ),
+        result({ ...FETCH, prefetchedFraction: 0.5 }, { sec: 2, xferLat: 0, xferBw: 2 }),
+      ]),
+    ];
+    // Formula: t = 0.5 + 2 + 3 − (2/3)·min(2, 3)
+    expect(stageResult(0, mixed, send, 'ideal').sec).toBeCloseTo(5.5 - 4 / 3, 12);
+  });
+  it('lat + max(core, xfer) ≤ t_s ≤ t_core + xfer for every q and both overlap modes', () => {
     for (const overlap of ['ideal', 'none'] as const) {
-      const before = stageResult(0, layers(0), send, overlap);
-      expect(before.sec).toBe(overlap === 'ideal' ? 2.5 : 3.75);
-      for (const offloadOverlap of ['ideal', 'none'] as const) {
-        const s = stageResult(0, layers(0), send, overlap, offloadOverlap);
-        expect(s).toEqual(before);
-        expect(s.transferSec).toBe(0);
-        expect(s.exposedTransferSec).toBe(0);
+      const core = overlap === 'ideal' ? 2 : 3.25;
+      const tCore = 0.5 + core;
+      for (const xfer of [0.5, 2, 3, 10]) {
+        for (const q of [0, 0.1, 0.5, 0.8, 0.95, 1]) {
+          const t = stageResult(0, layers(xfer, q), send, overlap).sec;
+          expect(t).toBeGreaterThanOrEqual(0.5 + Math.max(core, xfer) - 1e-12);
+          expect(t).toBeLessThanOrEqual(tCore + xfer + 1e-12);
+        }
       }
+    }
+  });
+  it('xfer 0 reproduces the transfer-free stage bit for bit', () => {
+    for (const overlap of ['ideal', 'none'] as const) {
+      const s = stageResult(0, layers(0), send, overlap);
+      expect(s.sec).toBe(overlap === 'ideal' ? 2.5 : 3.75);
+      expect(s.transferSec).toBe(0);
+      expect(s.exposedTransferSec).toBe(0);
     }
   });
   it('phaseTransfer sums useful bytes and expected requests; absent without transfer ops', () => {

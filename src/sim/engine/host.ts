@@ -17,7 +17,7 @@ import { hostPcieLink } from '../hw/presets/links';
 import type { DeviceSpec, HardwareStack, HostMemorySpec, LinkSpec, NvmeSpec } from '../hw/types';
 import type { ModelSpec } from '../ir/model';
 import type { OffloadLowering } from '../lower/lower';
-import { hitRatio, resolveQueueDepth, type TransferPath } from './transfer';
+import { DEFAULT_PREFETCH_ACCURACY, hitRatio, resolveQueueDepth, type TransferPath } from './transfer';
 import type { OffloadConfig, OffloadTier } from './types';
 
 /** The resolved placement and the notes it produced. */
@@ -30,8 +30,9 @@ export interface ResolvedOffload {
 
 /**
  * Resolve the deployment's offload placement (design doc §2.1): the routed-expert layer range defaults to every
- * layer, h(f) is evaluated from the hit-ratio model, the table scale layout defaults to `'separate'` on host RAM and
- * `'pinned_host'` on NVMe. On unified memory host RAM IS the device pool, so a `'host_ram'` placement is dropped
+ * layer, the prefetch accuracy defaults to `DEFAULT_PREFETCH_ACCURACY`, h(f) is evaluated from the hit-ratio model,
+ * the table scale layout defaults to `'separate'` on host RAM and `'pinned_host'` on NVMe. On unified memory host RAM
+ * IS the device pool, so a `'host_ram'` placement is dropped
  * (no transfer, weights stay counted on the device). Lookup tables at `'device'` are no placement.
  */
 export function resolveOffload(
@@ -49,7 +50,7 @@ export function resolveOffload(
     }
     return false;
   };
-  const offload: OffloadLowering = {};
+  const offload: OffloadLowering = { prefetchAccuracy: config.prefetchAccuracy ?? DEFAULT_PREFETCH_ACCURACY };
   const experts = config.routedExperts;
   if (experts !== undefined && !onDevice(experts.tier)) {
     const f = experts.residentFraction;

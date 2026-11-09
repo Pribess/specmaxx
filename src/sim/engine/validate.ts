@@ -168,6 +168,10 @@ export function deploymentErrors(input: SimInput): string[] {
     if (offload.queueDepth !== undefined) {
       errors.push(...positiveIntegerErrors(offload.queueDepth, 'deployment.offload.queueDepth'));
     }
+    const p = offload.prefetchAccuracy;
+    if (p !== undefined && !(Number.isFinite(p) && inRange(p, 0, 1))) {
+      errors.push(`deployment.offload.prefetchAccuracy must be in [0, 1] (got ${p})`);
+    }
     const experts = offload.routedExperts;
     if (experts !== undefined) {
       const hasMoe = model.layers.some((l) => l.blocks.some((b) => b.kind === 'moe'));

@@ -24,6 +24,7 @@
 import type { MathFormat } from '../../ir/dtype';
 import type { ComputeEngine, DeviceSpec, EstimatedField, GemmTiling, MatmulPeak, SourceRef } from '../types';
 import { gb, gbPerSec, mb, tbPerSec, tflops } from '../units';
+import { NVIDIA_DC_GPUDIRECT_SOURCE } from './gpudirect';
 
 // ---------------------------------------------------------------------------------------------------------------
 // Shared sources and helpers
@@ -377,7 +378,9 @@ export const H100_SXM: DeviceSpec = {
   },
   // "50 MB L2 cache" (blog), recorded as quoted (SI). Not used by the v1 model.
   l2Bytes: mb(50),
+  gpuDirectRdma: true,
   sources: [
+    NVIDIA_DC_GPUDIRECT_SOURCE,
     {
       url: H100_PRODUCT_URL,
       title: 'NVIDIA H100 product page, Product Specifications (H100 SXM column)',
@@ -422,7 +425,9 @@ export const H200_SXM: DeviceSpec = {
     bandwidthBytesPerSec: tbPerSec(4.8),
   },
   l2Bytes: mb(50),
+  gpuDirectRdma: true,
   sources: [
+    NVIDIA_DC_GPUDIRECT_SOURCE,
     {
       url: H200_PRODUCT_URL,
       title: 'NVIDIA H200 product page, Specifications (H200 SXM column)',
@@ -547,7 +552,9 @@ export const B200: DeviceSpec = {
   },
   // "126 MB" as quoted (SI). Not used by the v1 model.
   l2Bytes: mb(126),
+  gpuDirectRdma: true,
   sources: [
+    NVIDIA_DC_GPUDIRECT_SOURCE,
     {
       url: BLACKWELL_BRIEF_URL,
       title: 'NVIDIA Blackwell Architecture Technical Brief V2.1, Table 3 (HGX B200 column, "Per GPU Specs")',
@@ -649,7 +656,9 @@ export const B300: DeviceSpec = {
     capacityOptionsBytes: [gb(270)],
     bandwidthBytesPerSec: tbPerSec(7.7),
   },
+  gpuDirectRdma: true,
   sources: [
+    NVIDIA_DC_GPUDIRECT_SOURCE,
     {
       url: BLACKWELL_ULTRA_DATASHEET_URL,
       title: 'NVIDIA Blackwell Ultra Datasheet (OCT25), HGX B300 column (per GPU)',

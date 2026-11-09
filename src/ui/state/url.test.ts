@@ -31,7 +31,7 @@ const STATES: [string, AppState][] = [
     }),
   ],
   ['parallel + workload', state({ parallel: { tp: 2, pp: 2, dp: 1, ep: 1 }, workload: { batch: 8, promptLen: 4096, decodeContextLen: 32768 } })],
-  ['every option', state({ options: { overlap: 'none', elementwiseFusion: 'ideal', collectiveAlgorithm: 'ring', offloadOverlap: 'none' } })],
+  ['every option', state({ options: { overlap: 'none', elementwiseFusion: 'ideal', collectiveAlgorithm: 'ring' } })],
   [
     'every offload knob and host field',
     state({
@@ -42,6 +42,7 @@ const STATES: [string, AppState][] = [
           dense: { tier: 'nvme', layersOnDevice: 40 },
           tables: { tier: 'host_ram', scaleLayout: 'interleaved' },
           queueDepth: 32,
+          prefetchAccuracy: 0.9,
         },
       },
     }),
@@ -237,24 +238,47 @@ describe('URL codec', () => {
   });
 
   it('encodes the deployment and host keys in a readable canonical form', () => {
-    const q = 'hr=ddr5-6400-8ch&hrc=512&ssd=nvme-t705-2tb&hl=4x8&oo=none&ox=ssd&oxl=3&oxf=0.25&oxh=fine&odl=40&odt=ssd&olt=ram&ols=interleaved&oqd=32&sd=dflash2&sdr=hyp&sdk=5&sda=0.8';
+    const q = 'hr=ddr5-6400-8ch&hrc=512&ssd=nvme-t705-2tb&hl=4x8&ox=ssd&oxl=3&oxf=0.25&oxh=fine&odl=40&odt=ssd&olt=ram&ols=interleaved&oqd=32&opf=0&sd=dflash2&sdr=hyp&sdk=5&sda=0.8';
     const { state: s, dropped } = decodeState(q);
     expect(dropped).toEqual([]);
     expect(encodeState(s)).toBe(q);
     expect(s.deployment.specDec).toEqual({ method: 'dflash2', drafter: 'hyp', k: 5, alpha: 0.8 });
   });
 
+  it('prefetch accuracy opf: round trip, range, parent; legacy oo maps to the equivalent p', () => {
+    expect(decodeState('ox=ram&opf=0.9').state.deployment.offload).toEqual({ experts: { tier: 'host_ram' }, prefetchAccuracy: 0.9 });
+    expect(encodeState(decodeState('ox=ram&opf=0.9').state)).toBe('ox=ram&opf=0.9');
+    // The default 0.8 is not encoded.
+    expect(encodeState(decodeState('ox=ram&opf=0.8').state)).toBe('ox=ram');
+    // Out of range, or with nothing offloaded: dropped with a notice.
+    expect(decodeState('ox=ram&opf=1.5').dropped).toEqual(['opf=1.5']);
+    expect(decodeState('opf=0.5').dropped).toEqual(['opf=0.5']);
+    // Legacy offload overlap: 'none' was no prefetching (p 0), 'ideal' perfect prediction (p 1).
+    const none = decodeState('oo=none&ox=ram');
+    expect(none.dropped).toEqual([]);
+    expect(none.state.deployment.offload?.prefetchAccuracy).toBe(0);
+    expect(encodeState(none.state)).toBe('ox=ram&opf=0');
+    expect(encodeState(decodeState('oo=ideal&ox=ram').state)).toBe('ox=ram&opf=1');
+    expect(encodeState(decodeState('oo=none&olt=ram').state)).toBe('olt=ram&opf=0');
+    // An explicit opf wins over the legacy key.
+    expect(encodeState(decodeState('oo=none&ox=ram&opf=0.7').state)).toBe('ox=ram&opf=0.7');
+    // Without offload the legacy key had no effect: ignored without a notice, never encoded.
+    const alone = decodeState('oo=none');
+    expect(alone.dropped).toEqual([]);
+    expect(encodeState(alone.state)).toBe('');
+    expect(alone.state.options).toEqual({});
+  });
+
   it('omits default deployment values', () => {
     const s = state({
-      options: { offloadOverlap: 'ideal' },
-      deployment: { offload: { experts: { tier: 'host_ram', fromLayer: 0, residentFraction: 0, hitRatio: 'uniform' }, tables: { tier: 'nvme', scaleLayout: 'pinned_host' } }, specDec: { method: 'mtp', useCase: 'prose' } },
+      deployment: { offload: { prefetchAccuracy: 0.8, experts: { tier: 'host_ram', fromLayer: 0, residentFraction: 0, hitRatio: 'uniform' }, tables: { tier: 'nvme', scaleLayout: 'pinned_host' } }, specDec: { method: 'mtp', useCase: 'prose' } },
     });
     expect(encodeState(s)).toBe('ox=ram&olt=ssd&sd=mtp');
   });
 
   it('drops invalid deployment values and dependent keys without their parent', () => {
     const d = decodeState('ox=gpu&oxf=0.5&olt=ram&ols=zig&oqd=0&sd=eagle&sdk=3&hr=ddr9&hrc=-1&ssd=floppy&hl=6x16&oo=maybe');
-    expect(d.dropped).toEqual(['oo=maybe', 'hr=ddr9', 'hrc=-1', 'ssd=floppy', 'hl=6x16', 'ox=gpu', 'oxf=0.5', 'ols=zig', 'oqd=0', 'sd=eagle', 'sdk=3']);
+    expect(d.dropped).toEqual(['hr=ddr9', 'hrc=-1', 'ssd=floppy', 'hl=6x16', 'ox=gpu', 'oxf=0.5', 'ols=zig', 'oqd=0', 'oo=maybe', 'sd=eagle', 'sdk=3']);
     expect(d.state.deployment).toEqual({ offload: { tables: { tier: 'host_ram' } } });
     expect(d.state.hw.host).toBeUndefined();
     const range = decodeState('sd=mtp&sdk=17&sda=0.995&sdr=a/b&sdu=poetry&oxh=fine&odt=ssd');

@@ -261,6 +261,11 @@ fall with batch (ExpertFlow 76.6 → 58.4% at BS 4 → 16); the bounds reproduce
 
 ### 2.6 Overlap: `SimOptions.offloadOverlap`
 
+> **Superseded** by the prefetch accuracy `OffloadConfig.prefetchAccuracy` (default 0.8, URL key `opf`; see
+> docs/simulation-model.md §12 "Expert prefetch"). `'ideal'` is p = 1 and `'none'` is p = 0, both bit for bit; old
+> `oo=` URLs map to them. The "31–67% on Qwen2 / 512-expert models" below has no source for its 31%: the sourced
+> figure for Qwen2-57B is 66.9% next-gate recall (ProMoE arXiv 2410.22134 §4.2). Kept as the original design.
+
 Copies the `overlap` pattern (default in `DEFAULT_SIM_OPTIONS`, exhaustive `switch`, URL key `oo`, Assumptions
 picker with `help`):
 

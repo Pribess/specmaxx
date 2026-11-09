@@ -28,7 +28,7 @@ import { lowerMlp } from './mlp';
 import { lowerMoe, moeResidentWeightBytes } from './moe';
 import { lowerNgram, ngramResidentWeightBytes, ngramSequenceStateBytes } from './ngram';
 import { lowerNorm, lowerResidual } from './norm';
-import { denseLayerPlacementAt } from './offload';
+import { denseLayerPlacementAt, prefetchedFraction } from './offload';
 import { lowerShortConv, shortConvSequenceStateBytes } from './shortConv';
 
 /** One phase step of one microbatch, as seen by the lowering. */
@@ -63,6 +63,11 @@ export interface LoweringContext {
  * when it has bytes to move. Layer ranges are `[from, to)` over `ModelSpec.layers` (zero-based indices).
  */
 export interface OffloadLowering {
+  /**
+   * Prefetch accuracy p (`OffloadConfig.prefetchAccuracy`, default filled in): sets each transfer op's
+   * `prefetchedFraction` (docs §12 "Expert prefetch"). Dimensionless, in [0, 1].
+   */
+  prefetchAccuracy: number;
   /** Routed experts of the MoE layers in `layers` live on `tier`; a resident cache keeps a fraction of them. */
   routedExperts?: {
     /** Tier holding each offloaded layer's full expert set. */
@@ -220,6 +225,9 @@ export function denseLayerFetchOp(
     source: placement.tier,
     reads: [{ count: 1, bytesEach: W_layer }],
     usefulBytes: W_layer,
+    prefetchedFraction: prefetchedFraction(ctx.offload?.prefetchAccuracy ?? 0, {
+      group: 'dense_layer',
+    }),
   };
 }
 

@@ -66,7 +66,10 @@ describe('U-16 n-gram tables off-device: read layouts, tier bytes and PCIe bytes
   });
 
   it('PLE (config ple_layer_ids [2], one-based) sits at layer index 1: one 320 B row read, 16 rows per token', () => {
-    const f = fetches(PLE, { lookupTables: { tier: 'host_ram', scaleLayout: 'separate' } });
+    const f = fetches(PLE, {
+      prefetchAccuracy: 1,
+      lookupTables: { tier: 'host_ram', scaleLayout: 'separate' },
+    });
     expect(f.map((x) => x.layer)).toEqual([1]);
     expect(f[0].op.reads).toEqual([{ count: 16, bytesEach: 320 }]); // bf16, no scales: one read whatever the layout
     expect(f[0].op.usefulBytes).toBe(5_120);
@@ -78,12 +81,16 @@ describe('U-16 n-gram tables off-device: read layouts, tier bytes and PCIe bytes
       scaleBytes: 8,
       rowBytes: 264,
     });
-    const f = fetches(ENGRAM, { lookupTables: { tier: 'host_ram', scaleLayout: 'separate' } });
+    const f = fetches(ENGRAM, {
+      prefetchAccuracy: 1,
+      lookupTables: { tier: 'host_ram', scaleLayout: 'separate' },
+    });
     expect(f.map((x) => x.layer)).toEqual([1, 14]);
   });
 
   it('Engram separate on DDR5: reads [{24, 256}, {24, 8}], bytes_tier 24·256 + 24·64 = 7,680, usefulBytes 6,336', () => {
     const [{ op }] = fetches(ENGRAM, {
+      prefetchAccuracy: 1,
       lookupTables: { tier: 'host_ram', scaleLayout: 'separate' },
     });
     expect(op.reads).toEqual([
@@ -95,7 +102,10 @@ describe('U-16 n-gram tables off-device: read layouts, tier bytes and PCIe bytes
   });
 
   it('Engram pinned_host on NVMe: reads [{24, 256}], bytes_tier 98,304, usefulBytes 6,336; host RAM holds the scales', () => {
-    const offload: OffloadLowering = { lookupTables: { tier: 'nvme', scaleLayout: 'pinned_host' } };
+    const offload: OffloadLowering = {
+      prefetchAccuracy: 1,
+      lookupTables: { tier: 'nvme', scaleLayout: 'pinned_host' },
+    };
     const [{ op }] = fetches(ENGRAM, offload);
     expect(op.source).toBe('nvme');
     expect(op.reads).toEqual([{ count: 24, bytesEach: 256 }]);
@@ -109,6 +119,7 @@ describe('U-16 n-gram tables off-device: read layouts, tier bytes and PCIe bytes
 
   it('Engram interleaved: reads [{24, 264}], bytes_tier 98,304 on NVMe / 7,680 on DDR5, usefulBytes 6,336', () => {
     const [{ op }] = fetches(ENGRAM, {
+      prefetchAccuracy: 1,
       lookupTables: { tier: 'nvme', scaleLayout: 'interleaved' },
     });
     expect(op.reads).toEqual([{ count: 24, bytesEach: 264 }]);
@@ -138,6 +149,7 @@ describe('U-16 n-gram tables off-device: read layouts, tier bytes and PCIe bytes
 
   it('stageTierBreakdown splits tables from routed experts and sums to stageTierBytes', () => {
     const offload: OffloadLowering = {
+      prefetchAccuracy: 1,
       lookupTables: { tier: 'host_ram', scaleLayout: 'separate' },
       routedExperts: {
         tier: 'host_ram',
@@ -172,7 +184,10 @@ describe('U-16 n-gram tables off-device: read layouts, tier bytes and PCIe bytes
 
     it('PLE nvfp4 table is 51.2e9 params × 4.5 bits / 8 = 28.8e9 B on host RAM; bf16 is 102.4e9 B', () => {
       expect(tableParams(PLE)).toBe(51_200_000_000);
-      const off: OffloadLowering = { lookupTables: { tier: 'host_ram', scaleLayout: 'separate' } };
+      const off: OffloadLowering = {
+        prefetchAccuracy: 1,
+        lookupTables: { tier: 'host_ram', scaleLayout: 'separate' },
+      };
       const bf16 = stageTierBytes(PLE.model, decodeCtx(PLE.quant, off), 0);
       const nvfp4 = stageTierBytes(PLE.model, decodeCtx(withTables(PLE, NVFP4), off), 0);
       expect(bf16.host_ram).toBe(102_400_000_000);
@@ -181,6 +196,7 @@ describe('U-16 n-gram tables off-device: read layouts, tier bytes and PCIe bytes
       const pinned = stageTierBreakdown(
         PLE.model,
         decodeCtx(withTables(PLE, NVFP4), {
+          prefetchAccuracy: 1,
           lookupTables: { tier: 'nvme', scaleLayout: 'pinned_host' },
         }),
         0,
@@ -198,13 +214,13 @@ describe('U-16 n-gram tables off-device: read layouts, tier bytes and PCIe bytes
     it('row bytes of the off-device gather follow the override (PLE d 160: bf16 320 B → nvfp4 90 B)', () => {
       const f = fetches(
         { model: PLE.model, quant: withTables(PLE, NVFP4) },
-        { lookupTables: { tier: 'host_ram', scaleLayout: 'interleaved' } },
+        { prefetchAccuracy: 1, lookupTables: { tier: 'host_ram', scaleLayout: 'interleaved' } },
       );
       expect(f[0].op.reads).toEqual([{ count: 16, bytesEach: 90 }]);
       expect(f[0].op.usefulBytes).toBe(16 * 90);
       const sep = fetches(
         { model: PLE.model, quant: withTables(PLE, NVFP4) },
-        { lookupTables: { tier: 'host_ram', scaleLayout: 'separate' } },
+        { prefetchAccuracy: 1, lookupTables: { tier: 'host_ram', scaleLayout: 'separate' } },
       );
       expect(sep[0].op.reads).toEqual([
         { count: 16, bytesEach: 80 },

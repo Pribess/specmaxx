@@ -34,7 +34,7 @@ import {
 } from './common';
 import { activationOp, lowerDenseFfn, type DenseFfnShape } from './mlp';
 import type { LoweringContext, OffloadLowering } from './lower';
-import { expertPlacementAt } from './offload';
+import { expertPlacementAt, prefetchedFraction } from './offload';
 
 /** The expert-parallel layout of one MoE block under a parallel config. */
 export interface MoeLayout {
@@ -157,7 +157,7 @@ export function expertFetchOp(
   placement: NonNullable<OffloadLowering['routedExperts']>,
 ): TransferOp | undefined {
   const U = neededExperts(block, layout, routing, routedTokens, ctx.parallel.ep);
-  const { misses } = expertHitsMisses(U, placement.hitRatio, placement.residentFraction, layout.localExperts);
+  const { misses, residentExperts } = expertHitsMisses(U, placement.hitRatio, placement.residentFraction, layout.localExperts);
   if (!(misses > 0)) return undefined;
   const W_expert = expertWeightBytes(block, ctx);
   // Formula: reads = [{ M, W_expert }];  usefulBytes = M·W_expert
@@ -169,6 +169,12 @@ export function expertFetchOp(
     source: placement.tier,
     reads: [{ count: misses, bytesEach: W_expert }],
     usefulBytes: misses * W_expert,
+    // Formula: q = max(p, M/(E_loc − C))   (docs §12 "Expert prefetch")
+    prefetchedFraction: prefetchedFraction(ctx.offload?.prefetchAccuracy ?? 0, {
+      group: 'routed_experts',
+      misses,
+      nonResidentExperts: layout.localExperts - residentExperts,
+    }),
   };
 }
 

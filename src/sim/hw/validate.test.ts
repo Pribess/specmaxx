@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SYNTH_CLUSTER, SYNTH_GPU, SYNTH_IB } from '../__fixtures__/synthetic';
+import { SYNTH_CLUSTER, SYNTH_GPU, SYNTH_IB, SYNTH_UNIFIED } from '../__fixtures__/synthetic';
 import type { DeviceSpec, HostMemorySpec, HostSpec, LinkSpec, NvmeSpec, TopologySpec } from './types';
 import { validateDevice, validateHost, validateLink, validateStorageTier, validateTopology } from './validate';
 
@@ -222,5 +222,15 @@ describe('validateDevice: hostInterface', () => {
       'device synth-gpu.hostInterface: lanes must be 4, 8 or 16 (got 2)',
     ]);
     expect(validateDevice({ ...SYNTH_GPU, hostInterface: { generation: 4, lanes: 8 } }).filter((e) => e.includes('not covered'))).toHaveLength(2);
+  });
+});
+
+describe('validateDevice: gpuDirectRdma', () => {
+  it('is accepted on dedicated memory and rejected on unified memory', () => {
+    expect(validateDevice({ ...SYNTH_GPU, gpuDirectRdma: false })).toEqual([]);
+    expect(validateDevice(SYNTH_UNIFIED)).toEqual([]);
+    expect(validateDevice({ ...SYNTH_UNIFIED, gpuDirectRdma: true })).toEqual([
+      `device ${SYNTH_UNIFIED.id}: gpuDirectRdma applies to dedicated memory only (unified memory never stages); leave it absent`,
+    ]);
   });
 });

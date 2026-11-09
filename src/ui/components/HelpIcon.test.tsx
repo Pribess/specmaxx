@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { useState } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { HelpIcon } from './HelpIcon';
 import { NumberField } from './NumberField';
 
@@ -31,13 +31,66 @@ describe('HelpIcon', () => {
     expect(tip().textContent).toBe(DEFINITION);
   });
 
-  it('opens on mouse hover and closes when the pointer leaves', () => {
-    render(<HelpIcon term="Weights">{DEFINITION}</HelpIcon>);
-    pointer(icon(), 'pointerover', 'mouse');
-    expect(icon().getAttribute('aria-expanded')).toBe('true');
+  it('opens on mouse hover and closes shortly after the pointer leaves', () => {
+    vi.useFakeTimers();
+    try {
+      render(<HelpIcon term="Weights">{DEFINITION}</HelpIcon>);
+      pointer(icon(), 'pointerover', 'mouse');
+      expect(icon().getAttribute('aria-expanded')).toBe('true');
+      expect(tip().hidden).toBe(false);
+      pointer(icon(), 'pointerout', 'mouse');
+      // A short grace period lets the pointer cross into the popup.
+      expect(icon().getAttribute('aria-expanded')).toBe('true');
+      act(() => vi.advanceTimersByTime(200));
+      expect(icon().getAttribute('aria-expanded')).toBe('false');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stays open while the pointer moves into the popup', () => {
+    vi.useFakeTimers();
+    try {
+      render(<HelpIcon term="Weights">{DEFINITION}</HelpIcon>);
+      pointer(icon(), 'pointerover', 'mouse');
+      pointer(icon(), 'pointerout', 'mouse');
+      pointer(tip(), 'pointerover', 'mouse');
+      act(() => vi.advanceTimersByTime(500));
+      expect(tip().hidden).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stays open while focus moves into a link of the popup; closes when focus leaves both', () => {
+    render(
+      <>
+        <HelpIcon term="Weights">
+          {DEFINITION} <a href="https://example.com/">source</a>
+        </HelpIcon>
+        <button type="button">next</button>
+      </>,
+    );
+    const link = screen.getByRole('link', { name: 'source', hidden: true });
+    fireEvent.focus(icon());
+    fireEvent.blur(icon(), { relatedTarget: link });
     expect(tip().hidden).toBe(false);
-    pointer(icon(), 'pointerout', 'mouse');
-    expect(icon().getAttribute('aria-expanded')).toBe('false');
+    fireEvent.blur(link, { relatedTarget: screen.getByRole('button', { name: 'next' }) });
+    expect(tip().hidden).toBe(true);
+  });
+
+  it('Escape inside the popup closes it and returns focus to the icon without reopening', () => {
+    render(
+      <HelpIcon term="Weights">
+        {DEFINITION} <a href="https://example.com/">source</a>
+      </HelpIcon>,
+    );
+    fireEvent.click(icon());
+    const link = screen.getByRole('link', { name: 'source' });
+    link.focus();
+    fireEvent.keyDown(link, { key: 'Escape' });
+    expect(tip().hidden).toBe(true);
+    expect(document.activeElement).toBe(icon());
   });
 
   it('opens on focus and closes on blur', () => {

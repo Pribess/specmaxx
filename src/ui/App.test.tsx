@@ -335,6 +335,22 @@ describe('estimator inputs', () => {
     fireEvent.keyDown(search, { key: 'Enter' });
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Device' }).textContent).toMatch(/4090/));
   });
+  it('shows the prefetch accuracy only with offload, 80 by default, and writes opf', async () => {
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-Flash-Next');
+    mount();
+    await screen.findByTestId('decode-tps');
+    expect(screen.queryByLabelText('Prefetch accuracy %')).toBeNull();
+    cleanup();
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-Flash-Next&ox=ram');
+    mount();
+    await screen.findByTestId('decode-tps');
+    const field = screen.getByLabelText('Prefetch accuracy %') as HTMLInputElement;
+    expect(field.value).toBe('80');
+    fireEvent.change(field, { target: { value: '90' } });
+    await waitFor(() => expect(location.search).toContain('opf=0.9'));
+    fireEvent.change(screen.getByLabelText('Prefetch accuracy %'), { target: { value: '80' } });
+    await waitFor(() => expect(location.search).not.toContain('opf='));
+  });
   it('keeps Advanced closed until opened, then its subsections are open', async () => {
     const { container } = mount();
     await screen.findByTestId('decode-tps');

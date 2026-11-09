@@ -248,6 +248,7 @@ describe('HF families keep their drafter as model.draft (spec-dec off: never cou
       quant: r.quant.quant,
       parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
       offload: {
+        prefetchAccuracy: 1,
         routedExperts: {
           tier: 'host_ram',
           layers: { from: 0, to: 40 },

@@ -1,3 +1,4 @@
+import { DEFAULT_PREFETCH_ACCURACY } from '../../sim/engine/transfer';
 import { HOST_PCIE_LINKS, HOST_RAM_PRESETS, SSD_PRESETS, hostPcieLink } from '../../sim/hw/presets';
 import {
   defaultScaleLayout,
@@ -20,6 +21,20 @@ import type { PanelProps } from './types';
 
 /** Picker value of "on the device". */
 const DEVICE = 'device';
+
+/** "?" help of the prefetch accuracy (docs/simulation-model.md §12 "Expert prefetch"). */
+const PREFETCH_HELP = (
+  <>
+    <span className="help-line">
+      Share of the needed experts the predictor picks one layer ahead (recall). Measured 67–90 %.
+    </span>
+    <span className="help-line">
+      Predicted experts are copied while the previous layer computes; the rest after the router, on
+      the critical path.
+    </span>
+    <span className="help-line">100 = perfect prediction, 0 = no prefetching. Default 80.</span>
+  </>
+);
 
 /** Tier labels. */
 const TIER_LABELS: Record<TierChoice | typeof DEVICE, string> = {
@@ -330,6 +345,24 @@ export function OffloadSection({ state, dispatch, loaded, built }: PanelProps) {
                 })
               }
               help="Outstanding read requests the deployment keeps in flight; 1 serializes every request behind its latency. Empty: the tier's rated maximum."
+            />
+          )}
+          {anyOff && (
+            <NumberField
+              label="Prefetch accuracy %"
+              value={Math.round((offload.prefetchAccuracy ?? DEFAULT_PREFETCH_ACCURACY) * 100)}
+              min={0}
+              max={100}
+              step="1"
+              onChange={(v) =>
+                setOffload({
+                  ...offload,
+                  prefetchAccuracy: Number.isFinite(v)
+                    ? Math.min(1, Math.max(0, v / 100))
+                    : undefined,
+                })
+              }
+              help={PREFETCH_HELP}
             />
           )}
         </details>

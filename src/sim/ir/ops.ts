@@ -405,4 +405,12 @@ export interface TransferOp {
    * the granularity rounding). Unit: bytes.
    */
   usefulBytes: number;
+  /**
+   * q: the share of this op's transfer time that is prefetched, i.e. issued before the consuming block's router (or
+   * before the step, for dense layers and table rows) and so eligible to hide behind the stage's compute
+   * (docs/simulation-model.md §12 "Expert prefetch"). Routed experts: `q = max(p, M/(E_loc − C))`; dense layers and table rows:
+   * `q = 1` when prefetching is on (`p > 0`), `0` at `p = 0`. Set by `lower/offload.ts: prefetchedFraction`.
+   * Dimensionless, in [0, 1].
+   */
+  prefetchedFraction: number;
 }

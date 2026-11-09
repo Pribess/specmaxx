@@ -23,18 +23,22 @@ export function layerResult(name: string, layerIndex: number | null, ops: OpResu
  * - `'ideal'`: t_core,s = lat_s + max(compute_s, bw_s)   (β hides behind independent work, α is on the dependency
  *   chain; the PP send is not in t_s: it lengthens the latency path and, as a link resource, bounds the cycle;
  *   see {@link phaseResult})
- * Then the off-device transfers under `offloadOverlap` (design doc §2.6):
- * - `'ideal'`: t_s = lat_s + max(core_s, xfer_s)   (core_s = max(compute_s, bw_s) under `overlap 'ideal'`,
- *   compute_s + bw_s + p2p_s under `'none'`; prefetch hides xfer behind the core)
- * - `'none'`:  t_s = t_core,s + xfer_s
- * With xfer_s = 0 both give t_s = t_core,s exactly.
+ * Then the off-device transfers, by how much of them is prefetched (docs §12 "Expert prefetch"; each transfer op
+ * carries its prefetched share q, set by lowering from the prefetch accuracy p):
+ *   pbar_s = Σ_ops q·t_xfer / xfer_s                     (time-weighted mean of q over the stage's transfer ops)
+ *   t_s    = lat_s + core_s + xfer_s − pbar_s · min(core_s, xfer_s)
+ * with core_s = max(compute_s, bw_s) under `overlap 'ideal'`, compute_s + bw_s + p2p_s under `'none'`. The
+ * prefetched share hides behind the stage's core time, the rest is serialized after it. The window is the whole
+ * stage, not one layer: the same relaxation as the former `offloadOverlap 'ideal'`, which this reproduces at
+ * pbar_s = 1 (t_s = lat_s + max(core_s, xfer_s)); pbar_s = 0 is the former `'none'` (t_s = t_core,s + xfer_s).
+ * Both endpoints, and xfer_s = 0 (t_s = t_core,s), are computed by their own expressions, bit-identical to before.
+ * Always lat_s + max(core_s, xfer_s) ≤ t_s ≤ t_core,s + xfer_s.
  */
 export function stageResult(
   index: number,
   layers: LayerResult[],
   sendToNext: OpResult | undefined,
   overlap: SimOptions['overlap'],
-  offloadOverlap: SimOptions['offloadOverlap'] = 'ideal',
 ): StageResult {
   const ops = layers.flatMap((l) => l.ops);
   const computeSec = ops
@@ -42,6 +46,17 @@ export function stageResult(
     .reduce((s, o) => s + o.sec, 0);
   // Formula: xfer_s = Σ transfer op sec   (design doc §2.6)
   const transferSec = ops.filter((o) => o.op.kind === 'transfer').reduce((s, o) => s + o.sec, 0);
+  // Formula: Σ q·t_xfer over the stage's transfer ops (pbar_s = this / xfer_s)
+  let prefetchedSec = 0;
+  let allPrefetched = true;
+  let nonePrefetched = true;
+  for (const o of ops) {
+    if (o.op.kind !== 'transfer') continue;
+    const q = o.op.prefetchedFraction;
+    prefetchedSec += q * o.sec;
+    if (q !== 1) allPrefetched = false;
+    if (q !== 0) nonePrefetched = false;
+  }
   const commLatencySec = ops.reduce((s, o) => s + o.commLatencySec, 0);
   const commBandwidthSec = ops.reduce((s, o) => s + o.commBandwidthSec, 0);
   const p2pSec = sendToNext?.sec ?? 0;
@@ -67,21 +82,21 @@ export function stageResult(
     }
   }
   let sec: number;
-  switch (offloadOverlap) {
-    case 'none':
-      // Formula: t_s = t_core,s + xfer_s
-      // See docs/simulation-model.md §7 ("Stage time and overlap"), design doc §2.6
-      sec = transferSec === 0 ? coreSec : coreSec + transferSec;
-      break;
-    case 'ideal':
-      // Formula: t_s = lat_s + max(core_s, xfer_s)
-      // See docs/simulation-model.md §7 ("Stage time and overlap"), design doc §2.6
-      sec = transferSec === 0 ? coreSec : commLatencySec + Math.max(coreTermSec, transferSec);
-      break;
-    default: {
-      const _never: never = offloadOverlap;
-      throw new Error(`unknown offload overlap ${String(_never)}`);
-    }
+  if (transferSec === 0) {
+    sec = coreSec;
+  } else if (allPrefetched) {
+    // Formula: t_s = lat_s + max(core_s, xfer_s)   (pbar_s = 1: the former offloadOverlap 'ideal')
+    // See docs/simulation-model.md §7 ("Stage time and overlap"), §12 ("Expert prefetch")
+    sec = commLatencySec + Math.max(coreTermSec, transferSec);
+  } else if (nonePrefetched) {
+    // Formula: t_s = t_core,s + xfer_s   (pbar_s = 0: the former offloadOverlap 'none')
+    sec = coreSec + transferSec;
+  } else {
+    // Formula: pbar_s = Σ q·t_xfer / xfer_s;  t_s = lat_s + core_s + xfer_s − pbar_s·min(core_s, xfer_s)
+    // See docs/simulation-model.md §7 ("Stage time and overlap"), §12 ("Expert prefetch")
+    const meanPrefetched = prefetchedSec / transferSec;
+    const hiddenSec = meanPrefetched * Math.min(coreTermSec, transferSec);
+    sec = commLatencySec + coreTermSec + transferSec - hiddenSec;
   }
   // Formula: exposedComm_s = t_core,s − compute_s;  exposedTransfer_s = t_s − t_core,s
   const exposedCommSec = coreSec - computeSec;

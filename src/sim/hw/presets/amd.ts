@@ -45,6 +45,7 @@
 import type { MathFormat } from '../../ir/dtype';
 import type { ComputeEngine, DeviceSpec, EstimatedField, GemmTiling, MatmulPeak, SourceRef } from '../types';
 import { gb, gbPerSec, tbPerSec, tflops } from '../units';
+import { AMD_PEERDIRECT_SOURCE, NO_RDMA_SOURCE_ESTIMATE } from './gpudirect';
 
 /** One mebibyte (cache sizes are binary). Unit: bytes. */
 const MIB = 1024 * 1024;
@@ -275,6 +276,7 @@ export const RADEON_AI_PRO_R9700: DeviceSpec = {
   l2Bytes: 64 * MIB,
   // "PCIe® 5.0 x16" host interface (product page).
   hostInterface: { generation: 5, lanes: 16 },
+  gpuDirectRdma: false,
   sources: [
     {
       url: R9700_URL,
@@ -295,6 +297,7 @@ export const RADEON_AI_PRO_R9700: DeviceSpec = {
     },
   ],
   estimated: [
+    NO_RDMA_SOURCE_ESTIMATE,
     ...peakPaths(R9700_ENGINE.matmulPeaks, ['bf16']).map((field) => ({
       field,
       reason:
@@ -338,6 +341,7 @@ export const RADEON_RX_9070_XT: DeviceSpec = {
   l2Bytes: 64 * MIB,
   // "PCIe® 5.0 x16" host interface (product page).
   hostInterface: { generation: 5, lanes: 16 },
+  gpuDirectRdma: false,
   sources: [
     {
       url: RX_9070_XT_URL,
@@ -364,6 +368,7 @@ export const RADEON_RX_9070_XT: DeviceSpec = {
     },
   ],
   estimated: [
+    NO_RDMA_SOURCE_ESTIMATE,
     ...peakPaths(RX_9070_XT_ENGINE.matmulPeaks, ['bf16']).map((field) => ({
       field,
       reason:
@@ -697,7 +702,9 @@ export const INSTINCT_MI300X: DeviceSpec = {
   },
   // 256 MB Infinity Cache (last-level cache).
   l2Bytes: 256 * MIB,
+  gpuDirectRdma: true,
   sources: [
+    AMD_PEERDIRECT_SOURCE,
     {
       url: MI300X_DS_URL,
       title: 'AMD Instinct MI300X data sheet',
@@ -744,7 +751,9 @@ export const INSTINCT_MI325X: DeviceSpec = {
   },
   // "Last Level Cache (LLC) 256 MB".
   l2Bytes: 256 * MIB,
+  gpuDirectRdma: true,
   sources: [
+    AMD_PEERDIRECT_SOURCE,
     {
       url: MI325X_PAGE_URL,
       title: 'AMD Instinct MI325X product page',
@@ -872,7 +881,9 @@ export const INSTINCT_MI355X: DeviceSpec = {
   },
   // "Last Level Cache (LLC) 256 MB".
   l2Bytes: 256 * MIB,
+  gpuDirectRdma: true,
   sources: [
+    AMD_PEERDIRECT_SOURCE,
     {
       url: MI355X_PAGE_URL,
       title: 'AMD Instinct MI355X product page',
@@ -977,7 +988,9 @@ export const INSTINCT_MI455X: DeviceSpec = {
     // "Peak Memory Bandwidth 23.3 TB/s".
     bandwidthBytesPerSec: tbPerSec(23.3),
   },
+  gpuDirectRdma: true,
   sources: [
+    AMD_PEERDIRECT_SOURCE,
     {
       url: MI455X_DS_URL,
       title: 'AMD Instinct MI455X brochure (datasheet): AI peak theoretical performance table and specifications',

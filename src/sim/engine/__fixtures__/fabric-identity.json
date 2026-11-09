@@ -8594,1011 +8594,1011 @@
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:best|n2|S1000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 1e-7,
-   "totalSec": 0.0001401,
+   "totalSec": 0.00009010000000000001,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:best|n2|S1000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.0001,
-   "totalSec": 0.00023999999999999998,
+   "totalSec": 0.00019,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:best|n2|S100000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.01,
-   "totalSec": 0.01014,
+   "totalSec": 0.01009,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:best|n3|S1000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 1.333333333333333e-7,
-   "totalSec": 0.00028013333333333333,
+   "totalSec": 0.00018013333333333334,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:best|n3|S1000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.00013333333333333334,
-   "totalSec": 0.0004133333333333333,
+   "totalSec": 0.0003133333333333333,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:best|n3|S100000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.013333333333333332,
-   "totalSec": 0.013613333333333333,
+   "totalSec": 0.013513333333333332,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:best|n4|S1000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 2e-7,
-   "totalSec": 0.0002802,
+   "totalSec": 0.00018020000000000002,
    "algorithm": "tree"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:best|n4|S1000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.0002,
-   "totalSec": 0.00047999999999999996,
+   "totalSec": 0.00038,
    "algorithm": "tree"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:best|n4|S100000000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 0.015,
-   "totalSec": 0.01542,
+   "totalSec": 0.015269999999999999,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:best|n8|S1000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 2e-7,
-   "totalSec": 0.00042019999999999997,
+   "totalSec": 0.0002702,
    "algorithm": "tree"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:best|n8|S1000000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 0.0002,
-   "totalSec": 0.00062,
+   "totalSec": 0.00047000000000000004,
    "algorithm": "tree"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:best|n8|S100000000": {
-   "latencySec": 0.00098,
+   "latencySec": 0.00063,
    "bandwidthSec": 0.0175,
-   "totalSec": 0.018480000000000003,
+   "totalSec": 0.01813,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:ring|n2|S1000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 1e-7,
-   "totalSec": 0.0001401,
+   "totalSec": 0.00009010000000000001,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:ring|n2|S1000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.0001,
-   "totalSec": 0.00023999999999999998,
+   "totalSec": 0.00019,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:ring|n2|S100000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.01,
-   "totalSec": 0.01014,
+   "totalSec": 0.01009,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:ring|n3|S1000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 1.333333333333333e-7,
-   "totalSec": 0.00028013333333333333,
+   "totalSec": 0.00018013333333333334,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:ring|n3|S1000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.00013333333333333334,
-   "totalSec": 0.0004133333333333333,
+   "totalSec": 0.0003133333333333333,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:ring|n3|S100000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.013333333333333332,
-   "totalSec": 0.013613333333333333,
+   "totalSec": 0.013513333333333332,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:ring|n4|S1000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 1.5e-7,
-   "totalSec": 0.00042014999999999994,
+   "totalSec": 0.00027015,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:ring|n4|S1000000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 0.00015000000000000001,
-   "totalSec": 0.00057,
+   "totalSec": 0.00042,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:ring|n4|S100000000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 0.015,
-   "totalSec": 0.01542,
+   "totalSec": 0.015269999999999999,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:ring|n8|S1000": {
-   "latencySec": 0.00098,
+   "latencySec": 0.00063,
    "bandwidthSec": 1.75e-7,
-   "totalSec": 0.000980175,
+   "totalSec": 0.0006301750000000001,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:ring|n8|S1000000": {
-   "latencySec": 0.00098,
+   "latencySec": 0.00063,
    "bandwidthSec": 0.000175,
-   "totalSec": 0.001155,
+   "totalSec": 0.000805,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:ring|n8|S100000000": {
-   "latencySec": 0.00098,
+   "latencySec": 0.00063,
    "bandwidthSec": 0.0175,
-   "totalSec": 0.018480000000000003,
+   "totalSec": 0.01813,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:tree|n2|S1000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 2e-7,
-   "totalSec": 0.0001402,
+   "totalSec": 0.00009020000000000001,
    "algorithm": "tree"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:tree|n2|S1000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.0002,
-   "totalSec": 0.00034,
+   "totalSec": 0.00029,
    "algorithm": "tree"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:tree|n2|S100000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.02,
-   "totalSec": 0.02014,
+   "totalSec": 0.02009,
    "algorithm": "tree"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:tree|n3|S1000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 2e-7,
-   "totalSec": 0.0002802,
+   "totalSec": 0.00018020000000000002,
    "algorithm": "tree"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:tree|n3|S1000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.0002,
-   "totalSec": 0.00047999999999999996,
+   "totalSec": 0.00038,
    "algorithm": "tree"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:tree|n3|S100000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.02,
-   "totalSec": 0.02028,
+   "totalSec": 0.02018,
    "algorithm": "tree"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:tree|n4|S1000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 2e-7,
-   "totalSec": 0.0002802,
+   "totalSec": 0.00018020000000000002,
    "algorithm": "tree"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:tree|n4|S1000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.0002,
-   "totalSec": 0.00047999999999999996,
+   "totalSec": 0.00038,
    "algorithm": "tree"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:tree|n4|S100000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.02,
-   "totalSec": 0.02028,
+   "totalSec": 0.02018,
    "algorithm": "tree"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:tree|n8|S1000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 2e-7,
-   "totalSec": 0.00042019999999999997,
+   "totalSec": 0.0002702,
    "algorithm": "tree"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:tree|n8|S1000000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 0.0002,
-   "totalSec": 0.00062,
+   "totalSec": 0.00047000000000000004,
    "algorithm": "tree"
   },
   "flat|thunderbolt-5-bridge-tcp|all_reduce:tree|n8|S100000000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 0.02,
-   "totalSec": 0.02042,
+   "totalSec": 0.02027,
    "algorithm": "tree"
   },
   "flat|thunderbolt-5-bridge-tcp|all_gather|n2|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 5e-8,
-   "totalSec": 0.00007005,
+   "totalSec": 0.000045050000000000004,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_gather|n2|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.00005,
-   "totalSec": 0.00011999999999999999,
+   "totalSec": 0.000095,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_gather|n2|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.005,
-   "totalSec": 0.00507,
+   "totalSec": 0.005045,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_gather|n3|S1000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 6.666666666666665e-8,
-   "totalSec": 0.00014006666666666667,
+   "totalSec": 0.00009006666666666667,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_gather|n3|S1000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.00006666666666666667,
-   "totalSec": 0.00020666666666666666,
+   "totalSec": 0.00015666666666666666,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_gather|n3|S100000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.006666666666666666,
-   "totalSec": 0.006806666666666667,
+   "totalSec": 0.006756666666666666,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_gather|n4|S1000": {
-   "latencySec": 0.00020999999999999998,
+   "latencySec": 0.000135,
    "bandwidthSec": 7.5e-8,
-   "totalSec": 0.00021007499999999997,
+   "totalSec": 0.000135075,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_gather|n4|S1000000": {
-   "latencySec": 0.00020999999999999998,
+   "latencySec": 0.000135,
    "bandwidthSec": 0.00007500000000000001,
-   "totalSec": 0.000285,
+   "totalSec": 0.00021,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_gather|n4|S100000000": {
-   "latencySec": 0.00020999999999999998,
+   "latencySec": 0.000135,
    "bandwidthSec": 0.0075,
-   "totalSec": 0.00771,
+   "totalSec": 0.007634999999999999,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_gather|n8|S1000": {
-   "latencySec": 0.00049,
+   "latencySec": 0.000315,
    "bandwidthSec": 8.75e-8,
-   "totalSec": 0.0004900875,
+   "totalSec": 0.00031508750000000004,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_gather|n8|S1000000": {
-   "latencySec": 0.00049,
+   "latencySec": 0.000315,
    "bandwidthSec": 0.0000875,
-   "totalSec": 0.0005775,
+   "totalSec": 0.0004025,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_gather|n8|S100000000": {
-   "latencySec": 0.00049,
+   "latencySec": 0.000315,
    "bandwidthSec": 0.00875,
-   "totalSec": 0.009240000000000002,
+   "totalSec": 0.009065,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|reduce_scatter|n2|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 5e-8,
-   "totalSec": 0.00007005,
+   "totalSec": 0.000045050000000000004,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|reduce_scatter|n2|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.00005,
-   "totalSec": 0.00011999999999999999,
+   "totalSec": 0.000095,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|reduce_scatter|n2|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.005,
-   "totalSec": 0.00507,
+   "totalSec": 0.005045,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|reduce_scatter|n3|S1000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 6.666666666666665e-8,
-   "totalSec": 0.00014006666666666667,
+   "totalSec": 0.00009006666666666667,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|reduce_scatter|n3|S1000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.00006666666666666667,
-   "totalSec": 0.00020666666666666666,
+   "totalSec": 0.00015666666666666666,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|reduce_scatter|n3|S100000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.006666666666666666,
-   "totalSec": 0.006806666666666667,
+   "totalSec": 0.006756666666666666,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|reduce_scatter|n4|S1000": {
-   "latencySec": 0.00020999999999999998,
+   "latencySec": 0.000135,
    "bandwidthSec": 7.5e-8,
-   "totalSec": 0.00021007499999999997,
+   "totalSec": 0.000135075,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|reduce_scatter|n4|S1000000": {
-   "latencySec": 0.00020999999999999998,
+   "latencySec": 0.000135,
    "bandwidthSec": 0.00007500000000000001,
-   "totalSec": 0.000285,
+   "totalSec": 0.00021,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|reduce_scatter|n4|S100000000": {
-   "latencySec": 0.00020999999999999998,
+   "latencySec": 0.000135,
    "bandwidthSec": 0.0075,
-   "totalSec": 0.00771,
+   "totalSec": 0.007634999999999999,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|reduce_scatter|n8|S1000": {
-   "latencySec": 0.00049,
+   "latencySec": 0.000315,
    "bandwidthSec": 8.75e-8,
-   "totalSec": 0.0004900875,
+   "totalSec": 0.00031508750000000004,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|reduce_scatter|n8|S1000000": {
-   "latencySec": 0.00049,
+   "latencySec": 0.000315,
    "bandwidthSec": 0.0000875,
-   "totalSec": 0.0005775,
+   "totalSec": 0.0004025,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|reduce_scatter|n8|S100000000": {
-   "latencySec": 0.00049,
+   "latencySec": 0.000315,
    "bandwidthSec": 0.00875,
-   "totalSec": 0.009240000000000002,
+   "totalSec": 0.009065,
    "algorithm": "ring"
   },
   "flat|thunderbolt-5-bridge-tcp|all_to_all|n2|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 5e-8,
-   "totalSec": 0.00007005,
+   "totalSec": 0.000045050000000000004,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|all_to_all|n2|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.00005,
-   "totalSec": 0.00011999999999999999,
+   "totalSec": 0.000095,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|all_to_all|n2|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.005,
-   "totalSec": 0.00507,
+   "totalSec": 0.005045,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|all_to_all|n3|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 6.666666666666665e-8,
-   "totalSec": 0.00007006666666666666,
+   "totalSec": 0.000045066666666666667,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|all_to_all|n3|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.00006666666666666667,
-   "totalSec": 0.00013666666666666666,
+   "totalSec": 0.00011166666666666668,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|all_to_all|n3|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.006666666666666666,
-   "totalSec": 0.006736666666666666,
+   "totalSec": 0.006711666666666666,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|all_to_all|n4|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 7.5e-8,
-   "totalSec": 0.000070075,
+   "totalSec": 0.000045075000000000005,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|all_to_all|n4|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.00007500000000000001,
-   "totalSec": 0.000145,
+   "totalSec": 0.00012000000000000002,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|all_to_all|n4|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.0075,
-   "totalSec": 0.0075699999999999995,
+   "totalSec": 0.007545,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|all_to_all|n8|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 8.75e-8,
-   "totalSec": 0.00007008749999999999,
+   "totalSec": 0.000045087500000000005,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|all_to_all|n8|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.0000875,
-   "totalSec": 0.00015749999999999998,
+   "totalSec": 0.0001325,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|all_to_all|n8|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.00875,
-   "totalSec": 0.008820000000000001,
+   "totalSec": 0.008795,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|send_recv|n2|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 1e-7,
-   "totalSec": 0.0000701,
+   "totalSec": 0.000045100000000000005,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|send_recv|n2|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.0001,
-   "totalSec": 0.00017,
+   "totalSec": 0.000145,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|send_recv|n2|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.01,
-   "totalSec": 0.01007,
+   "totalSec": 0.010045,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|send_recv|n3|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 1e-7,
-   "totalSec": 0.0000701,
+   "totalSec": 0.000045100000000000005,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|send_recv|n3|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.0001,
-   "totalSec": 0.00017,
+   "totalSec": 0.000145,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|send_recv|n3|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.01,
-   "totalSec": 0.01007,
+   "totalSec": 0.010045,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|send_recv|n4|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 1e-7,
-   "totalSec": 0.0000701,
+   "totalSec": 0.000045100000000000005,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|send_recv|n4|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.0001,
-   "totalSec": 0.00017,
+   "totalSec": 0.000145,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|send_recv|n4|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.01,
-   "totalSec": 0.01007,
+   "totalSec": 0.010045,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|send_recv|n8|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 1e-7,
-   "totalSec": 0.0000701,
+   "totalSec": 0.000045100000000000005,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|send_recv|n8|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.0001,
-   "totalSec": 0.00017,
+   "totalSec": 0.000145,
    "algorithm": "direct"
   },
   "flat|thunderbolt-5-bridge-tcp|send_recv|n8|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.01,
-   "totalSec": 0.01007,
+   "totalSec": 0.010045,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:best|n2|S1000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 2e-7,
-   "totalSec": 0.0001402,
+   "totalSec": 0.00009020000000000001,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:best|n2|S1000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.0002,
-   "totalSec": 0.00034,
+   "totalSec": 0.00029,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:best|n2|S100000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.02,
-   "totalSec": 0.02014,
+   "totalSec": 0.02009,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:best|n3|S1000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 2.666666666666666e-7,
-   "totalSec": 0.00028026666666666663,
+   "totalSec": 0.00018026666666666667,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:best|n3|S1000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.0002666666666666667,
-   "totalSec": 0.0005466666666666667,
+   "totalSec": 0.0004466666666666667,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:best|n3|S100000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.026666666666666665,
-   "totalSec": 0.026946666666666664,
+   "totalSec": 0.026846666666666665,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:best|n4|S1000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 4e-7,
-   "totalSec": 0.0002804,
+   "totalSec": 0.00018040000000000002,
    "algorithm": "tree"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:best|n4|S1000000": {
-   "latencySec": 0.00028,
-   "bandwidthSec": 0.0004,
-   "totalSec": 0.00068,
-   "algorithm": "tree"
+   "latencySec": 0.00027,
+   "bandwidthSec": 0.00030000000000000003,
+   "totalSec": 0.00057,
+   "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:best|n4|S100000000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 0.03,
-   "totalSec": 0.03042,
+   "totalSec": 0.03027,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:best|n8|S1000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 4e-7,
-   "totalSec": 0.0004204,
+   "totalSec": 0.0002704,
    "algorithm": "tree"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:best|n8|S1000000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 0.0004,
-   "totalSec": 0.00082,
+   "totalSec": 0.00067,
    "algorithm": "tree"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:best|n8|S100000000": {
-   "latencySec": 0.00098,
+   "latencySec": 0.00063,
    "bandwidthSec": 0.035,
-   "totalSec": 0.035980000000000005,
+   "totalSec": 0.03563,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:ring|n2|S1000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 2e-7,
-   "totalSec": 0.0001402,
+   "totalSec": 0.00009020000000000001,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:ring|n2|S1000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.0002,
-   "totalSec": 0.00034,
+   "totalSec": 0.00029,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:ring|n2|S100000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.02,
-   "totalSec": 0.02014,
+   "totalSec": 0.02009,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:ring|n3|S1000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 2.666666666666666e-7,
-   "totalSec": 0.00028026666666666663,
+   "totalSec": 0.00018026666666666667,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:ring|n3|S1000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.0002666666666666667,
-   "totalSec": 0.0005466666666666667,
+   "totalSec": 0.0004466666666666667,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:ring|n3|S100000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.026666666666666665,
-   "totalSec": 0.026946666666666664,
+   "totalSec": 0.026846666666666665,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:ring|n4|S1000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 3e-7,
-   "totalSec": 0.00042029999999999997,
+   "totalSec": 0.0002703,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:ring|n4|S1000000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 0.00030000000000000003,
-   "totalSec": 0.0007199999999999999,
+   "totalSec": 0.00057,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:ring|n4|S100000000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 0.03,
-   "totalSec": 0.03042,
+   "totalSec": 0.03027,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:ring|n8|S1000": {
-   "latencySec": 0.00098,
+   "latencySec": 0.00063,
    "bandwidthSec": 3.5e-7,
-   "totalSec": 0.00098035,
+   "totalSec": 0.00063035,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:ring|n8|S1000000": {
-   "latencySec": 0.00098,
+   "latencySec": 0.00063,
    "bandwidthSec": 0.00035,
-   "totalSec": 0.00133,
+   "totalSec": 0.00098,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:ring|n8|S100000000": {
-   "latencySec": 0.00098,
+   "latencySec": 0.00063,
    "bandwidthSec": 0.035,
-   "totalSec": 0.035980000000000005,
+   "totalSec": 0.03563,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:tree|n2|S1000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 4e-7,
-   "totalSec": 0.0001404,
+   "totalSec": 0.0000904,
    "algorithm": "tree"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:tree|n2|S1000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.0004,
-   "totalSec": 0.00054,
+   "totalSec": 0.00049,
    "algorithm": "tree"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:tree|n2|S100000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.04,
-   "totalSec": 0.04014,
+   "totalSec": 0.04009,
    "algorithm": "tree"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:tree|n3|S1000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 4e-7,
-   "totalSec": 0.0002804,
+   "totalSec": 0.00018040000000000002,
    "algorithm": "tree"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:tree|n3|S1000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.0004,
-   "totalSec": 0.00068,
+   "totalSec": 0.00058,
    "algorithm": "tree"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:tree|n3|S100000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.04,
-   "totalSec": 0.04028,
+   "totalSec": 0.04018,
    "algorithm": "tree"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:tree|n4|S1000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 4e-7,
-   "totalSec": 0.0002804,
+   "totalSec": 0.00018040000000000002,
    "algorithm": "tree"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:tree|n4|S1000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.0004,
-   "totalSec": 0.00068,
+   "totalSec": 0.00058,
    "algorithm": "tree"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:tree|n4|S100000000": {
-   "latencySec": 0.00028,
+   "latencySec": 0.00018,
    "bandwidthSec": 0.04,
-   "totalSec": 0.04028,
+   "totalSec": 0.04018,
    "algorithm": "tree"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:tree|n8|S1000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 4e-7,
-   "totalSec": 0.0004204,
+   "totalSec": 0.0002704,
    "algorithm": "tree"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:tree|n8|S1000000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 0.0004,
-   "totalSec": 0.00082,
+   "totalSec": 0.00067,
    "algorithm": "tree"
   },
   "flat|thunderbolt-4-bridge-tcp|all_reduce:tree|n8|S100000000": {
-   "latencySec": 0.00041999999999999996,
+   "latencySec": 0.00027,
    "bandwidthSec": 0.04,
-   "totalSec": 0.04042,
+   "totalSec": 0.04027,
    "algorithm": "tree"
   },
   "flat|thunderbolt-4-bridge-tcp|all_gather|n2|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 1e-7,
-   "totalSec": 0.0000701,
+   "totalSec": 0.000045100000000000005,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_gather|n2|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.0001,
-   "totalSec": 0.00017,
+   "totalSec": 0.000145,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_gather|n2|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.01,
-   "totalSec": 0.01007,
+   "totalSec": 0.010045,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_gather|n3|S1000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 1.333333333333333e-7,
-   "totalSec": 0.00014013333333333332,
+   "totalSec": 0.00009013333333333333,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_gather|n3|S1000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.00013333333333333334,
-   "totalSec": 0.00027333333333333333,
+   "totalSec": 0.00022333333333333336,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_gather|n3|S100000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.013333333333333332,
-   "totalSec": 0.013473333333333332,
+   "totalSec": 0.013423333333333332,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_gather|n4|S1000": {
-   "latencySec": 0.00020999999999999998,
+   "latencySec": 0.000135,
    "bandwidthSec": 1.5e-7,
-   "totalSec": 0.00021014999999999999,
+   "totalSec": 0.00013515,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_gather|n4|S1000000": {
-   "latencySec": 0.00020999999999999998,
+   "latencySec": 0.000135,
    "bandwidthSec": 0.00015000000000000001,
-   "totalSec": 0.00035999999999999997,
+   "totalSec": 0.000285,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_gather|n4|S100000000": {
-   "latencySec": 0.00020999999999999998,
+   "latencySec": 0.000135,
    "bandwidthSec": 0.015,
-   "totalSec": 0.01521,
+   "totalSec": 0.015135,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_gather|n8|S1000": {
-   "latencySec": 0.00049,
+   "latencySec": 0.000315,
    "bandwidthSec": 1.75e-7,
-   "totalSec": 0.000490175,
+   "totalSec": 0.000315175,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_gather|n8|S1000000": {
-   "latencySec": 0.00049,
+   "latencySec": 0.000315,
    "bandwidthSec": 0.000175,
-   "totalSec": 0.000665,
+   "totalSec": 0.00049,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_gather|n8|S100000000": {
-   "latencySec": 0.00049,
+   "latencySec": 0.000315,
    "bandwidthSec": 0.0175,
-   "totalSec": 0.017990000000000003,
+   "totalSec": 0.017815,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|reduce_scatter|n2|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 1e-7,
-   "totalSec": 0.0000701,
+   "totalSec": 0.000045100000000000005,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|reduce_scatter|n2|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.0001,
-   "totalSec": 0.00017,
+   "totalSec": 0.000145,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|reduce_scatter|n2|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.01,
-   "totalSec": 0.01007,
+   "totalSec": 0.010045,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|reduce_scatter|n3|S1000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 1.333333333333333e-7,
-   "totalSec": 0.00014013333333333332,
+   "totalSec": 0.00009013333333333333,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|reduce_scatter|n3|S1000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.00013333333333333334,
-   "totalSec": 0.00027333333333333333,
+   "totalSec": 0.00022333333333333336,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|reduce_scatter|n3|S100000000": {
-   "latencySec": 0.00014,
+   "latencySec": 0.00009,
    "bandwidthSec": 0.013333333333333332,
-   "totalSec": 0.013473333333333332,
+   "totalSec": 0.013423333333333332,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|reduce_scatter|n4|S1000": {
-   "latencySec": 0.00020999999999999998,
+   "latencySec": 0.000135,
    "bandwidthSec": 1.5e-7,
-   "totalSec": 0.00021014999999999999,
+   "totalSec": 0.00013515,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|reduce_scatter|n4|S1000000": {
-   "latencySec": 0.00020999999999999998,
+   "latencySec": 0.000135,
    "bandwidthSec": 0.00015000000000000001,
-   "totalSec": 0.00035999999999999997,
+   "totalSec": 0.000285,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|reduce_scatter|n4|S100000000": {
-   "latencySec": 0.00020999999999999998,
+   "latencySec": 0.000135,
    "bandwidthSec": 0.015,
-   "totalSec": 0.01521,
+   "totalSec": 0.015135,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|reduce_scatter|n8|S1000": {
-   "latencySec": 0.00049,
+   "latencySec": 0.000315,
    "bandwidthSec": 1.75e-7,
-   "totalSec": 0.000490175,
+   "totalSec": 0.000315175,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|reduce_scatter|n8|S1000000": {
-   "latencySec": 0.00049,
+   "latencySec": 0.000315,
    "bandwidthSec": 0.000175,
-   "totalSec": 0.000665,
+   "totalSec": 0.00049,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|reduce_scatter|n8|S100000000": {
-   "latencySec": 0.00049,
+   "latencySec": 0.000315,
    "bandwidthSec": 0.0175,
-   "totalSec": 0.017990000000000003,
+   "totalSec": 0.017815,
    "algorithm": "ring"
   },
   "flat|thunderbolt-4-bridge-tcp|all_to_all|n2|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 1e-7,
-   "totalSec": 0.0000701,
+   "totalSec": 0.000045100000000000005,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|all_to_all|n2|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.0001,
-   "totalSec": 0.00017,
+   "totalSec": 0.000145,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|all_to_all|n2|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.01,
-   "totalSec": 0.01007,
+   "totalSec": 0.010045,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|all_to_all|n3|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 1.333333333333333e-7,
-   "totalSec": 0.00007013333333333332,
+   "totalSec": 0.00004513333333333334,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|all_to_all|n3|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.00013333333333333334,
-   "totalSec": 0.00020333333333333333,
+   "totalSec": 0.00017833333333333335,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|all_to_all|n3|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.013333333333333332,
-   "totalSec": 0.013403333333333333,
+   "totalSec": 0.013378333333333332,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|all_to_all|n4|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 1.5e-7,
-   "totalSec": 0.00007015,
+   "totalSec": 0.00004515,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|all_to_all|n4|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.00015000000000000001,
-   "totalSec": 0.00022,
+   "totalSec": 0.00019500000000000002,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|all_to_all|n4|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.015,
-   "totalSec": 0.01507,
+   "totalSec": 0.015045,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|all_to_all|n8|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 1.75e-7,
-   "totalSec": 0.000070175,
+   "totalSec": 0.000045175,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|all_to_all|n8|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.000175,
-   "totalSec": 0.000245,
+   "totalSec": 0.00022,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|all_to_all|n8|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.0175,
-   "totalSec": 0.017570000000000002,
+   "totalSec": 0.017545,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|send_recv|n2|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 2e-7,
-   "totalSec": 0.0000702,
+   "totalSec": 0.0000452,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|send_recv|n2|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.0002,
-   "totalSec": 0.00027,
+   "totalSec": 0.000245,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|send_recv|n2|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.02,
-   "totalSec": 0.02007,
+   "totalSec": 0.020045,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|send_recv|n3|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 2e-7,
-   "totalSec": 0.0000702,
+   "totalSec": 0.0000452,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|send_recv|n3|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.0002,
-   "totalSec": 0.00027,
+   "totalSec": 0.000245,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|send_recv|n3|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.02,
-   "totalSec": 0.02007,
+   "totalSec": 0.020045,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|send_recv|n4|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 2e-7,
-   "totalSec": 0.0000702,
+   "totalSec": 0.0000452,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|send_recv|n4|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.0002,
-   "totalSec": 0.00027,
+   "totalSec": 0.000245,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|send_recv|n4|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.02,
-   "totalSec": 0.02007,
+   "totalSec": 0.020045,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|send_recv|n8|S1000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 2e-7,
-   "totalSec": 0.0000702,
+   "totalSec": 0.0000452,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|send_recv|n8|S1000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.0002,
-   "totalSec": 0.00027,
+   "totalSec": 0.000245,
    "algorithm": "direct"
   },
   "flat|thunderbolt-4-bridge-tcp|send_recv|n8|S100000000": {
-   "latencySec": 0.00007,
+   "latencySec": 0.000045,
    "bandwidthSec": 0.02,
-   "totalSec": 0.02007,
+   "totalSec": 0.020045,
    "algorithm": "direct"
   },
   "flat|strix-halo-usb4-native-rdma-20-gb-s-negotiated|all_reduce:best|n2|S1000": {
@@ -14440,68 +14440,68 @@
    "decode.sendSec": 0.000053276800000000005
   },
   "m3-ultra-tb4-tcp-2|dense8b|tp2|b1": {
-   "prefill.tokensPerSec": 3661.0827132597697,
-   "prefill.latencySec": 1.1187947175203226,
-   "prefill.cycleSec": 1.1187947175203226,
-   "prefill.commLatencySec": 0.01029,
+   "prefill.tokensPerSec": 3673.1482150707748,
+   "prefill.latencySec": 1.1151197175203227,
+   "prefill.cycleSec": 1.1151197175203227,
+   "prefill.commLatencySec": 0.00661499999999999,
    "prefill.commBandwidthSec": 0.4898947088000003,
-   "prefill.exposedCommSec": 0.01028999999999991,
+   "prefill.exposedCommSec": 0.0066150000000000375,
    "prefill.sendSec": 0,
-   "decode.tokensPerSec": 49.31142328109881,
-   "decode.latencySec": 0.02027927675702077,
-   "decode.cycleSec": 0.02027927675702077,
-   "decode.commLatencySec": 0.01029,
+   "decode.tokensPerSec": 60.225447614101675,
+   "decode.latencySec": 0.016604276757020763,
+   "decode.cycleSec": 0.016604276757020763,
+   "decode.commLatencySec": 0.00661499999999999,
    "decode.commBandwidthSec": 0.00011960480000000007,
-   "decode.exposedCommSec": 0.010289999999999999,
+   "decode.exposedCommSec": 0.006614999999999991,
    "decode.sendSec": 0
   },
   "m3-ultra-tb4-tcp-2|dense8b|tp2|b8": {
-   "prefill.tokensPerSec": 3696.1633224976563,
-   "prefill.latencySec": 8.865409112348763,
-   "prefill.cycleSec": 8.865409112348763,
-   "prefill.commLatencySec": 0.01029,
+   "prefill.tokensPerSec": 3697.696137637218,
+   "prefill.latencySec": 8.861734112348763,
+   "prefill.cycleSec": 8.861734112348763,
+   "prefill.commLatencySec": 0.00661499999999999,
    "prefill.commBandwidthSec": 3.9191576704000024,
-   "prefill.exposedCommSec": 0.010289999999999466,
+   "prefill.exposedCommSec": 0.0066150000000000375,
    "prefill.sendSec": 0,
-   "decode.tokensPerSec": 313.5490035067727,
-   "decode.latencySec": 0.025514353133089127,
-   "decode.cycleSec": 0.025514353133089127,
-   "decode.commLatencySec": 0.01029,
+   "decode.tokensPerSec": 366.31121587017543,
+   "decode.latencySec": 0.02183935313308912,
+   "decode.cycleSec": 0.02183935313308912,
+   "decode.commLatencySec": 0.00661499999999999,
    "decode.commBandwidthSec": 0.0009568384000000006,
-   "decode.exposedCommSec": 0.010289999999999999,
+   "decode.exposedCommSec": 0.006614999999999991,
    "decode.sendSec": 0
   },
   "m3-ultra-tb4-tcp-2|dense8b|pp2|b1": {
    "prefill.tokensPerSec": 3718.950650856884,
-   "prefill.latencySec": 2.208114586706754,
+   "prefill.latencySec": 2.208089586706754,
    "prefill.cycleSec": 1.101385951183902,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.0067808864,
-   "decode.tokensPerSec": 49.71575319561477,
-   "decode.latencySec": 0.02011434878730161,
-   "decode.cycleSec": 0.02011434878730161,
+   "prefill.sendSec": 0.0067558864,
+   "decode.tokensPerSec": 49.83964396755719,
+   "decode.latencySec": 0.02006434878730161,
+   "decode.cycleSec": 0.02006434878730161,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.0000716384
+   "decode.sendSec": 0.000046638400000000004
   },
   "m3-ultra-tb4-tcp-2|dense8b|pp2|b8": {
    "prefill.tokensPerSec": 3723.875241021683,
-   "prefill.latencySec": 13.224873213098947,
+   "prefill.latencySec": 13.224848213098948,
    "prefill.cycleSec": 8.799435501767714,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.0269135456,
+   "prefill.sendSec": 0.0268885456,
    "decode.tokensPerSec": 308.0962772110634,
    "decode.latencySec": 0.025965909333333315,
    "decode.cycleSec": 0.025965909333333315,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.0000765536
+   "decode.sendSec": 0.0000515536
   },
   "m3-ultra-tb4-tcp-3|dense8b|tp3|b1": {
    "error": "layer.0: attn heads (32) must be divisible by tp (3)\nlayer.1: attn heads (32) must be divisible by tp (3)\nlayer.2: attn heads (32) must be divisible by tp (3)\nlayer.3: attn heads (32) must be divisible by tp (3)\nlayer.4: attn heads (32) must be divisible by tp (3)\nlayer.5: attn heads (32) must be divisible by tp (3)\nlayer.6: attn heads (32) must be divisible by tp (3)\nlayer.7: attn heads (32) must be divisible by tp (3)\nlayer.8: attn heads (32) must be divisible by tp (3)\nlayer.9: attn heads (32) must be divisible by tp (3)\nlayer.10: attn heads (32) must be divisible by tp (3)\nlayer.11: attn heads (32) must be divisible by tp (3)\nlayer.12: attn heads (32) must be divisible by tp (3)\nlayer.13: attn heads (32) must be divisible by tp (3)\nlayer.14: attn heads (32) must be divisible by tp (3)\nlayer.15: attn heads (32) must be divisible by tp (3)\nlayer.16: attn heads (32) must be divisible by tp (3)\nlayer.17: attn heads (32) must be divisible by tp (3)\nlayer.18: attn heads (32) must be divisible by tp (3)\nlayer.19: attn heads (32) must be divisible by tp (3)\nlayer.20: attn heads (32) must be divisible by tp (3)\nlayer.21: attn heads (32) must be divisible by tp (3)\nlayer.22: attn heads (32) must be divisible by tp (3)\nlayer.23: attn heads (32) must be divisible by tp (3)\nlayer.24: attn heads (32) must be divisible by tp (3)\nlayer.25: attn heads (32) must be divisible by tp (3)\nlayer.26: attn heads (32) must be divisible by tp (3)\nlayer.27: attn heads (32) must be divisible by tp (3)\nlayer.28: attn heads (32) must be divisible by tp (3)\nlayer.29: attn heads (32) must be divisible by tp (3)\nlayer.30: attn heads (32) must be divisible by tp (3)\nlayer.31: attn heads (32) must be divisible by tp (3)\nlayer.32: attn heads (32) must be divisible by tp (3)\nlayer.33: attn heads (32) must be divisible by tp (3)\nlayer.34: attn heads (32) must be divisible by tp (3)\nlayer.35: attn heads (32) must be divisible by tp (3)"
@@ -14511,131 +14511,131 @@
   },
   "m3-ultra-tb4-tcp-3|dense8b|pp3|b1": {
    "prefill.tokensPerSec": 5574.578936139418,
-   "prefill.latencySec": 2.2148954731067523,
+   "prefill.latencySec": 2.214845473106752,
    "prefill.cycleSec": 0.7347640148112454,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.0135617728,
-   "decode.tokensPerSec": 49.539316096914504,
-   "decode.latencySec": 0.020185987187301597,
-   "decode.cycleSec": 0.020185987187301597,
+   "prefill.sendSec": 0.0135117728,
+   "decode.tokensPerSec": 49.72406330363615,
+   "decode.latencySec": 0.020110987187301595,
+   "decode.cycleSec": 0.020110987187301595,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.0001432768
+   "decode.sendSec": 0.00009327680000000001
   },
   "m3-ultra-tb4-tcp-3|dense8b|pp3|b8": {
    "prefill.tokensPerSec": 4963.292883999433,
-   "prefill.latencySec": 11.041056882537523,
+   "prefill.latencySec": 11.041006882537523,
    "prefill.cycleSec": 6.602068579437825,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.0404053184,
+   "prefill.sendSec": 0.0403553184,
    "decode.tokensPerSec": 307.74169342719307,
    "decode.latencySec": 0.025995827575091564,
    "decode.cycleSec": 0.025995827575091564,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.0001498304
+   "decode.sendSec": 0.0000998304
   },
   "m3-ultra-tb4-tcp-4|dense8b|tp4|b1": {
-   "prefill.tokensPerSec": 5349.269241030495,
-   "prefill.latencySec": 0.7657120655999992,
-   "prefill.cycleSec": 0.7657120655999992,
-   "prefill.commLatencySec": 0.030870000000000012,
+   "prefill.tokensPerSec": 5427.415132315215,
+   "prefill.latencySec": 0.7546870655999991,
+   "prefill.cycleSec": 0.7546870655999991,
+   "prefill.commLatencySec": 0.019844999999999977,
    "prefill.commBandwidthSec": 0.7348420655999991,
-   "prefill.exposedCommSec": 0.20362183947289336,
+   "prefill.exposedCommSec": 0.1925968394728933,
    "prefill.sendSec": 0,
-   "decode.tokensPerSec": 38.99006325241325,
-   "decode.latencySec": 0.02564756034188034,
-   "decode.cycleSec": 0.02564756034188034,
-   "decode.commLatencySec": 0.020649999999999998,
+   "decode.tokensPerSec": 54.726868117546786,
+   "decode.latencySec": 0.018272560341880323,
+   "decode.cycleSec": 0.018272560341880323,
+   "decode.commLatencySec": 0.01327499999999998,
    "decode.commBandwidthSec": 0.00023921120000000015,
-   "decode.exposedCommSec": 0.020649999999999998,
+   "decode.exposedCommSec": 0.013274999999999981,
    "decode.sendSec": 0
   },
   "m3-ultra-tb4-tcp-4|dense8b|tp4|b8": {
-   "prefill.tokensPerSec": 5544.87001164752,
-   "prefill.latencySec": 5.909606524799993,
-   "prefill.cycleSec": 5.909606524799993,
-   "prefill.commLatencySec": 0.030870000000000012,
+   "prefill.tokensPerSec": 5555.233891780632,
+   "prefill.latencySec": 5.898581524799993,
+   "prefill.cycleSec": 5.898581524799993,
+   "prefill.commLatencySec": 0.019844999999999977,
    "prefill.commBandwidthSec": 5.878736524799993,
-   "prefill.exposedCommSec": 1.4223000031390187,
+   "prefill.exposedCommSec": 1.4112750031390187,
    "prefill.sendSec": 0,
-   "decode.tokensPerSec": 282.8562467934194,
-   "decode.latencySec": 0.028282917880341887,
-   "decode.cycleSec": 0.028282917880341887,
-   "decode.commLatencySec": 0.020649999999999998,
+   "decode.tokensPerSec": 382.63016173034595,
+   "decode.latencySec": 0.020907917880341867,
+   "decode.cycleSec": 0.020907917880341867,
+   "decode.commLatencySec": 0.01327499999999998,
    "decode.commBandwidthSec": 0.0019136896000000012,
-   "decode.exposedCommSec": 0.02065,
+   "decode.exposedCommSec": 0.01327499999999998,
    "decode.sendSec": 0
   },
   "m3-ultra-tb4-tcp-4|dense8b|pp4|b1": {
    "prefill.tokensPerSec": 7427.649597855938,
-   "prefill.latencySec": 2.221676359506752,
+   "prefill.latencySec": 2.221601359506752,
    "prefill.cycleSec": 0.5514530466249175,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.0203426592,
-   "decode.tokensPerSec": 49.36412689090503,
-   "decode.latencySec": 0.020257625587301587,
-   "decode.cycleSec": 0.020257625587301587,
+   "prefill.sendSec": 0.0202676592,
+   "decode.tokensPerSec": 49.609017474258266,
+   "decode.latencySec": 0.020157625587301588,
+   "decode.cycleSec": 0.020157625587301588,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.0002149152
+   "decode.sendSec": 0.00013991520000000002
   },
   "m3-ultra-tb4-tcp-4|dense8b|pp4|b8": {
    "prefill.tokensPerSec": 7439.324730197559,
-   "prefill.latencySec": 7.744304065420704,
+   "prefill.latencySec": 7.744229065420703,
    "prefill.cycleSec": 4.404700855037123,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.0404753184,
+   "prefill.sendSec": 0.0404003184,
    "decode.tokensPerSec": 307.3973983601726,
    "decode.latencySec": 0.026024943746031738,
    "decode.cycleSec": 0.026024943746031738,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.0002198304
+   "decode.sendSec": 0.0001448304
   },
   "m3-ultra-tb4-tcp-4|dense8b|tp2pp2|b1": {
-   "prefill.tokensPerSec": 7318.187428434329,
-   "prefill.latencySec": 1.1255756039203213,
-   "prefill.cycleSec": 0.5597014342766441,
-   "prefill.commLatencySec": 0.010290000000000004,
+   "prefill.tokensPerSec": 7342.1276618557495,
+   "prefill.latencySec": 1.1218756039203213,
+   "prefill.cycleSec": 0.5578764342766441,
+   "prefill.commLatencySec": 0.006614999999999994,
    "prefill.commBandwidthSec": 0.4898947088000002,
-   "prefill.exposedCommSec": 0.01028999999999991,
-   "prefill.sendSec": 0.0067808864,
-   "decode.tokensPerSec": 48.969399908636206,
-   "decode.latencySec": 0.02042091595702076,
-   "decode.cycleSec": 0.02042091595702076,
-   "decode.commLatencySec": 0.010290000000000004,
+   "prefill.exposedCommSec": 0.0066149999999999265,
+   "prefill.sendSec": 0.0067558864,
+   "decode.tokensPerSec": 59.89488702352345,
+   "decode.latencySec": 0.016695915957020746,
+   "decode.cycleSec": 0.016695915957020746,
+   "decode.commLatencySec": 0.006614999999999994,
    "decode.commBandwidthSec": 0.00011960480000000004,
-   "decode.exposedCommSec": 0.010290000000000004,
-   "decode.sendSec": 0.0000716384
+   "decode.exposedCommSec": 0.006614999999999993,
+   "decode.sendSec": 0.000046638400000000004
   },
   "m3-ultra-tb4-tcp-4|dense8b|tp2pp2|b8": {
-   "prefill.tokensPerSec": 7380.415290300867,
-   "prefill.latencySec": 6.6863384074084316,
-   "prefill.cycleSec": 4.439858559593899,
-   "prefill.commLatencySec": 0.010290000000000004,
+   "prefill.tokensPerSec": 7386.487708999791,
+   "prefill.latencySec": 6.680813407408432,
+   "prefill.cycleSec": 4.436208559593899,
+   "prefill.commLatencySec": 0.006614999999999994,
    "prefill.commBandwidthSec": 1.9595788352000008,
-   "prefill.exposedCommSec": 0.010290000000000354,
-   "prefill.sendSec": 0.0269135456,
-   "decode.tokensPerSec": 344.62647733733513,
-   "decode.latencySec": 0.023213538500610496,
-   "decode.cycleSec": 0.023213538500610496,
-   "decode.commLatencySec": 0.010290000000000004,
+   "prefill.exposedCommSec": 0.0066150000000000375,
+   "prefill.sendSec": 0.0268885456,
+   "decode.tokensPerSec": 408.92397864273664,
+   "decode.latencySec": 0.01956353850061049,
+   "decode.cycleSec": 0.01956353850061049,
+   "decode.commLatencySec": 0.006614999999999994,
    "decode.commBandwidthSec": 0.0004784192000000002,
-   "decode.exposedCommSec": 0.010290000000000004,
-   "decode.sendSec": 0.0000765536
+   "decode.exposedCommSec": 0.006614999999999995,
+   "decode.sendSec": 0.0000515536
   },
   "strix-halo-usb4-tcp-2|dense8b|tp2|b1": {
    "prefill.tokensPerSec": 4174.227453549586,

@@ -325,6 +325,7 @@ function transferOp(latencySec: number, bandwidthSec: number): OpResult {
       source: 'host_ram',
       reads: [{ count: 40, bytesEach: 7.5e6 }],
       usefulBytes: 300e6,
+      prefetchedFraction: 1,
     },
     flops: 0,
     bytes: zero,

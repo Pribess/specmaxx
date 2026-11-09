@@ -9,7 +9,25 @@
  */
 
 import type { HostMemorySpec, NvmeSpec, StorageTierSpec } from '../hw/types';
-import type { HitRatioModel, SimOptions } from './types';
+import type { HitRatioModel } from './types';
+
+// ---------------------------------------------------------------------------------------------------------------
+// Expert prefetch (docs/simulation-model.md §12 "Expert prefetch")
+
+/**
+ * Default prefetch accuracy p (`OffloadConfig.prefetchAccuracy`): the share of a step's missed routed experts that
+ * are predicted one layer ahead and copied while the previous layer computes. Dimensionless, in [0, 1].
+ *
+ * Estimated: the middle of what training-free next-gate prediction (the next layer's gate applied to the current
+ * hidden state, same set size k, exact outputs) achieves one layer ahead:
+ * - Mixtral 8×7B (8 experts, top-2): 0.84 (DAOP, arXiv 2501.10375 Fig. 5), ≈0.9 (AdapMoE, arXiv 2408.10284 §6),
+ *   ≈0.85 (Eliseev & Mazur, arXiv 2312.17238 Fig. 2);
+ * - Qwen1.5-MoE (60, top-4): 0.79 (Fate, arXiv 2502.12224 §4.2);
+ * - Qwen2-57B-A14B (64, top-8): 0.67 (ProMoE, arXiv 2410.22134 §4.2);
+ * - Qwen3-30B-A3B (128, top-8): ≈0.9 beyond the first two layers (Madan et al., arXiv 2603.19289 §3.3).
+ * Learned predictors reach 0.85–0.95, and 0.97–0.99 only by fetching extra experts.
+ */
+export const DEFAULT_PREFETCH_ACCURACY = 0.8;
 
 // ---------------------------------------------------------------------------------------------------------------
 // Expert hit ratio and misses (design doc §2.4)
@@ -253,23 +271,13 @@ export function stageDevicesOnNode(tp: number, dp: number, devicesPerNode: numbe
 }
 
 /**
- * Stages that stream from a tier at the same time (design doc §2.3): under `offloadOverlap 'ideal'` every
- * offloading stage can have a prefetch in flight (`|S_tier|`); under `'none'` a stage streams only while a microbatch
+ * Stages that stream from a tier at the same time (design doc §2.3): with prefetching on (p > 0) every offloading
+ * stage can have a prefetch in flight (`|S_tier|`); without it (p = 0) a stage streams only while a microbatch
  * occupies it, and `m` microbatches circulate, so at most `min(m, |S_tier|)`. Count.
  */
-export function streamSlots(offloadOverlap: SimOptions['offloadOverlap'], microbatches: number, streamingStages: number): number {
-  switch (offloadOverlap) {
-    case 'ideal':
-      // Formula: slots = |S_tier|
-      return streamingStages;
-    case 'none':
-      // Formula: slots = min(m, |S_tier|)
-      return Math.min(microbatches, streamingStages);
-    default: {
-      const _never: never = offloadOverlap;
-      throw new Error(`unknown offload overlap ${String(_never)}`);
-    }
-  }
+export function streamSlots(prefetching: boolean, microbatches: number, streamingStages: number): number {
+  // Formula: slots = p > 0 ? |S_tier| : min(m, |S_tier|)
+  return prefetching ? streamingStages : Math.min(microbatches, streamingStages);
 }
 
 /**
@@ -289,14 +297,14 @@ export function nStream(consumers: readonly number[], stage: number, slots: numb
 /**
  * n_stream of a tier for the devices of stage `stage`: {@link nStream} on every node holding a device of the stage,
  * the largest of them (the stage's TP ranks finish together, so its slowest device sets its time). `streams[s]` is
- * true if stage s streams from the tier in this phase. Count (≥ 1).
+ * true if stage s streams from the tier in this phase; `prefetching` is p > 0 ({@link streamSlots}). Count (≥ 1).
  */
 export function stageNStream(
   parallel: { tp: number; dp: number; pp: number },
   devicesPerNode: number,
   streams: readonly boolean[],
   stage: number,
-  offloadOverlap: SimOptions['offloadOverlap'],
+  prefetching: boolean,
   microbatches: number,
 ): number {
   const { tp, dp, pp } = parallel;
@@ -308,7 +316,7 @@ export function stageNStream(
       streams[s] ? stageDevicesOnNode(tp, dp, devicesPerNode, s, node) : 0,
     );
     const streaming = consumers.filter((c) => c > 0).length;
-    n = Math.max(n, nStream(consumers, stage, streamSlots(offloadOverlap, microbatches, streaming)));
+    n = Math.max(n, nStream(consumers, stage, streamSlots(prefetching, microbatches, streaming)));
   }
   return n;
 }

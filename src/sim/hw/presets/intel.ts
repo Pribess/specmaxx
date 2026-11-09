@@ -33,6 +33,7 @@
 
 import type { ComputeEngine, DeviceSpec, EstimatedField, GemmTiling, MatmulPeak, SourceRef } from '../types';
 import { gb, gbPerSec, tflops } from '../units';
+import { NO_RDMA_SOURCE_ESTIMATE } from './gpudirect';
 
 // ---------------------------------------------------------------------------------------------------------
 // Source URLs
@@ -282,6 +283,7 @@ export const ARC_PRO_B70: DeviceSpec = {
   l2Bytes: 24 * 1024 * 1024,
   // ark "PCI Express 5.0 x16"; datasheet "PCIe Support Gen 5 x16 Native".
   hostInterface: { generation: 5, lanes: 16 },
+  gpuDirectRdma: false,
   sources: [
     {
       url: B70_ARK_URL,
@@ -302,7 +304,7 @@ export const ARC_PRO_B70: DeviceSpec = {
     pcghSource(['l2Bytes'], 'B70 column: BMG-G31 WKSTN, 368 mm², 27.7 B transistors; Level-2-Cache (MiB) 24; boost 2800 MHz; FP32 22.9 TFLOPS.'),
     XE2_DPAS_SHAPE_SOURCE,
   ],
-  estimated: xe2Estimates({ card: 'Arc Pro B70', xeCores: 32, maxClockGHz: 2.8, vendorInt8Tops: 367 }),
+  estimated: [NO_RDMA_SOURCE_ESTIMATE, ...xe2Estimates({ card: 'Arc Pro B70', xeCores: 32, maxClockGHz: 2.8, vendorInt8Tops: 367 })],
 };
 
 /** B65 / B60 max clock (ark "Graphics Clock 2400 MHz"; datasheet: peaks "as defined by maximum clock frequency"). Unit: Hz. */
@@ -338,6 +340,7 @@ export const ARC_PRO_B65: DeviceSpec = {
   l2Bytes: 18 * 1024 * 1024,
   // ark "PCI Express 5.0 x16".
   hostInterface: { generation: 5, lanes: 16 },
+  gpuDirectRdma: false,
   sources: [
     {
       url: B65_ARK_URL,
@@ -348,7 +351,7 @@ export const ARC_PRO_B65: DeviceSpec = {
     pcghSource(['l2Bytes'], 'B65 column: BMG-G31 WKSTN (cut down), 2560 FP32 ALUs, 160 matrix units; Level-2-Cache (MiB) 18; boost 2400 MHz.'),
     XE2_DPAS_SHAPE_SOURCE,
   ],
-  estimated: xe2Estimates({ card: 'Arc Pro B65', xeCores: 20, maxClockGHz: 2.4, vendorInt8Tops: 197 }),
+  estimated: [NO_RDMA_SOURCE_ESTIMATE, ...xe2Estimates({ card: 'Arc Pro B65', xeCores: 20, maxClockGHz: 2.4, vendorInt8Tops: 197 })],
 };
 
 /**
@@ -383,6 +386,7 @@ export const ARC_PRO_B60: DeviceSpec = {
   l2Bytes: 18 * 1024 * 1024,
   // x16 connector, x8 ELECTRICAL: datasheet "Gen 5.0 x16 (x8 Electrical)", ark "PCI Express 5.0 x8".
   hostInterface: { generation: 5, lanes: 8 },
+  gpuDirectRdma: false,
   sources: [
     {
       url: B60_DATASHEET_URL,
@@ -402,7 +406,7 @@ export const ARC_PRO_B60: DeviceSpec = {
     pcghSource(['l2Bytes'], 'B60 column: BMG-G21 WKSTN, 272 mm²; Level-2-Cache (MiB) 18; boost 2400 MHz; FP32 12.3 TFLOPS.'),
     XE2_DPAS_SHAPE_SOURCE,
   ],
-  estimated: xe2Estimates({ card: 'Arc Pro B60', xeCores: 20, maxClockGHz: 2.4, vendorInt8Tops: 197 }),
+  estimated: [NO_RDMA_SOURCE_ESTIMATE, ...xe2Estimates({ card: 'Arc Pro B60', xeCores: 20, maxClockGHz: 2.4, vendorInt8Tops: 197 })],
 };
 
 /**
@@ -444,6 +448,7 @@ export const ARC_B580: DeviceSpec = {
   l2Bytes: 18 * 1024 * 1024,
   // ark "PCI Express 4.0 x8".
   hostInterface: { generation: 4, lanes: 8 },
+  gpuDirectRdma: false,
   sources: [
     {
       url: B580_ARK_URL,
@@ -460,6 +465,7 @@ export const ARC_B580: DeviceSpec = {
     XE2_DPAS_SHAPE_SOURCE,
   ],
   estimated: [
+    NO_RDMA_SOURCE_ESTIMATE,
     {
       field: 'engines.0.vectorFlopsPerSec.fp32',
       reason:

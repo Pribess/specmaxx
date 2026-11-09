@@ -379,6 +379,7 @@ describe('deployment fields (design doc §7.1): defaults reproduce today, overri
       source: 'host_ram',
       reads: [{ count: 8, bytesEach: 2_654_208 }],
       usefulBytes: 21_233_664,
+      prefetchedFraction: 1,
     };
     expect(opFlops(op)).toBe(0);
     expect(opBytes(op)).toEqual({

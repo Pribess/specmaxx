@@ -8,6 +8,7 @@
  */
 
 import { SPEC_USE_CASES, type SpecUseCase } from '../../sim/engine/specdec';
+import { DEFAULT_PREFETCH_ACCURACY } from '../../sim/engine/transfer';
 
 /** An off-device storage tier: the node's host RAM or its NVMe SSD (engine `OffloadTier`). */
 export type TierChoice = 'host_ram' | 'nvme';
@@ -51,6 +52,11 @@ export interface OffloadChoice {
   };
   /** Outstanding read requests per device; absent = the tier's rated maximum. Integer ≥ 1. Count. */
   queueDepth?: number;
+  /**
+   * Prefetch accuracy p (engine `OffloadConfig.prefetchAccuracy`): the predictor's recall, the share of the needed
+   * experts it picks one layer ahead; absent = the default 0.8. In [0, 1]. Dimensionless.
+   */
+  prefetchAccuracy?: number;
 }
 
 /** Speculative-decoding method (engine `SpecDecodeConfig.method`). */
@@ -133,7 +139,7 @@ function compact<T extends object>(record: T): T {
 
 /**
  * The offload choice with defaults removed (fromLayer 0, f 0, uniform h, the tier's scale layout) and a queue depth
- * kept only while something is offloaded; `{}` when nothing is.
+ * and a prefetch accuracy (without the default 0.8) kept only while something is offloaded; `{}` when nothing is.
  */
 export function normalizeOffload(o: OffloadChoice): OffloadChoice {
   const experts =
@@ -154,7 +160,11 @@ export function normalizeOffload(o: OffloadChoice): OffloadChoice {
           : o.tables.scaleLayout,
     });
   const out = compact({ experts, dense: o.dense && { ...o.dense }, tables });
-  return offloadsAnything(out) ? compact({ ...out, queueDepth: o.queueDepth }) : {};
+  const prefetchAccuracy =
+    o.prefetchAccuracy === DEFAULT_PREFETCH_ACCURACY ? undefined : o.prefetchAccuracy;
+  return offloadsAnything(out)
+    ? compact({ ...out, queueDepth: o.queueDepth, prefetchAccuracy })
+    : {};
 }
 
 /** The spec-dec choice with defaults removed (use case `'prose'`; the use case while α is set). */

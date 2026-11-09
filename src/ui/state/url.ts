@@ -17,7 +17,7 @@
  * | `x`, `xi`, `xe` | spec edits on device / intra link / inter link, `path:value` comma list, SI units | `x=memory.bandwidthBytesPerSec:2e12` |
  * | `tp`, `pp` | parallel degrees (old `dp` / `ep` are ignored: both fixed at 1) | `tp=2` |
  * | `b`, `p`, `c` | batch, prefill length (default 8192), decode context (default 8192) | `b=8` |
- * | `ov`, `fu`, `ar`, `oo` | overlap, elementwise fusion, all-reduce algorithm, offload overlap (`ideal` default, `none`) | `ov=none` |
+ * | `ov`, `fu`, `ar` | overlap, elementwise fusion, all-reduce algorithm | `ov=none` |
  * | `hr`, `hrc` | host-RAM preset id (default `ddr5-6000-2ch`), its capacity in GB (1e9 B) | `hr=ddr5-6400-8ch&hrc=512` |
  * | `ssd` | SSD preset id (default: the device's own SSD on unified memory, else `nvme-990-pro-2tb`) | `ssd=nvme-t705-2tb` |
  * | `hl` | host-link override, `<PCIe gen>x<lanes>` (default: the device's host interface) | `hl=4x16` |
@@ -26,6 +26,8 @@
  * | `odl`, `odt` | dense layers kept on the device (the rest stream; absent: none stream), their tier `ram` (default) or `ssd` | `odl=40` |
  * | `olt`, `ols` | lookup-tables tier `ram`, `ssd` (absent: on the device); (with `olt`) scale layout `separate`, `pinned`, `interleaved` (default: the tier's) | `olt=ram` |
  * | `oqd` | (with offload) queue depth, integer ≥ 1 (default: the tier's rated maximum) | `oqd=32` |
+ * | `opf` | (with offload) prefetch accuracy p 0–1 (default 0.8) | `opf=0.9` |
+ * | `oo` | legacy offload overlap, read only: with offload and no `opf`, `ideal` → `opf=1`, `none` → `opf=0`; otherwise ignored | `oo=none` |
  * | `sd` | speculative decoding method: `mtp`, `dflash2`, `dspark` (absent: off) | `sd=mtp` |
  * | `sdr` | (block methods) drafter repo id, or `hyp` for the hypothetical drafter (default: the known one for the model) | `sdr=hyp` |
  * | `sdk`, `sdu`, `sda` | draft length k 1–16 (default per method), use case `code`, `math`, `reasoning`, `agentic` (default `prose`), acceptance α 0–0.99 (custom; overrides the use case) | `sdk=3&sda=0.8` |
@@ -67,14 +69,13 @@ const OPTION_KEYS: [string, keyof SimOptions, readonly string[]][] = [
   ['ov', 'overlap', ['ideal', 'none']],
   ['fu', 'elementwiseFusion', ['none', 'ideal']],
   ['ar', 'collectiveAlgorithm', ['best', 'ring', 'tree']],
-  ['oo', 'offloadOverlap', ['ideal', 'none']],
 ];
 
-/** Every key the codec knows, in encoding order. */
+/** Every key the codec knows, in encoding order (`oo` is a legacy key: read, never written). */
 export const URL_KEYS = [
   'm', 'rev', 'w', 'bpw', 'hbpw', 'a', 'kv', 'lt', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'fab', 'x', 'xi', 'xe',
   'hr', 'hrc', 'ssd', 'hl', 'tp', 'pp', 'dp', 'ep', 'b', 'p', 'c', 'ov', 'fu', 'ar', 'oo',
-  'ox', 'oxl', 'oxf', 'oxh', 'odl', 'odt', 'olt', 'ols', 'oqd', 'sd', 'sdr', 'sdk', 'sdu', 'sda',
+  'ox', 'oxl', 'oxf', 'oxh', 'odl', 'odt', 'olt', 'ols', 'oqd', 'opf', 'sd', 'sdr', 'sdk', 'sdu', 'sda',
 ] as const;
 
 /** URL value of a tier. */
@@ -201,6 +202,7 @@ export function encodeState(s: AppState): string {
     if (o.tables.scaleLayout !== undefined) put('ols', SCALE_LAYOUT_KEYS[o.tables.scaleLayout]);
   }
   put('oqd', o.queueDepth);
+  put('opf', o.prefetchAccuracy);
   const sd = deployment.specDec;
   if (sd !== undefined) {
     put('sd', sd.method);
@@ -273,8 +275,10 @@ function decodeHost(get: (key: string) => string | undefined, drop: (key: string
 }
 
 /**
- * The deployment choice of the offload (`ox`…`oqd`) and spec-dec (`sd`…`sda`) parameters. A dependent key without
- * its parent (`oxf` without `ox`, `ols` without `olt`, `sdk` without `sd`, `oqd` with nothing offloaded) is dropped.
+ * The deployment choice of the offload (`ox`…`opf`, legacy `oo`) and spec-dec (`sd`…`sda`) parameters. A dependent key without
+ * its parent (`oxf` without `ox`, `ols` without `olt`, `sdk` without `sd`, `oqd` or `opf` with nothing offloaded) is
+ * dropped. The legacy `oo` (offload overlap) maps to the equivalent prefetch accuracy when something is offloaded and
+ * `opf` is absent (`ideal` → 1, `none` → 0); otherwise it is ignored without a notice (it was valid on its own).
  */
 function decodeDeployment(get: (key: string) => string | undefined, drop: (key: string, value: string) => void): DeploymentChoice {
   /** Reads `key` with `parse`; drops it when invalid or when its parent is missing (`allowed` false). */
@@ -300,6 +304,11 @@ function decodeDeployment(get: (key: string) => string | undefined, drop: (key: 
   if (tablesTier !== undefined) offload.tables = { tier: tablesTier, scaleLayout };
   const any = offload.experts !== undefined || offload.dense !== undefined || offload.tables !== undefined;
   offload.queueDepth = read('oqd', any, (r) => parseInteger(r, 1, MAX_VALUE));
+  offload.prefetchAccuracy = read('opf', any, (r) => parseNumberIn(r, 0, 1));
+  if (any && offload.prefetchAccuracy === undefined && get('oo') !== undefined) {
+    // Legacy offload overlap: 'ideal' was perfect prefetch (p = 1), 'none' no prefetching (p = 0).
+    offload.prefetchAccuracy = read('oo', true, (r) => (r === 'ideal' ? 1 : r === 'none' ? 0 : undefined));
+  }
 
   const method = read('sd', true, (r) => SPEC_DEC_METHODS.find((m) => m === r));
   const on = method !== undefined;

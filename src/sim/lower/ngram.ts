@@ -17,7 +17,7 @@ import type { EmbeddingOp, Op, TransferOp } from '../ir/ops';
 import { actBpe, causalConvOp, convStateTokens, elementwise, hpBpe, linearGemm, stepTokens, tpAllReduce } from './common';
 import { embeddingFormat } from './embedding';
 import type { LoweringContext, OffloadLowering } from './lower';
-import { tablePlacementAt } from './offload';
+import { prefetchedFraction, tablePlacementAt } from './offload';
 
 /** Storage format of n-gram lookup tables: `quant.lookupTables`, else the embedding format. */
 export function lookupTableFormat(ctx: LoweringContext): TensorFormat {
@@ -77,6 +77,7 @@ export function tableFetchOp(
     source: placement.tier,
     reads,
     usefulBytes: rows * rowBytes,
+    prefetchedFraction: prefetchedFraction(ctx.offload?.prefetchAccuracy ?? 0, { group: 'lookup_table' }),
   };
 }
 

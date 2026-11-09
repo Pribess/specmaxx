@@ -12,7 +12,19 @@ import { fixtureRepoFiles } from '../models/__fixtures__/fixtures.testutil';
 import { mapHfModel } from '../models/hf/index';
 import { REF_MOE_30B_A3B } from '../models/reference';
 import { simulate } from './simulate';
-import type { OffloadConfig, SimInput, SimOptions, SimResult } from './types';
+import { DEFAULT_PREFETCH_ACCURACY } from './transfer';
+import type { OffloadConfig, SimInput, SimResult } from './types';
+
+/**
+ * Prefetch setting of a worked example: `'ideal'` = p 1 (the former offloadOverlap 'ideal'), `'none'` = p 0 (the
+ * former 'none'), or an explicit p. The rows keep their pre-prefetch-accuracy numbers, so they pin both endpoints.
+ */
+type Prefetch = 'ideal' | 'none' | number;
+
+/** p of a {@link Prefetch}. Dimensionless. */
+function prefetchAccuracy(prefetch: Prefetch): number {
+  return prefetch === 'ideal' ? 1 : prefetch === 'none' ? 0 : prefetch;
+}
 
 function expectClose(actual: number, expected: number, rel = 1e-9): void {
   expect(Math.abs(actual - expected)).toBeLessThanOrEqual(rel * Math.abs(expected));
@@ -34,17 +46,21 @@ const W1_QUANT: QuantConfig = {
 /** One expert at 4.5 bits: 3·2048·768·4.5/8. Unit: bytes. */
 const W_EXPERT = 2_654_208;
 
-function w1(f: number | undefined, offloadOverlap: SimOptions['offloadOverlap']): SimResult {
+function w1(f: number | undefined, prefetch: Prefetch): SimResult {
   const input: SimInput = {
     model: REF_MOE_30B_A3B,
     quant: W1_QUANT,
     parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
     workload: { batch: 1, promptLen: 8192, decodeContextLen: 8192 },
     hardware: GPU,
-    options: { offloadOverlap },
   };
   if (f !== undefined) {
-    input.deployment = { offload: { routedExperts: { tier: 'host_ram', residentFraction: f, hitRatio: { kind: 'uniform' } } } };
+    input.deployment = {
+      offload: {
+        prefetchAccuracy: prefetchAccuracy(prefetch),
+        routedExperts: { tier: 'host_ram', residentFraction: f, hitRatio: { kind: 'uniform' } },
+      },
+    };
   }
   return simulate(input);
 }
@@ -110,6 +126,28 @@ describe('W1 experts in DDR5 over PCIe 5.0 x16 (REF_MOE_30B_A3B, int4+0.5 routed
     expect(w1(0.5, 'none').memory.perStage[0].stagingBytes).toBe(64 * W_EXPERT);
   });
 
+  it('default p 0.8 (decode f 0): q = max(0.8, 8/128) = 0.8; t = core + xfer − q·min(core, xfer)', () => {
+    const omitted = simulate({
+      model: REF_MOE_30B_A3B,
+      quant: W1_QUANT,
+      parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
+      workload: { batch: 1, promptLen: 8192, decodeContextLen: 8192 },
+      hardware: GPU,
+      deployment: { offload: { routedExperts: { tier: 'host_ram', residentFraction: 0, hitRatio: { kind: 'uniform' } } } },
+    });
+    expect(omitted).toEqual(w1(0, DEFAULT_PREFETCH_ACCURACY));
+    const r = omitted.decode;
+    const fetch = r.stages[0].layers[1].ops.find((o) => o.op.kind === 'transfer');
+    expect(fetch?.op.kind === 'transfer' ? fetch.op.prefetchedFraction : NaN).toBe(0.8);
+    const core = baseline.decode.cycleSec;
+    const xfer = 48 * (1.07e-6 + (8 * W_EXPERT) / B_LINK);
+    expectClose(r.cycleSec, core + xfer - 0.8 * Math.min(core, xfer), 1e-6);
+    expect(r.cycleSec).toBeGreaterThan(w1(0, 'ideal').decode.cycleSec);
+    expect(r.cycleSec).toBeLessThan(w1(0, 'none').decode.cycleSec);
+    // Prefill needs every expert (M = E − C), so q = 1: identical to perfect prefetch.
+    expect(omitted.prefill).toEqual(w1(0, 'ideal').prefill);
+  });
+
   it('f = 1 contract: every rate, op time and device memory line equals the baseline; only tiers and warnings differ', () => {
     for (const overlap of ['ideal', 'none'] as const) {
       const base = w1(undefined, overlap);
@@ -141,7 +179,7 @@ describe('W1 experts in DDR5 over PCIe 5.0 x16 (REF_MOE_30B_A3B, int4+0.5 routed
 });
 
 // ---------------------------------------------------------------------------------------------------------------
-// W3/W4: n-gram tables off-device on one RTX 5090, decode and prefill @ 8k, offloadOverlap 'none' (design doc §8.6)
+// W3/W4: n-gram tables off-device on one RTX 5090, decode and prefill @ 8k, prefetch accuracy 0 (design doc §8.6)
 
 /** The design doc's 990 PRO numbers: QD1 latency rounded to 45 µs (the preset carries 1/22,000 s = 45.45 µs). */
 const SSD_45US: NvmeSpec = { ...NVME_990_PRO_2TB, randomReadLatencySec: 45e-6 };
@@ -152,22 +190,21 @@ function hf(repo: string): Pick<SimInput, 'model' | 'quant'> {
   return { model: mapped.model, quant: mapped.quant.quant };
 }
 
-function tables(repo: string, lookupTables: OffloadConfig['lookupTables'] | undefined, overlap: SimOptions['offloadOverlap'] = 'none'): SimResult {
+function tables(repo: string, lookupTables: OffloadConfig['lookupTables'] | undefined, prefetch: Prefetch = 'none'): SimResult {
   const input: SimInput = {
     ...hf(repo),
     parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
     workload: { batch: 1, promptLen: 8192, decodeContextLen: 8192 },
     hardware: { ...GPU, host: { ssd: SSD_45US } },
-    options: { offloadOverlap: overlap },
   };
-  if (lookupTables !== undefined) input.deployment = { offload: { lookupTables } };
+  if (lookupTables !== undefined) input.deployment = { offload: { prefetchAccuracy: prefetchAccuracy(prefetch), lookupTables } };
   return simulate(input);
 }
 
 const PLE = 'Qwen/Qwen3.8-Flash-Next';
 const ENGRAM = 'deepseek-ai/DeepSeek-V4.1-Flash';
 
-describe('W3/W4 n-gram tables off-device (fixtures, repo quant, RTX 5090, b 1, @8k, offloadOverlap none)', () => {
+describe('W3/W4 n-gram tables off-device (fixtures, repo quant, RTX 5090, b 1, @8k, prefetch accuracy 0)', () => {
   // [repo, tier, phase, transfer sec (all tables), tok/s @ 8k]
   const rows = [
     // PLE: one table, R = 16 (decode) / 131,072 (prefill) reads of 320 B.
@@ -191,10 +228,11 @@ describe('W3/W4 n-gram tables off-device (fixtures, repo quant, RTX 5090, b 1, @
     });
   }
 
-  it("'ideal' leaves every rate at the baseline: the gathers hide behind compute", () => {
+  it('p 1 and the default p (q = 1 for table rows) leave every rate at the baseline: the gathers hide behind compute', () => {
     for (const repo of [PLE, ENGRAM]) {
       const base = tables(repo, undefined);
       const r = tables(repo, { tier: 'host_ram' }, 'ideal');
+      expect(tables(repo, { tier: 'host_ram' }, DEFAULT_PREFETCH_ACCURACY)).toEqual(r);
       expect(r.decode.cycleSec).toBe(base.decode.cycleSec);
       expect(r.prefill.cycleSec).toBe(base.prefill.cycleSec);
     }

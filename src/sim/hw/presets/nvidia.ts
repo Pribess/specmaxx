@@ -7,6 +7,7 @@ import type { MathFormat } from '../../ir/dtype';
 import type { DeviceSpec, GemmTiling, MatmulPeak, SourceRef } from '../types';
 import type { UnlockAxis } from '../unlocks';
 import { gbPerSec, gb, tflops } from '../units';
+import { GEFORCE_NO_GPUDIRECT_SOURCES } from './gpudirect';
 
 /** NVIDIA RTX Blackwell GPU Architecture whitepaper (Appendix A, Table 3: GeForce RTX 5090 specs, pp. 46–48). */
 const RTX_BLACKWELL_WHITEPAPER_URL =
@@ -138,7 +139,9 @@ export const RTX_5090: DeviceSpec = {
   l2Bytes: 98304 * 1024,
   // PCIe 5.0 x16 edge connector (Table 3 "PCI Express Interface Gen 5"; x16 per TechPowerUp).
   hostInterface: { generation: 5, lanes: 16 },
+  gpuDirectRdma: false,
   sources: [
+    ...GEFORCE_NO_GPUDIRECT_SOURCES,
     RTX_5090_WHITEPAPER,
     {
       url: RTX_BLACKWELL_WHITEPAPER_URL,
@@ -299,7 +302,9 @@ export const RTX_3090: DeviceSpec = {
   l2Bytes: 6144 * 1024,
   // PCIe 4.0 x16 host interface (GA102 whitepaper p. 9, "PCIe Gen 4").
   hostInterface: { generation: 4, lanes: 16 },
+  gpuDirectRdma: false,
   sources: [
+    ...GEFORCE_NO_GPUDIRECT_SOURCES,
     {
       url: AMPERE_WHITEPAPER_URL,
       title: 'NVIDIA Ampere GA102 whitepaper, Appendix A Table 9 (pp. 44–45), Figure 2',
@@ -381,7 +386,9 @@ export const RTX_4090: DeviceSpec = {
   l2Bytes: 73728 * 1024,
   // PCIe 4.0 x16 edge connector (Ada Table 2 "PCI Express Interface Gen 4"; x16 per TechPowerUp).
   hostInterface: { generation: 4, lanes: 16 },
+  gpuDirectRdma: false,
   sources: [
+    ...GEFORCE_NO_GPUDIRECT_SOURCES,
     {
       url: ADA_WHITEPAPER_URL,
       title: 'NVIDIA Ada Lovelace whitepaper, Appendix A Table 2 (pp. 29–31), Figure 1',

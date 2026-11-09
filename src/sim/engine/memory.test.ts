@@ -102,17 +102,18 @@ describe('stage weights', () => {
 describe('U-6 memory with routed experts offloaded (TINY_HYBRID on one RTX 5090, host RAM)', () => {
   // W_expert = 3·256·128·2 B = 196,608 B; 8 experts × 4 MoE layers = 6,291,456 B of routed experts per device.
   const W_EXPERT = 196_608;
-  const run = (f: number | undefined, offloadOverlap: 'ideal' | 'none' = 'ideal') => {
+  const run = (f: number | undefined, prefetch: 'ideal' | 'none' = 'ideal') => {
     const r: SimInput = {
       model: TINY_HYBRID,
       quant: BF16,
       parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
       workload: { batch: 1, promptLen: 128, decodeContextLen: 256 },
       hardware: { device: RTX_5090, topology: singleDevice(RTX_5090) },
-      options: { offloadOverlap },
     };
     if (f !== undefined) {
-      r.deployment = { offload: { routedExperts: { tier: 'host_ram', residentFraction: f, hitRatio: { kind: 'uniform' } } } };
+      // 'ideal' = prefetch accuracy 1 (double-buffered staging), 'none' = 0 (single buffer).
+      const prefetchAccuracy = prefetch === 'ideal' ? 1 : 0;
+      r.deployment = { offload: { prefetchAccuracy, routedExperts: { tier: 'host_ram', residentFraction: f, hitRatio: { kind: 'uniform' } } } };
     }
     return simulate(r);
   };
@@ -181,6 +182,7 @@ describe('dense layers offloaded and unified memory', () => {
         source: 'host_ram',
         reads: [{ count: 1, bytesEach: W_LAYER }],
         usefulBytes: W_LAYER,
+        prefetchedFraction: 1,
       });
       expect(phase.stages[0].layers.find((l) => l.layerIndex === 0)?.ops.some((o) => o.op.kind === 'transfer')).toBe(false);
     }

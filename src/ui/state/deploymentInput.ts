@@ -207,7 +207,11 @@ export function deploymentConfig(
       out.denseLayers !== undefined ||
       out.lookupTables !== undefined;
     if (placed)
-      offload = { ...out, ...(o.queueDepth !== undefined ? { queueDepth: o.queueDepth } : {}) };
+      offload = {
+        ...out,
+        ...(o.queueDepth !== undefined ? { queueDepth: o.queueDepth } : {}),
+        ...(o.prefetchAccuracy !== undefined ? { prefetchAccuracy: o.prefetchAccuracy } : {}),
+      };
   }
 
   let speculative: SpecDecodeConfig | undefined;

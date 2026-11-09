@@ -72,7 +72,10 @@ function draftContext(ctx: LoweringContext, qLen: number, kvLen: number): Loweri
   delete draftCtx.offload;
   if (experts !== undefined && experts.includeDraft) {
     // Formula: draft expert range = [0, ∞) (every drafter MoE layer is offloaded with includeDraft)
-    draftCtx.offload = { routedExperts: { ...experts, layers: { from: 0, to: Infinity } } };
+    draftCtx.offload = {
+      prefetchAccuracy: ctx.offload?.prefetchAccuracy ?? 0,
+      routedExperts: { ...experts, layers: { from: 0, to: Infinity } },
+    };
   }
   return draftCtx;
 }

@@ -1,6 +1,7 @@
 /**
- * Alpha-beta collective costs: flat (one link level), hierarchical (intra-node + inter-node), and host-bounce
- * links (GeForce without P2P). Each cost is split into latency (α) terms, which stay on the dependency chain,
+ * Alpha-beta collective costs: flat (one link level), hierarchical (intra-node + inter-node), host-bounce
+ * links (GeForce without P2P), and inter-node host staging (a dedicated-memory GPU without a GPUDirect path, e.g.
+ * any GPU over TCP; `staging.ts`). Each cost is split into latency (α) terms, which stay on the dependency chain,
  * and bandwidth (β) terms, which may overlap with compute.
  * See docs/simulation-model.md §6 ("Collectives").
  *
@@ -19,6 +20,7 @@
 import type { CollectiveOp } from '../ir/ops';
 import type { FabricShape, LinkSpec } from '../hw/types';
 import { fabricCollectiveTime } from './fabricCollectives';
+import type { HostStaging } from './staging';
 
 /** The kinds of collective (same as `CollectiveOp.collective`). */
 export type CollectiveKind = CollectiveOp['collective'];
@@ -38,7 +40,7 @@ export interface CollectiveTime {
   algorithm: 'ring' | 'tree' | 'direct' | 'hierarchical' | 'none';
 }
 
-/** The α and β parameters one link level offers to a collective, after host-bounce effects. */
+/** The α and β parameters one link level offers to a collective, after host-bounce and host-staging effects. */
 export interface EffectiveLink {
   /** Effective per-device, per-direction bandwidth B_eff. Unit: B/s. */
   bandwidthBytesPerSec: number;
@@ -73,6 +75,11 @@ export type CollectivePath =
       sendHops?: number;
       /** Concurrent send/recv ranks sharing one host: min(devicesPerNode, tp·dp). Count; absent = 1. */
       sendActiveDevices?: number;
+      /**
+       * Inter-node host staging of this path (`staging.ts`); absent = none (intra-node paths, unified memory, a
+       * GPUDirect pair, and every path before staging was modelled). Only on `level: 'inter'`.
+       */
+      interStaging?: HostStaging;
     }
   | {
       kind: 'hierarchical';
@@ -85,6 +92,8 @@ export type CollectivePath =
        * hierarchical (they need one device per node).
        */
       interFabric?: { kind: 'switched'; oversubscription: number };
+      /** Host staging of the inter-node phase (`staging.ts`); absent = none. The intra-node phase never stages. */
+      interStaging?: HostStaging;
     };
 
 /** A zero cost (group of one). */
@@ -100,12 +109,26 @@ function time(
 }
 
 /**
- * α and β of `link` when `activeDevices` devices of a node transfer at once. A `'direct'` link is unchanged.
+ * α and β of `link` when `activeDevices` devices of a node transfer at once, then host staging if `staging` is given.
+ * A `'direct'` link is unchanged.
  * A `'host_bounce'` link stages every byte through host memory (written once, read once), so the host memory
  * bandwidth is shared by 2 · activeDevices streams, and each message pays the host copy latency.
  * `activeDevices` = group size for collectives; PP send/recv uses min(devicesPerNode, tp·dp).
+ * `staging` (inter-node paths only) applies {@link stagedLink} with m = `stepMessageBytes`, the bytes of one
+ * algorithm step's message (S/n for the collectives, S for send/recv). Absent ⇒ exactly the result without staging.
  */
-export function effectiveLink(link: LinkSpec, activeDevices: number): EffectiveLink {
+export function effectiveLink(
+  link: LinkSpec,
+  activeDevices: number,
+  staging?: HostStaging,
+  stepMessageBytes = 0,
+): EffectiveLink {
+  const unstaged = hostBounceLink(link, activeDevices);
+  return staging === undefined ? unstaged : stagedLink(unstaged, staging, stepMessageBytes);
+}
+
+/** α and β of `link` after host-bounce effects only (the part of {@link effectiveLink} before staging). */
+function hostBounceLink(link: LinkSpec, activeDevices: number): EffectiveLink {
   if (link.p2p === 'direct' || link.hostBounce === undefined) {
     return {
       bandwidthBytesPerSec: link.bandwidthPerDirectionBytesPerSec,
@@ -120,6 +143,83 @@ export function effectiveLink(link: LinkSpec, activeDevices: number): EffectiveL
     hostShareBytesPerSec,
   );
   const latencySec = link.latencySec + link.hostBounce.extraLatencySec;
+  return { bandwidthBytesPerSec, latencySec };
+}
+
+/**
+ * The bandwidth host staging allows one device, per direction: min(B_pcie, B_host / (4·n_stg)). Each staged byte
+ * crosses the device's PCIe link once per end, and host DRAM 4 times per device pair (sender: GPU write + NIC read;
+ * receiver: NIC write + GPU read), shared by the n_stg devices of the node that stage at once. Unit: B/s.
+ */
+export function stagingBandwidthCapBytesPerSec(staging: HostStaging): number {
+  // Formula: B_stg = min(B_pcie, B_host / (4·n_stg))
+  // See docs/simulation-model.md §6 ("Inter-node host staging")
+  const hostShareBytesPerSec = staging.hostMemBandwidthBytesPerSec / (4 * staging.activeDevicesPerNode);
+  return Math.min(staging.hostLinkBandwidthBytesPerSec, hostShareBytesPerSec);
+}
+
+/**
+ * The per-device rates of the three stages of one staged message, and the joint host-memory cap, for
+ * {@link stagedLink}. In a collective every node sends and receives at once, so each stage's host-DRAM traffic is
+ * counted for both directions on each node:
+ * - r_copy: GPU ↔ pinned host buffer over PCIe (copy-out at the sender, copy-in at the receiver): one DRAM access per
+ *   byte per device, r_copy = min(B_pcie, B_host/n_stg);
+ * - r_net: the wire: NIC read at the sender + NIC write at the receiver, two DRAM accesses per byte per device,
+ *   r_net = min(B, B_host/(2·n_stg));
+ * - B_hostjoint: all stages running at once (steady state of the pipeline): four accesses, B_host/(4·n_stg).
+ * All in B/s, per device, per direction.
+ */
+export interface StagedStageRates {
+  /** r_copy: one PCIe copy stage (sender copy-out, receiver copy-in). Unit: B/s. */
+  copyBytesPerSec: number;
+  /** r_net: the wire stage. Unit: B/s. */
+  netBytesPerSec: number;
+  /** B_host/(4·n_stg): the DRAM cap when every stage runs at once (pipelined steady state). Unit: B/s. */
+  hostJointBytesPerSec: number;
+}
+
+/** {@link StagedStageRates} of a staged path whose unstaged network rate is `netBytesPerSec` (B, B/s). */
+export function stagedStageRates(netBytesPerSec: number, staging: HostStaging): StagedStageRates {
+  // Formula: r_copy = min(B_pcie, B_host/n_stg);  r_net = min(B, B_host/(2·n_stg));  B_hj = B_host/(4·n_stg)
+  // See docs/simulation-model.md §6 ("Inter-node host staging")
+  const n = staging.activeDevicesPerNode;
+  const hostBytesPerSec = staging.hostMemBandwidthBytesPerSec;
+  return {
+    copyBytesPerSec: Math.min(staging.hostLinkBandwidthBytesPerSec, hostBytesPerSec / n),
+    netBytesPerSec: Math.min(netBytesPerSec, hostBytesPerSec / (2 * n)),
+    hostJointBytesPerSec: hostBytesPerSec / (4 * n),
+  };
+}
+
+/**
+ * An inter-node link level `unstaged` with host staging applied. Every message is copied GPU → pinned host buffer at
+ * the sender (rate r_copy), sent (r_net) and copied host buffer → GPU at the receiver (r_copy), in steps of
+ * s = min(m, c) bytes (c = `staging.stepBytes`), the three stages pipelined over the k = m/s steps
+ * ({@link stagedStageRates}).
+ *
+ * A pipeline of stages with per-step times s/r_i, k steps, and steady-state period s/B_eff takes
+ * Σ_i s/r_i + (k − 1)·s/B_eff = m/B_eff + (Σ_i s/r_i − s/B_eff):
+ * - B_eff = min(r_copy, r_net, B_hostjoint) = min(B, B_pcie, B_host/(4·n_stg)) is the steady-state rate (β);
+ * - the fill/drain Σ_i s/r_i − s/B_eff is one step through every stage except the one that sets B_eff, so nothing
+ *   is counted twice when PCIe (or host memory) rather than the NIC binds. It is ≥ 0 because Σ_i 1/r_i ≥ 1/B_eff.
+ * - m ≤ c (k = 1): exactly the serial sum m/r_copy + m/r_net + m/r_copy.
+ * The fill is serial with the step chain, so it joins α; β stays m/B_eff, which the collective formulas apply.
+ * `stepMessageBytes` = m (bytes); returns B_eff (B/s) and α_eff (seconds).
+ */
+export function stagedLink(unstaged: EffectiveLink, staging: HostStaging, stepMessageBytes: number): EffectiveLink {
+  // Formula: B_eff = min(r_copy, r_net, B_host/(4·n_stg))
+  //          s = min(m, c)
+  //          α_eff = α + 2·α_pcie + (2·s/r_copy + s/r_net − s/B_eff)
+  // 2·α_pcie = α_stage: one PCIe write + flag at the sender, one PCIe poll + read at the receiver.
+  // See docs/simulation-model.md §6 ("Inter-node host staging")
+  const rates = stagedStageRates(unstaged.bandwidthBytesPerSec, staging);
+  const bandwidthBytesPerSec = Math.min(rates.copyBytesPerSec, rates.netBytesPerSec, rates.hostJointBytesPerSec);
+  const stageLatencySec = 2 * staging.hostLinkLatencySec;
+  const stepBytes = Math.min(stepMessageBytes, staging.stepBytes);
+  const oneStepThroughAllSec =
+    (2 * stepBytes) / rates.copyBytesPerSec + stepBytes / rates.netBytesPerSec;
+  const fillSec = oneStepThroughAllSec - stepBytes / bandwidthBytesPerSec;
+  const latencySec = unstaged.latencySec + stageLatencySec + fillSec;
   return { bandwidthBytesPerSec, latencySec };
 }
 
@@ -151,16 +251,21 @@ export function treeAllReduceSec(
   return time(latencySec, bandwidthSec, 'tree');
 }
 
-/** Flat all-reduce with the chosen algorithm (`'best'` = the faster of ring and tree; a tie keeps ring). */
+/**
+ * Flat all-reduce with the chosen algorithm (`'best'` = the faster of ring and tree; a tie keeps ring). `treeLink`
+ * (default `link`) is the link the tree runs on when it differs from the ring's: on a host-staged path the per-step
+ * message differs (ring S/n, tree S), so each algorithm gets its own staged α before the comparison.
+ */
 export function allReduceSec(
   messageBytes: number,
   n: number,
   link: EffectiveLink,
   algorithm: AllReduceAlgorithm,
+  treeLink: EffectiveLink = link,
 ): CollectiveTime {
   if (n <= 1) return NO_TIME;
   const ring = ringAllReduceSec(messageBytes, n, link);
-  const tree = treeAllReduceSec(messageBytes, n, link);
+  const tree = treeAllReduceSec(messageBytes, n, treeLink);
   switch (algorithm) {
     case 'ring':
       return ring;
@@ -240,11 +345,12 @@ export function hierarchicalAllReduceSec(
   intra: EffectiveLink,
   inter: EffectiveLink,
   algorithm: AllReduceAlgorithm,
+  interTree: EffectiveLink = inter,
 ): CollectiveTime {
   // Formula: t = RS_intra(S, n1) + AR_inter(S/n1, n2) + AG_intra(S, n1)
   // See docs/simulation-model.md §6 ("Hierarchical collectives")
   const reduceScatterIntra = ringReduceScatterSec(messageBytes, n1, intra);
-  const allReduceInter = allReduceSec(messageBytes / n1, n2, inter, algorithm);
+  const allReduceInter = allReduceSec(messageBytes / n1, n2, inter, algorithm, interTree);
   const allGatherIntra = ringAllGatherSec(messageBytes, n1, intra);
   return sumPhases([reduceScatterIntra, allReduceInter, allGatherIntra]);
 }
@@ -309,6 +415,10 @@ export function hierarchicalAllToAllSec(
  * `algorithm` selects the all-reduce algorithm (flat, and the inter-node phase of hierarchical). A flat path with a
  * `fabric` is costed by `fabricCollectiveTime` (docs §6 "Fabric shapes"); a hierarchical path with an
  * oversubscribed `interFabric` runs the formulas below with the inter-node bandwidth divided by the oversubscription.
+ * An `interStaging` (inter-node host staging, docs §6 "Inter-node host staging") applies {@link stagedLink} to the
+ * inter-node level with the message one step of each algorithm really moves, before ring and tree are compared:
+ * ring all-reduce, all-gather, reduce-scatter and all-to-all S/n; tree all-reduce S; send/recv S; the hierarchical
+ * inter phase S/n (ring, = (S/n1)/n2) or S/n1 (tree). Staging is not host bounce: an all-to-all keeps one α.
  */
 export function collectiveTime(
   kind: CollectiveKind,
@@ -318,6 +428,8 @@ export function collectiveTime(
   algorithm: AllReduceAlgorithm,
 ): CollectiveTime {
   if (path.kind === 'none') return NO_TIME;
+  // Formula: m_ring = S/n (one ring step's or one peer's share);  m_tree = S;  m_send = S
+  const ringStepBytes = messageBytes / groupSize;
   if (path.kind === 'flat') {
     if (path.fabric !== undefined) {
       return fabricCollectiveTime(
@@ -329,15 +441,16 @@ export function collectiveTime(
         algorithm,
         path.sendHops,
         path.sendActiveDevices,
+        path.interStaging,
       );
     }
-    const link = effectiveLink(
-      path.link,
-      kind === 'send_recv' ? (path.sendActiveDevices ?? 1) : groupSize,
-    );
+    const activeDevices = kind === 'send_recv' ? (path.sendActiveDevices ?? 1) : groupSize;
+    const linkFor = (stepMessageBytes: number): EffectiveLink =>
+      effectiveLink(path.link, activeDevices, path.interStaging, stepMessageBytes);
+    const link = linkFor(kind === 'send_recv' ? messageBytes : ringStepBytes);
     switch (kind) {
       case 'all_reduce':
-        return allReduceSec(messageBytes, groupSize, link, algorithm);
+        return allReduceSec(messageBytes, groupSize, link, algorithm, linkFor(messageBytes));
       case 'all_gather':
         return ringAllGatherSec(messageBytes, groupSize, link);
       case 'reduce_scatter':
@@ -365,16 +478,23 @@ export function collectiveTime(
   const intra = effectiveLink(path.intra, n1);
   const interLink = effectiveLink(path.inter, n1);
   // Formula: B_inter = B_eff / o  (oversubscribed switch between nodes; o absent = 1 keeps the link untouched)
-  const inter: EffectiveLink =
+  const switchedInter: EffectiveLink =
     path.interFabric === undefined
       ? interLink
       : {
           ...interLink,
           bandwidthBytesPerSec: interLink.bandwidthBytesPerSec / path.interFabric.oversubscription,
         };
+  // Staging applies after the switch: its PCIe and host-DRAM caps are the device's own, not shared by o.
+  const interFor = (stepMessageBytes: number): EffectiveLink =>
+    path.interStaging === undefined
+      ? switchedInter
+      : stagedLink(switchedInter, path.interStaging, stepMessageBytes);
+  const inter = interFor(ringStepBytes);
   switch (kind) {
     case 'all_reduce':
-      return hierarchicalAllReduceSec(messageBytes, n1, n2, intra, inter, algorithm);
+      // Formula: inter-phase tree step m = S/n1 (the whole node shard)
+      return hierarchicalAllReduceSec(messageBytes, n1, n2, intra, inter, algorithm, interFor(messageBytes / n1));
     case 'all_gather':
       return hierarchicalAllGatherSec(messageBytes, n1, n2, intra, inter);
     case 'reduce_scatter':

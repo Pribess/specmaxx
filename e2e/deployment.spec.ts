@@ -89,8 +89,8 @@ test('every deployment and host URL key loads, stays canonical and survives a re
   await mockHf(page);
   // Every new key with a non-default value, in the codec's canonical order (url.ts).
   const query =
-    'm=Qwen/Qwen3.8-Flash-Next&hr=ddr5-6400-8ch&hrc=512&ssd=nvme-t705-2tb&hl=4x8&oo=none' +
-    '&ox=ssd&oxl=3&oxf=0.25&oxh=fine&odl=40&odt=ssd&olt=ram&ols=interleaved&oqd=32' +
+    'm=Qwen/Qwen3.8-Flash-Next&hr=ddr5-6400-8ch&hrc=512&ssd=nvme-t705-2tb&hl=4x8' +
+    '&ox=ssd&oxl=3&oxf=0.25&oxh=fine&odl=40&odt=ssd&olt=ram&ols=interleaved&oqd=32&opf=0' +
     '&sd=dflash2&sdr=hyp&sdk=5&sdu=code';
   await page.goto(`/?${query}`);
   await expect(page.getByTestId('decode-tps')).toHaveText(/[1-9]/);
@@ -110,4 +110,17 @@ test('every deployment and host URL key loads, stays canonical and survives a re
   await expect(page.getByRole('combobox', { name: 'Use case', exact: true })).toHaveText('Custom');
   await expect(page.getByLabel('Acceptance α', { exact: true })).toHaveValue('0.8');
   expect(errors).toEqual([]);
+});
+
+test('a legacy offload-overlap URL is rewritten to the equivalent prefetch accuracy', async ({
+  page,
+}) => {
+  await mockHf(page);
+  await page.goto('/?m=Qwen/Qwen3.8-Flash-Next&oo=none&ox=ram');
+  await expect(page.getByTestId('decode-tps')).toHaveText(/[1-9]/);
+  await expect(page.getByText('Ignored invalid URL values')).toHaveCount(0);
+  await page.waitForTimeout(400);
+  expect(new URL(page.url()).search).toBe('?m=Qwen/Qwen3.8-Flash-Next&ox=ram&opf=0');
+  await page.getByTestId('offload-section').getByText('Advanced', { exact: true }).click();
+  await expect(page.getByLabel('Prefetch accuracy %', { exact: true })).toHaveValue('0');
 });

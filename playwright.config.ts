@@ -23,7 +23,7 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
   },
   projects: [
-    { name: 'smoke', testMatch: /(smoke|fabric|deployment|layout)\.spec\.ts/ },
+    { name: 'smoke', testMatch: /(smoke|fabric|deployment|layout|help)\.spec\.ts/ },
     { name: 'screenshots', testMatch: /screenshots\.spec\.ts/ },
     { name: 'redesign', testMatch: /redesign\.spec\.ts/ },
   ],
