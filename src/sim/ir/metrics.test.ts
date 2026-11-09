@@ -281,6 +281,46 @@ describe('T2e recurrent GatedDeltaNet (vH 8, qkH 4, dk = dv = 64, fp32 state)', 
   });
 });
 
+describe('recurrent Mamba2 (Nemotron-3.5-Lightning layer, tp 1: H 64, G 8, N 128, P 64, fp32 state)', () => {
+  const step: RecurrentOp = {
+    kind: 'recurrent',
+    name: 'lin.recurrent',
+    variant: 'mamba2',
+    seqs: 1,
+    qLen: 1,
+    heads: 64,
+    qkHeads: 8,
+    keyDim: 128,
+    valueDim: 64,
+    mode: 'step',
+    chunkLen: 1,
+    stateFlopsPerElemPerToken: 5,
+    gateElemsPerTokenPerHead: 2,
+    hasPriorState: true,
+    stateDtype: 'fp32',
+    activationDtype: 'bf16',
+    math: 'bf16',
+    accumulate: 'fp32',
+  };
+  it('decode step: F = T·H·5·N·P; state 64·128·64·4 B read and written', () => {
+    expect(opFlops(step)).toBe(2_621_440); // 1·64·5·8192
+    const b = opBytes(step);
+    expect(b.stateReadBytes).toBe(2_097_152);
+    expect(b.stateWriteBytes).toBe(2_097_152);
+    // B, C 2·1·8·128·2 = 4096 + x 64·64·2 = 8192 + gates 64·2·2 = 256
+    expect(b.activationReadBytes).toBe(12_544);
+    expect(b.activationWriteBytes).toBe(8192); // y 64·64·2
+  });
+  it('prefill chunked SSD: C·Bᵀ once per group, F = T·(H·4·N·P + (Q+1)·(G·N + H·P))', () => {
+    const op: RecurrentOp = { ...step, qLen: 4096, mode: 'chunked', chunkLen: 128, stateFlopsPerElemPerToken: 4, hasPriorState: false };
+    // 4096·(64·4·8192 + 129·(8·128 + 64·64)) = 4096·(2,097,152 + 660,480) = 4096·2,757,632
+    expect(opFlops(op)).toBe(11_295_260_672);
+    // The per-head form of the other variants would count C·Bᵀ for all 64 heads: 4096·64·(4·8192 + 129·192)
+    expect(opFlops({ ...op, variant: 'gated_delta_net' })).toBe(15_082_717_184);
+    expect(opBytes(op).stateReadBytes).toBe(0);
+  });
+});
+
 describe('deployment fields (design doc §7.1): defaults reproduce today, overrides scale only their term', () => {
   const attention: AttentionOp = {
     kind: 'attention',

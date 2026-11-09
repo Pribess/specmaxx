@@ -51,3 +51,12 @@ Copied from the research of the HF-loader task (base repos only; quantized repos
 | `thinkingmachines/Inkling-Small` | config, api | `inkling_mm_model`; `text_config` without `model_type` |
 | `MiniMaxAI/MiniMax-M3` | config, api | `minimax_m3_vl`; `text_config` without `model_type` |
 | `MiniMaxAI/MiniMax-M3.1-Flash` | config, api | sibling (all layers sparse); `mxfp8` with `U8` storage, so the param check says `packed` |
+| `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16` | config, api | `nemotron_h`, flat; `layers_block_type` (Mamba-2 / MoE / attention); `safetensors.total` leaves out MTP (per-dtype sum includes it) |
+| `nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4` | config (trimmed), api | `nemotron_h_omni` with `llm_config`; latent MoE; `modelopt_mixed` (FP8 + NVFP4), `U8` storage so `packed` |
+
+The Super-VL config.json (8.6 MB as fetched) is trimmed to ~85 KB: from `quantization_config.quantized_layers`
+and from each `config_groups.*.targets`, the entries naming routed experts 2 and up (`.mixer.experts.<n>.`, n ≥ 2)
+are removed; experts 0–1 of every MoE layer and every other entry are kept, and the model fields (including
+`time_step_limit`'s `{"__float__": "Infinity"}`) are verbatim. `quantization_config._fixture_note` says so. The
+quant defaults derived from the trimmed and the full file were checked equal once. The `siblings` of both Nemotron
+`api` fixtures are kept, filtered as above.

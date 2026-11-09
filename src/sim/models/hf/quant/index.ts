@@ -4,8 +4,9 @@
  * Source, first found wins:
  * 1. `params.json` `quantization_config` (Mistral consolidated exports; the repo has no config.json of its own,
  *    so config.json's block would be the base model's);
- * 2. config.json `quantization_config` (top level, else `text_config`), dispatched on `quant_method`;
- *    one without `quant_method` but with `bits` + `group_size` is MLX;
+ * 2. config.json `quantization_config` (top level, else `text_config` / `llm_config`), dispatched on
+ *    `quant_method` (`modelopt` and `modelopt_mixed` are ModelOpt); one without `quant_method` but with `bits` +
+ *    `group_size` is MLX;
  * 3. `hf_quant_config.json` (ModelOpt);
  * 4. `quantization_config.json`;
  * 5. the MLX `quantization` key;
@@ -25,7 +26,7 @@ import { readCompressedTensors } from './compressedTensors';
 import { mistralCacheFlags, readFp8, readMistralParamsQuantization } from './fp8';
 import { readAutoRound, readAwq, readGptq } from './gptq';
 import { readMlx } from './mlx';
-import { isModeloptFp8, readModelopt } from './modelopt';
+import { isModeloptFp8, readModelopt, readModeloptMixed } from './modelopt';
 import { buildProbes } from './moduleClass';
 import { readQuark } from './quark';
 import { assemble } from './assemble';
@@ -70,6 +71,8 @@ function readByMethod(
     }
     case 'modelopt':
       return readModelopt(qc, ctx, { source });
+    case 'modelopt_mixed':
+      return readModeloptMixed(qc, ctx, { source });
     case 'compressed-tensors':
       return readCompressedTensors(qc, ctx, source);
     case 'quark':

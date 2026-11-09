@@ -406,6 +406,10 @@ export interface LinearAttentionBlock {
   /**
    * Recurrence variant. `'kda'` (Kimi Delta Attention, GLM-5.3-Flash): separate full q/k/v projections with their
    * own convs, a per-channel forget gate and an output gate, both low-rank (`gateRank`), and a β projection.
+   * `'mamba2'` (Mamba-2 SSD, Nemotron-H): one fused in_proj `h → (z, x, B, C, dt)` with ONE dt per head (not two
+   * gates); per-head vectors A_log, D and dt_bias (3 per head); the conv runs over x, B and C; the output norm is a
+   * grouped RMSNorm after `y·silu(z)` with γ over all `vHeads·valueDim` channels; in the chunked form C·Bᵀ is
+   * computed once per B/C group, not per head (docs §5 "Mamba-2").
    */
   variant: 'gated_delta_net' | 'kda' | 'mamba2' | 'linear';
   /** Input/output width (the residual stream). Unit: elements. */
@@ -418,8 +422,19 @@ export interface LinearAttentionBlock {
   keyDim: number;
   /** State value dimension dv (Mamba2: head dim). Unit: elements. */
   valueDim: number;
-  /** Causal depthwise conv width over the q, k, v channels; 0 = no conv. Unit: tokens (taps). */
+  /** Causal depthwise conv width over the q, k, v channels (Mamba2: x, B, C); 0 = no conv. Unit: tokens (taps). */
   convKernel: number;
+  /**
+   * True if the conv1d has a bias of one element per conv channel `C = 2·qkHeads·keyDim + vHeads·valueDim`
+   * (Mamba2 `use_conv_bias`). Default false. Unit: none (flag).
+   */
+  convBias?: boolean;
+  /**
+   * Chunk length Q of the chunked (prefill) form (Mamba2 `chunk_size`, 128 for Nemotron-H); default
+   * `RECURRENT_CHUNK_TOKENS` (64, lower/linearAttention.ts). A step uses `min(chunkTokens, qLen)`. Must be a positive
+   * integer. Unit: tokens.
+   */
+  chunkTokens?: number;
   /** True if the output passes a z-gate (gated rmsnorm) before the output projection. Must be true for `'kda'`. */
   outputGate: boolean;
   /**
@@ -440,13 +455,16 @@ export interface MlpBlock {
   intermediate: number;
   /** True for GLU-style (gate and up projections, e.g. SwiGLU). */
   gated: boolean;
-  /** Activation function. */
-  activation: 'silu' | 'gelu' | 'relu';
+  /** Activation function (`relu2`: `relu(x)²`, ungated only). */
+  activation: 'silu' | 'gelu' | 'relu' | 'relu2';
   /** True if the projections have biases. */
   bias: boolean;
 }
 
-/** Mixture-of-experts feed-forward block with a top-k router and optional always-on shared experts. */
+/**
+ * Mixture-of-experts feed-forward block with a top-k router and optional always-on shared experts. With
+ * `latentDim` set it is a latent MoE: the routed experts run at a narrower width l than the residual h.
+ */
 export interface MoeBlock {
   kind: 'moe';
   /** Display name, e.g. `'moe'`. */
@@ -461,12 +479,20 @@ export interface MoeBlock {
   expertIntermediate: number;
   /** True for GLU-style experts. */
   gated: boolean;
-  /** Expert activation function. */
-  activation: 'silu' | 'gelu' | 'relu';
+  /** Expert activation function (`relu2`: `relu(x)²`, ungated only, e.g. Nemotron-H experts). */
+  activation: 'silu' | 'gelu' | 'relu' | 'relu2';
   /** Shared experts applied to every token (0 = none). Count. */
   sharedExperts: number;
   /** Intermediate width of EACH shared expert. Unit: elements. */
   sharedIntermediate: number;
+  /**
+   * Width l the routed experts run at (latent MoE: Muse Spark `moe_hidden_size`, Nemotron `moe_latent_size`);
+   * absent = `hidden` with no projections. When set, a projection `h → l` runs before the expert dispatch and
+   * `l → h` after the combine (both module `'moe_latent'`, replicated across TP, never sharded); the routed experts'
+   * input/output width, the EP dispatch/combine messages and the combine are at l. The router reads h and the
+   * shared experts stay at h. Must be a positive integer. Unit: elements.
+   */
+  latentDim?: number;
 }
 
 /**
@@ -615,6 +641,11 @@ export type WeightModule =
   | 'shared_experts'
   /** MoE routed-expert projections. */
   | 'routed_experts'
+  /**
+   * Latent-MoE projections around the routed experts, `h → l` and `l → h` ({@link MoeBlock.latentDim}); no
+   * fallback (absent: `QuantConfig.weights`). (Nemotron NVFP4 keeps `fc1/fc2_latent_proj` BF16.)
+   */
+  | 'moe_latent'
   /** Hyper-connection projections; default `{ dtype: highPrecision }` (not `weights`), never structured-sparse. */
   | 'residual_mixer'
   /** n-gram / Engram projections (not the lookup table: see `QuantConfig.lookupTables`). */

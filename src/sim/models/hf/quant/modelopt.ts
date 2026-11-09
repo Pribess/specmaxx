@@ -1,5 +1,6 @@
 /**
- * NVIDIA ModelOpt exports: `quant_method: "modelopt"` in config.json, or `hf_quant_config.json`
+ * NVIDIA ModelOpt exports: `quant_method: "modelopt"` (or `"modelopt_mixed"`, {@link readModeloptMixed}) in
+ * config.json, or `hf_quant_config.json`
  * (`{ producer, quantization: { quant_algo, kv_cache_quant_algo, exclude_modules, quantized_layers } }`).
  * NVIDIA's DeepSeek-V4.1 NVFP4 says `quant_method: "fp8"` but is a ModelOpt export (`producer`, `quant_algo`,
  * `moe_quant_algo`, `quantized_layers`): it is read here, and the modules it leaves alone keep the native
@@ -163,5 +164,30 @@ export function readModelopt(q: JsonObject, ctx: SchemeContext, opts: ModeloptOp
     ...(kvCache ? { kvCache } : {}),
     ignoreLists: [{ label: 'ignore', patterns: ignoreRaw }],
     notes: [...notes, ...(base?.notes ?? [])],
+  };
+}
+
+/**
+ * Read a `quant_method: "modelopt_mixed"` config.json `quantization_config` (NVIDIA's Nemotron-3.5 NVFP4
+ * exports, ModelOpt 0.37). Schema:
+ * - `quant_algo: "MIXED_PRECISION"`;
+ * - `quantized_layers: { <module name>: { quant_algo, group_size? } }`: the authoritative per-module list (e.g.
+ *   `FP8` Mamba `in_proj` / `out_proj`, attention and `lm_head`; `NVFP4` g16 routed and shared experts);
+ *   modules not listed stay in the checkpoint dtype;
+ * - `ignore`: modules left unconverted (embeddings, router `gate`, `conv1d`, latent projections, MTP, towers);
+ * - `config_groups`: a compressed-tensors view of the same assignment (`targets` = module names, `weights` /
+ *   `input_activations` bit widths); not read when `quantized_layers` exists;
+ * - `kv_cache_scheme: { num_bits: 8, type: "float" }` → fp8_e4m3 KV cache;
+ * - `producer: { name: "modelopt", version }`.
+ * This is the same schema as a `quant_method: "modelopt"` MIXED_PRECISION export, so it delegates to
+ * {@link readModelopt}; a `quant_algo` other than MIXED_PRECISION is read the same way, with a note.
+ */
+export function readModeloptMixed(q: JsonObject, ctx: SchemeContext, opts: ModeloptOptions = {}): SchemeReading {
+  const r = readModelopt(q, ctx, opts);
+  const algo = strAt(q, 'quant_algo');
+  if (algo?.toUpperCase() === 'MIXED_PRECISION') return r;
+  return {
+    ...r,
+    notes: [`modelopt_mixed with quant_algo '${algo ?? 'none'}' (expected MIXED_PRECISION); read as ModelOpt`, ...r.notes],
   };
 }

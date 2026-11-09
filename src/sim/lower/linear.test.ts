@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { opFlops } from '../ir/metrics';
 import { blockResidentWeightBytes, blockSequenceStateBytes, lowerBlock, lowerModel, type LoweringContext } from './lower';
 import type { LinearAttentionBlock } from '../ir/model';
 import type { ElementwiseOp, GemmOp, Op, RecurrentOp } from '../ir/ops';
@@ -129,5 +130,82 @@ describe('value-head sharding (review P2: no replicated value heads)', () => {
     // The out_proj rows over both ranks add up to the logical vH·dv = 128 exactly once.
     const out = ops.find((o): o is GemmOp => o.kind === 'gemm' && o.name === 'lin.out_proj');
     expect((out?.k ?? 0) * 2).toBe(2 * 64);
+  });
+});
+
+describe('Mamba-2 (Nemotron-3.5-Lightning mixer: h 2688, G 8, H 64, N 128, P 64, K 4, conv bias, Q 128)', () => {
+  const mamba: LinearAttentionBlock = {
+    kind: 'linear_attention',
+    name: 'mixer',
+    variant: 'mamba2',
+    hidden: 2688,
+    qkHeads: 8,
+    vHeads: 64,
+    keyDim: 128,
+    valueDim: 64,
+    convKernel: 4,
+    convBias: true,
+    chunkTokens: 128,
+    outputGate: true,
+  };
+  const prefill = (qLen: number, tp = 1): LoweringContext => ({ ...ctx('prefill', tp), qLen, kvLen: qLen });
+  const gemm = (ops: Op[], name: string): GemmOp | undefined =>
+    ops.find((o): o is GemmOp => o.kind === 'gemm' && o.name === name);
+
+  it('decode, tp 1: in_proj has ONE dt per head, conv taps + bias, out-norm γ over H·P', () => {
+    const ops = lowerBlock(mamba, ctx('decode'));
+    const inProj = gemm(ops, 'lin.in_proj');
+    // n = 2·8·128 (B, C) + 64·64·2 (x, z) + 64 (dt) = 10,304
+    expect(inProj?.n).toBe(10_304);
+    expect(inProj?.outParts).toEqual([1024, 1024, 4096, 4096, 64]);
+    const conv = fnOf(ops, 'causal_conv1d');
+    // C = 2·8·128 + 64·64 = 6144; taps (6144·4 + 6144 bias)·2 B = 61,440
+    expect(conv?.elems).toBe(6144);
+    expect(conv?.weightBytes).toBe(61_440);
+    // grouped RMSNorm γ over H·P = 4096 channels · 2 B
+    expect(fnOf(ops, 'gated_rmsnorm')?.weightBytes).toBe(8192);
+    const rec = recurrentOf(ops);
+    expect([rec?.variant, rec?.mode, rec?.chunkLen, rec?.stateFlopsPerElemPerToken]).toEqual(['mamba2', 'step', 1, 5]);
+    expect([rec?.heads, rec?.qkHeads, rec?.keyDim, rec?.valueDim]).toEqual([64, 8, 128, 64]);
+    expect(rec === undefined ? 0 : opFlops(rec)).toBe(2_621_440); // 64·5·8192
+    expect(gemm(ops, 'lin.out_proj')?.k).toBe(4096);
+  });
+
+  it('prefill uses chunkTokens: Q = min(128, qLen); without it the default 64', () => {
+    const rec = recurrentOf(lowerBlock(mamba, prefill(4096)));
+    expect([rec?.mode, rec?.chunkLen, rec?.stateFlopsPerElemPerToken]).toEqual(['chunked', 128, 4]);
+    // 4096·(64·4·8192 + 129·(8·128 + 64·64))
+    expect(rec === undefined ? 0 : opFlops(rec)).toBe(11_295_260_672);
+    expect(recurrentOf(lowerBlock(mamba, prefill(100)))?.chunkLen).toBe(100);
+    const { chunkTokens: _q, ...noChunk } = mamba;
+    void _q;
+    expect(recurrentOf(lowerBlock(noChunk, prefill(4096)))?.chunkLen).toBe(64);
+  });
+
+  it('sequence state: 64·128·64·4 + 6144·3·2 = 2,134,016 B per layer, context-independent', () => {
+    expect(blockSequenceStateBytes(mamba, ctx('decode'), 1000)).toBe(2_134_016);
+    expect(blockSequenceStateBytes(mamba, ctx('decode'), 1_000_000)).toBe(2_134_016);
+  });
+
+  it('tp 8: vL 8, qkL 1, C 768', () => {
+    const ops = lowerBlock(mamba, ctx('decode', 8));
+    const rec = recurrentOf(ops);
+    expect([rec?.heads, rec?.qkHeads]).toEqual([8, 1]);
+    expect(fnOf(ops, 'causal_conv1d')?.elems).toBe(768); // 2·1·128 + 8·64
+    expect(gemm(ops, 'lin.in_proj')?.n).toBe(1288); // 256 + 8·64·2 + 8
+    expect(fnOf(ops, 'gated_rmsnorm')?.weightBytes).toBe(1024); // 8·64·2 B
+    // 8·8192·4 + 768·3·2
+    expect(blockSequenceStateBytes(mamba, ctx('decode', 8), 1000)).toBe(266_752);
+  });
+
+  it('params 38,742,208 (= headers); resident weights = params·2 B minus the 3·H unstreamed scalars', () => {
+    // in_proj 2688·10304 = 27,697,152 + conv 24,576 + bias 6,144 + A_log/D/dt_bias 192 + γ 4096 + out 11,010,048
+    expect(blockParams(mamba)).toBe(38_742_208);
+    expect(blockResidentWeightBytes(mamba, ctx('decode'))).toBe(38_742_208 * 2 - 3 * 64 * 2);
+  });
+
+  it('chunkTokens does not change a GDN block that leaves it unset', () => {
+    const gdn = TINY_HYBRID.layers[0].blocks[1];
+    expect(recurrentOf(lowerBlock(gdn, ctx('prefill')))?.chunkLen).toBe(64);
   });
 });

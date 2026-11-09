@@ -29,7 +29,8 @@ export const SHAPE_DEPENDENT_FNS: readonly ShapeDependentFn[] = ['causal_conv1d'
  * lowering ({@link SHAPE_DEPENDENT_FNS}): `causal_conv1d` 2·K, `hc_collapse` 2·N, `hc_expand` 2N+2 (mixing) or 2,
  * `sinkhorn` 4·iters per N×N element. `router_topk` is per logit. `ngram_gate` ≈ 8 (two norm statistics, a dot
  * product, a sigmoid and the fused add); `kv_pool` ≈ 4 (softmax weight, multiply, add); `kv_cache_write` 1 (the cast
- * of each stored K/V element into the cache format); `candidate_score` 2 (one multiply-add per rank element).
+ * of each stored K/V element into the cache format); `candidate_score` 2 (one multiply-add per rank element); `relu2`
+ * 2 (max, square).
  * Unit: FLOP/element. See docs/simulation-model.md §3 "Elementwise".
  */
 export const ELEMENTWISE_FLOPS_PER_ELEM: Record<Exclude<ElementwiseOp['fn'], ShapeDependentFn>, number> = {
@@ -44,6 +45,7 @@ export const ELEMENTWISE_FLOPS_PER_ELEM: Record<Exclude<ElementwiseOp['fn'], Sha
   gelu: 8,
   relu: 1,
   relu_mul: 2,
+  relu2: 2,
   sigmoid_mul: 5,
   gated_rmsnorm: 9,
   router_topk: 5,

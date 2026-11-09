@@ -224,7 +224,7 @@ export interface RecurrentOp {
   qLen: number;
   /** State (value) heads on this device. Count. */
   heads: number;
-  /** q/k heads on this device (Mamba2: B/C groups). Count. */
+  /** q/k heads on this device (Mamba2: B/C groups, over which the chunked form computes C·Bᵀ once each). Count. */
   qkHeads: number;
   /** State key dimension dk (Mamba2: d_state). Unit: elements. */
   keyDim: number;
@@ -232,7 +232,10 @@ export interface RecurrentOp {
   valueDim: number;
   /** `'chunked'`: prefill, chunk-parallel form (tensor-core friendly); `'step'`: decode, one recurrent update. */
   mode: 'chunked' | 'step';
-  /** Tokens per chunk in chunked mode (default 64); 1 in step mode. Unit: tokens. */
+  /**
+   * Tokens per chunk in chunked mode: `min(chunkTokens ?? 64, qLen)` (`LinearAttentionBlock.chunkTokens`); 1 in step
+   * mode. Unit: tokens.
+   */
   chunkLen: number;
   /**
    * FLOP per state element per token for the state terms (c_s in docs §3: chunked 4; step: gated_delta_net 7,
@@ -273,7 +276,8 @@ export interface ElementwiseOp {
   name: string;
   /**
    * Function computed; its FLOP-per-element approximation is in the docs §3 table (`ELEMENTWISE_FLOPS_PER_ELEM` in
-   * lower/common.ts). `silu` and `relu_mul` cover the ungated-SiLU and gated-ReLU MLPs. Hyper-connections:
+   * lower/common.ts). `silu`, `relu` and `relu_mul` cover the ungated-SiLU, ungated-ReLU and gated-ReLU MLPs; `relu2`
+   * is the ungated squared ReLU `relu(x)²` (Nemotron-H experts). Hyper-connections:
    * `hc_collapse` (N streams → 1), `hc_expand` (1 → N, with or without stream mixing), `sinkhorn` (per N×N matrix
    * element); `ngram_gate` (n-gram value gated against the stream); `kv_pool` (softmax-weighted pooling of tokens).
    * Speculative decoding (design doc §3.3–3.4): `kv_cache_write` (a write-only cache op: a block drafter's context
@@ -292,6 +296,7 @@ export interface ElementwiseOp {
     | 'gelu'
     | 'relu'
     | 'relu_mul'
+    | 'relu2'
     | 'sigmoid_mul'
     | 'gated_rmsnorm'
     | 'causal_conv1d'

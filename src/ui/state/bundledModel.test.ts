@@ -30,8 +30,10 @@ describe('model shortlist', () => {
       'GLM-5.3',
       'Mistral Large 4',
       'Minimax M3',
+      'Nemotron 3.5 Lightning',
+      'Nemotron 3.5 Super VL',
     ]);
-    expect(new Set(MODEL_SHORTLIST.map((m) => m.id)).size).toBe(8);
+    expect(new Set(MODEL_SHORTLIST.map((m) => m.id)).size).toBe(10);
     expect(MODEL_SHORTLIST.some((m) => m.id.startsWith('thinkingmachines/'))).toBe(false);
     expect(MODEL_SHORTLIST.some((m) => m.id === DEFAULT_MODEL_ID)).toBe(true);
   });

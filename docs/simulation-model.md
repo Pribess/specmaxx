@@ -75,6 +75,9 @@ pre-norm decoder layers from `MixerParams` + `FfnParams` (+ optional `residual`,
   lowered and pipeline-staged as part of it. `finalNorm: 'none'` (Qwen4Exp) has no final norm.
 - `ModelSpec.residualStreams` N (default 1): each token carries `N·hidden` residual elements; the PP activation
   send is `T·N·h·bpe(act)` (`lower.ts: lowerModel`).
+- `singleBlockLayer({ hidden, mixer } | { hidden, ffn })` builds a layer with ONE sublayer,
+  `norm → mixer|ffn → residual` (Nemotron-H, whose `hybrid_override_pattern` makes each layer a Mamba-2,
+  attention or MoE block).
 
 **Cross-layer sharing** names an earlier layer by index: `MlaAttentionBlock.kvCacheFromLayer` (Mistral Large 4:
 read another layer's latent; no `kv_a`, no cache), `CsaGlobalSpec.kvCacheFromLayer` (DeepSeek-V4.1: read a
@@ -101,6 +104,10 @@ New block kinds (lowered in `src/sim/lower/{csa,hyperConnection,ngram,shortConv}
 - New fields: `IndexerSpec.{keyPoolTokens, keyPoolGate, keyPoolOverlap, keyInputDim, ownsKeys, maxScoredKeys, headWeights}` (GLM
   k-pool, Qwen QSA, MiniMax MSA, DeepSeek CSA indexers); `GqaAttentionBlock.{relativeBias, kvConvKernel}`
   (Inkling); `LinearAttentionBlock.variant 'kda'` with `gateRank` (GLM-5.3-Flash Kimi Delta Attention).
+- Mamba-2 fields (Nemotron-H; §5 "Mamba-2"): `LinearAttentionBlock.convBias` (conv1d bias of C elements, default
+  false) and `chunkTokens` (chunk length Q of the chunked prefill form, default 64, any variant). Activation
+  `'relu2'` (`relu(x)²`, ungated only; `MlpBlock`, `MoeBlock`) for Nemotron-H's non-gated experts.
+  `modelSpecErrors` checks that `chunkTokens` is a positive integer and that `relu2` is ungated.
 
 **Lowering** (§5, `src/sim/lower/lower.ts: lowerModel`) turns spec + workload step + quantization +
 parallelism into the ops ONE device runs per stage, with concrete shapes and dtypes (§3).
@@ -134,7 +141,8 @@ parallelism into the ops ONE device runs per stage, with concrete shapes and dty
     and o_proj, CSA q path, window `wkv` and output), `attention_kv_down` (MLA `kv_a`, CSA compressor),
     `attention_kv_up` (MLA `kv_b` and its absorbed slices `q_absorb`, `v_absorb`), `linear_attention`, `indexer`
     (query `wq`/`wq_b`), `indexer_key` (`wk`, k-pool gate), `indexer_head_weights` (`weights_proj`), `dense_mlp`,
-    `shared_experts`, `routed_experts`, `residual_mixer`, `ngram`.
+    `shared_experts`, `routed_experts`, `moe_latent` (latent-MoE projections `h → l`, `l → h`; no parent),
+    `residual_mixer`, `ngram`.
   - Resolution (`WEIGHT_MODULE_FALLBACK`): an absent class uses its parent's entry if listed
     (`attention_kv_down`, `attention_kv_up` → `attention`; `indexer_key`, `indexer_head_weights` → `indexer`), else
     `{ weights }`; `residual_mixer` defaults to `{ dtype: highPrecision }`. This expresses e.g. GLM-5.3-Flash FP8
@@ -240,12 +248,18 @@ totals (unsharded), used to sanity-check mappers against published sizes.
   `h·coff·hd_I + p·coff·hd_I` + [headWeights] `h·H_I`, coff = 2 with `keyPoolOverlap`, else 1. A `'reuse'`
   selection has 0.
 - linear_attention: in_proj `h·(2·qkH·dk + vH·dv·(gate?2:1) + 2·vH)`, conv `(2·qkH·dk + vH·dv)·K`, `2·vH`
-  (A_log, dt_bias), `dv` (out norm), out_proj `vH·dv·h`.
+  (A_log, dt_bias), `dv` (out norm), out_proj `vH·dv·h`; + `(2·qkH·dk + vH·dv)` with `convBias`.
+- mamba2 (G = qkH B/C groups, H = vH heads, N = dk state size, P = dv head dim; `params.ts: blockParams`,
+  per-variant constants `linearVariantConstants`): in_proj `h·(2·G·N + 2·H·P + H)` (z, x, B, C and ONE dt per
+  head), conv `(2·G·N + H·P)·K` + [convBias] `2·G·N + H·P`, `3·H` (A_log, D, dt_bias), `H·P` (grouped out-norm
+  γ), out_proj `H·P·h`. Nemotron-3.5-Lightning (h 2688, H 64, P 64, G 8, N 128, K 4, bias): 38,742,208 per
+  layer; Super (h 4096, H 128): 109,635,968 (both equal the checkpoint headers without the 2688 / 4096 pre-norm).
 - kda: `h·(2·qkH·dk + vH·dv)` (q, k, v) + `h·vH` (β) + `h·r + r·vH·dk` (forget gate) + `h·r + r·vH·dv` (output
   gate) + conv `(2·qkH·dk + vH·dv)·K` + `vH` (A_log) + `vH·dk` (dt_bias) + `dv` (o_norm) + `vH·dv·h` (o_proj).
   GLM-5.3-Flash: q, k, v, f, g, b projections 104.07 M per layer.
-- mlp `(gated?3:2)·h·f`; moe `E·(gated?3:2)·h·fe + E·h + S·(gated?3:2)·h·fs`; active MoE uses `k` instead of `E`
-  for the routed experts.
+- mlp `(gated?3:2)·h·f`; moe `E·(gated?3:2)·l·fe + E·h + [latent] 2·h·l + S·(gated?3:2)·h·fs` with
+  `l = latentDim ?? h` (`params.ts: moeParams`; the router and the shared experts read h, the latent term exists
+  only with `latentDim`); active MoE uses `k` instead of `E` for the routed experts.
 - hc_pre: [normGamma] `N·D` + `Σ in·out` + `vectorParams`; hc_post 0. Qwen3.8-Flash-Next 6,604,800 per sublayer
   (634 M in 48 layers, final collapse 6.56 M); DeepSeek-V4.1 `24·20480 + 27` per sublayer (39.3 M); GLM-5.3-Flash
   0.79 M per layer.
@@ -265,6 +279,7 @@ totals (unsharded), used to sanity-check mappers against published sizes.
 | GatedDeltaNet / Mamba2 / linear attention                                        | `RecurrentOp` (fixed-size state, chunked vs step) + `causal_conv1d`, `gated_rmsnorm`; block `linear_attention`                        | **yes: recurrent** |
 | Gated attention output                                                           | `sigmoid_mul` + a wider q projection                                                                                                  | no                 |
 | MoE shared experts, dense first layers                                           | `MoeBlock.sharedExperts`; heterogeneous `layers[]`                                                                                    | no                 |
+| Latent MoE (experts at l < h; Muse Spark, Nemotron)                              | `MoeBlock.latentDim` → replicated `moe.latent_in` / `moe.latent_out` GEMMs (module `moe_latent`), experts and a2a at l (§5)           | no                 |
 | Attention sinks (gpt-oss)                                                        | ignored (negligible cost)                                                                                                             | no                 |
 | DeepSeek-V4.1 CSA (K = V, window + compressed top-k, grouped low-rank output)    | block `csa_attention`; one `AttentionOp` with `secondaryKv` (§5 "CSA")                                                                | no                 |
 | Hyper-connections (Qwen Gated Residual, mHC)                                     | blocks `hc_pre` / `hc_post` → GEMMs + `hc_collapse`, `hc_expand`, `sinkhorn`; `ModelSpec.residualStreams`                             | no                 |
@@ -349,6 +364,13 @@ State per sequence = `heads·dk·dv` elements.
 
 - `F = seqs·qLen·heads·( c_s·dk·dv + (chunked ? (C+1)·(dk+dv) : 0) )`; the second term is causal attention
   inside a chunk of C tokens ((C+1)/2 keys per query on average, 2 FLOP per element over dk + dv).
+- Mamba2 (chunked SSD, Mamba-2 paper §6; §5 "Mamba-2"): with T = seqs·qLen, H = heads, G = qkHeads (B/C
+  groups), N = dk, P = dv, Q = chunkLen,
+  `F = T·( H·c_s·N·P + (chunked ? (Q+1)·(G·N + H·P) : 0) )`. The scores C·Bᵀ inside a chunk are shared by
+  the heads of a group, so their `(Q+1)·N` term is counted once per **group**; `(L∘CBᵀ)·X` (`(Q+1)·P`) is per
+  head. Step (decode): `F = T·H·5·N·P` (`h ← exp(dt·A)·h + (dt·x)⊗B`: decay 1, outer product 1, add 1;
+  `y = C·h`: 2). Nemotron-3.5-Lightning layer at tp 1 (H 64, G 8, N 128, P 64): decode 2,621,440 FLOP per
+  token; prefill qLen 4096, Q 128: 4096·(64·4·8192 + 129·(8·128 + 64·64)) = 11,295,260,672 FLOP.
 - `c_s` (documented approximations): chunked 4 for all variants (inter-chunk output 2 + state update 2);
   step: GatedDeltaNet and KDA 7 (Sᵀk 2 + delta outer product 2 + decay 1 + output 2; KDA's per-channel decay is
   still 1 FLOP per state element), Mamba2 5, linear 4.
@@ -380,6 +402,7 @@ State per sequence = `heads·dk·dv` elements.
 | sinkhorn       | 4·iters per T·N² elem                                | ngram_gate                 | 8 (two norm statistics, dot, sigmoid, fused add) |
 | kv_pool        | 4 (softmax weight, multiply, add)                    | causal_conv1d (+ residual) | 2·K + 1                                          |
 | kv_cache_write | 1 (cast to the KV format; §13 "Draft-cache prefill") | candidate_score            | 2 (DFlash 2 selector multiply-add)               |
+| relu2          | 2 (max, square; ungated only)                        |                            |                                                  |
 
 The DFlash 2 dynamic convs (§13 "Draft ops") are `causal_conv1d` ops with an explicit `flopsPerElem = 4·K` (base
 and dynamic taps, applied in both the prepare and the finish step).
@@ -925,6 +948,31 @@ for `reuse` and `all`).
 conv, recurrent (`variant 'kda'`, gates `dk + 1` per token and head: per-channel decay plus β), gated_rmsnorm,
 out_proj, all_reduce. Sharding as for GatedDeltaNet (`vL = vHeads/tp` must divide).
 
+### Mamba-2
+
+`lower/linearAttention.ts: lowerLinearAttention` (variant `'mamba2'`, Nemotron-H), `ir/params.ts:
+linearVariantConstants`, `ir/metrics.ts: recurrentFlops`. Mapping: `qkHeads` = B/C groups G (`n_groups`),
+`vHeads` = SSM heads H (`mamba_num_heads`), `keyDim` = state size N (`ssm_state_size`), `valueDim` = head dim P
+(`mamba_head_dim`), `convKernel` K, `convBias` (`use_conv_bias`), `chunkTokens` Q (`chunk_size`), `outputGate`
+true. The inner width is `H·P` (not `expand·h`). Same op sequence and sharding as GatedDeltaNet ("Linear-attention
+sharding"); only shapes and counts differ, per device (`qkL`, `vL = H/tp`, `C = 2·qkL·N + vL·P`):
+
+1. `lin.in_proj (m T, n 2·qkL·N + 2·vL·P + vL, k h)`: outputs z, x, B, C and ONE dt per head
+   (`linearVariantConstants('mamba2').gateOutputsPerHead = 1`; GatedDeltaNet has 2, a and b).
+2. `lin.conv1d` over x, B, C: `T·C` elements, taps `C·K·bpe(hp)` + [convBias] `C·bpe(hp)`, state
+   `seqs·C·(K−1)·bpe(act)`.
+3. `lin.recurrent` (`variant 'mamba2'`): decode step `c_s = 5`; prefill chunked SSD with
+   `chunkLen = min(chunkTokens ?? 64, qLen)` and the per-group C·Bᵀ term (§3 "Recurrent"). Gates read: 2 per token
+   and head (dt and its decay).
+4. `lin.out_norm` gated_rmsnorm `norm(y·silu(z))` over `T·vL·P`, grouped (group size `H·P/G`); γ holds one value
+   per channel, `vL·P·bpe(hp)` per device (GatedDeltaNet: one `dv`-wide γ shared by all heads).
+5. `lin.out_proj (m T, n h, k vL·P)` → all_reduce(tp) of `T·h`.
+
+Per-head vectors A_log, D, dt_bias (`3·H` params) are not streamed by any op (negligible). Sequence state per
+layer `vL·N·P·bpe(state) + C·(K−1)·bpe(act)`: Nemotron-3.5-Lightning at tp 1, fp32 state, bf16 activations,
+`64·128·64·4 + 6144·3·2 = 2,134,016` B; Super `4,194,304 + 61,440 = 4,255,744` B. At tp 8 Lightning has
+`vL 8, qkL 1, C 768`; past `tp > G` the groups replicate (KV-head rule).
+
 ### Hyper-connections
 
 `lower/hyperConnection.ts: lowerHcPre, lowerHcPost`. Replicated on every TP rank, like norms; no sequence state.
@@ -976,27 +1024,40 @@ stateFlopsPerElemPerToken`. Per device `qkL` by the replication rule and **`vL =
 and the TP all-reduce, so a value head replicated on r ranks would be summed r times (e.g. vHeads 2, dv 64 at
 tp 4: four ranks projecting 64 features each, 256 summed features for 128 logical ones). A replicated q/k head
 is only an input shared by the local value heads, like a GQA KV head. Conv channels
-`C = 2·qkL·dk + vL·dv`. `in_proj n = 2·qkL·dk + vL·dv·(gate?2:1) + 2·vL` → `causal_conv1d` over `T·C`
+`C = 2·qkL·dk + vL·dv`. `in_proj n = 2·qkL·dk + vL·dv·(gate?2:1) + g·vL` (`g` gate outputs per head: 2,
+Mamba2 1) → `causal_conv1d` over `T·C`
 (`2·K` FLOP/elem; rolling state `seqs·C·(K−1)·bpe(act)` read if a prior state exists, and written) →
-`recurrent` (prefill: chunked, `chunkLen = min(64, qLen)`, `hasPriorState = kvLen > qLen`; decode: step) →
+`recurrent` (prefill: chunked, `chunkLen = min(chunkTokens ?? 64, qLen)`, `hasPriorState = kvLen > qLen`; decode:
+step) →
 gated_rmsnorm (or rmsnorm) over `T·vL·dv` → `out_proj k = vL·dv` → all_reduce. Sequence state
 `vL·dk·dv·bpe(state) + C·(K−1)·bpe(act)`, independent of context.
 
 ### MoE modes A/B
 
-`lower/moe.ts: lowerMoe, moeLayout, moeRouting, moeParallelErrors, moeResidentWeightBytes`. Balanced
-("uniform") routing. Valid iff `E % ep == 0` and (`tp % ep == 0` → **mode A**, or `ep % tp == 0` and
-`(tp·dp) % ep == 0` → **mode B**). `Eloc = E/ep`, `etp = max(1, tp/ep)`, `p = max(1, ep/tp)`.
+`lower/moe.ts: lowerMoe, moeLayout, moeRouting, moeParallelErrors, moeResidentWeightBytes, moeExpertWidth,
+moeLatentWeightBytes`. Balanced ("uniform") routing. Valid iff `E % ep == 0` and (`tp % ep == 0` → **mode A**, or
+`ep % tp == 0` and `(tp·dp) % ep == 0` → **mode B**). `Eloc = E/ep`, `etp = max(1, tp/ep)`, `p = max(1, ep/tp)`.
+`l = latentDim ?? h` is the routed experts' width ("Latent MoE" below).
 
 - **Mode A** (includes ep = 1): every TP rank has all T tokens. `A = ceil(T·k/ep)` assignments on the busiest
   device, `a = min(Eloc, A)` active experts, `mE = ceil(A/a)` tokens each. Router (hp, replicated) → top-k →
-  grouped `gate_up (batch a, m mE, n (gated?2:1)·fe/etp)` → act → `down` → combine (`a·mE·h`) → shared experts
-  as one dense MLP of `S·fs` sharded by tp → **one** all_reduce(tp).
+  [`latent_in`] → grouped `gate_up (batch a, m mE, n (gated?2:1)·fe/etp, k l)` → act → `down (n l)` → combine
+  (`a·mE·l`, writes `T·l·reduceBpe`) → [`latent_out`] → shared experts as one dense MLP of `S·fs` sharded by tp →
+  **one** all_reduce(tp) of `T·h`.
 - **Mode B**: the EP group spans p replicas; each device routes its slice `Ts = ceil(T/tp)`; `A = Ts·k`,
-  `etp = 1`. Router → top-k → `all_to_all(ep)` dispatch `Ts·k·h·bpe(act)` → experts → `all_to_all(ep)` combine
-  `Ts·k·h·reduceBpe` → combine → shared experts (unsharded) on Ts → `all_gather(tp)` of `T·h·bpe(act)` when
-  tp > 1 (replaces the all-reduce).
-- Resident: `Eloc·(gated?3:2)·h·fe/etp·bpe(w)` + router + shared (`/tp` in mode A).
+  `etp = 1`. Router → top-k → [`latent_in`] → `all_to_all(ep)` dispatch `Ts·k·l·bpe(act)` → experts →
+  `all_to_all(ep)` combine `Ts·k·l·reduceBpe` → combine (`Ts·k·l`) → [`latent_out`] → shared experts
+  (unsharded) on Ts → `all_gather(tp)` of `T·h·bpe(act)` when tp > 1 (replaces the all-reduce).
+- **Latent MoE** (`MoeBlock.latentDim` = l, Muse Spark `moe_hidden_size`, Nemotron `moe_latent_size`):
+  `latent_in (m Ts, n l, k h)` after the top-k and `latent_out (m Ts, n h, k l)` after the combine (Ts = T in
+  mode A), module `moe_latent`. Both are **replicated**: every TP rank computes them whole and stores both
+  matrices, `2·h·l·bpe(w_latent)` per device per layer at any tp (vLLM `ReplicatedLinear`; Muse Spark bf16: 8.3 GB
+  over its 62 layers). In mode A `latent_out` maps each rank's `T·l` partial sum to a `T·h` partial sum, valid by linearity
+  (`Σ_r W·p_r = W·Σ_r p_r`), so the one all-reduce stays at h; TP-sharding them would need an extra collective
+  at width l. The router reads h; shared experts stay at h. Without `latentDim`, `l = h` and both GEMMs are absent:
+  every op is the same as before.
+- Resident: `Eloc·(gated?3:2)·l·fe/etp·bpe(w)` + router `E·h·bpe(hp)` + [latent] `2·h·l·bpe(w_latent)`
+  (`moeLatentWeightBytes`, summed per GEMM like the ops) + shared (`/tp` in mode A).
 
 ### PP split
 
@@ -1535,9 +1596,13 @@ Excluded on purpose (only hardware and math limits are modeled):
 
 Documented approximations (each isolated in one constant or rule):
 
-- Recurrent `c_s` constants (chunked 4; step GDN 7, Mamba2 5, linear 4) and the chunk length `min(64, qLen)`.
-- linear-attention `in_proj` carries `2·vH` gate outputs for GatedDeltaNet, Mamba2 and linear (KDA: β only, its
-  decay comes from the low-rank forget gate).
+- Recurrent `c_s` constants (chunked 4; step GDN 7, Mamba2 5, linear 4) and the chunk length
+  `min(chunkTokens ?? 64, qLen)`.
+- linear-attention `in_proj` carries `2·vH` gate outputs for GatedDeltaNet and linear, `vH` (dt) for Mamba2 (KDA:
+  β only, its decay comes from the low-rank forget gate).
+- Mamba2 chunked SSD FLOPs leave out the state passing between chunks (`2·N·P/Q` per token and head: `2/Q` FLOP
+  per state element next to `c_s = 4`, under 0.4 % at Q = 128), the decay mask `exp(segsum)` (`Q+1` per token and
+  head), the dt softplus and the D skip (vector work, a few FLOP per element).
 - MLA form by phase (absorbed for decode and sparse prefill, MHA for dense prefill).
 - The indexer is replicated on every TP rank; its key norm is counted as a LayerNorm.
 - conv1d and recurrent state reads are 0 on the first prefill step (no prior state).
@@ -1694,13 +1759,13 @@ tablePlacementAt`; `lower/moe.ts: expertFetchOp`; `lower/lower.ts: denseLayerFet
 `lower/ngram.ts: tableFetchOp`. Three weight groups, each lowered to one `TransferOp` (§3 op catalogue: `kind
 'transfer'`) in front of the block that consumes it, **only when it has bytes to move**:
 
-| group                                 | selector                             | stays on device                               | `reads` / `usefulBytes` per step       |
-| ------------------------------------- | ------------------------------------ | --------------------------------------------- | -------------------------------------- |
-| `routed_experts` (`moe.expert_fetch`) | MoE layers in `layers` (default all) | `C = f·E_loc` experts, router, shared experts | `[{ M, W_expert }]` / `M·W_expert`     |
-| `dense_layer` (`layer.fetch`)         | layers `[from, to)`                  | nothing of the layer                          | `[{ 1, W_layer }]` / `W_layer`         |
-| `lookup_table` (`<block>.row_fetch`)  | every n-gram table                   | projections, gate vectors, conv taps          | per scale layout, below / `R·rowBytes` |
+| group                                 | selector                             | stays on device                                                   | `reads` / `usefulBytes` per step       |
+| ------------------------------------- | ------------------------------------ | ----------------------------------------------------------------- | -------------------------------------- |
+| `routed_experts` (`moe.expert_fetch`) | MoE layers in `layers` (default all) | `C = f·E_loc` experts, router, latent projections, shared experts | `[{ M, W_expert }]` / `M·W_expert`     |
+| `dense_layer` (`layer.fetch`)         | layers `[from, to)`                  | nothing of the layer                                              | `[{ 1, W_layer }]` / `W_layer`         |
+| `lookup_table` (`<block>.row_fetch`)  | every n-gram table                   | projections, gate vectors, conv taps                              | per scale layout, below / `R·rowBytes` |
 
-- `W_expert = gemmWeightBytes(gated ? 3 : 2, h, fe/etp, w_routed)` (`moe.ts: expertWeightBytes`); the grouped
+- `W_expert = gemmWeightBytes(gated ? 3 : 2, l, fe/etp, w_routed)`, `l = latentDim ?? h` (`moe.ts: expertWeightBytes`); the grouped
   expert GEMMs keep their `a` active experts, so the device-memory bytes of the step are unchanged.
 - `W_layer` = Σ of the layer's resident block weights with everything on the device (all experts, the whole table
   shard). A layer in the `denseLayers` range gets no expert or table transfer on top (it is streamed whole).
@@ -1855,7 +1920,7 @@ least as long as the copy: many experts resident, or a fast link (GH200 C2C, uni
 ngramTableShardBytes`.
 
 ```
-W_s        = resident weights: offloaded MoE layer C·W_expert (+ router, shared); dense-layer range 0;
+W_s        = resident weights: offloaded MoE layer C·W_expert (+ router, latent projections, shared); dense-layer range 0;
              off-device table: the non-table part  + [unified ∧ pinned_host] ceil(rows/tp)·scaleBytes
              (lower/ngram.ts: ngramResidentWeightBytes, pinnedScaleBytes)
 staging_s  = max_{phase, transfer op} (q > 0 ? 2 : 1)·buffer          (double buffer for a prefetched op),

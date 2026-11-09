@@ -1,0 +1,42 @@
+{
+  "id": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+  "sha": "a9904d24bcc1d289a1950fa9d2b978c47cf903b9",
+  "gated": false,
+  "private": false,
+  "tags": [
+    "transformers",
+    "safetensors",
+    "nemotron_h",
+    "text-generation",
+    "nvidia",
+    "pytorch",
+    "nemotron-3.5",
+    "conversational",
+    "en",
+    "es",
+    "fr",
+    "de",
+    "it",
+    "ja",
+    "dataset:nvidia/nemotron-post-training-v3",
+    "dataset:nvidia/nemotron-pre-training-datasets",
+    "license:other",
+    "eval-results",
+    "endpoints_compatible",
+    "deploy:azure",
+    "deploy:sagemaker",
+    "region:us"
+  ],
+  "safetensors": {
+    "parameters": {
+      "F32": 3072,
+      "BF16": 32913263168
+    },
+    "total": 31577937344
+  },
+  "siblings": [
+    {
+      "rfilename": "config.json"
+    }
+  ]
+}

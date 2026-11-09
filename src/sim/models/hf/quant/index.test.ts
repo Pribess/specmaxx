@@ -3,7 +3,7 @@ import type { Dtype } from '../../../ir/dtype';
 import type { QuantConfig, WeightModule } from '../../../ir/model';
 import { WEIGHT_MODULE_FALLBACK } from '../../../ir/model';
 import { fixtureRepoFiles } from '../../__fixtures__/fixtures.testutil';
-import { isJsonObject } from '../reader';
+import { unwrapTextConfig } from '../textConfig';
 import type { HfRepoFiles, QuantDefaults } from '../types';
 import { deriveQuantDefaults, type QuantInputs } from './index';
 
@@ -23,8 +23,9 @@ const MLX_G64 = 32 / 64; // 0.5
 
 /** Inputs for a fixture repo, as mapHfModel builds them. */
 function inputsOf(files: HfRepoFiles): QuantInputs {
-  const top = files.config as Record<string, unknown>;
-  const text = isJsonObject(top.text_config) ? top.text_config : top;
+  const u = unwrapTextConfig(files.config);
+  if (u.kind !== 'ok') throw new Error(u.errors.join('; '));
+  const { top, text } = u.view;
   return {
     top,
     text,
@@ -50,11 +51,15 @@ function expectFormat(label: string, got: { dtype: Dtype; extra: number; input: 
 }
 
 interface Case {
+  /** Test name when the repo has several cases; default `repo`. */
+  name?: string;
   repo: string;
   /** Fixture dir: `quant` (default) or the base fixtures. */
   dir?: '' | 'quant';
   /** Repo whose config.json to use (Mistral NVFP4 has none). */
   configFrom?: string;
+  /** Drop config.json's `quantization_config`, so a quant file (hf_quant_config.json) is the source. */
+  stripConfigQuant?: boolean;
   scheme: RegExp;
   source: QuantDefaults['source'];
   /** Activations dtype (default bf16). */
@@ -467,12 +472,64 @@ const CASES: Case[] = [
     modules: { routed_experts: ['mxfp4'], attention: ['mxfp4'] },
     embeddings: 'mxfp4',
   },
+
+  // --- Nemotron-H (llm_config wrapper, layers_block_type, latent MoE) -------------------------------------------
+  {
+    repo: 'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16',
+    dir: '',
+    scheme: /^bf16 \(unquantized\)$/,
+    source: 'none',
+    modules: { linear_attention: ['bf16'], attention: ['bf16'], routed_experts: ['bf16'], shared_experts: ['bf16'] },
+    explicit: [],
+  },
+  {
+    repo: 'nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4',
+    dir: '',
+    scheme: /^modelopt MIXED_PRECISION \(FP8, NVFP4\), fp8_e4m3 KV cache$/,
+    source: 'quantization_config',
+    modules: {
+      linear_attention: ['fp8_e4m3', 0, 'fp8_e4m3'],
+      attention: ['fp8_e4m3', 0, 'fp8_e4m3'],
+      routed_experts: ['nvfp4', 0, 'nvfp4'],
+      shared_experts: ['nvfp4', 0, 'nvfp4'],
+      // In `ignore`: the h ↔ latent projections stay bf16.
+      moe_latent: ['bf16'],
+    },
+    lmHead: ['fp8_e4m3', 0, 'fp8_e4m3'],
+    kvCache: 'fp8_e4m3',
+    explicit: ['kvCache', 'modules'],
+    // MTP, conv1d, gate, embeddings, mlp1 / vision entries of `ignore` are all known.
+    noNotes: [/no known module/],
+  },
+  {
+    name: 'nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4 (hf_quant_config.json)',
+    repo: 'nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4',
+    stripConfigQuant: true,
+    scheme: /^modelopt MIXED_PRECISION \(FP8, NVFP4\), fp8_e4m3 KV cache$/,
+    source: 'hf_quant_config.json',
+    modules: {
+      linear_attention: ['fp8_e4m3', 0, 'fp8_e4m3'],
+      attention: ['fp8_e4m3', 0, 'fp8_e4m3'],
+      routed_experts: ['nvfp4', 0, 'nvfp4'],
+      shared_experts: ['nvfp4', 0, 'nvfp4'],
+      moe_latent: ['bf16'],
+    },
+    lmHead: ['fp8_e4m3', 0, 'fp8_e4m3'],
+    kvCache: 'fp8_e4m3',
+    explicit: ['kvCache', 'modules'],
+    noNotes: [/no known module/],
+  },
 ];
 
 describe('deriveQuantDefaults: per-repo defaults from the fixtures', () => {
   for (const c of CASES) {
-    it(c.repo, () => {
+    it(c.name ?? c.repo, () => {
       const files = fixtureRepoFiles(c.repo, { dir: c.dir ?? 'quant', ...(c.configFrom ? { configFrom: c.configFrom } : {}) });
+      if (c.stripConfigQuant) {
+        const rest = { ...(files.config as Record<string, unknown>) };
+        delete rest.quantization_config;
+        files.config = rest;
+      }
       const d = deriveQuantDefaults(inputsOf(files));
       const act = c.activations ?? 'bf16';
       expect(d.scheme).toMatch(c.scheme);

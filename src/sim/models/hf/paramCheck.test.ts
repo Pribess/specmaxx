@@ -40,6 +40,30 @@ describe('checkParams', () => {
     expect(checkParams(REF_DENSE_8B, EXCL, api({ I8: 1 }, ACTUAL), 'fp8').status).toBe('ok');
   });
 
+  it('checks against the per-dtype sum when it exceeds safetensors.total (total without MTP)', () => {
+    // Sum = ACTUAL, total 4% lower: against the total this would be a +4.2% mismatch.
+    const r = checkParams(REF_DENSE_8B, EXCL, api({ BF16: ACTUAL - 10, F32: 10 }, ACTUAL / 1.042));
+    expect(r.status).toBe('ok');
+    expect(r.expected).toBe(ACTUAL);
+    expect(r.relError).toBe(0);
+    expect(r.note).toMatch(/differs from the per-dtype sum .*checked against the sum/);
+    // Within 1e-4, or a sum below the total: the total is used as before.
+    const close = checkParams(REF_DENSE_8B, EXCL, api({ BF16: ACTUAL * (1 + 5e-5) }, ACTUAL));
+    expect([close.expected, close.relError]).toEqual([ACTUAL, 0]);
+    expect(checkParams(REF_DENSE_8B, EXCL, api({ BF16: 1 }, ACTUAL)).expected).toBe(ACTUAL);
+    // The packed rule runs first.
+    expect(checkParams(REF_DENSE_8B, EXCL, api({ U8: ACTUAL * 2 }, ACTUAL)).status).toBe('packed');
+  });
+
+  it('Nemotron-3.5 fixtures: Lightning uses the sum (MTP left out of total), Super-VL is packed', () => {
+    const lightning = fixtureRepoFiles('nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16').api;
+    const r = checkParams(REF_DENSE_8B, EXCL, lightning);
+    expect(r.expected).toBe(32_913_266_240);
+    expect(r.note).toContain('safetensors.total (31577937344)');
+    const zuper = fixtureRepoFiles('nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4').api;
+    expect(checkParams(REF_DENSE_8B, EXCL, zuper, 'modelopt_mixed').status).toBe('packed');
+  });
+
   it('unavailable without safetensors', () => {
     expect(checkParams(REF_DENSE_8B, EXCL, { id: 'org/repo' }).status).toBe('unavailable');
     expect(checkParams(REF_DENSE_8B, EXCL, undefined).status).toBe('unavailable');

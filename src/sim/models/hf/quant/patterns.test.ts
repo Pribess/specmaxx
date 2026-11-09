@@ -3,6 +3,8 @@ import type { Probe } from './common';
 import { blockScaleBits, dtypeNameBits, formatRanges, groupScaleBits, modelDtypeOf } from './common';
 import { buildProbes, layerLayout } from './moduleClass';
 import { compilePatterns, dottedContains, firstMatch } from './patterns';
+import { fixtureRepoFiles } from '../../__fixtures__/fixtures.testutil';
+import { unwrapTextConfig } from '../textConfig';
 
 const probe = (name: string, extra: Partial<Probe> = {}): Probe => ({
   name,
@@ -134,5 +136,60 @@ describe('moduleClass', () => {
     expect(hf.probes.some((x) => x.name === 'model.layers.0.self_attn.kv_b_proj')).toBe(true);
     const minimax = buildProbes({ model_type: 'minimax_m3_vl' }, { num_hidden_layers: 1, num_local_experts: 2 }, '"language_model.model.layers.0.block_sparse_moe.experts.3.gate_proj"');
     expect(minimax.probes.some((x) => x.name.endsWith('experts.0.gate_proj'))).toBe(true);
+  });
+
+  it('Nemotron-H: one sublayer per layer from layers_block_type, latent probes only with moe_latent_size', () => {
+    const text = { layers_block_type: ['mamba', 'moe', 'attention', 'mlp'], n_routed_experts: 8, moe_latent_size: 1024 };
+    const l = layerLayout(text, undefined, 'nemotron_h');
+    expect(l.numLayers).toBe(4);
+    expect(l.attention).toEqual(['linear', 'none', 'full', 'none']);
+    expect(l.mlp).toEqual(['none', 'moe', 'none', 'dense']);
+    expect(l.moeLatent).toBe(true);
+    const byLayer = (set: ReturnType<typeof buildProbes>, i: number) =>
+      set.probes.filter((x) => x.layer === i).map((x) => `${x.cls}:${x.leaf}`);
+
+    // Super-VL naming (`language_model.backbone.`), picked by evidence.
+    const zuper = buildProbes({ model_type: 'nemotron_h_omni' }, text, '"language_model.backbone.layers.0.mixer.in_proj"');
+    expect(zuper.family).toBe('nemotron_h');
+    expect(byLayer(zuper, 0)).toEqual(['linear_attention:mixer.in_proj', 'linear_attention:mixer.out_proj']);
+    expect(byLayer(zuper, 1)).toEqual([
+      'routed_experts:mixer.experts.0.up_proj',
+      'routed_experts:mixer.experts.0.down_proj',
+      'shared_experts:mixer.shared_experts.up_proj',
+      'shared_experts:mixer.shared_experts.down_proj',
+      'moe_latent:mixer.fc1_latent_proj',
+      'moe_latent:mixer.fc2_latent_proj',
+    ]);
+    expect(byLayer(zuper, 2)).toHaveLength(4);
+    expect(byLayer(zuper, 3)).toEqual(['dense_mlp:mixer.up_proj', 'dense_mlp:mixer.down_proj']);
+    expect(zuper.probes.find((x) => x.cls === 'lm_head')?.name).toBe('language_model.lm_head');
+    expect(zuper.probes.find((x) => x.cls === 'embeddings')?.name).toBe('language_model.backbone.embeddings');
+
+    // Lightning naming (`backbone.`), no latent: no moe_latent probes.
+    const flat = { ...text, model_type: 'nemotron_h', moe_latent_size: null };
+    const lightning = buildProbes(flat, flat, '');
+    expect(lightning.probes.find((x) => x.cls === 'lm_head')?.name).toBe('lm_head');
+    expect(lightning.probes.some((x) => x.name === 'backbone.layers.1.mixer.experts.0.up_proj')).toBe(true);
+    expect(lightning.probes.some((x) => x.cls === 'moe_latent')).toBe(false);
+  });
+
+  it('Nemotron-H shortlist fixtures: 88 Super-VL layers with latent probes, none for Lightning', () => {
+    const config = (id: string) => {
+      const u = unwrapTextConfig(fixtureRepoFiles(id).config);
+      if (u.kind !== 'ok') throw new Error(u.errors.join('; '));
+      return u.view;
+    };
+    const s = config('nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4');
+    const zuper = buildProbes(s.top, s.text, JSON.stringify(s.top.quantization_config));
+    const count = (set: ReturnType<typeof buildProbes>, cls: string) => set.probes.filter((x) => x.cls === cls).length;
+    expect(zuper.layout.numLayers).toBe(88);
+    // 40 Mamba, 40 MoE, 8 attention layers.
+    expect([count(zuper, 'linear_attention'), count(zuper, 'routed_experts'), count(zuper, 'moe_latent')]).toEqual([80, 80, 80]);
+    expect(count(zuper, 'attention')).toBe(32);
+    const l = config('nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16');
+    const lightning = buildProbes(l.top, l.text, '');
+    expect(lightning.layout.numLayers).toBe(52);
+    expect(count(lightning, 'moe_latent')).toBe(0);
+    expect(count(lightning, 'routed_experts')).toBe(46);
   });
 });

@@ -4,10 +4,39 @@
  * Unit of every result: parameters (elements). See docs/simulation-model.md §2 (Model IR) "Parameter counts".
  *
  * Notation: h hidden, hd head dim, rq/rkv MLA ranks, dn/dr/dv MLA head dims, E experts, k top-k,
- * fe/fs routed/shared expert widths, S shared experts, N residual streams, D stream width.
+ * fe/fs routed/shared expert widths, S shared experts, l latent-MoE expert width, N residual streams, D stream width.
  */
 
-import type { BlockSpec, CsaSelection, IndexerSpec, ModelSpec, ProjectionSpec } from './model';
+import type { BlockSpec, CsaSelection, IndexerSpec, ModelSpec, MoeBlock, ProjectionSpec } from './model';
+
+/**
+ * Per-variant shape constants of the linear-attention variants with ONE fused in_proj (all but `'kda'`), shared by
+ * {@link blockParams} and the lowering (lower/linearAttention.ts) so params and ops agree. See docs/simulation-model.md
+ * §5 "Mamba-2".
+ */
+export interface LinearVariantConstants {
+  /**
+   * Scalar gate outputs of in_proj per value head per token: GatedDeltaNet / linear 2 (decay a and β b), Mamba2 1
+   * (dt). Unit: elements/(token·head).
+   */
+  gateOutputsPerHead: number;
+  /** Learned scalars per value head: GatedDeltaNet / linear 2 (A_log, dt_bias), Mamba2 3 (A_log, D, dt_bias). Unit: params/head. */
+  vectorsPerHead: number;
+  /**
+   * True if the output-norm γ spans every head's channels (`vHeads·valueDim`, Mamba2's grouped RMSNorm); false: one
+   * `valueDim`-wide γ shared by all heads (GatedDeltaNet).
+   */
+  outNormSpansHeads: boolean;
+}
+
+/** The {@link LinearVariantConstants} of a fused-in_proj linear-attention variant. */
+export function linearVariantConstants(
+  variant: Exclude<Extract<BlockSpec, { kind: 'linear_attention' }>['variant'], 'kda'>,
+): LinearVariantConstants {
+  return variant === 'mamba2'
+    ? { gateOutputsPerHead: 1, vectorsPerHead: 3, outNormSpansHeads: true }
+    : { gateOutputsPerHead: 2, vectorsPerHead: 2, outNormSpansHeads: false };
+}
 
 /** Weights of a list of dense projections: `Σ inputDim·outputDim`. Unit: params. */
 function projectionParams(projections: ProjectionSpec[]): number {
@@ -51,6 +80,24 @@ function mlpParams(hidden: number, f: number, gated: boolean, bias: boolean): nu
   // See docs/simulation-model.md §2 "Parameter counts"
   const biasParams = bias ? (gated ? 2 : 1) * f + hidden : 0;
   return matrices * hidden * f + biasParams;
+}
+
+/**
+ * Weights of a MoE block counting `routedExperts` of its routed experts (E for the total, k for the active
+ * params), with l = `latentDim ?? h` the routed experts' width. The router reads h, the shared experts are at h,
+ * and a latent block adds its two projections `h → l` and `l → h`. Unit: params.
+ */
+function moeParams(block: MoeBlock, routedExperts: number): number {
+  const h = block.hidden;
+  const l = block.latentDim ?? h;
+  // Formula: P = n·(gated ? 3 : 2)·l·fe (routed) + E·h (router) + [latent] 2·h·l + S·(gated ? 3 : 2)·h·fs
+  //   with n = E (total) or k (active), l = latentDim ?? h
+  // See docs/simulation-model.md §2 "Parameter counts"
+  const routed = routedExperts * mlpParams(l, block.expertIntermediate, block.gated, false);
+  const router = block.experts * h;
+  const latent = block.latentDim === undefined ? 0 : 2 * h * l;
+  const shared = block.sharedExperts * mlpParams(h, block.sharedIntermediate, block.gated, false);
+  return routed + router + latent + shared;
 }
 
 /**
@@ -130,9 +177,10 @@ export function blockParams(block: BlockSpec): number {
       const h = block.hidden;
       const qkDims = 2 * block.qkHeads * block.keyDim;
       const vDims = block.vHeads * block.valueDim;
-      const conv = (qkDims + vDims) * block.convKernel;
-      const outNorm = block.valueDim;
+      // Formula: conv = (2·qkH·dk + vH·dv)·K  [+ convBias: (2·qkH·dk + vH·dv)]
+      const conv = (qkDims + vDims) * block.convKernel + (block.convBias === true ? qkDims + vDims : 0);
       const outProj = vDims * h;
+      const outNorm = block.valueDim;
       if (block.variant === 'kda') {
         const r = block.gateRank ?? 0;
         // Formula: KDA = h·(2·qkH·dk + vH·dv) (q, k, v) + h·vH (β) + h·r + r·vH·dk (forget gate)
@@ -147,7 +195,19 @@ export function blockParams(block: BlockSpec): number {
         const dtBias = block.vHeads * block.keyDim;
         return qkv + beta + forgetGate + outGate + conv + aLog + dtBias + outNorm + outProj;
       }
-      // Formula: in = h·(2·qkH·dk + vH·dv·(gate ? 2 : 1) + 2·vH); conv = (2·qkH·dk + vH·dv)·K
+      if (block.variant === 'mamba2') {
+        const H = block.vHeads;
+        const vc = linearVariantConstants(block.variant);
+        // Formula: Mamba2 = h·(2·G·N + 2·H·P + H) (in_proj: z, x, B, C, dt) + (2·G·N + H·P)·K [+ convBias: 2·G·N + H·P]
+        // Formula:        + 3·H (A_log, D, dt_bias) + H·P (grouped out-norm γ) + H·P·h (out_proj)
+        // Formula:   with G = qkHeads, H = vHeads, N = keyDim, P = valueDim
+        // See docs/simulation-model.md §2 "Parameter counts", §5 "Mamba-2"
+        const inProj = h * (qkDims + vDims * (block.outputGate ? 2 : 1) + vc.gateOutputsPerHead * H);
+        const headVectors = vc.vectorsPerHead * H;
+        const normGamma = vDims;
+        return inProj + conv + headVectors + normGamma + outProj;
+      }
+      // Formula: in = h·(2·qkH·dk + vH·dv·(gate ? 2 : 1) + 2·vH); conv as above
       // Formula: + 2·vH (A_log, dt_bias) + dv (out norm) + vH·dv·h (out_proj)
       // See docs/simulation-model.md §2 "Parameter counts"
       const inProj = h * (qkDims + vDims * (block.outputGate ? 2 : 1) + 2 * block.vHeads);
@@ -156,14 +216,9 @@ export function blockParams(block: BlockSpec): number {
     }
     case 'mlp':
       return mlpParams(block.hidden, block.intermediate, block.gated, block.bias);
-    case 'moe': {
-      // Formula: P = E·(gated ? 3 : 2)·h·fe + E·h (router) + S·(gated ? 3 : 2)·h·fs
-      // See docs/simulation-model.md §2 "Parameter counts"
-      const routed = block.experts * mlpParams(block.hidden, block.expertIntermediate, block.gated, false);
-      const router = block.experts * block.hidden;
-      const shared = block.sharedExperts * mlpParams(block.hidden, block.sharedIntermediate, block.gated, false);
-      return routed + router + shared;
-    }
+    case 'moe':
+      // Formula: P = E·(gated ? 3 : 2)·l·fe + E·h (router) + [latent] 2·h·l + S·(gated ? 3 : 2)·h·fs
+      return moeParams(block, block.experts);
     case 'hc_pre': {
       // Formula: P_hc_pre = [normGamma] N·D + Σ in·out + vectorParams
       // See docs/simulation-model.md §2 "Parameter counts"
@@ -196,14 +251,9 @@ export function blockParams(block: BlockSpec): number {
  */
 export function activeBlockParams(block: BlockSpec): number {
   switch (block.kind) {
-    case 'moe': {
-      // Formula: P_active = k·(gated ? 3 : 2)·h·fe + E·h (router) + S·(gated ? 3 : 2)·h·fs
-      // See docs/simulation-model.md §2 "Parameter counts"
-      const routed = block.topK * mlpParams(block.hidden, block.expertIntermediate, block.gated, false);
-      const router = block.experts * block.hidden;
-      const shared = block.sharedExperts * mlpParams(block.hidden, block.sharedIntermediate, block.gated, false);
-      return routed + router + shared;
-    }
+    case 'moe':
+      // Formula: P_active = k·(gated ? 3 : 2)·l·fe + E·h (router) + [latent] 2·h·l + S·(gated ? 3 : 2)·h·fs
+      return moeParams(block, block.topK);
     case 'ngram_embedding':
       // Formula: P_active = P_ngram − tableRows·rowDim + rowsPerToken·rowDim
       // See docs/simulation-model.md §2 "Parameter counts"

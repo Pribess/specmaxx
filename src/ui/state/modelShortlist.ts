@@ -30,4 +30,6 @@ export const MODEL_SHORTLIST: ShortlistModel[] = [
   // (48 layers, 8 of 384 experts), while `thinkingmachines/Inkling-Small` is a different, 276B / 12B model.
   // Add it here once the matching repo is published.
   { id: 'MiniMaxAI/MiniMax-M3', name: 'Minimax M3' },
+  { id: 'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16', name: 'Nemotron 3.5 Lightning' },
+  { id: 'nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4', name: 'Nemotron 3.5 Super VL' },
 ];

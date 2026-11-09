@@ -115,6 +115,62 @@ describe('modelSpecErrors', () => {
     expect(modelSpecErrors(model([kda({ outputGate: false })]))[0]).toMatch(/outputGate/);
   });
 
+  it('Mamba-2 chunkTokens must be a positive integer; relu2 must be ungated (Nemotron-H)', () => {
+    const mamba = (chunkTokens?: number): MixerParams => ({
+      kind: 'linear',
+      variant: 'mamba2',
+      qkHeads: 1,
+      vHeads: 2,
+      keyDim: 32,
+      valueDim: 32,
+      outputGate: true,
+      ...(chunkTokens === undefined ? {} : { chunkTokens }),
+    });
+    expect(modelSpecErrors(model([mamba(), mamba(128)]))).toEqual([]);
+    expect(modelSpecErrors(model([mamba(0)]))[0]).toMatch(/layer 0 linear_attn: chunkTokens 0 must be a positive integer/);
+    expect(modelSpecErrors(model([mamba(1.5)]))[0]).toMatch(/chunkTokens 1.5/);
+    const relu2 = (gated: boolean): ModelSpec =>
+      decoderModel({
+        name: 'relu2',
+        hidden: 128,
+        vocab: 10,
+        tieEmbeddings: true,
+        layers: [
+          decoderLayer({
+            hidden: 128,
+            mixer: mamba(),
+            ffn: { kind: 'moe', experts: 4, topK: 2, expertIntermediate: 64, gated, activation: 'relu2' },
+          }),
+        ],
+      });
+    expect(modelSpecErrors(relu2(false))).toEqual([]);
+    expect(modelSpecErrors(relu2(true))).toEqual(['layer 0 moe: activation relu2 needs gated false']);
+  });
+
+  it('MoE latentDim must be a positive integer; the builder adds it only when given', () => {
+    const moeModel = (latentDim?: number): ModelSpec =>
+      decoderModel({
+        name: 'moe',
+        hidden: 128,
+        vocab: 10,
+        tieEmbeddings: true,
+        layers: [
+          decoderLayer({
+            hidden: 128,
+            mixer: { kind: 'gqa', heads: 4, kvHeads: 2, headDim: 32 },
+            ffn: { kind: 'moe', experts: 4, topK: 2, expertIntermediate: 64, ...(latentDim === undefined ? {} : { latentDim }) },
+          }),
+        ],
+      });
+    expect(modelSpecErrors(moeModel())).toEqual([]);
+    expect(modelSpecErrors(moeModel(64))).toEqual([]);
+    expect(modelSpecErrors(moeModel(0))[0]).toMatch(/latentDim 0 must be a positive integer/);
+    expect(modelSpecErrors(moeModel(31.5))[0]).toMatch(/latentDim 31.5 must be a positive integer/);
+    const moeBlock = (m: ModelSpec) => m.layers[0].blocks.find((b) => b.kind === 'moe');
+    expect(moeBlock(moeModel())).not.toHaveProperty('latentDim');
+    expect(moeBlock(moeModel(64))).toHaveProperty('latentDim', 64);
+  });
+
   it('hc blocks and n-gram width must match residualStreams · hidden', () => {
     const pre: HcPreParams = { normGamma: false, projections: [], sinkhornIters: 20, vectorParams: 0 };
     const layer = decoderLayer({

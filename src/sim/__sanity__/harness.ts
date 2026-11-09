@@ -237,6 +237,7 @@ const QUANTIZED_MODULES: Record<Exclude<WeightModule, 'residual_mixer'>, true> =
   dense_mlp: true,
   shared_experts: true,
   routed_experts: true,
+  moe_latent: true,
   ngram: true,
 };
 

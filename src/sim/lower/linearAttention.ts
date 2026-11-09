@@ -3,7 +3,8 @@
  * TP shards q/k heads with the KV-head replication rule (`qkL`, see common.ts) and value (state) heads evenly
  * (`vL = vHeads / tp`, which must divide): each value head's output feeds the row-parallel out_proj, so a
  * replicated value head would be summed tp/vHeads times by the TP all-reduce.
- * See docs/simulation-model.md §5 "Linear-attention sharding" and §3 "Recurrent".
+ * See docs/simulation-model.md §5 "Linear-attention sharding", §5 "Mamba-2" and §3 "Recurrent". Per-variant in_proj
+ * shapes (gate outputs per head, per-head vectors, out-norm γ width) come from `linearVariantConstants` (ir/params.ts).
  *
  * Notation: dk = keyDim, dv = valueDim, K = convKernel, C = 2·qkL·dk + vL·dv conv channels per device, r = gateRank.
  */
@@ -11,6 +12,7 @@
 import { bytesPerElement } from '../ir/dtype';
 import type { LinearAttentionBlock } from '../ir/model';
 import type { Op, RecurrentOp } from '../ir/ops';
+import { linearVariantConstants } from '../ir/params';
 import {
   actBpe,
   attentionMath,
@@ -33,7 +35,8 @@ export const RECURRENT_CHUNK_TOKENS = 64;
  * FLOP per state element per token `c_s` (documented approximations, docs §3 "Recurrent"):
  * chunked form 4 for every variant (inter-chunk output 2 + state update 2); step form: GatedDeltaNet and KDA 7
  * (Sᵀk 2 + delta outer product 2 + decay 1 + output 2; KDA's per-channel decay is still 1 FLOP per state element),
- * Mamba2 5, linear 4. Unit: FLOP/(element·token).
+ * Mamba2 5 (`h ← exp(dt·A)·h + (dt·x)⊗B`: decay 1, outer product 1, add 1; `y = C·h` 2), linear 4.
+ * Unit: FLOP/(element·token).
  */
 export function stateFlopsPerElemPerToken(
   variant: LinearAttentionBlock['variant'],
@@ -112,10 +115,12 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
     ops.push(linearGemm('lin.g_a', { m: T, n: r, k: h }, ctx, m));
     ops.push(linearGemm('lin.g_b', { m: T, n: vL * dv, k: r }, ctx, m));
   } else {
-    // Formula: in_proj: m = T, n = 2·qkL·dk + vL·dv·(gate ? 2 : 1) + 2·vL, k = h
-    // See docs/simulation-model.md §5 "Linear-attention sharding"
-    const inN = 2 * qkL * dk + vL * dv * (block.outputGate ? 2 : 1) + 2 * vL;
-    const inParts = [qkL * dk, qkL * dk, vL * dv, ...(block.outputGate ? [vL * dv] : []), vL, vL];
+    // g: scalar gate outputs per value head (GatedDeltaNet / linear 2: a, b; Mamba2 1: dt)
+    const g = linearVariantConstants(block.variant).gateOutputsPerHead;
+    // Formula: in_proj: m = T, n = 2·qkL·dk + vL·dv·(gate ? 2 : 1) + g·vL, k = h
+    // See docs/simulation-model.md §5 "Linear-attention sharding", "Mamba-2"
+    const inN = 2 * qkL * dk + vL * dv * (block.outputGate ? 2 : 1) + g * vL;
+    const inParts = [qkL * dk, qkL * dk, vL * dv, ...(block.outputGate ? [vL * dv] : []), ...Array<number>(g).fill(vL)];
     ops.push(linearGemm('lin.in_proj', { m: T, n: inN, k: h }, ctx, { module: 'linear_attention', outParts: inParts }));
   }
 
@@ -123,7 +128,7 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
     const elems = T * C;
     const convStateBytes = ctx.seqs * C * (K - 1) * act;
     // Formula: conv1d over T·C: flopsPerElem = 2·K; rolling state seqs·C·(K−1)·bpe(act) read (if prior) and written
-    //          snapshots times; taps C·K·bpe(hp)
+    //          snapshots times; taps C·K·bpe(hp) [+ convBias: C·bpe(hp)]
     // See docs/simulation-model.md §5 "Linear-attention sharding"
     ops.push(
       elementwise(
@@ -134,7 +139,7 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
           flopsPerElem: 2 * K,
           activationReadBytes: elems * act,
           activationWriteBytes: elems * act,
-          weightBytes: C * K * hpBpe(ctx),
+          weightBytes: (C * K + (block.convBias === true ? C : 0)) * hpBpe(ctx),
           stateReadBytes: hasPriorState ? convStateBytes : 0,
           stateWriteBytes: snapshots * convStateBytes,
         },
@@ -155,7 +160,8 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
     keyDim: dk,
     valueDim: dv,
     mode,
-    chunkLen: mode === 'chunked' ? Math.min(RECURRENT_CHUNK_TOKENS, ctx.qLen) : 1,
+    // Formula: chunkLen = chunked ? min(chunkTokens ?? 64, qLen) : 1
+    chunkLen: mode === 'chunked' ? Math.min(block.chunkTokens ?? RECURRENT_CHUNK_TOKENS, ctx.qLen) : 1,
     stateFlopsPerElemPerToken: stateFlopsPerElemPerToken(block.variant, mode),
     // Formula: gate elems per token per head: KDA dk + 1 (per-channel decay + β), else 2
     gateElemsPerTokenPerHead: block.variant === 'kda' ? dk + 1 : 2,
@@ -171,7 +177,10 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
 
   const outElems = T * vL * dv;
   if (block.outputGate) {
-    // Formula: gated_rmsnorm over T·vL·dv: read 2·elems (o, z), write elems, gamma dv·bpe(hp)
+    // Formula: gated_rmsnorm over T·vL·dv: read 2·elems (o, z), write elems, gamma (Mamba2 vL·dv, else dv)·bpe(hp)
+    // (Mamba2's grouped RMSNorm has one γ per channel; GatedDeltaNet shares one dv-wide γ across heads.)
+    const spansHeads = block.variant !== 'kda' && linearVariantConstants(block.variant).outNormSpansHeads;
+    const gammaElems = spansHeads ? vL * dv : dv;
     ops.push(
       elementwise(
         'lin.out_norm',
@@ -180,7 +189,7 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
           elems: outElems,
           activationReadBytes: 2 * outElems * act,
           activationWriteBytes: outElems * act,
-          weightBytes: dv * hpBpe(ctx),
+          weightBytes: gammaElems * hpBpe(ctx),
         },
         ctx,
       ),

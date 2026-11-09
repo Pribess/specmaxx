@@ -36,6 +36,7 @@ Copied from the HF-loader research (`config.json`, `hf_quant_config.json`, `para
 | `mlx-community/Mistral-Large-4-1T-A52B-Text-4bit` | config | MLX affine 4-bit g64 |
 | `mistralai/Mistral-Large-4-1T-A52B-NVFP4` | params | no config.json; ModelOpt MIXED_PRECISION in params.json |
 | `amd/Mistral-Large-4-1T-A52B-Quark-MXFP4` | config (trimmed) | Quark MXFP4 + fp8 128×128 `layer_quant_config` + `exclude` |
+| `nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4` | hf_quant_config (trimmed) | ModelOpt MIXED_PRECISION (FP8, NVFP4 g16), `kv_cache_quant_algo: FP8`; config.json in `../` (`modelopt_mixed`) |
 
 ## Trimming
 
@@ -49,6 +50,10 @@ trimmed config carries a `quantization_config._fixture_note` saying what was rem
 - compressed-tensors (`intel-ai/DeepSeek…`): the 47k explicit expert targets of `group_0` reduced to layers
   0–3, experts 0–1; the `RoutedExperts` class target, which covers all experts, is kept. Vision ignore entries
   removed.
+- ModelOpt `quantized_layers` (`nvidia/NVIDIA-Nemotron-3.5-Super-VL…`, 5.6 MB `hf_quant_config.json` and the
+  config.json in `../`): entries naming routed experts 2 and up (`.mixer.experts.<n>.`, n ≥ 2) removed, the same
+  from `config_groups.*.targets`; experts 0–1 of every MoE layer, the MTP entries and everything else kept. The
+  note is `quantization._fixture_note` in hf_quant_config.json. Derived defaults equal the full files'.
 
 ## EXL3 (ExLlamaV3) fixtures
 

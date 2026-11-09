@@ -8,6 +8,12 @@
  * - **Mode B** (`ep % tp == 0`, `ep > tp`, `(tp·dp) % ep == 0`): the EP group spans `p = ep/tp` replicas. Each
  *   device dispatches its token slice `Ts = ceil(T/tp)` with all-to-alls; experts are unsharded (`etp = 1`).
  *
+ * Latent MoE (`latentDim` l set, Muse Spark, Nemotron): a replicated `h → l` projection runs after the router and
+ * before the dispatch, the routed experts, dispatch/combine and the weighted sum work at width l, and a replicated
+ * `l → h` projection follows the weighted sum (in mode A on the TP partial sums, valid by linearity, so the single
+ * all-reduce stays at h). Router and shared experts stay at h. Without `latentDim` nothing changes (l = h, no
+ * projections).
+ *
  * Routing is balanced: the busiest device gets the ceiling of its average share (`A` assignments), spread over
  * `a = min(Eloc, A)` active experts with `mE = ceil(A/a)` tokens each.
  *
@@ -120,16 +126,39 @@ function epAllToAll(name: string, messageBytes: number, dtype: CollectiveOp['dty
 }
 
 /**
- * Stored bytes of ONE routed expert on one device: its (gated ? 3 : 2) matrices of `h × fe/etp` in the routed-expert
- * format (`gemmWeightBytes`, incl. 2:4 metadata and side vectors). Unit: bytes.
+ * Width l the routed experts of a MoE block read and write: `latentDim` for a latent MoE, else the hidden h. It is
+ * also the width of the EP dispatch/combine messages and of the weighted sum. Unit: elements.
+ */
+export function moeExpertWidth(block: MoeBlock): number {
+  return block.latentDim ?? block.hidden;
+}
+
+/**
+ * Stored bytes of a latent MoE's two projections on one device: `h → l` (`n l, k h`) plus `l → h` (`n h, k l`)
+ * in the `'moe_latent'` format, replicated (the same on every TP rank, never offloaded); 0 without `latentDim`.
+ * Computed per GEMM like the ops of {@link lowerMoe}, so resident and streamed bytes agree. Unit: bytes.
+ */
+export function moeLatentWeightBytes(block: MoeBlock, ctx: LoweringContext): number {
+  if (block.latentDim === undefined) return 0;
+  const h = block.hidden;
+  const l = block.latentDim;
+  const fmt = moduleQuant(ctx, 'moe_latent');
+  // Formula: W_latent = gemmWeightBytes(1, l, h, w_latent) + gemmWeightBytes(1, h, l, w_latent)  ≈ 2·h·l·bpe(w_latent)
+  // See docs/simulation-model.md §5 "MoE modes A/B"
+  return gemmWeightBytes(1, l, h, fmt.weights, fmt.sparsity) + gemmWeightBytes(1, h, l, fmt.weights, fmt.sparsity);
+}
+
+/**
+ * Stored bytes of ONE routed expert on one device: its (gated ? 3 : 2) matrices of `l × fe/etp` in the routed-expert
+ * format (`gemmWeightBytes`, incl. 2:4 metadata and side vectors), l = {@link moeExpertWidth}. Unit: bytes.
  */
 export function expertWeightBytes(block: MoeBlock, ctx: LoweringContext): number {
   const layout = moeLayout(block, ctx.parallel);
   const routedFmt = moduleQuant(ctx, 'routed_experts');
   const feLocal = block.expertIntermediate / layout.expertTp;
-  // Formula: W_expert = gemmWeightBytes(gated ? 3 : 2, h, fe/etp, w_routed)
+  // Formula: W_expert = gemmWeightBytes(gated ? 3 : 2, l, fe/etp, w_routed),  l = latentDim ?? h
   // See docs/simulation-model.md §12 ("Expert hit ratio")
-  return gemmWeightBytes(block.gated ? 3 : 2, block.hidden, feLocal, routedFmt.weights, routedFmt.sparsity);
+  return gemmWeightBytes(block.gated ? 3 : 2, moeExpertWidth(block), feLocal, routedFmt.weights, routedFmt.sparsity);
 }
 
 /**
@@ -179,16 +208,18 @@ export function expertFetchOp(
 }
 
 /**
- * MoE ops. Mode A: router → topk → gate_up → act → down → combine → [shared MLP /tp] → TP all-reduce.
- * Mode B: router (Ts) → topk → a2a dispatch → gate_up → act → down → a2a combine → combine → [shared MLP, full]
- * → TP all-gather. With the layer's experts offloaded (`layerIndex` in the placement's range), the expert fetch
- * comes first.
+ * MoE ops. Mode A: router → topk → [latent_in] → gate_up → act → down → combine → [latent_out] → [shared MLP /tp]
+ * → TP all-reduce. Mode B: router (Ts) → topk → [latent_in] → a2a dispatch → gate_up → act → down → a2a combine →
+ * combine → [latent_out] → [shared MLP, full] → TP all-gather. The bracketed latent projections exist only with
+ * `latentDim`. With the layer's experts offloaded (`layerIndex` in the placement's range), the expert fetch comes first.
  */
 export function lowerMoe(block: MoeBlock, ctx: LoweringContext, layerIndex?: number): Op[] {
   const { tp, ep } = ctx.parallel;
   const layout = moeLayout(block, ctx.parallel);
   const T = stepTokens(ctx);
   const h = block.hidden;
+  // l: width of the routed experts, the dispatch/combine messages and the weighted sum (= h without latentDim)
+  const l = moeExpertWidth(block);
   const E = block.experts;
   const act = actBpe(ctx);
   // Formula: Ts = mode A ? T : ceil(T/tp)    (tokens this device routes)
@@ -222,30 +253,37 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext, layerIndex?: num
     ),
   );
 
-  if (layout.mode === 'B') {
-    // Formula: dispatch S = Ts·k·h·bpe(act)
+  if (block.latentDim !== undefined) {
+    // Latent input projection h → l, replicated (every TP rank computes all of it, as vLLM ReplicatedLinear).
+    // Formula: latent_in: m = Ts, n = l, k = h
     // See docs/simulation-model.md §5 "MoE modes A/B"
-    ops.push(epAllToAll('moe.dispatch', routedTokens * block.topK * h * act, ctx.quant.activations, ep));
+    ops.push(linearGemm('moe.latent_in', { m: routedTokens, n: l, k: h }, ctx, { module: 'moe_latent' }));
+  }
+
+  if (layout.mode === 'B') {
+    // Formula: dispatch S = Ts·k·l·bpe(act)
+    // See docs/simulation-model.md §5 "MoE modes A/B"
+    ops.push(epAllToAll('moe.dispatch', routedTokens * block.topK * l * act, ctx.quant.activations, ep));
   }
 
   // Grouped expert GEMMs over a active experts, mE tokens each.
-  // Formula: gate_up: batch = a, m = mE, n = (gated ? 2 : 1)·fe/etp, k = h; down: batch = a, m = mE, n = h, k = fe/etp
+  // Formula: gate_up: batch = a, m = mE, n = (gated ? 2 : 1)·fe/etp, k = l; down: batch = a, m = mE, n = l, k = fe/etp
   const upWidth = (block.gated ? 2 : 1) * feLocal;
-  ops.push(linearGemm('moe.gate_up', { m: mE, n: upWidth, k: h }, ctx, { module: 'routed_experts', batch: a, outParts: block.gated ? [feLocal, feLocal] : [feLocal] }));
+  ops.push(linearGemm('moe.gate_up', { m: mE, n: upWidth, k: l }, ctx, { module: 'routed_experts', batch: a, outParts: block.gated ? [feLocal, feLocal] : [feLocal] }));
   ops.push(activationOp('moe.act', block, a * mE, feLocal, ctx));
-  ops.push(linearGemm('moe.down', { m: mE, n: h, k: feLocal }, ctx, { module: 'routed_experts', batch: a }));
+  ops.push(linearGemm('moe.down', { m: mE, n: l, k: feLocal }, ctx, { module: 'routed_experts', batch: a }));
 
   if (layout.mode === 'B') {
-    // Formula: combine S = Ts·k·h·reduceBpe
-    ops.push(epAllToAll('moe.combine_a2a', routedTokens * block.topK * h * reduceBpe(ctx), reduceDtype(ctx), ep));
+    // Formula: combine S = Ts·k·l·reduceBpe
+    ops.push(epAllToAll('moe.combine_a2a', routedTokens * block.topK * l * reduceBpe(ctx), reduceDtype(ctx), ep));
   }
 
-  // Weighted sum of the expert outputs: mode A over a·mE rows into a T·h partial-sum buffer;
-  // mode B over the Ts·k returned rows into Ts·h.
-  // Formula: mode A: elems = a·mE·h, write T·h·reduceBpe; mode B: elems = Ts·k·h, write Ts·h·bpe(act)
+  // Weighted sum of the expert outputs: mode A over a·mE rows into a T·l partial-sum buffer;
+  // mode B over the Ts·k returned rows into Ts·l.
+  // Formula: mode A: elems = a·mE·l, write T·l·reduceBpe; mode B: elems = Ts·k·l, write Ts·l·bpe(act)
   const combineRows = layout.mode === 'A' ? a * mE : routedTokens * block.topK;
-  const combineElems = combineRows * h;
-  const combineWrite = layout.mode === 'A' ? T * h * reduceBpe(ctx) : routedTokens * h * act;
+  const combineElems = combineRows * l;
+  const combineWrite = layout.mode === 'A' ? T * l * reduceBpe(ctx) : routedTokens * l * act;
   ops.push(
     elementwise(
       'moe.combine',
@@ -254,6 +292,14 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext, layerIndex?: num
       ctx,
     ),
   );
+
+  if (block.latentDim !== undefined) {
+    // Latent output projection l → h, replicated. In mode A it maps each rank's T·l partial sum to a T·h partial
+    // sum: Σ_r W·p_r = W·Σ_r p_r (linearity), so the one all-reduce below stays at h.
+    // Formula: latent_out: m = Ts, n = h, k = l
+    // See docs/simulation-model.md §5 "MoE modes A/B"
+    ops.push(linearGemm('moe.latent_out', { m: routedTokens, n: h, k: l }, ctx, { module: 'moe_latent' }));
+  }
 
   if (block.sharedExperts > 0) {
     // Mode A: TP-sharded by tp (reduced by the one all-reduce below); mode B: unsharded on the Ts slice.
@@ -279,31 +325,34 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext, layerIndex?: num
 }
 
 /**
- * Resident MoE weights on one device: ALL local experts (not only the active ones), the router and the shared
- * experts. With the layer's experts offloaded (`layerIndex` in the placement's range), only the `C = f·E_loc` resident
- * experts count (the full set lives on the tier, design doc §2.7). Unit: bytes.
+ * Resident MoE weights on one device: ALL local experts (not only the active ones), the router, the latent
+ * projections (if any, replicated) and the shared experts. With the layer's experts offloaded (`layerIndex` in the
+ * placement's range), only the `C = f·E_loc` resident experts count (the full set lives on the tier, design doc
+ * §2.7); router, latent projections and shared experts stay resident. Unit: bytes.
  */
 export function moeResidentWeightBytes(block: MoeBlock, ctx: LoweringContext, layerIndex?: number): number {
   const layout = moeLayout(block, ctx.parallel);
   const h = block.hidden;
+  const l = moeExpertWidth(block);
   const routedFmt = moduleQuant(ctx, 'routed_experts');
   const sharedFmt = moduleQuant(ctx, 'shared_experts');
   const matrices = block.gated ? 3 : 2;
   const feLocal = block.expertIntermediate / layout.expertTp;
   const sharedShards = layout.mode === 'A' ? ctx.parallel.tp : 1;
   const sharedLocal = (block.sharedExperts * block.sharedIntermediate) / sharedShards;
-  // Formula: W = Eloc·(gated ? 3 : 2)·h·fe/etp·bpe(w_routed) + E·h·bpe(hp)
-  //            + (gated ? 3 : 2)·h·S·fs/(mode A ? tp : 1)·bpe(w_shared)
+  // Formula: W = Eloc·(gated ? 3 : 2)·l·fe/etp·bpe(w_routed) + E·h·bpe(hp) + [latent] 2·h·l·bpe(w_latent)
+  //            + (gated ? 3 : 2)·h·S·fs/(mode A ? tp : 1)·bpe(w_shared),   l = latentDim ?? h
   // Formula (offloaded layer, f < 1): the routed part becomes C·W_expert, C = f·Eloc
   // See docs/simulation-model.md §8 "Memory fit", §12 ("Memory tiers")
   const placement = expertPlacementAt(ctx, layerIndex);
   const experts =
     placement === undefined || placement.residentFraction >= 1
-      ? gemmWeightBytes(layout.localExperts * matrices, h, feLocal, routedFmt.weights, routedFmt.sparsity)
+      ? gemmWeightBytes(layout.localExperts * matrices, l, feLocal, routedFmt.weights, routedFmt.sparsity)
       : placement.residentFraction * layout.localExperts * expertWeightBytes(block, ctx);
   const router = block.experts * h * hpBpe(ctx);
+  const latent = moeLatentWeightBytes(block, ctx);
   const shared = gemmWeightBytes(matrices, h, sharedLocal, sharedFmt.weights, sharedFmt.sparsity);
-  return experts + router + shared;
+  return experts + router + latent + shared;
 }
 
 /**
@@ -314,6 +363,6 @@ export function moeLocalExpertBytes(block: MoeBlock, ctx: LoweringContext): numb
   const layout = moeLayout(block, ctx.parallel);
   const routedFmt = moduleQuant(ctx, 'routed_experts');
   const feLocal = block.expertIntermediate / layout.expertTp;
-  // Formula: W_experts = Eloc·(gated ? 3 : 2)·h·fe/etp·bpe(w_routed)
-  return gemmWeightBytes(layout.localExperts * (block.gated ? 3 : 2), block.hidden, feLocal, routedFmt.weights, routedFmt.sparsity);
+  // Formula: W_experts = Eloc·(gated ? 3 : 2)·l·fe/etp·bpe(w_routed),  l = latentDim ?? h
+  return gemmWeightBytes(layout.localExperts * (block.gated ? 3 : 2), moeExpertWidth(block), feLocal, routedFmt.weights, routedFmt.sparsity);
 }

@@ -51,6 +51,22 @@ describe('unwrapTextConfig', () => {
     expect(v.quantizationConfig).toEqual({ quant_method: 'fp8' });
   });
 
+  it('unwraps llm_config (Nemotron-H omni) and keeps quantization and vision at the top', () => {
+    const v = view(fixtureRepoFiles('nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4').config);
+    expect(v.nested).toBe(true);
+    expect(v.text.model_type).toBe('nemotron_h');
+    expect(v.text.hidden_size).toBe(4096);
+    expect(v.topModelType).toBe('nemotron_h_omni');
+    expect(v.textModelType).toBe('nemotron_h');
+    expect(v.textArchitectures).toEqual(['NemotronHForCausalLM']);
+    expect((v.quantizationConfig as { quant_method?: string }).quant_method).toBe('modelopt_mixed');
+    expect(v.visionConfig).toBeDefined();
+    expect(v.notes).toContain('language model only; vision/audio towers excluded');
+    // text_config wins over llm_config; a non-object llm_config is rejected.
+    expect(view({ text_config: { model_type: 'a' }, llm_config: { model_type: 'b' } }).text.model_type).toBe('a');
+    expect(unwrapTextConfig({ llm_config: 3 })).toEqual({ kind: 'invalid_config', errors: ['llm_config: expected object'] });
+  });
+
   it('rejects non-object configs and text_configs', () => {
     expect(unwrapTextConfig(null)).toEqual({ kind: 'invalid_config', errors: ['config.json: expected a JSON object'] });
     expect(unwrapTextConfig({ text_config: 3 })).toEqual({ kind: 'invalid_config', errors: ['text_config: expected object'] });

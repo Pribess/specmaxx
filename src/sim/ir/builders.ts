@@ -11,6 +11,9 @@
  *   [ngram] → hc_pre → [norm] → mixer → [short_conv] → [post-norm] → hc_post
  *           → hc_pre → [norm] → ffn → [short_conv] → [post-norm] → hc_post
  *
+ * A one-sublayer layer ({@link singleBlockLayer}, Nemotron-H: each layer is ONE Mamba-2, attention or MoE block)
+ * is `norm → mixer|ffn → residual`.
+ *
  * Defaults (when a field is omitted): activation `'silu'`, gated `true`, norm `'rmsnorm'`, rope `true`,
  * convKernel 4, outputGate `false`, residual `{ kind: 'plain' }`, finalNorm `'rmsnorm'`, residualStreams 1;
  * every other boolean `false`, every other count 0, every other optional field absent.
@@ -102,8 +105,12 @@ export type MixerParams =
       valueDim: number;
       /** Causal conv width (default 4; 0 = no conv). Unit: taps. */
       convKernel?: number;
-      /** z-gated output norm (default false; must be true for kda). */
+      /** z-gated output norm (default false; must be true for kda; true for mamba2). */
       outputGate?: boolean;
+      /** conv1d bias over the conv channels (see {@link LinearAttentionBlock.convBias}; default false). */
+      convBias?: boolean;
+      /** Chunk length of the chunked prefill form (see {@link LinearAttentionBlock.chunkTokens}; default 64). Unit: tokens. */
+      chunkTokens?: number;
       /** Low-rank gate rank r, set iff variant is 'kda'. Unit: elements. */
       gateRank?: number;
     };
@@ -115,8 +122,8 @@ export type FfnParams =
       kind: 'dense';
       /** Intermediate width. Unit: elements. */
       intermediate: number;
-      /** Activation (default 'silu'). */
-      activation?: 'silu' | 'gelu' | 'relu';
+      /** Activation (default 'silu'; 'relu2' only with gated: false). */
+      activation?: 'silu' | 'gelu' | 'relu' | 'relu2';
       /** GLU-style (default true). */
       gated?: boolean;
       /** Projection biases (default false). */
@@ -131,12 +138,14 @@ export type FfnParams =
       topK: number;
       /** Intermediate width of one routed expert. Unit: elements. */
       expertIntermediate: number;
+      /** Latent width l of the routed experts (see {@link MoeBlock.latentDim}); default none (experts at hidden). Unit: elements. */
+      latentDim?: number;
       /** Shared experts (default 0). Count. */
       sharedExperts?: number;
       /** Intermediate width of EACH shared expert (default 0). Unit: elements. */
       sharedIntermediate?: number;
-      /** Activation (default 'silu'). */
-      activation?: 'silu' | 'gelu' | 'relu';
+      /** Activation (default 'silu'; 'relu2' only with gated: false). */
+      activation?: 'silu' | 'gelu' | 'relu' | 'relu2';
       /** GLU-style experts (default true). */
       gated?: boolean;
     };
@@ -251,6 +260,8 @@ function mixerBlock(hidden: number, m: MixerParams): BlockSpec {
         convKernel: m.convKernel ?? 4,
         outputGate: m.outputGate ?? false,
         ...(m.gateRank !== undefined ? { gateRank: m.gateRank } : {}),
+        ...(m.convBias !== undefined ? { convBias: m.convBias } : {}),
+        ...(m.chunkTokens !== undefined ? { chunkTokens: m.chunkTokens } : {}),
       };
       return block;
     }
@@ -288,6 +299,8 @@ function ffnBlock(hidden: number, f: FfnParams): BlockSpec {
         activation: f.activation ?? 'silu',
         sharedExperts: f.sharedExperts ?? 0,
         sharedIntermediate: f.sharedIntermediate ?? 0,
+        // Only when given, so a block without it is deep-equal to one built before the field existed.
+        ...(f.latentDim === undefined ? {} : { latentDim: f.latentDim }),
       };
       return block;
     }
@@ -302,7 +315,11 @@ function ffnBlock(hidden: number, f: FfnParams): BlockSpec {
  * One sublayer (`prefix` 'mixer' or 'ffn') with its residual handling: plain `norm → branch → [short_conv] →
  * [post-norm] → residual`, or hyper `hc_pre → [norm] → branch → [short_conv] → [post-norm] → hc_post`.
  */
-function sublayerBlocks(p: DecoderLayerParams, prefix: 'mixer' | 'ffn', branch: BlockSpec): BlockSpec[] {
+function sublayerBlocks(
+  p: Pick<DecoderLayerParams, 'hidden' | 'norm' | 'residual' | 'shortConv' | 'postNorms'>,
+  prefix: 'mixer' | 'ffn',
+  branch: BlockSpec,
+): BlockSpec[] {
   const norm = p.norm ?? 'rmsnorm';
   const h = p.hidden;
   const residual = p.residual ?? { kind: 'plain' };
@@ -344,6 +361,29 @@ export function decoderLayer(p: DecoderLayerParams): LayerSpec {
   }
   blocks.push(...sublayerBlocks(p, 'mixer', mixerBlock(h, p.mixer)));
   blocks.push(...sublayerBlocks(p, 'ffn', ffnBlock(h, p.ffn)));
+  return { name: p.name ?? 'layer', blocks };
+}
+
+/**
+ * Parameters of a one-sublayer layer: exactly one of `mixer` (attention or linear attention / Mamba-2) or `ffn`
+ * (dense or MoE), with a plain residual.
+ */
+export type SingleBlockLayerParams = {
+  /** Width of the residual stream. Unit: elements. */
+  hidden: number;
+  /** Norm function of the pre-norm (default 'rmsnorm'). */
+  norm?: 'rmsnorm' | 'layernorm';
+  /** Layer display name (default 'layer'). */
+  name?: string;
+} & ({ mixer: MixerParams; ffn?: never } | { ffn: FfnParams; mixer?: never });
+
+/**
+ * A layer with ONE sublayer, `norm → mixer|ffn → residual` (Nemotron-H `hybrid_override_pattern`: each layer is a
+ * Mamba-2, attention or MoE block). Same blocks and names as that sublayer of {@link decoderLayer}.
+ */
+export function singleBlockLayer(p: SingleBlockLayerParams): LayerSpec {
+  const branch = p.mixer !== undefined ? mixerBlock(p.hidden, p.mixer) : ffnBlock(p.hidden, p.ffn);
+  const blocks = sublayerBlocks(p, p.mixer !== undefined ? 'mixer' : 'ffn', branch);
   return { name: p.name ?? 'layer', blocks };
 }
 

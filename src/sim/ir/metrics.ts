@@ -398,9 +398,24 @@ function indexerBytes(op: IndexerOp): ByteBreakdown {
 // ---------------------------------------------------------------------------------------------------------------
 // Recurrent
 
-/** FLOP of a linear-attention / SSM mixer step (state terms + intra-chunk attention in chunked mode). Unit: FLOP. */
+/**
+ * FLOP of a linear-attention / SSM mixer step (state terms + intra-chunk attention in chunked mode). Mamba2's chunked
+ * (SSD) form computes the intra-chunk scores C·Bᵀ once per B/C group (`qkHeads`) and applies them to x per head;
+ * the other variants score q·k per head. Unit: FLOP.
+ */
 function recurrentFlops(op: RecurrentOp): number {
   const stateElemsPerHead = op.keyDim * op.valueDim;
+  if (op.variant === 'mamba2') {
+    const T = op.seqs * op.qLen;
+    const statePerToken = op.heads * op.stateFlopsPerElemPerToken * stateElemsPerHead;
+    // Intra-chunk, per token: causal C·Bᵀ over (Q+1)/2 keys × 2 FLOP × N, once per group, plus (L∘CBᵀ)·X
+    // over (Q+1)/2 keys × 2 FLOP × P per head.
+    const intraChunkPerToken =
+      op.mode === 'chunked' ? (op.chunkLen + 1) * (op.qkHeads * op.keyDim + op.heads * op.valueDim) : 0;
+    // Formula: F = T·( H·c_s·N·P + (chunked ? (Q+1)·(G·N + H·P) : 0) ),  T = seqs·qLen, G = qkHeads, Q = chunkLen
+    // See docs/simulation-model.md §3 "Recurrent", §5 "Mamba-2"
+    return T * (statePerToken + intraChunkPerToken);
+  }
   // Intra-chunk causal attention: on average (C+1)/2 keys per query, 2 FLOP per element over dk + dv.
   const intraChunkPerToken = op.mode === 'chunked' ? (op.chunkLen + 1) * (op.keyDim + op.valueDim) : 0;
   // Formula: F = seqs·qLen·heads·( c_s·dk·dv + (chunked ? (C+1)·(dk+dv) : 0) )

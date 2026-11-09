@@ -28,6 +28,7 @@ const MODULE_ORDER: WeightModule[] = [
   'dense_mlp',
   'shared_experts',
   'routed_experts',
+  'moe_latent',
   'residual_mixer',
   'ngram',
 ];
@@ -148,7 +149,7 @@ function splitNotes(cls: ModuleClass, d: ClassDecision): string[] {
 /** Notes for ignore-list entries that match no probe and do not name a module outside the IR. */
 function unknownIgnoreNotes(reading: SchemeReading, probes: Probe[], numLayers: number): string[] {
   const known =
-    /(visual|vision|audio|mtp|norm|bias|conv|sconv|embed|projector|patch|aligner|merger|sink|gate|a_log|scale|lm_head|head|output|router|eh_proj|_hc|hc_|hyper_connection|mapping_proj|attn_mha|attn_mqa|position|rotary|lerope|ssmax)/i;
+    /(visual|vision|audio|mtp|norm|bias|conv|sconv|embed|projector|patch|aligner|merger|sink|gate|a_log|scale|lm_head|head|output|router|eh_proj|_hc|hc_|hyper_connection|mapping_proj|attn_mha|attn_mqa|position|rotary|lerope|ssmax|mlp1)/i;
   const notes: string[] = [];
   for (const { label, patterns } of reading.ignoreLists) {
     const unknown: string[] = [];

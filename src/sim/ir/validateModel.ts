@@ -96,7 +96,7 @@ function selectionErrors(model: ModelSpec, i: number, block: AttentionBlock, sel
   return [`layer ${i}: indexer has ownsKeys false but no earlier layer owns indexer keys`];
 }
 
-/** Errors of one block of layer i that do not depend on other layers (KDA fields, residual-stream widths). */
+/** Errors of one block of layer i that do not depend on other layers (KDA fields, residual-stream widths, MoE latent width). */
 function blockErrors(model: ModelSpec, i: number, block: BlockSpec): string[] {
   const streams = model.residualStreams ?? 1;
   const at = `layer ${i} ${block.name}`;
@@ -107,6 +107,9 @@ function blockErrors(model: ModelSpec, i: number, block: BlockSpec): string[] {
         errors.push(`${at}: gateRank must be set exactly when variant is 'kda'`);
       }
       if (block.variant === 'kda' && !block.outputGate) errors.push(`${at}: kda needs outputGate true`);
+      if (block.chunkTokens !== undefined && !(Number.isInteger(block.chunkTokens) && block.chunkTokens > 0)) {
+        errors.push(`${at}: chunkTokens ${block.chunkTokens} must be a positive integer`);
+      }
       return errors;
     }
     case 'hc_pre':
@@ -120,9 +123,22 @@ function blockErrors(model: ModelSpec, i: number, block: BlockSpec): string[] {
         return [`${at}: outputDim ${block.outputDim} must equal residualStreams·hidden ${streams * model.hidden}`];
       }
       return [];
+    case 'moe':
+      if (block.latentDim !== undefined && !(Number.isInteger(block.latentDim) && block.latentDim > 0)) {
+        return [`${at}: latentDim ${block.latentDim} must be a positive integer`];
+      }
+      return [];
     default:
       return [];
   }
+}
+
+/** Errors of a feed-forward block's activation: `relu2` (squared ReLU) is defined only ungated. */
+function activationErrors(i: number, block: BlockSpec): string[] {
+  if ((block.kind === 'mlp' || block.kind === 'moe') && block.activation === 'relu2' && block.gated) {
+    return [`layer ${i} ${block.name}: activation relu2 needs gated false`];
+  }
+  return [];
 }
 
 /**
@@ -134,13 +150,15 @@ function blockErrors(model: ModelSpec, i: number, block: BlockSpec): string[] {
  * - an indexer with `ownsKeys: false` has an earlier key-owning indexer of the same headDim and keyPoolTokens;
  * - `gateRank` is set iff the linear-attention variant is `'kda'` (which also needs `outputGate`);
  * - every `hc_pre` / `hc_post` has `residualStreams` streams of width `hidden`, and every n-gram block writes
- *   `residualStreams · hidden` elements.
+ *   `residualStreams · hidden` elements;
+ * - a linear-attention `chunkTokens`, when set, is a positive integer, and a `relu2` activation is ungated;
+ * - a MoE `latentDim`, when set, is a positive integer.
  * Messages name the layer index.
  */
 export function modelSpecErrors(model: ModelSpec): string[] {
   const errors: string[] = [];
   model.layers.forEach((layer, i) => {
-    for (const block of layer.blocks) errors.push(...blockErrors(model, i, block));
+    for (const block of layer.blocks) errors.push(...blockErrors(model, i, block), ...activationErrors(i, block));
     const attn = attentionOf(layer);
     if (attn === undefined) return;
     if (attn.kind === 'mla_attention' && attn.kvCacheFromLayer !== undefined) {

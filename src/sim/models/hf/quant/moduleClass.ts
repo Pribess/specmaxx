@@ -5,8 +5,9 @@
  * {@link ModuleClass}. The readers answer per probe; `assemble.ts` takes the majority per class. Probes exist
  * only where the module exists: attention projections in full-attention layers, linear-attention ones in
  * linear layers, dense-MLP ones in dense layers, experts in MoE layers, n-gram ones in n-gram layers (from
- * `layer_types`, `mlp_layer_types`, `moe_layer_freq`, `first_k_dense_replace`, …). MTP layers (index ≥
- * `num_hidden_layers`, or names under `mtp`) and vision / audio towers are never probed: they are not in the IR.
+ * `layer_types`, `mlp_layer_types`, `moe_layer_freq`, `first_k_dense_replace`, Nemotron-H `layers_block_type`,
+ * …). MTP layers (index ≥ `num_hidden_layers`, or names under `mtp`) and vision / audio towers are never probed:
+ * they are not in the IR.
  *
  * Several naming variants exist per family (HF `self_attn.q_proj` vs Mistral-native `attention.wq`, MiniMax
  * experts `w1` vs `gate_proj`, `model.` vs `model.language_model.` prefixes). The variant whose names occur
@@ -16,14 +17,15 @@
 import type { Dtype } from '../../../ir/dtype';
 import type { ModuleClass, Probe, ProbeKind } from './common';
 import { numAt, numListAt, objAt, strListAt } from './common';
+import { nemotronBlockTypes } from '../nemotronHPattern';
 import type { JsonObject } from '../types';
 
 /**
  * Where in the layer stack a leaf exists: every layer, full- / linear-attention layers, dense / MoE layers,
  * n-gram layers, KV-owning full-attention layers (`kv`: layers that compute their own KV latent, the rest
- * share one) and indexer-owning full-attention layers (`index`).
+ * share one), indexer-owning full-attention layers (`index`) and MoE layers of a latent MoE (`moe_latent`).
  */
-type LeafWhere = 'all' | 'full' | 'linear' | 'dense' | 'moe' | 'ngram' | 'kv' | 'index';
+type LeafWhere = 'all' | 'full' | 'linear' | 'dense' | 'moe' | 'ngram' | 'kv' | 'index' | 'moe_latent';
 
 /** One projection of a decoder layer (or a top-level module) in one naming. */
 interface LeafSpec {
@@ -58,12 +60,20 @@ interface NamingVariant {
 
 /** Which layers have which attention / MLP kind, as far as the config says. */
 export interface LayerLayout {
-  /** Decoder layers in the IR (`num_hidden_layers`; MTP layers excluded). Count. */
+  /**
+   * Decoder layers in the IR (`num_hidden_layers`, or the length of Nemotron-H's `layers_block_type`; MTP layers
+   * excluded). Count.
+   */
   numLayers: number;
-  /** Attention kind per layer: `full` (softmax attention, incl. sparse/MLA) or `linear` (GDN, KDA). */
-  attention: ('full' | 'linear')[];
-  /** MLP kind per layer. */
-  mlp: ('dense' | 'moe')[];
+  /**
+   * Attention kind per layer: `full` (softmax attention, incl. sparse/MLA), `linear` (GDN, KDA, Mamba-2) or
+   * `none` (a Nemotron-H MoE / MLP layer, which has no mixer).
+   */
+  attention: ('full' | 'linear' | 'none')[];
+  /** MLP kind per layer; `none` for a Nemotron-H Mamba / attention layer, which has no MLP. */
+  mlp: ('dense' | 'moe' | 'none')[];
+  /** True when the MoE runs its routed experts in a latent width (`moe_latent_size` set). */
+  moeLatent: boolean;
   /** Layers with n-gram / Engram modules (0-based), empty when none. */
   ngramLayers: number[];
   /** Layers that own their KV projections (`kv_source_layer_ids`, `kv_source_layers`), or null for all. */
@@ -310,6 +320,30 @@ const FAMILY_NAMING: Record<string, NamingVariant[]> = {
       ],
     },
   ],
+  nemotron_h: [
+    { prefix: 'backbone.', lm: 'lm_head' },
+    { prefix: 'language_model.backbone.', lm: 'language_model.lm_head' },
+  ].map(({ prefix, lm }) => ({
+    // Every layer holds one sublayer under `mixer` (transformers / vLLM `NemotronHBlock`); `mixer.gate` is the
+    // router, not a module.
+    prefix,
+    top: [
+      { leaf: lm, cls: 'lm_head' as const },
+      { leaf: `${prefix}embeddings`, cls: 'embeddings' as const, kind: 'embedding' as const },
+    ],
+    groups: [
+      {
+        leaves: [
+          ...leaves('mixer', ['in_proj', 'out_proj'], 'linear_attention', { where: 'linear' }),
+          ...leaves('mixer', ['q_proj', 'k_proj', 'v_proj', 'o_proj'], 'attention', { where: 'full' }),
+          ...leaves('mixer.experts.0', ['up_proj', 'down_proj'], 'routed_experts', { where: 'moe' }),
+          ...leaves('mixer.shared_experts', ['up_proj', 'down_proj'], 'shared_experts', { where: 'moe' }),
+          ...leaves('mixer', ['fc1_latent_proj', 'fc2_latent_proj'], 'moe_latent', { where: 'moe_latent' }),
+          ...leaves('mixer', ['up_proj', 'down_proj'], 'dense_mlp', { where: 'dense' }),
+        ],
+      },
+    ],
+  })),
   generic: ['model.', 'model.language_model.', 'language_model.model.', ''].map((prefix) => ({
     prefix,
     top: hfTop(prefix),
@@ -333,6 +367,7 @@ export function familyKey(top: JsonObject, text: JsonObject): string {
     if (t.startsWith('glm_moe_dsa')) return 'glm_moe_dsa';
     if (t.startsWith('mistral_large4')) return 'mistral_large4';
     if (t.startsWith('inkling')) return 'inkling';
+    if (t.startsWith('nemotron_h')) return 'nemotron_h';
   }
   return 'generic';
 }
@@ -353,9 +388,28 @@ function firstNum(o: JsonObject | undefined, keys: string[]): number | undefined
 /**
  * The attention and MLP kind of every decoder layer, from the usual config fields. Approximate by design: the
  * families (`families/*.ts`) do the authoritative parsing; this only decides which probes exist.
+ *
+ * `family` is the naming family ({@link familyKey}). For `'nemotron_h'` the layer roles come from
+ * `layers_block_type` / `hybrid_override_pattern` ({@link nemotronBlockTypes}): one sublayer per layer, so a
+ * Mamba layer is (`linear`, `none`), an attention layer (`full`, `none`), a MoE layer (`none`, `moe`) and an MLP
+ * layer (`none`, `dense`). The list's length is the layer count (Super-VL's `llm_config` has no
+ * `num_hidden_layers`; transformers also derives it from the list).
  */
-export function layerLayout(text: JsonObject, paramsJson?: unknown): LayerLayout {
+export function layerLayout(text: JsonObject, paramsJson?: unknown, family?: string): LayerLayout {
   const params = typeof paramsJson === 'object' && paramsJson !== null ? (paramsJson as JsonObject) : undefined;
+  const moeLatent = (numAt(text, 'moe_latent_size') ?? 0) > 0;
+  const blocks = family === 'nemotron_h' ? nemotronBlockTypes(text) : undefined;
+  if (Array.isArray(blocks)) {
+    return {
+      numLayers: blocks.length,
+      attention: blocks.map((b) => (b === 'mamba' ? 'linear' : b === 'attention' ? 'full' : 'none')),
+      mlp: blocks.map((b) => (b === 'moe' ? 'moe' : b === 'mlp' ? 'dense' : 'none')),
+      moeLatent,
+      ngramLayers: [],
+      kvLayers: null,
+      indexLayers: null,
+    };
+  }
   const numLayers = firstNum(text, ['num_hidden_layers', 'n_layers']) ?? numAt(params, 'n_layers') ?? 0;
   const layerTypes = strListAt(text, 'layer_types');
   const kdaLayers = numListAt(objAt(text, 'linear_attn_config'), 'kda_layers') ?? [];
@@ -398,7 +452,7 @@ export function layerLayout(text: JsonObject, paramsJson?: unknown): LayerLayout
     : indexTypes.length > 0
       ? indexTypes.flatMap((t, i) => (t === 'full' ? [i] : []))
       : null;
-  return { numLayers, attention, mlp, ngramLayers, kvLayers, indexLayers };
+  return { numLayers, attention, mlp, moeLatent, ngramLayers, kvLayers, indexLayers };
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -445,6 +499,8 @@ function existsIn(where: LeafWhere, i: number, layout: LayerLayout): boolean {
       return layout.attention[i] === 'full' && (layout.kvLayers === null || layout.kvLayers.includes(i));
     case 'index':
       return layout.attention[i] === 'full' && (layout.indexLayers === null || layout.indexLayers.includes(i));
+    case 'moe_latent':
+      return layout.mlp[i] === 'moe' && layout.moeLatent;
   }
 }
 
@@ -469,7 +525,7 @@ function probeOf(name: string, spec: LeafSpec, layer: number | null): Probe {
  */
 export function buildProbes(top: JsonObject, text: JsonObject, meta: string, paramsJson?: unknown): ProbeSet {
   const family = familyKey(top, text);
-  const layout = layerLayout(text, paramsJson);
+  const layout = layerLayout(text, paramsJson, family);
   const variants = FAMILY_NAMING[family] ?? FAMILY_NAMING.generic;
 
   // Pick the variant: score its prefix, top names and fixed leaves.

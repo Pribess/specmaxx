@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { activeBlockParams, activeParamsPerToken, blockParams, countParams } from './params';
-import { decoderLayer, decoderModel, hyperCollapse, type HcPreParams } from './builders';
+import { decoderLayer, decoderModel, hyperCollapse, singleBlockLayer, type HcPreParams } from './builders';
 import type {
   CsaAttentionBlock,
   GqaAttentionBlock,
@@ -81,12 +81,107 @@ describe('activeParamsPerToken', () => {
     expect(activeBlockParams(moe)).toBe(395_264);
     expect(blockParams(moe)).toBe(985_088);
   });
+  it('latent MoE: experts at l, router and shared at h, plus 2·h·l projections', () => {
+    // h 64, l 32, E 8, k 2, fe 16, S 1, fs 64
+    const moe: MoeBlock = {
+      kind: 'moe',
+      name: 'moe',
+      hidden: 64,
+      experts: 8,
+      topK: 2,
+      expertIntermediate: 16,
+      gated: true,
+      activation: 'silu',
+      sharedExperts: 1,
+      sharedIntermediate: 64,
+      latentDim: 32,
+    };
+    // routed 8·3·32·16 = 12,288 + router 8·64 = 512 + latent 2·64·32 = 4096 + shared 3·64·64 = 12,288
+    expect(blockParams(moe)).toBe(29_184);
+    // active: routed 2·3·32·16 = 3072 + 512 + 4096 + 12,288
+    expect(activeBlockParams(moe)).toBe(19_968);
+    // non-gated: 2 matrices per expert and shared expert: 8·2·32·16 = 8192 + 512 + 4096 + 2·64·64 = 8192
+    const plain: MoeBlock = { ...moe, gated: false, activation: 'gelu' };
+    expect(blockParams(plain)).toBe(20_992);
+    // active: 2·2·32·16 = 2048 + 512 + 4096 + 8192
+    expect(activeBlockParams(plain)).toBe(14_848);
+    // latentDim = h still adds the two projections (they exist in the checkpoint)
+    expect(blockParams({ ...moe, latentDim: 64 })).toBe(8 * 3 * 64 * 16 + 512 + 2 * 64 * 64 + 12_288);
+  });
   it('dense model: active = total', () => {
     expect(activeParamsPerToken(REF_DENSE_8B)).toBe(countParams(REF_DENSE_8B));
   });
   it('TINY_HYBRID drops 6 inactive experts in each of 4 MoE layers', () => {
     // 5,086,712 − 4·6·3·256·128 = 5,086,712 − 2,359,296
     expect(activeParamsPerToken(TINY_HYBRID)).toBe(2_727_416);
+  });
+});
+
+describe('Nemotron-H blocks (Nemotron-3.5-Super-VL-120B-A12B, checked against the checkpoint headers)', () => {
+  it('latent relu² MoE layer: E 512, k 22, fe 2688, l 1024, S 1, fs 5376, ungated', () => {
+    const moe: MoeBlock = {
+      kind: 'moe',
+      name: 'moe',
+      hidden: 4096,
+      experts: 512,
+      topK: 22,
+      expertIntermediate: 2688,
+      gated: false,
+      activation: 'relu2',
+      sharedExperts: 1,
+      sharedIntermediate: 5376,
+      latentDim: 1024,
+    };
+    // routed 512·2·1024·2688 = 2,818,572,288 + router 512·4096 = 2,097,152 + shared 2·4096·5376 = 44,040,192
+    // + latent 2·4096·1024 = 8,388,608
+    expect(blockParams(moe)).toBe(2_873_098_240);
+    // active: routed 22·2·1024·2688 = 121,110,528 + 2,097,152 + 44,040,192 + 8,388,608
+    expect(activeBlockParams(moe)).toBe(175_636_480);
+  });
+  it('Mamba-2 mixer: h 4096, G 8, H 128, N 128, P 64, K 4, conv bias', () => {
+    const mamba: LinearAttentionBlock = {
+      kind: 'linear_attention',
+      name: 'mixer',
+      variant: 'mamba2',
+      hidden: 4096,
+      qkHeads: 8,
+      vHeads: 128,
+      keyDim: 128,
+      valueDim: 64,
+      convKernel: 4,
+      convBias: true,
+      outputGate: true,
+    };
+    // in_proj 4096·(2048 + 16384 + 128) = 76,021,760; conv 10240·4 = 40,960 + bias 10,240; A_log, D, dt_bias 384;
+    // norm γ 8192; out_proj 8192·4096 = 33,554,432 (headers: in_proj [18560, 4096], conv1d [10240, 1, 4], ...)
+    expect(blockParams(mamba)).toBe(109_635_968);
+    // without the conv bias: 10,240 fewer; a GDN block with the same dims keeps 2 gates per head, 2 vectors, γ dv
+    expect(blockParams({ ...mamba, convBias: false })).toBe(109_625_728);
+    expect(blockParams({ ...mamba, variant: 'gated_delta_net' })).toBe(109_635_968 + 4096 * 128 - 128 - 8192 + 64);
+  });
+});
+
+describe('singleBlockLayer (one sublayer per layer, Nemotron-H)', () => {
+  it('mixer layer: norm → Mamba-2 → residual, with convBias / chunkTokens passed through', () => {
+    const layer = singleBlockLayer({
+      hidden: 64,
+      name: 'layer.0',
+      mixer: { kind: 'linear', variant: 'mamba2', qkHeads: 1, vHeads: 2, keyDim: 16, valueDim: 8, outputGate: true, convBias: true, chunkTokens: 128 },
+    });
+    expect(layer.name).toBe('layer.0');
+    expect(layer.blocks.map((b) => `${b.kind}:${b.name}`)).toEqual(['norm:input_norm', 'linear_attention:linear_attn', 'residual:mixer_residual']);
+    const mixer = layer.blocks[1];
+    expect(mixer.kind === 'linear_attention' && [mixer.convBias, mixer.chunkTokens, mixer.convKernel]).toEqual([true, 128, 4]);
+  });
+  it('ffn layer: ffn_norm → moe → residual; optional fields absent when not given', () => {
+    const layer = singleBlockLayer({
+      hidden: 64,
+      ffn: { kind: 'moe', experts: 4, topK: 2, expertIntermediate: 32, gated: false, activation: 'relu2' },
+    });
+    expect(layer.blocks.map((b) => `${b.kind}:${b.name}`)).toEqual(['norm:ffn_norm', 'moe:moe', 'residual:ffn_residual']);
+    const plain = singleBlockLayer({ hidden: 64, mixer: { kind: 'linear', variant: 'mamba2', qkHeads: 1, vHeads: 2, keyDim: 16, valueDim: 8 } });
+    expect(Object.keys(plain.blocks[1])).not.toContain('convBias');
+    expect(Object.keys(plain.blocks[1])).not.toContain('chunkTokens');
   });
 });
 

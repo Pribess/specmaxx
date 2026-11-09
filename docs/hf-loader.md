@@ -44,7 +44,8 @@ loadHfModel(id, { revision?, token? })                       src/hf/load.ts
 
 ## 2. Language model only: `text_config` unwrap
 
-Multimodal checkpoints nest the language model under `text_config` and keep `architectures`, `model_type` and
+Multimodal checkpoints nest the language model under `text_config` (NVIDIA's Nemotron-H omni wrappers, e.g.
+Nemotron-3.5-Super-VL: `llm_config`; `text_config` wins when both exist) and keep `architectures`, `model_type` and
 `vision_config` (sometimes also `quantization_config`) at the top. The simulator models the language model only;
 vision and audio towers are excluded and their parameters are estimated for the param check
 (`estimateVisionParams`, or a family's own estimate). The result's notes say "language model only; vision/audio
@@ -67,11 +68,21 @@ name the model class; model types second because text-only extractions often dro
 | `mistral_large4` (`mistralLarge4.ts`) | `mistral_large4`, `mistral_large4_text` | `MistralLarge4ForConditionalGeneration` | Mistral Large 4 |
 | `inkling` (`inkling.ts`) | `inkling_mm_model`, `inkling_text` | `InklingForConditionalGeneration` | Inkling-Small |
 | `minimax` (`minimax.ts`) | `minimax_m3_vl`, `minimax_m3_vl_text` | `MiniMaxM3SparseForConditionalGeneration`, `MiniMaxM3SparseForCausalLM` | MiniMax-M3 (and M3.1-Flash) |
+| `nemotron_h` (`nemotronH.ts`) | `nemotron_h`, `nemotron_h_omni` | `NemotronHForCausalLM`, `NemotronH_Omni_Reasoning_V3` | Nemotron 3.5 Lightning, Nemotron 3.5 Super VL |
 
 The MLA/DSA families share their readers in `families/mlaCommon.ts` (MLA dims from `qk_nope_head_dim` /
 `qk_rope_head_dim` / `v_head_dim` — never `head_dim` or `num_key_value_heads`, which are traps in GLM and Mistral
 configs —, the DSA indexer, the `indexer_types` / `mlp_layer_types` schedules with the transformers fallbacks, MoE,
 mHC hyper-connections, MTP estimates).
+
+**Nemotron-H.** Each decoder layer holds ONE block (`norm → block → residual`, `singleBlockLayer`), chosen by
+`layers_block_type` (or the legacy `hybrid_override_pattern` string, `nemotronHPattern.ts`): a Mamba-2 mixer
+(`linear_attention` variant `mamba2`: `n_groups` B/C groups, `mamba_num_heads` × `mamba_head_dim`, `ssm_state_size`,
+`conv_kernel`, conv bias, `chunk_size`), full attention WITHOUT RoPE (the forward applies none), an MoE with non-gated
+relu² experts, or a dense relu² MLP. Super's routed experts run at a latent width (`moe_latent_size`, down/up
+projections around them, kept in BF16). The omni wrapper (`llm_config`) is simulated as its language model only.
+MTP (one attention + MoE module) is the drafter (`mtp_layers_block_type`), costed only with speculative decoding on.
+The SSM state format comes from `mamba_ssm_cache_dtype` (fp32; the model card serves fp16).
 
 **Rules every family follows.**
 - The mapping reads config fields, never model names, so sibling checkpoints of the same architecture (BF16
@@ -107,7 +118,7 @@ mHC hyper-connections, MTP estimates).
 `deriveQuantDefaults` reads the repo's quantization metadata and returns a `QuantConfig` plus a scheme label, its
 source and notes. The defaults are plain data; the UI may override any of them. Source, first found wins:
 `params.json` `quantization_config` (Mistral consolidated exports), config.json `quantization_config` (top level,
-else `text_config`, dispatched on `quant_method`: `fp8`, `modelopt`, `compressed-tensors`, `quark`, `gptq`, `awq`,
+else `text_config` / `llm_config`, dispatched on `quant_method`: `fp8`, `modelopt`, `modelopt_mixed`, `compressed-tensors`, `quark`, `gptq`, `awq`,
 `auto-round`, `bitsandbytes`, `exl3`; a `bits` + `group_size` object without `quant_method` is MLX), `hf_quant_config.json`,
 `quantization_config.json`, the MLX `quantization` key, `params.json` `quantization` (native Mistral fp8), and
 finally the model's `torch_dtype` / `dtype` (unquantized).
@@ -117,6 +128,13 @@ finally the model's `torch_dtype` / `dtype` (unquantized).
   (one synthetic module name per class, layer and projection, in the checkpoint's own naming; `moduleClass.ts`)
   and `assemble.ts` takes the majority per `WeightModule` class into `QuantConfig.modules`, reporting splits and
   unmatched ignore-list entries as notes.
+- **ModelOpt `modelopt_mixed`.** NVIDIA's Nemotron-3.5 NVFP4 exports say `quant_method: "modelopt_mixed"` with
+  `quant_algo: MIXED_PRECISION` and a per-module `quantized_layers` list (`readModeloptMixed`, the same schema as
+  ModelOpt MIXED_PRECISION; `config_groups` is a compressed-tensors view of the same list and is not read).
+  Nemotron-H probes use the `backbone.layers.<i>.mixer.*` naming (`language_model.` prefixed in the VL wrapper),
+  one sublayer per layer from `layers_block_type`. Super-VL gives FP8 W8A8 Mamba in/out projections, attention
+  and LM head, NVFP4 W4A4 routed and shared experts, BF16 latent projections (`moe_latent`), router and
+  embeddings, and an fp8 KV cache.
 - **Scale overheads.** MX and NV formats carry their block scale in the dtype; every other scale or zero point is
   amortized into `extraBitsPerElem` (block scale `s/(r·c)`, group scale `(s + z)/g`). The full table of schemes,
   overheads and readers is in docs/simulation-model.md §2 "Quant overheads".
@@ -144,11 +162,16 @@ vision/audio towers). Actual = `countParams(model) + mtpParamsEstimate + visionP
    repo). `I8` counts as packed too unless `quant_method` is DeepSeek's native `fp8`, whose fp4 experts are stored
    as one `I8` per weight and whose total matches. The note suggests comparing against the base model
    (`cardData.base_model`).
-3. Within ±2% → `ok`, else `mismatch` (a warning in the notes, not an error).
+3. **Per-dtype sum above the total.** When `Σ safetensors.parameters` exceeds `safetensors.total` by more than
+   1e-4 (relative), the sum is the expected count, with a note. The total can come from the index's
+   `total_parameters`, which leaves out MTP tensors (Nemotron-3.5-Lightning: total 31,577,937,344, per-dtype sum
+   32,913,266,240), while the per-dtype counts are read from the headers. A sum below the total is not used. For
+   every other shortlist repo the two are equal, so their results are unchanged.
+4. Within ±2% → `ok`, else `mismatch` (a warning in the notes, not an error).
 
 ## 6. The shortlist
 
-All 8 base repos are public (not gated). Parameters are the IR's (`countParams`, text model incl. n-gram tables,
+All 10 base repos are public (not gated). Parameters are the IR's (`countParams`, text model incl. n-gram tables,
 MTP and vision excluded) and active per token incl. embedding and head (`activeParamsPerToken`); the param check
 compares against `safetensors.total` with the excluded estimates added.
 
@@ -163,6 +186,8 @@ compares against `safetensors.total` with the excluded estimates added.
 | Mistral Large 4 | `mistralai/Mistral-Large-4-1T-A52B` | `mistral_large4` | 1049.36B / 52.34B | unavailable (no safetensors totals) | FP8 128×128 |
 | Inkling 2 Small (stand-in, below) | `thinkingmachines/Inkling-Small` | `inkling` | 263.65B / 12.00B | ok | BF16 |
 | MiniMax M3 | `MiniMaxAI/MiniMax-M3` (`M3.1-Flash` same text dims) | `minimax` | 426.17B / 25.96B | ok | BF16 |
+| Nemotron 3.5 Lightning | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16` | `nemotron_h` | 31.58B / 3.58B | ok (against the per-dtype sum, §5; −9e-8) | BF16 |
+| Nemotron 3.5 Super VL | `nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4` | `nemotron_h` | 120.67B / 12.77B | packed (U8 words) | FP8 Mamba/attention/head, NVFP4 experts, BF16 latent |
 
 **Inkling 2 Small.** No repo of that name exists. Thinking Machines publishes only `thinkingmachines/Inkling` and
 `thinkingmachines/Inkling-Small`; `NarsAI/Inkling-2` is a byte-identical re-upload of the big Inkling. The loader is
@@ -171,23 +196,23 @@ way.
 
 **Feature matrix** (from the fetched configs, reference code and safetensors headers):
 
-| Feature | Q-Flash-Next | Q-27B | DSV4.1-Flash | GLM-5.3-Flash | GLM-5.3 | Mistral L4 | Inkling-Small | MiniMax-M3 |
-|---|---|---|---|---|---|---|---|---|
-| GQA full attention | 1 of 4 layers, gated | 1 of 4 layers, gated | – | – | – | – | ✓ | ✓ |
-| Linear attention | GatedDeltaNet, 3 of 4 | GatedDeltaNet, 3 of 4 | – | KDA, 3 of 4 | – | – | – | – |
-| MLA | – | – | CSA (one K=V vector, q-LoRA, grouped low-rank out) | NoPE | ✓ | no q-LoRA, NoPE every 4th | – | – |
-| Sparse top-k (indexer) | QSA, keys pooled 4:1 | – | compressed + hierarchical | DSA, k-pool 4 | DSA | DSA | – | block top-k |
-| Top-k reused across layers | – | – | 30 of 40 | – | 57 of 78 | 28 of 72 | – | – |
-| Cross-layer KV sharing | – | – | 4 source layers | – | – | 9 layers | – | – |
-| Sliding window | – | – | 128 + global top-k | – | – | – | 35 of 42 (512) | – |
-| KV compression | – | – | r = 1 or 2 | – | – | – | – | – |
-| Hyper-connections | 4 streams, low-rank | – | mHC, 4 streams | mHC, 4 streams | – | – | – | – |
-| n-gram / Engram tables | 51B, 1 layer | – | 196B, 2 layers | – | – | – | – | – |
-| Relative-position bias, short convs | – | – | – | – | – | – | ✓ | – |
-| MoE experts / top-k / shared | 512 / 10 / 1 | dense | 384 / 6 / 1 | 288 / 8 / 1 | 256 / 8 / 1 | 128 / 4 / 1 | 256 / 6 / 2 | 128 / 4 / 1 |
-| Dense first layers | – | all | – | 3 | 3 | 1 | 2 | 3 |
-| MTP / draft (`model.draft`, §7) | 1, multi-step | 1, multi-step | DSpark block drafter, 3 MoE layers | 1, single-step | 1, single-step | none (3-layer DSpark in `params.json`, deferred) | 8, single-step | none (config only, no weights) |
-| Vision / audio (excluded) | ✓ | ✓ | ✓ | ✓ | – | ✓ | vision + audio | ✓ |
+| Feature | Q-Flash-Next | Q-27B | DSV4.1-Flash | GLM-5.3-Flash | GLM-5.3 | Mistral L4 | Inkling-Small | MiniMax-M3 | Nemotron-Lightning | Nemotron-Super |
+|---|---|---|---|---|---|---|---|---| --- | --- |
+| GQA full attention | 1 of 4 layers, gated | 1 of 4 layers, gated | – | – | – | – | ✓ | ✓ | 6 of 52 layers, no RoPE | 8 of 88 layers, no RoPE |
+| Linear attention | GatedDeltaNet, 3 of 4 | GatedDeltaNet, 3 of 4 | – | KDA, 3 of 4 | – | – | – | – | Mamba-2 (SSM), 23 of 52 | Mamba-2 (SSM), 40 of 88 |
+| MLA | – | – | CSA (one K=V vector, q-LoRA, grouped low-rank out) | NoPE | ✓ | no q-LoRA, NoPE every 4th | – | – | – | – |
+| Sparse top-k (indexer) | QSA, keys pooled 4:1 | – | compressed + hierarchical | DSA, k-pool 4 | DSA | DSA | – | block top-k | – | – |
+| Top-k reused across layers | – | – | 30 of 40 | – | 57 of 78 | 28 of 72 | – | – | – | – |
+| Cross-layer KV sharing | – | – | 4 source layers | – | – | 9 layers | – | – | – | – |
+| Sliding window | – | – | 128 + global top-k | – | – | – | 35 of 42 (512) | – | – | – |
+| KV compression | – | – | r = 1 or 2 | – | – | – | – | – | – | – |
+| Hyper-connections | 4 streams, low-rank | – | mHC, 4 streams | mHC, 4 streams | – | – | – | – | – | – |
+| n-gram / Engram tables | 51B, 1 layer | – | 196B, 2 layers | – | – | – | – | – | – | – |
+| Relative-position bias, short convs | – | – | – | – | – | – | ✓ | – | – | – |
+| MoE experts / top-k / shared | 512 / 10 / 1 | dense | 384 / 6 / 1 | 288 / 8 / 1 | 256 / 8 / 1 | 128 / 4 / 1 | 256 / 6 / 2 | 128 / 4 / 1 | 128 / 6 / 1 (relu², ungated) | 512 / 22 / 1 (relu², latent width 1024) |
+| Dense first layers | – | all | – | 3 | 3 | 1 | 2 | 3 | – | – |
+| MTP / draft (`model.draft`, §7) | 1, multi-step | 1, multi-step | DSpark block drafter, 3 MoE layers | 1, single-step | 1, single-step | none (3-layer DSpark in `params.json`, deferred) | 8, single-step | none (config only, no weights) | 1, single-step (attention + MoE) | 1, single-step (attention + MoE) |
+| Vision / audio (excluded) | ✓ | ✓ | ✓ | ✓ | – | ✓ | vision + audio | ✓ | – | vision (RADIO ViT + mlp1) |
 
 **DeepSeek-V4.1 prefill.** The reference `inference/model.py` runs all 40 layers on all N prompt tokens, and so does
 the simulator. The tech report's "Decoder SWA Bounded Replay" (the decoder half re-runs only the last window of the

@@ -31,7 +31,7 @@ interface ShortlistCase {
   /** Family that builds it. */
   family: string;
   /** Param-check status against `safetensors.total`. */
-  paramCheck: 'ok' | 'unavailable';
+  paramCheck: 'ok' | 'packed' | 'unavailable';
   /** Decoder layers. */
   layers: number;
   /** Count of each mixer / FFN / extra block kind (see {@link mixLabel}). */
@@ -122,6 +122,24 @@ const SHORTLIST: ShortlistCase[] = [
     mix: { 'gqa:full': 3, 'gqa:indexer': 57, mlp: 3, moe: 57 },
     weights: 'bf16',
     kvCache: 'bf16',
+  },
+  {
+    id: 'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16',
+    family: 'nemotron_h',
+    paramCheck: 'ok',
+    layers: 52,
+    mix: { 'linear:mamba2': 23, 'gqa:full': 6, moe: 23 },
+    weights: 'bf16',
+    kvCache: 'bf16',
+  },
+  {
+    id: 'nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4',
+    family: 'nemotron_h',
+    paramCheck: 'packed',
+    layers: 88,
+    mix: { 'linear:mamba2': 40, 'gqa:full': 8, moe: 40 },
+    weights: 'nvfp4',
+    kvCache: 'fp8_e4m3',
   },
 ];
 

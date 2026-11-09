@@ -1,10 +1,10 @@
 /**
  * Split a config.json into its language-model part and its multimodal wrapper.
  *
- * Multimodal checkpoints nest the language model under `text_config` and keep `architectures`,
- * `model_type`, `vision_config` (and sometimes `quantization_config`) at the top level. Text-only checkpoints
- * are flat. The simulator models the language model only, so vision and audio towers are excluded (their
- * parameters are estimated separately for the param check).
+ * Multimodal checkpoints nest the language model under `text_config` (NVIDIA's Nemotron-H omni wrappers:
+ * `llm_config`) and keep `architectures`, `model_type`, `vision_config` (and sometimes `quantization_config`)
+ * at the top level. Text-only checkpoints are flat. The simulator models the language model only, so vision and
+ * audio towers are excluded (their parameters are estimated separately for the param check).
  *
  * Quirks of the shortlist this handles:
  * - MiniMax-M3 and Inkling text configs have no `model_type`; dispatch then uses the top-level one.
@@ -30,15 +30,19 @@ function strList(o: JsonObject, key: string): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 }
 
-/** Unwrap `text_config` (when present) and record the wrapper's identity and quantization metadata. */
+/**
+ * Unwrap `text_config`, else `llm_config` (when present), and record the wrapper's identity and quantization
+ * metadata.
+ */
 export function unwrapTextConfig(config: unknown): UnwrapResult {
   if (!isJsonObject(config)) return { kind: 'invalid_config', errors: ['config.json: expected a JSON object'] };
   const top = config;
   const notes: string[] = [];
 
-  const rawText = top.text_config;
+  const textKey = top.text_config !== undefined && top.text_config !== null ? 'text_config' : 'llm_config';
+  const rawText = top[textKey];
   if (rawText !== undefined && rawText !== null && !isJsonObject(rawText)) {
-    return { kind: 'invalid_config', errors: ['text_config: expected object'] };
+    return { kind: 'invalid_config', errors: [`${textKey}: expected object`] };
   }
   const nested = isJsonObject(rawText);
   const text: JsonObject = nested ? rawText : top;

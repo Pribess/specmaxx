@@ -16,14 +16,17 @@ export interface DenseFfnShape {
   intermediate: number;
   /** GLU-style (gate and up). */
   gated: boolean;
-  /** Activation function. */
-  activation: 'silu' | 'gelu' | 'relu';
+  /** Activation function (`relu2` = `relu(x)²`, ungated only). */
+  activation: 'silu' | 'gelu' | 'relu' | 'relu2';
   /** Projection biases. */
   bias: boolean;
 }
 
-/** The elementwise function of an activation, fused with the gate multiply when gated. */
-export function activationFn(activation: 'silu' | 'gelu' | 'relu', gated: boolean): ElementwiseOp['fn'] {
+/**
+ * The elementwise function of an activation, fused with the gate multiply when gated. `relu2` exists only ungated
+ * (Nemotron-H experts); a gated `relu2` throws, since no model uses it and its FLOP count is not defined.
+ */
+export function activationFn(activation: 'silu' | 'gelu' | 'relu' | 'relu2', gated: boolean): ElementwiseOp['fn'] {
   switch (activation) {
     case 'silu':
       return gated ? 'silu_mul' : 'silu';
@@ -31,6 +34,9 @@ export function activationFn(activation: 'silu' | 'gelu' | 'relu', gated: boolea
       return gated ? 'gelu_mul' : 'gelu';
     case 'relu':
       return gated ? 'relu_mul' : 'relu';
+    case 'relu2':
+      if (gated) throw new Error('activation relu2 is supported only ungated (gated: false)');
+      return 'relu2';
     default: {
       const _never: never = activation;
       throw new Error(`unknown activation ${String(_never)}`);

@@ -1,16 +1,21 @@
 /**
  * Check the IR's parameter count against the checkpoint's, and a generic vision-tower estimate.
  *
- * Expected = the Hub's `safetensors.total` (the sum of the safetensors header element counts; it includes
- * MTP layers and vision/audio towers). Actual = `countParams(model) + mtpParamsEstimate + visionParamsEstimate`.
- * Rules, in order:
+ * Expected = the Hub's `safetensors.total` (normally the sum of the safetensors header element counts; it includes
+ * MTP layers and vision/audio towers), unless rule 3 replaces it. Actual = `countParams(model) +
+ * mtpParamsEstimate + visionParamsEstimate`. Rules, in order:
  * 1. No `safetensors` in the api info (e.g. Mistral consolidated repos) → `unavailable`.
  * 2. Packed quantized storage → `packed`: the Hub counts each packed word (`U8`, `U32`, `I32`, …) as ONE
  *    element although it holds several weights, so the total is not a parameter count. Packed when
  *    `parameters` has a `U8`, `U16`, `U32`, `I32` or `I16` key, or an `I8` key while the repo's
  *    `quant_method` is not DeepSeek's native `fp8` (DeepSeek-V4.1 stores its fp4 experts as `I8` with one
  *    element per weight, and its total matches the IR).
- * 3. `|actual − expected| / expected ≤ PARAM_CHECK_TOLERANCE` (2%) → `ok`, else `mismatch` (a warning).
+ * 3. Per-dtype sum above the total: `sum = Σ safetensors.parameters`. When `(sum − total) / total >
+ *    PARAM_SUM_TOLERANCE` (1e-4), expected = sum. The Hub's total can come from the index's `total_parameters`,
+ *    which leaves out MTP tensors (Nemotron-3.5-Lightning: total 31,577,937,344, sum 32,913,266,240, the
+ *    difference being its MTP layer), while the per-dtype counts are read from the headers. A sum below the
+ *    total is not used (incomplete counts).
+ * 4. `|actual − expected| / expected ≤ PARAM_CHECK_TOLERANCE` (2%) → `ok`, else `mismatch` (a warning).
  */
 
 import { countParams } from '../../ir/params';
@@ -22,7 +27,13 @@ import { PARAM_CHECK_TOLERANCE } from './types';
 const PACKED_KEYS = ['U8', 'U16', 'U32', 'I16', 'I32'];
 
 /**
- * Compare `model` (+ excluded estimates) with `api.safetensors.total`.
+ * Relative excess of the per-dtype sum over `safetensors.total` above which the sum is the expected count
+ * (rule 3). Unit: dimensionless fraction.
+ */
+export const PARAM_SUM_TOLERANCE = 1e-4;
+
+/**
+ * Compare `model` (+ excluded estimates) with `api.safetensors.total`, or its per-dtype sum (rule 3 above).
  * `quantMethod` is the config's `quantization_config.quant_method`, used to tell packed `I8` storage
  * from DeepSeek's unpacked one.
  */
@@ -57,6 +68,26 @@ export function checkParams(
       actual,
       relError,
       note: `packed quantized storage (${packedKey ?? 'I8'}): the Hub counts packed words as elements, so safetensors.total is not a parameter count; ${baseHint}`,
+    };
+  }
+
+  // Formula: sum = Σ_dtype parameters[dtype]; use it when (sum − total) / total > PARAM_SUM_TOLERANCE
+  const sum = Object.values(st.parameters ?? {}).reduce((a, n) => a + (Number.isFinite(n) ? n : 0), 0);
+  if ((sum - st.total) / st.total > PARAM_SUM_TOLERANCE) {
+    const sumRelError = (actual - sum) / sum;
+    const sumPct = (sumRelError * 100).toFixed(2);
+    const why =
+      `safetensors.total (${st.total}) differs from the per-dtype sum (${sum}; the index's total_parameters can ` +
+      'leave out MTP); checked against the sum';
+    if (Math.abs(sumRelError) <= PARAM_CHECK_TOLERANCE) {
+      return { status: 'ok', expected: sum, actual, relError: sumRelError, note: `IR + excluded parts match (${sumPct}%); ${why}` };
+    }
+    return {
+      status: 'mismatch',
+      expected: sum,
+      actual,
+      relError: sumRelError,
+      note: `IR + excluded parts differ by ${sumPct}% (tolerance ±${PARAM_CHECK_TOLERANCE * 100}%); ${why}`,
     };
   }
 

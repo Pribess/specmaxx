@@ -12,6 +12,7 @@ import { glmMoeDsaFamily } from './families/glmMoeDsa';
 import { inklingFamily } from './families/inkling';
 import { minimaxFamily } from './families/minimax';
 import { mistralLarge4Family } from './families/mistralLarge4';
+import { nemotronHFamily } from './families/nemotronH';
 import { qwenFamily } from './families/qwen';
 import type { FamilyEntry } from './types';
 
@@ -25,4 +26,5 @@ export const FAMILIES: readonly FamilyEntry[] = [
   glm5NextFamily,
   glmMoeDsaFamily,
   mistralLarge4Family,
+  nemotronHFamily,
 ];

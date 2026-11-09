@@ -66,9 +66,9 @@ export interface HfRepoFiles {
 export interface HfConfigView {
   /** The top-level config object. */
   top: JsonObject;
-  /** The language-model config: `top.text_config` when present, else `top`. */
+  /** The language-model config: `top.text_config`, else `top.llm_config` (Nemotron-H omni), else `top`. */
   text: JsonObject;
-  /** True when `text` came from `top.text_config`. */
+  /** True when `text` came from `top.text_config` or `top.llm_config`. */
   nested: boolean;
   /** `top.model_type`, or null. */
   topModelType: string | null;
@@ -126,8 +126,8 @@ export interface ExcludedParams {
 }
 
 /**
- * Result of comparing the IR's parameter count with the checkpoint's `safetensors.total`
- * (see `paramCheck.ts` for the rules).
+ * Result of comparing the IR's parameter count with the checkpoint's `safetensors.total`, or its per-dtype sum
+ * when that is larger (see `paramCheck.ts` for the rules).
  */
 export interface ParamCheck {
   /**
@@ -137,7 +137,11 @@ export interface ParamCheck {
    * - `unavailable`: the repo publishes no safetensors totals.
    */
   status: 'ok' | 'mismatch' | 'packed' | 'unavailable';
-  /** `safetensors.total` of the repo, when present. Unit: elements (≈ params for unpacked checkpoints). */
+  /**
+   * `safetensors.total` of the repo, when present; the per-dtype sum `Σ safetensors.parameters` instead when it
+   * exceeds the total by more than 1e-4 (the total left out MTP tensors). Unit: elements (≈ params for unpacked
+   * checkpoints).
+   */
   expected?: number;
   /** IR count + excluded estimates: `countParams(model) + mtp + vision`. Unit: params. */
   actual: number;
