@@ -1,6 +1,6 @@
-# Build and deploy the static app to Cloudflare Pages. Release by force-pushing the tag `release-pages`
-# to the commit to publish (see docs/deploy.md).
-name: Deploy to Cloudflare Pages
+# Build and deploy the static app as a Cloudflare Worker with static assets, served at cro.sh/specmaxx/. Release by
+# force-pushing the tag `release-pages` to the commit to publish (see docs/deploy.md).
+name: Deploy to Cloudflare Workers
 
 on:
   push:
@@ -34,11 +34,13 @@ jobs:
       # The Playwright e2e step of `bun run check` is skipped here: installing Chromium costs more than the rest of
       # the job, and e2e already runs locally in `bun run check` before every change lands.
       - run: bun run build
+      - run: bun run deploy:assets
 
       - uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
         with:
+          # Keep in sync with the wrangler devDependency in package.json.
           wranglerVersion: '4.158.0'
           packageManager: bun
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=${{ vars.CF_PAGES_PROJECT || 'specmaxx' }} --branch=main
+          command: deploy

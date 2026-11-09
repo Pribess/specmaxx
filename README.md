@@ -33,7 +33,7 @@ check document when present). Its back-link restores your estimate.
 
 ## Deployment
 
-Pushing the tag `release-pages` deploys the build to Cloudflare Pages, served at https://cro.sh/specmaxx/; see
+Pushing the tag `release-pages` deploys the build as a Cloudflare Worker with static assets, served at https://cro.sh/specmaxx/; see
 [docs/deploy.md](docs/deploy.md).
 
 Layout:

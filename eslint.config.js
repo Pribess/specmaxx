@@ -8,7 +8,7 @@ const NO_REACT = ['error', { patterns: ['react', 'react-dom', 'react/*', 'react-
 const NO_DOM_GLOBALS = ['error', 'window', 'document', 'localStorage', 'sessionStorage', 'fetch', 'navigator'];
 
 export default tseslint.config(
-  { ignores: ['dist', 'coverage', 'test-results', 'playwright-report', 'blob-report'] },
+  { ignores: ['dist', 'deploy', 'coverage', 'test-results', 'playwright-report', 'blob-report'] },
   {
     files: ['**/*.{ts,tsx}'],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],

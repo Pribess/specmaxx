@@ -8,3 +8,5 @@ blob-report/
 .env
 .env.*
 !.env.example
+deploy
+.wrangler

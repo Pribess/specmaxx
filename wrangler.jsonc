@@ -1,0 +1,19 @@
+// Workers Static Assets deployment: no Worker script, the build is served directly on cro.sh/specmaxx*.
+// See docs/deploy.md. Keep the wrangler version in package.json and the workflow in sync.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "specmaxx",
+  "compatibility_date": "2026-11-01",
+  // cro.sh/specmaxx* is the only public URL.
+  "routes": [{ "pattern": "cro.sh/specmaxx*", "zone_name": "cro.sh" }],
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    // `bun run deploy:assets` copies dist/ to deploy/specmaxx/, so asset paths match request paths.
+    "directory": "./deploy",
+    // /specmaxx -> /specmaxx/, /specmaxx/about.html -> /specmaxx/about.
+    "html_handling": "auto-trailing-slash",
+    // Unknown paths are 404, no SPA fallback.
+    "not_found_handling": "none"
+  }
+}

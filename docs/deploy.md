@@ -1,12 +1,19 @@
 # Deploying
 
-The app is static. [.github/workflows/deploy-pages.yml](../.github/workflows/deploy-pages.yml) builds it
-(typecheck, lint, unit tests, build; the Playwright e2e runs locally in `bun run check` only) and uploads `dist/` to
-the Cloudflare Pages project `specmaxx` as a production deployment. It runs on a push of the tag
-`release-pages`, or by hand (Actions → Deploy to Cloudflare Pages → Run workflow).
+The app is static. [.github/workflows/deploy.yml](../.github/workflows/deploy.yml) builds it (typecheck, lint, unit
+tests, build; the Playwright e2e runs locally in `bun run check` only), stages `dist/` as `deploy/specmaxx/`
+(`bun run deploy:assets`), and publishes it with `wrangler deploy` as the Cloudflare Worker `specmaxx` using
+[Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/) (no Worker script,
+[wrangler.jsonc](../wrangler.jsonc)). It runs on a push of the tag `release-pages`, or by hand (Actions → Deploy to
+Cloudflare Workers → Run workflow).
 
-The build uses relative asset URLs (`base: './'` in vite.config.ts), so the same `dist/` works at
-https://specmaxx.pages.dev/ and under https://cro.sh/specmaxx/.
+The only public URL is https://cro.sh/specmaxx/ (route `cro.sh/specmaxx*` in zone `cro.sh`). `workers_dev` and
+`preview_urls` are off, so no `*.workers.dev` or preview URL exists, and there is no Pages project.
+
+- Assets are matched on the full request path, hence the `specmaxx/` directory inside `deploy/`.
+- The build uses relative asset URLs (`base: './'` in vite.config.ts), so it works under the `/specmaxx/` prefix.
+- `/specmaxx` redirects to `/specmaxx/` and `/specmaxx/about.html` to `/specmaxx/about`
+  (`html_handling: "auto-trailing-slash"`). Unknown paths return 404 (`not_found_handling: "none"`, no SPA fallback).
 
 ## Release
 
@@ -15,40 +22,30 @@ git tag -f release-pages <commit>
 git push -f origin release-pages
 ```
 
+Or run the workflow by hand from the Actions tab.
+
 ## One-time setup
 
-1. Create the Pages project (Direct Upload):
-   `bunx wrangler pages project create specmaxx --production-branch=main`
-2. Create an API token (My Profile → API Tokens → Custom token) with **Account → Cloudflare Pages → Edit**.
-3. In the GitHub repository (Settings → Secrets and variables → Actions), add the secrets
-   `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Optional: the repository variable `CF_PAGES_PROJECT` to
-   deploy to a project not named `specmaxx`.
+1. Create an API token (Cloudflare dashboard → My Profile → API Tokens → Create Token → Custom token) with:
+   - **Account → Workers Scripts → Edit** (scoped to the account)
+   - **Zone → Workers Routes → Edit** (scoped to the zone `cro.sh`)
+   - **Zone → Zone → Read** (scoped to the zone `cro.sh`)
 
-## Serving at cro.sh/specmaxx
+   That is the minimum for `wrangler deploy` with an explicit account ID and a route: Workers Scripts Edit deploys
+   the Worker and its assets, Zone Read lets Wrangler resolve `zone_name: "cro.sh"` to its zone ID
+   ([List Zones](https://developers.cloudflare.com/api/resources/zones/methods/list/)), and Workers Routes Edit
+   attaches the route
+   ([Workers roles and permissions](https://developers.cloudflare.com/workers/authorization/workers/#routes-and-custom-domains),
+   [API token permissions](https://developers.cloudflare.com/fundamentals/api/reference/permissions/)). Because
+   `CLOUDFLARE_ACCOUNT_ID` is set, Wrangler does not need to look up memberships or user details, so no User or
+   Account Settings read permission is required. (Cloudflare's "Edit Cloudflare Workers" template adds those and more;
+   it works too but is broader.)
+2. In the GitHub repository (Settings → Secrets and variables → Actions), add the secrets `CLOUDFLARE_API_TOKEN` and
+   `CLOUDFLARE_ACCOUNT_ID`.
+3. In DNS for `cro.sh`, the record for the root (the CNAME to GitHub Pages) must be **proxied** (orange cloud), or
+   requests never reach the Worker route.
 
-A redirect rule alone would send visitors to pages.dev; to keep the cro.sh URL, proxy with a Worker on the routes
-`cro.sh/specmaxx` and `cro.sh/specmaxx/*` that strips the prefix:
+## Updating wrangler
 
-- `/specmaxx` without the trailing slash must 301 to `/specmaxx/`, or the page's relative URLs resolve against `/`.
-- Pages redirects `/about.html` to `/about` with a root-relative `Location`; the Worker puts the prefix back.
-
-```js
-const PREFIX = '/specmaxx';
-const ORIGIN = 'https://specmaxx.pages.dev';
-
-export default {
-  async fetch(request) {
-    const url = new URL(request.url);
-    if (url.pathname === PREFIX)
-      return Response.redirect(`${url.origin}${PREFIX}/${url.search}`, 301);
-    const upstream = new URL(url.pathname.slice(PREFIX.length) + url.search, ORIGIN);
-    const response = await fetch(new Request(upstream, request), { redirect: 'manual' });
-    let location = response.headers.get('Location');
-    if (location?.startsWith(ORIGIN)) location = location.slice(ORIGIN.length);
-    if (!location?.startsWith('/')) return response;
-    const headers = new Headers(response.headers);
-    headers.set('Location', PREFIX + location);
-    return new Response(response.body, { status: response.status, headers });
-  },
-};
-```
+The version is pinned twice: the `wrangler` devDependency in package.json and `wranglerVersion` in the workflow.
+Change both together.
