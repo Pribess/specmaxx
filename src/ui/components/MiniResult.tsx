@@ -1,5 +1,4 @@
-import { formatContextTokens, formatTokensPerSec, type ResultSummary } from '../state';
-import { memoryState } from './MemoryWarning';
+import { formatContextTokens, formatTokensPerSec, memoryVerdict, type ResultSummary } from '../state';
 import { Num } from './Num';
 
 /**
@@ -9,12 +8,7 @@ import { Num } from './Num';
  * what the hero says, so it is hidden from assistive technology.
  */
 export function MiniResult({ result, visible }: { result: ResultSummary; visible: boolean }) {
-  const states = result.memory.stages.map(memoryState);
-  const fit = states.includes('danger')
-    ? 'danger'
-    : states.includes('warning')
-      ? 'warning'
-      : 'fits';
+  const fit = memoryVerdict(result.memory).state;
   const spec = result.decode.speculative;
   return (
     <div

@@ -372,7 +372,7 @@ it('annotates an offload result: chips, offload transfer bound, one memory bar p
   expect((first.querySelector('.bound-bar .transfer') as HTMLElement).style.width).toBe('100%');
 });
 
-it('hatches an on-device n-gram table, offers to move it (to the SSD on unified memory), and lists unified host-RAM groups', async () => {
+it('hatches an on-device n-gram table and offers to move it (to the SSD on unified memory)', async () => {
   const { summary } = await defaultResult();
   const stage = summary.memory.stages[0];
   let placed = 0;
@@ -382,7 +382,7 @@ it('hatches an on-device n-gram table, offers to move it (to the SSD on unified 
       ...summary.memory,
       kind: 'unified' as const,
       stages: [{ ...stage, lookupTableBytes: 0.4 * stage.weightBytes }],
-      tiers: [{ tier: 'host_ram' as const, bytes: 16.3e9, breakdown: { lookupTables: 0, routedExperts: 16.3e9, denseLayers: 0, draftExperts: 0 }, capacityBytes: 128e9, fits: true }],
+      tiers: [],
     },
   };
   const { container } = render(
@@ -396,7 +396,7 @@ it('hatches an on-device n-gram table, offers to move it (to the SSD on unified 
   // On unified memory host RAM is the device pool, so the table moves to the SSD.
   fireEvent.click(screen.getByRole('button', { name: 'Place on SSD' }));
   expect(placed).toBe(1);
-  // Unified memory: host RAM is the device pool, so a line instead of a tier bar.
+  // Unified memory: host RAM is the device pool, so no host-RAM tier or line ever shows.
   expect(screen.queryAllByTestId('memory-tier')).toHaveLength(0);
-  expect(screen.getByTestId('memory-unified-host').textContent).toMatch(/^Host RAM groups 16\.3GB/);
+  expect(screen.queryByTestId('memory-unified-host')).toBeNull();
 });

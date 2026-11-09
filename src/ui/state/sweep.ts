@@ -4,6 +4,7 @@
 
 import { simulate } from '../../sim/engine/simulate';
 import type { SimInput } from '../../sim/engine/types';
+import { memoryFits } from './memoryVerdict';
 
 /** One point of the sweep. */
 export interface SweepPoint {
@@ -15,7 +16,7 @@ export interface SweepPoint {
   decodeTokensPerSec: number;
   /** Decode rate per sequence. Unit: tokens/s. */
   perSeqTokensPerSec: number;
-  /** True when the memory report fits at this batch. */
+  /** True when every stage and off-device tier fits at this batch (the same verdict as the main result). */
   fits: boolean;
 }
 
@@ -37,7 +38,7 @@ export function batchSweep(input: SimInput): SweepPoint[] {
         contextTokens: input.workload.decodeContextLen,
         decodeTokensPerSec: r.decode.tokensPerSec,
         perSeqTokensPerSec: r.decode.perSequenceTokensPerSec,
-        fits: r.memory.fits,
+        fits: memoryFits({ stages: r.memory.perStage, tiers: r.memory.tiers }),
       });
     } catch {
       // Invalid at this batch: no point.

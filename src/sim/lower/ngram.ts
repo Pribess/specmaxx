@@ -143,10 +143,23 @@ export function ngramTableShardBytes(block: NgramEmbeddingBlock, ctx: LoweringCo
 }
 
 /**
+ * Bytes of an n-gram block's quantization scales on one device, `ceil(rows/tp)·scaleBytes(row)` (0 for a table
+ * format without scales). Unit: bytes.
+ */
+export function pinnedScaleBytes(block: NgramEmbeddingBlock, ctx: LoweringContext): number {
+  const { scaleBytes } = tableRowBytes(lookupTableFormat(ctx), block.rowDim);
+  // Formula: S_scales = ceil(rows/tp)·scaleBytes
+  // See docs/simulation-model.md §12 ("Memory tiers")
+  return Math.ceil(block.tableRows / ctx.parallel.tp) * scaleBytes;
+}
+
+/**
  * Resident weight bytes of an n-gram block on one device: the table shard `ceil(rows/tp)·d·bpe(lookup)` plus the
  * projections, vectors and conv taps (the weights of a one-token step without its gathered rows). A step's ops read
- * only the gathered rows, so this has its own formula, like MoE. With the table off-device (`layerIndex` given and a
- * lookup-table placement), only the non-table part stays (design doc §2.7). Unit: bytes.
+ * only the gathered rows, so this has its own formula, like MoE. With the table off-device ((`layerIndex` given and a
+ * lookup-table placement), only the non-table part stays (design doc §2.7), plus, on unified memory
+ * (`offload.hostRamIsDevice`) with `scaleLayout 'pinned_host'`, the scales: host RAM is the device pool there, so the
+ * pinned scales are device bytes, not a tier. Unit: bytes.
  */
 export function ngramResidentWeightBytes(block: NgramEmbeddingBlock, ctx: LoweringContext, layerIndex?: number): number {
   const oneToken: LoweringContext = { ...ctx, phase: 'decode', seqs: 1, qLen: 1, kvLen: 2 };
@@ -155,8 +168,13 @@ export function ngramResidentWeightBytes(block: NgramEmbeddingBlock, ctx: Loweri
     .reduce((sum, op) => sum + opBytes(op).weightBytes, 0);
   // Formula: W = ceil(rows/tp)·d·bpe(lookup) + Σ weights(projections, gate vectors, conv taps)
   // Formula (table off-device): W = Σ weights(projections, gate vectors, conv taps)
+  // Formula (off-device, unified, pinned_host): W = Σ weights(...) + ceil(rows/tp)·scaleBytes
   // See docs/simulation-model.md §8 "Memory fit", §12 ("Memory tiers")
-  if (tablePlacementAt(ctx, layerIndex) !== undefined) return nonTable;
+  const placement = tablePlacementAt(ctx, layerIndex);
+  if (placement !== undefined) {
+    const scalesOnDevice = placement.scaleLayout === 'pinned_host' && ctx.offload?.hostRamIsDevice === true;
+    return scalesOnDevice ? nonTable + pinnedScaleBytes(block, ctx) : nonTable;
+  }
   const table = ngramTableShardBytes(block, ctx);
   return table + nonTable;
 }

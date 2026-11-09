@@ -294,12 +294,13 @@ W_s      = Σ resident block weights  (routed experts: C = f·E_loc per offloade
 staging  = (offloadOverlap === 'ideal' ? 2 : 1) · max_{phase, layer} ( ceil(M_ℓ)·W_expert,ℓ  |  W_layer  |  usefulBytes of the table op )    (0 when nothing is streamed)
 total_s  = W_s + B_r·state_s + act_s + staging  ≤ capacity_device
 tier_bytes[host_ram | nvme] = Σ groups placed there (the FULL group: all experts of the offloaded layers, whole dense layers, whole tables; the device cache is a copy)
-                            + [nvme tables with scaleLayout 'pinned_host'] rows·scaleBytes on host_ram            (§2.10)
+                            + [dedicated ∧ nvme tables with scaleLayout 'pinned_host'] rows·scaleBytes on host_ram (§2.10)
+                              (unified: those scales are device bytes in W_s instead)
 fits = fits_device ∧ ∀ tiers (tier_bytes ≤ capacity_tier)
 ```
 
 `MemoryReport.tiers: TierMemory[]` (§7.4); `maxSequencesPerReplica` uses `W_s + staging`. On unified memory
-`host_ram` groups count in the device pool (shown as a separate line in the UI).
+`host_ram` groups count in the device pool: no `host_ram` tier exists (an invariant in `stageTierBreakdown`).
 
 ### 2.8 CPU-compute mode (designed hook, rejected by validation for now)
 
@@ -370,7 +371,11 @@ the F8_E8M0 scales as a separate tensor (`embed.scale [rows, 8]`), so
   depend on the layout; useful bytes stay 264 B/row;
 - **`'pinned_host'` (default for `nvme`)**: the value rows on the SSD (one 4 KiB page per row), the scales pinned in
   host RAM: `rows·8 B` per table is **counted in the host-RAM tier capacity** (Engram: 3,072,049,344 + 3,072,133,456 =
-  6,144,182,800 B for both tables) and the 8 B RAM read per row is not costed (< 0.1% of the page read);
+  6,144,182,800 B for both tables) and the 8 B RAM read per row is not costed (< 0.1% of the page read). **On unified
+  memory** (Apple, Spark, Strix Halo) host RAM is the device pool, so there is no host-RAM tier: the same scales count
+  in the device's weight bytes (`OffloadLowering.hostRamIsDevice`). `pinned_host` stays the default for `nvme` there
+  too: rates are identical, only device bytes grow; defaulting to `interleaved` would change SSD reads for no physical
+  reason, and a virtual host tier is the bug this fixes;
 - **`'interleaved'`**: one 264 B read per row (a deployment that repacked the table); `requestsPerRow` of revision 2 is
   replaced by this field.
   Test U-16 checks tier bytes and PCIe bytes separately for all three layouts.
@@ -1030,7 +1035,7 @@ export interface OffloadConfig {
   denseLayers?: { tier: 'host_ram' | 'nvme'; layers: { from: number; to: number } };
   /**
    * n-gram table placement; absent = `'device'` (identity). `scaleLayout` (block-scaled tables only, §2.10): default
-   * `'separate'` on host RAM, `'pinned_host'` on NVMe (scales counted in the host-RAM tier), `'interleaved'` for a repacked table.
+   * `'separate'` on host RAM, `'pinned_host'` on NVMe (scales counted in the host-RAM tier; on unified memory in the device total), `'interleaved'` for a repacked table.
    */
   lookupTables?: {
     tier: 'device' | 'host_ram' | 'nvme';

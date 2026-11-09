@@ -401,13 +401,6 @@ svg [data-chart-point]:focus-visible { outline: none; stroke: var(--primary); st
 /* The legend's one-click action (place the n-gram table off the device): legend-sized, not a full button. */
 .memory-legend button.legend-action { height: 22px; margin-left: var(--space-1); padding: 0 var(--space-2); }
 .memory-tier > div:first-child { font-size: var(--type-control); }
-.memory-unified-host {
-  display: flex;
-  align-items: center;
-  gap: var(--gap-label-icon);
-  margin-top: var(--space-4);
-  font-size: var(--type-label);
-}
 .memory-limit {
   margin: var(--space-3) 0 0;
   color: var(--muted);

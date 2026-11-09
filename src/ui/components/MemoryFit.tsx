@@ -68,7 +68,7 @@ function tierState(tier: TierMemory): MemoryState {
 
 /**
  * Per-device capacity and its allocations, one bar per pipeline stage, then one bar per off-device tier (host RAM,
- * SSD). On unified memory, host-RAM groups live in the device pool: they get a line, not a bar.
+ * SSD).
  * `onPlaceTablesOnHost`, when given, adds a button that moves an on-device n-gram table to host RAM.
  */
 export function MemoryFit({
@@ -79,9 +79,8 @@ export function MemoryFit({
   onPlaceTablesOnHost?: () => void;
 }) {
   const unified = result.memory.kind === 'unified';
-  const tiers = result.memory.tiers ?? [];
-  const tierBars = tiers.filter((t) => !(unified && t.tier === 'host_ram'));
-  const unifiedHostRam = unified ? tiers.find((t) => t.tier === 'host_ram') : undefined;
+  // On unified memory no host_ram tier exists (host RAM is the device pool; the sim enforces it).
+  const tierBars = result.memory.tiers ?? [];
   const bars = [
     ...result.memory.stages.map((stage) => ({
       key: `stage-${stage.stage}`,
@@ -254,15 +253,6 @@ export function MemoryFit({
           </div>
         );
       })}
-      {unifiedHostRam && (
-        <div className="memory-unified-host" data-testid="memory-unified-host">
-          Host RAM groups <strong>{formatBytes(unifiedHostRam.bytes)}</strong>{' '}
-          <HelpIcon term="Host RAM groups">
-            On unified memory, host RAM is the device&apos;s own memory pool: these offloaded weight
-            groups count in the device total above.
-          </HelpIcon>
-        </div>
-      )}
       <p className="memory-limit">
         max{' '}
         {Number.isFinite(result.memory.maxSequencesPerReplica)

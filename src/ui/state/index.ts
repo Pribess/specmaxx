@@ -14,6 +14,7 @@ export * from './parallelism';
 export * from './buildInput';
 export * from './summary';
 export * from './sweep';
+export * from './memoryVerdict';
 export * from './format';
 export * from './modelShortlist';
 export * from './bundledModel';

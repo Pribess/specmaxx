@@ -101,3 +101,75 @@ it.each([
     expect(screen.getAllByRole('link', { name: label })).toHaveLength(2);
   },
 );
+
+it('shows the red hero warning naming a failing tier when every stage fits', async () => {
+  const { container } = await showStages([0.5]);
+  cleanup();
+  const built = buildSimInput(DEFAULT_STATE, BUNDLED_DEFAULT_MODEL);
+  if (built.kind !== 'ok') throw new Error('invalid fixture');
+  const { summary } = await inlineRunner.run(built.input, built.notes);
+  summary.memory.tiers = [
+    {
+      tier: 'nvme',
+      bytes: 2.2e12,
+      breakdown: { lookupTables: 2.2e12, routedExperts: 0, denseLayers: 0, draftExperts: 0 },
+      capacityBytes: 2e12,
+      fits: false,
+    },
+  ];
+  const view = render(
+    <ResultHero
+      result={summary}
+      state={DEFAULT_STATE}
+      loaded={BUNDLED_DEFAULT_MODEL}
+      built={built}
+      pending={false}
+    />,
+  );
+  void container;
+  const links = screen.getAllByRole('link', { name: /Does not fit: SSD 2\.2TB of 2\.0TB/ });
+  expect(links).toHaveLength(2);
+  expect(view.container.querySelectorAll('.hero-memory-warning')).toHaveLength(2);
+  expect(links[0].getAttribute('href')).toBe('#memory-fit');
+});
+
+it('is red, not amber, when a stage is above 90% but a tier does not fit', async () => {
+  const built = buildSimInput(DEFAULT_STATE, BUNDLED_DEFAULT_MODEL);
+  if (built.kind !== 'ok') throw new Error('invalid fixture');
+  const { summary } = await inlineRunner.run(built.input, built.notes);
+  summary.memory.stages = [
+    {
+      stage: 0,
+      weightBytes: 29e9,
+      sequenceStateBytes: 1e9,
+      activationPeakBytes: 1e9,
+      totalBytes: 31e9,
+      capacityBytes: 32e9,
+      fits: true,
+    },
+  ];
+  summary.memory.tiers = [
+    {
+      tier: 'nvme',
+      bytes: 2.2e12,
+      breakdown: { lookupTables: 2.2e12, routedExperts: 0, denseLayers: 0, draftExperts: 0 },
+      capacityBytes: 2e12,
+      fits: false,
+    },
+  ];
+  const view = render(
+    <ResultHero
+      result={summary}
+      state={DEFAULT_STATE}
+      loaded={BUNDLED_DEFAULT_MODEL}
+      built={built}
+      pending={false}
+    />,
+  );
+  const icons = view.container.querySelectorAll('.hero-memory-warning .memory-warning-icon');
+  expect(icons).toHaveLength(2);
+  for (const icon of icons) {
+    expect(icon.classList.contains('memory-danger')).toBe(true);
+    expect(icon.classList.contains('memory-warning')).toBe(false);
+  }
+});

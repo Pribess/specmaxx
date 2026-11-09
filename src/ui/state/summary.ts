@@ -17,6 +17,7 @@ import type {
 } from '../../sim/engine/types';
 import { engineMemBandwidthBytesPerSec } from '../../sim/engine/opTime';
 import { hitRatio } from '../../sim/engine/transfer';
+import { memoryFits } from './memoryVerdict';
 import type { Op } from '../../sim/ir/ops';
 
 /** Headline numbers of one phase. */
@@ -90,7 +91,7 @@ export interface StageMemory {
 export interface MemorySummary {
   /** Dedicated or unified memory (unified: the OS share is not modeled). */
   kind: 'dedicated' | 'unified';
-  /** True when every stage fits. */
+  /** True when every stage and every off-device tier fits ({@link memoryFits}). */
   fits: boolean;
   /** Most sequences one DP replica could hold at this context (Infinity: no per-sequence state). Count. */
   maxSequencesPerReplica: number;
@@ -406,7 +407,7 @@ export function summarize(result: SimResult, input: SimInput, notes: string[] = 
     decode: phaseSummary(result.decode, input.workload.decodeContextLen),
     memory: {
       kind: result.memory.kind,
-      fits: result.memory.fits,
+      fits: memoryFits({ stages: result.memory.perStage, tiers: result.memory.tiers }),
       maxSequencesPerReplica: result.memory.maxSequencesPerReplica,
       stages: result.memory.perStage.map((s) => ({ ...s })),
       tiers: result.memory.tiers.map((t) => ({ ...t })),

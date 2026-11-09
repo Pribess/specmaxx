@@ -31,8 +31,9 @@ export interface ResolvedOffload {
 /**
  * Resolve the deployment's offload placement (design doc §2.1): the routed-expert layer range defaults to every
  * layer, the prefetch accuracy defaults to `DEFAULT_PREFETCH_ACCURACY`, h(f) is evaluated from the hit-ratio model,
- * the table scale layout defaults to `'separate'` on host RAM and `'pinned_host'` on NVMe. On unified memory host RAM
- * IS the device pool, so a `'host_ram'` placement is dropped
+ * the table scale layout defaults to `'separate'` on host RAM and `'pinned_host'` on NVMe (also on unified memory, where
+ * the pinned scales sit in the device pool and count in the device bytes: `hostRamIsDevice`). On unified memory host
+ * RAM IS the device pool, so a `'host_ram'` placement is dropped
  * (no transfer, weights stay counted on the device). Lookup tables at `'device'` are no placement.
  */
 export function resolveOffload(
@@ -90,6 +91,12 @@ export function resolveOffload(
     };
   }
   const any = offload.routedExperts !== undefined || offload.denseLayers !== undefined || offload.lookupTables !== undefined;
+  if (any && memoryKind === 'unified') {
+    offload.hostRamIsDevice = true;
+    if (offload.lookupTables?.scaleLayout === 'pinned_host') {
+      warnings.push('offload: unified memory — pinned table scales stay in the unified pool and count in device memory');
+    }
+  }
   return { offload: any ? offload : undefined, warnings: [...new Set(warnings)] };
 }
 

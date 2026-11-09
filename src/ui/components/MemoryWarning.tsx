@@ -1,16 +1,14 @@
-import type { StageMemory } from '../state/summary';
+import type { TierMemory } from '../../sim/engine/types';
+import {
+  formatBytes,
+  HIGH_MEMORY_UTILISATION,
+  memoryState,
+  memoryVerdict,
+  type MemoryState,
+} from '../state';
+import type { MemorySummary, StageMemory } from '../state/summary';
 
-/** Fraction of per-device capacity above which a fitting stage has little headroom (dimensionless). */
-export const HIGH_MEMORY_UTILISATION = 0.9;
-
-/** Memory severity, ordered conceptually from comfortable fit to capacity overflow. */
-export type MemoryState = 'fits' | 'warning' | 'danger';
-
-/** Classifies one stage using its physical fit verdict and total/capacity byte ratio. */
-export function memoryState(stage: StageMemory): MemoryState {
-  if (!stage.fits) return 'danger';
-  return stage.totalBytes / stage.capacityBytes > HIGH_MEMORY_UTILISATION ? 'warning' : 'fits';
-}
+export { HIGH_MEMORY_UTILISATION, memoryState, type MemoryState };
 
 /**
  * Per-device utilisation rounded to 0.1 percentage points. Clamp warnings above the threshold and
@@ -26,12 +24,26 @@ export function memoryUtilisation(stage: StageMemory): string {
   return `${percent}%`;
 }
 
+/** Stand-in for "a tier overflows" so the red icon renders without a failing stage. */
+const DANGER_STAGE: StageMemory = {
+  stage: 0,
+  weightBytes: 0,
+  sequenceStateBytes: 0,
+  activationPeakBytes: 0,
+  totalBytes: 1,
+  capacityBytes: 0,
+  fits: false,
+};
+
 /** Accessible triangular warning sign; comfortable stages render no icon. */
 export function MemoryWarningIcon({
   stage,
+  label,
 }: {
   /** Per-device memory sizes in bytes and the physical fit verdict. */
   stage: StageMemory;
+  /** Overrides the accessible label (e.g. to name a failing tier). */
+  label?: string;
 }) {
   const state = memoryState(stage);
   if (state === 'fits') return null;
@@ -43,9 +55,10 @@ export function MemoryWarningIcon({
       height="20"
       role="img"
       aria-label={
-        state === 'danger'
+        label ??
+        (state === 'danger'
           ? 'Warning: does not fit'
-          : `Warning: ${memoryUtilisation(stage)} of memory used`
+          : `Warning: ${memoryUtilisation(stage)} of memory used`)
       }
     >
       <path d="M12 3 22 21H2Z" fill="currentColor" />
@@ -55,22 +68,41 @@ export function MemoryWarningIcon({
   );
 }
 
-/** Links a headline to the memory report, showing the worst stage (overflow before high utilisation). */
+const TIER_NAME: Record<TierMemory['tier'], string> = { host_ram: 'Host RAM', nvme: 'SSD' };
+
+/** Short names of the failing tiers with their sizes, e.g. "SSD 2.2GB of 2.0GB". */
+function failingTierText(tiers: TierMemory[]): string {
+  return tiers
+    .map((t) => `${TIER_NAME[t.tier]} ${formatBytes(t.bytes)} of ${formatBytes(t.capacityBytes)}`)
+    .join(', ');
+}
+
+/**
+ * Links a headline to the memory report: a red triangle when a stage or an off-device tier does not fit (the label
+ * names the failing tier), an amber one for the fullest stage over the headroom threshold.
+ */
 export function HeroMemoryWarning({
-  stages,
+  memory,
 }: {
-  /** All pipeline stages, each reporting one device's memory sizes in bytes. */
-  stages: StageMemory[];
+  /** The memory report: stages and off-device tiers. */
+  memory: Pick<MemorySummary, 'stages' | 'tiers'>;
 }) {
-  const stage =
-    stages.find((s) => memoryState(s) === 'danger') ??
-    stages
-      .filter((s) => memoryState(s) === 'warning')
-      .sort((a, b) => b.totalBytes / b.capacityBytes - a.totalBytes / a.capacityBytes)[0];
-  if (!stage) return null;
+  const verdict = memoryVerdict(memory);
+  if (verdict.state === 'fits') return null;
+  const tierLabel =
+    verdict.failingTiers.length > 0
+      ? `Does not fit: ${failingTierText(verdict.failingTiers)}`
+      : undefined;
   return (
-    <a className="hero-memory-warning" href="#memory-fit" title="View memory fit">
-      <MemoryWarningIcon stage={stage} />
+    <a className="hero-memory-warning" href="#memory-fit" title={tierLabel ?? 'View memory fit'}>
+      <MemoryWarningIcon
+        stage={
+          verdict.state === 'danger' && verdict.worstStage?.fits !== false
+            ? DANGER_STAGE
+            : (verdict.worstStage ?? DANGER_STAGE)
+        }
+        label={tierLabel}
+      />
     </a>
   );
 }

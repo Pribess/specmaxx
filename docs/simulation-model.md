@@ -1384,7 +1384,9 @@ Per device of stage s:
 ### Unified memory
 
 On `kind: 'unified'` devices the capacity is shared with the CPU and OS; the usable fraction is OS-dependent and
-not modeled, and `simulate` adds a warning saying so.
+not modeled, and `simulate` adds a warning saying so. Host RAM IS the device pool there, so it is never a tier: no
+`host_ram` entry appears in `MemoryReport.tiers` (`stageTierBreakdown` throws if a group would land there), and
+pinned-host table scales (§12) are device bytes in `W_s`. Only `nvme` is a tier.
 
 ---
 
@@ -1563,7 +1565,9 @@ tablePlacementAt`; `lower/moe.ts: expertFetchOp`; `lower/lower.ts: denseLayerFet
 - `W_layer` = Σ of the layer's resident block weights with everything on the device (all experts, the whole table
   shard). A layer in the `denseLayers` range gets no expert or table transfer on top (it is streamed whole).
 - On unified memory host RAM is the device pool: a `'host_ram'` placement is dropped with a note (no op, the
-  weights stay counted on the device); only `'nvme'` is a tier there.
+  weights stay counted on the device); only `'nvme'` is a tier there. An NVMe table with `scaleLayout 'pinned_host'`
+  keeps its scales in that pool too: they are device bytes (§12 "Memory tiers"). `pinned_host` stays the default for
+  `nvme` on unified memory: the rates are unchanged (the scale read is not costed), only the device bytes grow.
 - Draft layers (spec-dec) are lowered without a layer index and get no transfer op.
 
 ### Storage tiers
@@ -1712,12 +1716,14 @@ ngramTableShardBytes`.
 
 ```
 W_s        = resident weights: offloaded MoE layer C·W_expert (+ router, shared); dense-layer range 0;
-             off-device table: the non-table part
+             off-device table: the non-table part  + [unified ∧ pinned_host] ceil(rows/tp)·scaleBytes
+             (lower/ngram.ts: ngramResidentWeightBytes, pinnedScaleBytes)
 staging_s  = max_{phase, transfer op} (q > 0 ? 2 : 1)·buffer          (double buffer for a prefetched op),
              buffer = experts / layers: Σ ceil(count)·bytes;  tables: usefulBytes
 total_s    = W_s + B_r·state_s + act_s + staging_s ≤ capacity
 tier bytes = max over nodes of Σ_{devices of the node} (full groups: E_loc·W_expert per offloaded layer, W_layer,
-             table shards; NVMe tables with scaleLayout 'pinned_host' put ceil(rows/tp)·scaleBytes on host RAM)
+             table shards; NVMe tables with scaleLayout 'pinned_host' put ceil(rows/tp)·scaleBytes on host RAM —
+             dedicated memory only; unified memory has no host_ram tier, the scales are in W_s)
 fits       = ∀ s total_s ≤ capacity  ∧  ∀ tiers bytes ≤ capacityBytes
 ```
 
@@ -1731,7 +1737,8 @@ extraBits)/8`, `scaleBytes = d·blockScaleBits/8`, `rowBytes = d·bpe = valueByt
 256 + 8 = 264 B; PLE bf16 320 + 0). Rows per device `R = T·g/tp` (the table is row-parallel). Reads by
 `scaleLayout` (default `'separate'` on host RAM, `'pinned_host'` on NVMe): `interleaved` `[{ R, rowBytes }]`;
 `separate` `[{ R, valueBytes }, { R, scaleBytes }]`; `pinned_host` `[{ R, valueBytes }]` (the scales live in host
-RAM, counted in its capacity; their read is not costed). A table without scales reads `[{ R, rowBytes }]` in any
+RAM, counted in its capacity; their read is not costed; on unified memory they stay in the unified pool and count in
+the device's `W_s` instead). A table without scales reads `[{ R, rowBytes }]` in any
 layout. `usefulBytes = R·rowBytes` whatever the layout. The existing gather op stays (device-memory side).
 
 ## 13. Speculative decoding

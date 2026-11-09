@@ -103,7 +103,7 @@ export function ResultHero({
                     <strong data-testid={`${phase}-tps`}>
                       <Num>{formatTokensPerSec(result[phase].tokensPerSec)}</Num>
                     </strong>
-                    <HeroMemoryWarning stages={result.memory.stages} />
+                    <HeroMemoryWarning memory={result.memory} />
                     <span className="answer-unit">
                       tok/s @ {formatContextTokens(result[phase].contextTokens)}
                     </span>

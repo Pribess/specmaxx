@@ -58,6 +58,11 @@ const SCALE_LAYOUT_OPTIONS: PickerOption[] = [
   { value: 'interleaved', label: 'Interleaved rows' },
 ];
 
+/** Scale layout labels on unified memory: the pinned scales stay in the device's own pool. */
+const UNIFIED_SCALE_LAYOUT_OPTIONS: PickerOption[] = SCALE_LAYOUT_OPTIONS.map((o) =>
+  o.value === 'pinned_host' ? { ...o, label: 'Scales pinned in memory' } : o,
+);
+
 /** Picker value of the default host link (the device's own interface). */
 const DEFAULT_LINK = 'default';
 
@@ -375,14 +380,14 @@ export function OffloadAdvancedFields(props: PanelProps) {
         <Picker
           label="Scale layout"
           value={tables.scaleLayout ?? defaultScaleLayout(tables.tier)}
-          options={SCALE_LAYOUT_OPTIONS}
+          options={unified ? UNIFIED_SCALE_LAYOUT_OPTIONS : SCALE_LAYOUT_OPTIONS}
           onChange={(v) =>
             setOffload({
               ...offload,
               tables: { ...tables, scaleLayout: v as ScaleLayoutChoice },
             })
           }
-          help="Block-scaled tables only. Separate: the value row and its scales are two reads on the tier. Scales pinned in host RAM: the rows on the SSD, the scales in host RAM (counted there). Interleaved: one read per row."
+          help={`Block-scaled tables only. Separate: the value row and its scales are two reads on the tier. ${unified ? 'Scales pinned in memory: the rows on the SSD, the scales in the unified pool (counted in the device total).' : 'Scales pinned in host RAM: the rows on the SSD, the scales in host RAM (counted there).'} Interleaved: one read per row.`}
         />
       )}
       {anyOff && (

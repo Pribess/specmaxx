@@ -123,7 +123,8 @@ export interface OffloadConfig {
   /**
    * n-gram lookup-table placement (Qwen PLE, DeepSeek Engram; design doc §2.10); absent = `'device'` (identity).
    * `scaleLayout` (block-scaled tables only): default `'separate'` on host RAM, `'pinned_host'` on NVMe (the scales
-   * pinned in host RAM and counted in its capacity), `'interleaved'` for a repacked table (one read per row).
+   * pinned in host RAM and counted in its capacity; on unified memory they stay in the unified pool and count in the
+   * device total), `'interleaved'` for a repacked table (one read per row).
    */
   lookupTables?: {
     tier: 'device' | OffloadTier;

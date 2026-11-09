@@ -91,6 +91,11 @@ export interface OffloadLowering {
     tier: 'host_ram' | 'nvme';
     scaleLayout: 'separate' | 'pinned_host' | 'interleaved';
   };
+  /**
+   * Unified memory: host RAM is the device pool, so pinned-host table scales (and any host-RAM group) are device
+   * bytes, never a separate tier. Absent/false = dedicated memory (host RAM is its own tier).
+   */
+  hostRamIsDevice?: boolean;
 }
 
 /**

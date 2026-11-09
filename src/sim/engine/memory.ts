@@ -201,7 +201,9 @@ export function tierBytesTotal(b: TierBytes): number {
  * groups, since the device cache is a copy: all local experts of each offloaded MoE layer (`routedExperts`), the
  * whole weights of each `denseLayers` layer (`denseLayers`), each off-device table shard (`lookupTables`); plus, for
  * an NVMe table with `scaleLayout 'pinned_host'`, its scales (`ceil(rows/tp)·scaleBytes`) on host RAM
- * (`lookupTables`). The draft's own experts are `draftExperts`. Unit: bytes per device.
+ * (`lookupTables`) — on dedicated memory only: on unified memory (`hostRamIsDevice`) the scales are device bytes counted
+ * in {@link stageWeightBytes}, and a `host_ram` group is an error (invariant). The draft's own experts are
+ * `draftExperts`. Unit: bytes per device.
  */
 export function stageTierBreakdown(
   model: ModelSpec,
@@ -231,10 +233,11 @@ export function stageTierBreakdown(
         const shard = ngramTableShardBytes(block, ctx);
         const { scaleBytes } = tableRowBytes(lookupTableFormat(ctx), block.rowDim);
         if (tables.scaleLayout === 'pinned_host' && scaleBytes > 0) {
-          // Formula: nvme += shard − scales;  host_ram += ceil(rows/tp)·scaleBytes
+          // Formula: nvme += shard − scales;  host_ram += ceil(rows/tp)·scaleBytes   (dedicated memory)
+          // Formula: nvme += shard − scales;  the scales are device bytes             (unified: see stageWeightBytes)
           const scales = Math.ceil(block.tableRows / ctx.parallel.tp) * scaleBytes;
           bytes[tables.tier].lookupTables += shard - scales;
-          bytes.host_ram.lookupTables += scales;
+          if (ctx.offload?.hostRamIsDevice !== true) bytes.host_ram.lookupTables += scales;
         } else {
           // Formula: tier += ceil(rows/tp)·d·bpe(lookup)
           bytes[tables.tier].lookupTables += shard;
@@ -256,6 +259,10 @@ export function stageTierBreakdown(
           bytes[draftExperts.tier].draftExperts += moeLocalExpertBytes(block, ctx);
       }
     }
+  }
+  // Invariant: on unified memory host RAM is the device pool, so no group may land on a `host_ram` tier.
+  if (ctx.offload?.hostRamIsDevice === true && tierBytesTotal(bytes.host_ram) > 0) {
+    throw new Error('memory: invariant violated — a host_ram group on unified memory');
   }
   return bytes;
 }
@@ -310,7 +317,7 @@ export function stageSnapshotStateBytesPerSeq(
  * Off-device tier entries of the report (design doc §2.7): per node, `bytes = Σ over the node's devices` of their
  * {@link stageTierBytes} (a device of rank r sits on stage `floor(r/(tp·dp))` and node `floor(r/devicesPerNode)`,
  * docs §5 "Rank layout"), taking the fullest node; against the tier's capacity. One entry per tier with bytes.
- * On unified memory no `'host_ram'` group reaches here (it is device memory).
+ * On unified memory no `'host_ram'` group reaches here (it is device memory); {@link stageTierBreakdown} enforces it.
  */
 export function tierMemory(
   model: ModelSpec,
