@@ -192,7 +192,12 @@ export interface LinkSpec {
    * {@link FabricShape}) it is the bandwidth of ONE port (one cable), per direction. Unit: B/s.
    */
   bandwidthPerDirectionBytesPerSec: number;
-  /** Per-message (per algorithm step) latency α. Unit: seconds. */
+  /**
+   * Per-message (per algorithm step) latency α. For inter-node links, one definition for every transport: the one-way
+   * small-message floor as a collective library sees it = half the average (or median) round trip of a tuned
+   * small-message ping-pong over that transport (`ib_write_lat` / `ibv_uc_pingpong` for RDMA, a 1-byte TCP
+   * ping-pong for TCP); never an ICMP ping, never the minimum sample. Unit: seconds.
+   */
   latencySec: number;
   /** `'direct'` = device-to-device transfers; `'host_bounce'` = staged through host memory (e.g. GeForce without P2P). */
   p2p: 'direct' | 'host_bounce';
@@ -226,6 +231,19 @@ export interface LinkSpec {
    * capability flag, no unit.
    */
   gpuDirectRdma?: boolean;
+  /**
+   * Inter-node links: how the collective library moves bytes over this link.
+   * - `'rdma'`: verbs / RDMA (InfiniBand, RoCE, RDMA over Thunderbolt 5 or USB4): the NIC reads and writes the
+   *   registered user buffer directly, zero-copy and kernel-bypass.
+   * - `'tcp'`: kernel sockets (NCCL's socket transport, Gloo, MLX's ring): `send()` copies each message from the user
+   *   buffer into kernel socket buffers and `recv()` copies it out again, a CPU memcpy at each end that the engine
+   *   charges as the TCP socket copy (docs/simulation-model.md §6 "TCP socket copy"). A socket takes host pointers
+   *   only, so `'tcp'` requires `gpuDirectRdma: false` (`validateLink`).
+   * Absent = no socket copy, the convention before the copy was modelled; intra-node links leave it absent, and every
+   * inter-node preset sets it (enforced by a test). On one physical medium, RDMA's `latencySec` never exceeds TCP's
+   * (`LINK_MEDIA` in `presets/links.ts`, checked by a test). No unit.
+   */
+  transport?: 'rdma' | 'tcp';
   /** Citations covering the numeric fields. */
   sources: SourceRef[];
   /** Numbers no vendor publishes, with reasons. */

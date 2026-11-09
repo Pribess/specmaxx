@@ -2,6 +2,12 @@
  * Identity pin for fabric shapes (docs/simulation-model.md §6 "Fabric shapes"). Originally generated before
  * fabric shapes; deliberately regenerated after latency-audit G1–G4/G7/G8 (design §4.3 records deltas).
  * It now pins absent-fabric/switched results under the corrected engine, not the historical pre-audit timings.
+ * Regenerated again for the RDMA vs TCP latency fix (one α definition; docs §4 "Links and topologies") and the TCP
+ * socket copy (docs §6 "TCP socket copy"). Moved keys, and only these: collectives on `thunderbolt-5-rdma-macos-26-2`
+ * (α 50 → 7 µs) and `strix-halo-usb4-tcp-20-gb-s-negotiated` (α 10 → 9 µs), 84 keys each (the collective level has
+ * no staging, so no copy); simulate / ui rigs on TB5 RDMA (decode +0.3 % … +568 %, the α) and on TCP links (the copy:
+ * TB4 TCP, 5 / 10GbE decode −0.0 … −1.1 %; USB4 TCP α + copy −0.02 … +1.4 %). Every non-TCP, non-TB5-RDMA key and
+ * the hierarchical collectives are unchanged bit for bit.
  * Numbers are compared with exact equality (Object.is; JSON round-trips doubles exactly).
  *
  * Three levels:

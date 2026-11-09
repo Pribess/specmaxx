@@ -227,11 +227,12 @@ describe('preset library: links and topologies', () => {
     expect(cx7.allPortsCapPerDirectionBytesPerSec).toBe(25e9);
     expect(cx7.forwardingLatencySec).toBe(4.5e-6);
     expect(cx7.latencySec).toBe(1.5e-6);
-    // Thunderbolt 5 RDMA: ports add up (no cap), 3 µs relay handling; the 50 µs α is unchanged in this task.
+    // Thunderbolt 5 RDMA: ports add up (no cap), 3 µs relay handling, α 7 µs = half the measured 13.72 µs
+    // ibv_uc_pingpong round trip (the one α definition; the former 50 µs was an all-reduce upper bound).
     const tb5 = byId('thunderbolt-5-rdma-macos-26-2');
     expect(tb5.allPortsCapPerDirectionBytesPerSec).toBeUndefined();
     expect(tb5.forwardingLatencySec).toBe(3e-6);
-    expect(tb5.latencySec).toBe(50e-6);
+    expect(tb5.latencySec).toBe(7e-6);
     // Thunderbolt bridge over TCP: TB5 at the 80 Gb/s line rate, TB4 at 40 Gb/s, the same software latency and relay.
     const tb5Tcp = byId('thunderbolt-5-bridge-tcp');
     const tb4Tcp = byId('thunderbolt-4-bridge-tcp');
@@ -260,19 +261,15 @@ describe('preset library: links and topologies', () => {
     expect(us(lat(cx7, 2))).toBe(7.5);
     expect(us(lat(cx7, 2) - lat(cx7, 1))).toBe(6);
     expect(us(lat(cx7, 3))).toBe(13.5);
-    // Thunderbolt 5 RDMA with this preset's 50 µs α: 2 hops 103 µs, 3 hops 156 µs. With the measured ~7 µs one-way
-    // (half the 14 µs ibv_uc_pingpong RTT) the same relay gives 17 and 27 µs.
+    // Thunderbolt 5 RDMA (α 7 µs, half the 13.72 µs ibv_uc_pingpong RTT): 2 hops 17 µs, 3 hops 27 µs.
     const tb5 = byId('thunderbolt-5-rdma-macos-26-2');
-    expect(us(lat(tb5, 2))).toBe(103);
-    expect(us(lat(tb5, 3))).toBe(156);
-    const measured = { ...tb5, latencySec: 7e-6 };
-    expect(us(lat(measured, 2))).toBe(17);
-    expect(us(lat(measured, 3))).toBe(27);
-    // Thunderbolt bridge (TCP, α 45 µs): 2 hops 110 µs, 3 hops 175 µs. USB4 RDMA: 19 / 30 µs. USB4 TCP: 25 / 40 µs.
+    expect(us(lat(tb5, 2))).toBe(17);
+    expect(us(lat(tb5, 3))).toBe(27);
+    // Thunderbolt bridge (TCP, α 45 µs): 2 hops 110 µs, 3 hops 175 µs. USB4 RDMA: 19 / 30 µs. USB4 TCP (α 9 µs): 23 / 37 µs.
     expect([2, 3].map((h) => us(lat(byId('thunderbolt-5-bridge-tcp'), h)))).toEqual([110, 175]);
     expect([2, 3].map((h) => us(lat(byId('thunderbolt-4-bridge-tcp'), h)))).toEqual([110, 175]);
     expect([2, 3].map((h) => us(lat(byId('strix-halo-usb4-native-rdma-20-gb-s-negotiated'), h)))).toEqual([19, 30]);
-    expect([2, 3].map((h) => us(lat(byId('strix-halo-usb4-tcp-20-gb-s-negotiated'), h)))).toEqual([25, 40]);
+    expect([2, 3].map((h) => us(lat(byId('strix-halo-usb4-tcp-20-gb-s-negotiated'), h)))).toEqual([23, 37]);
     // The relay handling is always smaller than the hop it sits between: it excludes the wire.
     for (const l of LINK_PRESETS) if (l.forwardingLatencySec !== undefined) expect(l.forwardingLatencySec, l.name).toBeLessThan(l.latencySec * 4);
   });

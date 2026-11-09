@@ -47,11 +47,11 @@ More: [pipeline and DP](simulation-model.md#pipeline-and-dp).
 
 Work is split across devices three ways: **tensor parallel** (TP) shards each layer's matrices, **pipeline parallel** (PP) puts consecutive layers on consecutive devices, and **data parallel** (DP) runs independent replicas. Mixture-of-experts layers can also spread their experts (EP).
 
-The estimate assumes a perfectly balanced split and costs one representative device per stage. It then adds the traffic the split requires: all-reduces for TP, a hand-off of activations between pipeline stages, and expert exchange for EP. A link has a bandwidth (per direction) and a latency, and a message costs latency plus size over bandwidth.
+The estimate assumes a perfectly balanced split and costs one representative device per stage. It then adds the traffic the split requires: all-reduces for TP, a hand-off of activations between pipeline stages, and expert exchange for EP. A link has a bandwidth (per direction) and a latency, and a message costs latency plus size over bandwidth. Every network latency is measured the same way, half the round trip of a small-message ping-pong, so RDMA and TCP over the same cable compare fairly (RDMA is never slower).
 
-Between machines the network shape matters: a switch, a full mesh, a ring or a chain. Each shape gets its own routing and bandwidth rules. Where the hardware cannot pass data straight between devices, as with some consumer GPUs, or between a GPU and a network card, the traffic is staged through host memory and pays for it.
+Between machines the network shape matters: a switch, a full mesh, a ring or a chain. Each shape gets its own routing and bandwidth rules. Where the hardware cannot pass data straight between devices, as with some consumer GPUs, or between a GPU and a network card, the traffic is staged through host memory and pays for it. Over TCP, the operating system also copies every message into and out of its socket buffers at each end; RDMA skips that copy.
 
-More: [parallelism](simulation-model.md#5-parallelism), [collectives](simulation-model.md#6-collectives), [links and topologies](simulation-model.md#links-and-topologies), [fabric shapes](simulation-model.md#fabric-shapes), [host bounce](simulation-model.md#host-bounce), [inter-node host staging](simulation-model.md#inter-node-host-staging).
+More: [parallelism](simulation-model.md#5-parallelism), [collectives](simulation-model.md#6-collectives), [links and topologies](simulation-model.md#links-and-topologies), [fabric shapes](simulation-model.md#fabric-shapes), [host bounce](simulation-model.md#host-bounce), [inter-node host staging](simulation-model.md#inter-node-host-staging), [TCP socket copy](simulation-model.md#tcp-socket-copy).
 
 ## Does it fit in memory?
 

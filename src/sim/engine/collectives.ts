@@ -1,8 +1,8 @@
 /**
  * Alpha-beta collective costs: flat (one link level), hierarchical (intra-node + inter-node), host-bounce
  * links (GeForce without P2P), and inter-node host staging (a dedicated-memory GPU without a GPUDirect path, e.g.
- * any GPU over TCP; `staging.ts`). Each cost is split into latency (α) terms, which stay on the dependency chain,
- * and bandwidth (β) terms, which may overlap with compute.
+ * any GPU over TCP, and the TCP socket copy of every device over TCP; `staging.ts`). Each cost is split into latency
+ * (α) terms, which stay on the dependency chain, and bandwidth (β) terms, which may overlap with compute.
  * See docs/simulation-model.md §6 ("Collectives").
  *
  * Notation: S = messageBytes per device (conventions on `CollectiveOp`: all_reduce = the full buffer,
@@ -76,8 +76,9 @@ export type CollectivePath =
       /** Concurrent send/recv ranks sharing one host: min(devicesPerNode, tp·dp). Count; absent = 1. */
       sendActiveDevices?: number;
       /**
-       * Inter-node host staging of this path (`staging.ts`); absent = none (intra-node paths, unified memory, a
-       * GPUDirect pair, and every path before staging was modelled). Only on `level: 'inter'`.
+       * Inter-node host staging of this path (`staging.ts`: PCIe staging and / or the TCP socket copy); absent = none
+       * (intra-node paths, unified memory on RDMA, a GPUDirect pair on RDMA, and every path before staging was
+       * modelled). Only on `level: 'inter'`.
        */
       interStaging?: HostStaging;
     }
@@ -92,7 +93,10 @@ export type CollectivePath =
        * hierarchical (they need one device per node).
        */
       interFabric?: { kind: 'switched'; oversubscription: number };
-      /** Host staging of the inter-node phase (`staging.ts`); absent = none. The intra-node phase never stages. */
+      /**
+       * Host staging of the inter-node phase (`staging.ts`: PCIe staging and / or the TCP socket copy); absent = none.
+       * The intra-node phase never stages.
+       */
       interStaging?: HostStaging;
     };
 
@@ -147,77 +151,122 @@ function hostBounceLink(link: LinkSpec, activeDevices: number): EffectiveLink {
 }
 
 /**
- * The bandwidth host staging allows one device, per direction: min(B_pcie, B_host / (4·n_stg)). Each staged byte
- * crosses the device's PCIe link once per end, and host DRAM 4 times per device pair (sender: GPU write + NIC read;
- * receiver: NIC write + GPU read), shared by the n_stg devices of the node that stage at once. Unit: B/s.
+ * a: host-DRAM accesses per byte of ONE end's copies on a staged path: 1 for the PCIe copy (the GPU's DMA writes or
+ * reads the pinned buffer once), 2 for the TCP socket copy (a CPU memcpy reads and writes each byte), 3 for both.
+ * Formula: a = (pcie ? 1 : 0) + (socketCopy ? 2 : 0). Count.
  */
-export function stagingBandwidthCapBytesPerSec(staging: HostStaging): number {
-  // Formula: B_stg = min(B_pcie, B_host / (4·n_stg))
-  // See docs/simulation-model.md §6 ("Inter-node host staging")
-  const hostShareBytesPerSec = staging.hostMemBandwidthBytesPerSec / (4 * staging.activeDevicesPerNode);
-  return Math.min(staging.hostLinkBandwidthBytesPerSec, hostShareBytesPerSec);
+export function stagingCopyAccessesPerByte(staging: HostStaging): number {
+  return (staging.pcie === undefined ? 0 : 1) + (staging.socketCopy ? 2 : 0);
 }
 
 /**
- * The per-device rates of the three stages of one staged message, and the joint host-memory cap, for
- * {@link stagedLink}. In a collective every node sends and receives at once, so each stage's host-DRAM traffic is
- * counted for both directions on each node:
- * - r_copy: GPU ↔ pinned host buffer over PCIe (copy-out at the sender, copy-in at the receiver): one DRAM access per
- *   byte per device, r_copy = min(B_pcie, B_host/n_stg);
+ * B_hj: the host-DRAM share of one device when every stage of a staged message runs at once (the pipelined steady
+ * state): each byte touches host DRAM 2·a times for the copies (a per end, both ends) plus 2 times for the NIC (read
+ * at the sender, write at the receiver), and the n_stg devices of the node that stage at once share B_host.
+ * PCIe staging only (a = 1): B_host/(4·n_stg); socket copy only (a = 2): B_host/(6·n_stg); both (a = 3):
+ * B_host/(8·n_stg). Unit: B/s, per device, per direction.
+ */
+function hostJointBytesPerSec(staging: HostStaging): number {
+  // Formula: B_hj = B_host / ((2·a + 2)·n_stg)
+  const accesses = 2 * stagingCopyAccessesPerByte(staging) + 2;
+  return staging.hostMemBandwidthBytesPerSec / (accesses * staging.activeDevicesPerNode);
+}
+
+/**
+ * The bandwidth host staging allows one device, per direction, whatever the network: min(B_pcie, B_hj) (B_pcie = ∞
+ * without PCIe staging), B_hj from {@link hostJointBytesPerSec}. PCIe staging only: min(B_pcie, B_host/(4·n_stg)),
+ * each staged byte crossing the device's PCIe link once per end and host DRAM 4 times per device pair (sender: GPU
+ * write + NIC read; receiver: NIC write + GPU read). Unit: B/s.
+ */
+export function stagingBandwidthCapBytesPerSec(staging: HostStaging): number {
+  // Formula: B_stg = min(B_pcie, B_host / ((2·a + 2)·n_stg))   (B_pcie = ∞ without PCIe staging)
+  // See docs/simulation-model.md §6 ("Inter-node host staging", "TCP socket copy")
+  const hostShareBytesPerSec = hostJointBytesPerSec(staging);
+  return Math.min(staging.pcie?.bandwidthBytesPerSec ?? Infinity, hostShareBytesPerSec);
+}
+
+/**
+ * The per-device rates of the stages of one staged message, and the joint host-memory cap, for {@link stagedLink}.
+ * A message crosses up to five stages: PCIe copy-out (GPU → pinned host buffer), socket copy-in (user buffer →
+ * kernel), the wire, socket copy-out (kernel → user buffer), PCIe copy-in (host buffer → GPU). An absent stage has
+ * rate ∞ (its step time s/∞ = 0). In a collective every node sends and receives at once, so each stage's host-DRAM
+ * traffic is counted for both directions on each node:
+ * - r_pcie: GPU ↔ pinned host buffer over PCIe: one DRAM access per byte per device, r_pcie = min(B_pcie,
+ *   B_host/n_stg);
+ * - r_sock: the kernel memcpy between user and socket buffers: a read plus a write, two DRAM accesses per byte per
+ *   device, r_sock = B_host/(2·n_stg);
  * - r_net: the wire: NIC read at the sender + NIC write at the receiver, two DRAM accesses per byte per device,
  *   r_net = min(B, B_host/(2·n_stg));
- * - B_hostjoint: all stages running at once (steady state of the pipeline): four accesses, B_host/(4·n_stg).
+ * - B_hostjoint: all stages running at once (steady state of the pipeline): B_host/((2·a + 2)·n_stg).
  * All in B/s, per device, per direction.
  */
 export interface StagedStageRates {
-  /** r_copy: one PCIe copy stage (sender copy-out, receiver copy-in). Unit: B/s. */
-  copyBytesPerSec: number;
+  /** r_pcie: one PCIe copy stage (sender copy-out, receiver copy-in); ∞ without PCIe staging. Unit: B/s. */
+  pcieBytesPerSec: number;
+  /** r_sock: one socket copy stage (sender copy-in, receiver copy-out); ∞ without the socket copy. Unit: B/s. */
+  sockBytesPerSec: number;
   /** r_net: the wire stage. Unit: B/s. */
   netBytesPerSec: number;
-  /** B_host/(4·n_stg): the DRAM cap when every stage runs at once (pipelined steady state). Unit: B/s. */
+  /** B_host/((2·a + 2)·n_stg): the DRAM cap when every stage runs at once (pipelined steady state). Unit: B/s. */
   hostJointBytesPerSec: number;
 }
 
 /** {@link StagedStageRates} of a staged path whose unstaged network rate is `netBytesPerSec` (B, B/s). */
 export function stagedStageRates(netBytesPerSec: number, staging: HostStaging): StagedStageRates {
-  // Formula: r_copy = min(B_pcie, B_host/n_stg);  r_net = min(B, B_host/(2·n_stg));  B_hj = B_host/(4·n_stg)
-  // See docs/simulation-model.md §6 ("Inter-node host staging")
+  // Formula: r_pcie = min(B_pcie, B_host/n_stg)   (∞ without PCIe staging)
+  //          r_sock = B_host/(2·n_stg)            (∞ without the socket copy)
+  //          r_net  = min(B, B_host/(2·n_stg));  B_hj = B_host/((2·a + 2)·n_stg)
+  // See docs/simulation-model.md §6 ("Inter-node host staging", "TCP socket copy")
   const n = staging.activeDevicesPerNode;
   const hostBytesPerSec = staging.hostMemBandwidthBytesPerSec;
   return {
-    copyBytesPerSec: Math.min(staging.hostLinkBandwidthBytesPerSec, hostBytesPerSec / n),
+    pcieBytesPerSec:
+      staging.pcie === undefined ? Infinity : Math.min(staging.pcie.bandwidthBytesPerSec, hostBytesPerSec / n),
+    sockBytesPerSec: staging.socketCopy ? hostBytesPerSec / (2 * n) : Infinity,
     netBytesPerSec: Math.min(netBytesPerSec, hostBytesPerSec / (2 * n)),
-    hostJointBytesPerSec: hostBytesPerSec / (4 * n),
+    hostJointBytesPerSec: hostJointBytesPerSec(staging),
   };
 }
 
 /**
  * An inter-node link level `unstaged` with host staging applied. Every message is copied GPU → pinned host buffer at
- * the sender (rate r_copy), sent (r_net) and copied host buffer → GPU at the receiver (r_copy), in steps of
- * s = min(m, c) bytes (c = `staging.stepBytes`), the three stages pipelined over the k = m/s steps
- * ({@link stagedStageRates}).
+ * the sender (rate r_pcie, PCIe staging), copied into kernel socket buffers (r_sock, TCP), sent (r_net), copied out
+ * of the socket buffers (r_sock) and host buffer → GPU at the receiver (r_pcie), in steps of s = min(m, c) bytes
+ * (c = `staging.stepBytes`), the stages pipelined over the k = m/s steps ({@link stagedStageRates}; an absent stage
+ * has rate ∞ and contributes nothing).
  *
  * A pipeline of stages with per-step times s/r_i, k steps, and steady-state period s/B_eff takes
  * Σ_i s/r_i + (k − 1)·s/B_eff = m/B_eff + (Σ_i s/r_i − s/B_eff):
- * - B_eff = min(r_copy, r_net, B_hostjoint) = min(B, B_pcie, B_host/(4·n_stg)) is the steady-state rate (β);
+ * - B_eff = min(r_pcie, r_sock, r_net, B_hostjoint) = min(B, B_pcie, B_hostjoint) is the steady-state rate (β);
  * - the fill/drain Σ_i s/r_i − s/B_eff is one step through every stage except the one that sets B_eff, so nothing
- *   is counted twice when PCIe (or host memory) rather than the NIC binds. It is ≥ 0 because Σ_i 1/r_i ≥ 1/B_eff.
- * - m ≤ c (k = 1): exactly the serial sum m/r_copy + m/r_net + m/r_copy.
+ *   is counted twice when PCIe, the copy or host memory rather than the NIC binds. It is ≥ 0 because
+ *   Σ_i 1/r_i ≥ 1/B_eff.
+ * - m ≤ c (k = 1): exactly the serial sum 2·m/r_pcie + 2·m/r_sock + m/r_net.
  * The fill is serial with the step chain, so it joins α; β stays m/B_eff, which the collective formulas apply.
+ * No fixed latency is added for the socket copy: the measured TCP α (a 1-byte ping-pong) already holds the syscalls
+ * and a 1-byte copy, so only the size-dependent part 2·s/r_sock joins.
+ * PCIe staging only, the operations are exactly those of the formula before the socket copy (bit-identical).
  * `stepMessageBytes` = m (bytes); returns B_eff (B/s) and α_eff (seconds).
  */
 export function stagedLink(unstaged: EffectiveLink, staging: HostStaging, stepMessageBytes: number): EffectiveLink {
-  // Formula: B_eff = min(r_copy, r_net, B_host/(4·n_stg))
+  // Formula: B_eff = min(r_pcie, r_sock, r_net, B_host/((2·a + 2)·n_stg))
   //          s = min(m, c)
-  //          α_eff = α + 2·α_pcie + (2·s/r_copy + s/r_net − s/B_eff)
-  // 2·α_pcie = α_stage: one PCIe write + flag at the sender, one PCIe poll + read at the receiver.
-  // See docs/simulation-model.md §6 ("Inter-node host staging")
+  //          α_eff = α + 2·α_pcie + (2·s/r_pcie + 2·s/r_sock + s/r_net − s/B_eff)
+  // 2·α_pcie = α_stage: one PCIe write + flag at the sender, one PCIe poll + read at the receiver (0 without PCIe).
+  // See docs/simulation-model.md §6 ("Inter-node host staging", "TCP socket copy")
   const rates = stagedStageRates(unstaged.bandwidthBytesPerSec, staging);
-  const bandwidthBytesPerSec = Math.min(rates.copyBytesPerSec, rates.netBytesPerSec, rates.hostJointBytesPerSec);
-  const stageLatencySec = 2 * staging.hostLinkLatencySec;
+  const bandwidthBytesPerSec = Math.min(
+    rates.pcieBytesPerSec,
+    rates.sockBytesPerSec,
+    rates.netBytesPerSec,
+    rates.hostJointBytesPerSec,
+  );
+  const stageLatencySec = 2 * (staging.pcie?.latencySec ?? 0);
   const stepBytes = Math.min(stepMessageBytes, staging.stepBytes);
-  const oneStepThroughAllSec =
-    (2 * stepBytes) / rates.copyBytesPerSec + stepBytes / rates.netBytesPerSec;
+  // Each term is 0 when its stage is absent (rate ∞), so PCIe-only staging computes exactly the former sum.
+  const pcieCopiesSec = (2 * stepBytes) / rates.pcieBytesPerSec;
+  const socketCopiesSec = (2 * stepBytes) / rates.sockBytesPerSec;
+  const oneStepThroughAllSec = pcieCopiesSec + socketCopiesSec + stepBytes / rates.netBytesPerSec;
   const fillSec = oneStepThroughAllSec - stepBytes / bandwidthBytesPerSec;
   const latencySec = unstaged.latencySec + stageLatencySec + fillSec;
   return { bandwidthBytesPerSec, latencySec };

@@ -56,10 +56,10 @@ const PAR = { tp: 1, pp: 1, dp: 1, ep: 1 };
 const GEN5_X16 = hostPcieLink(5, 16);
 const GEN3_X16 = hostPcieLink(3, 16);
 
-/** Staging of an RTX 5090 (PCIe 5.0 x16, DDR5-6000 2ch): B_pcie 63.015 GB/s, α_pcie 1 µs, B_host 96 GB/s. */
+/** PCIe staging of an RTX 5090 (PCIe 5.0 x16, DDR5-6000 2ch): B_pcie 63.015 GB/s, α_pcie 1 µs, B_host 96 GB/s. */
 const STAGING: HostStaging = {
-  hostLinkBandwidthBytesPerSec: GEN5_X16.bandwidthPerDirectionBytesPerSec,
-  hostLinkLatencySec: 1e-6,
+  pcie: { bandwidthBytesPerSec: GEN5_X16.bandwidthPerDirectionBytesPerSec, latencySec: 1e-6 },
+  socketCopy: false,
   hostMemBandwidthBytesPerSec: 96e9,
   stepBytes: HOST_STAGING_STEP_BYTES,
   activeDevicesPerNode: 1,
@@ -102,7 +102,7 @@ describe('needsHostStaging (docs §6 "Inter-node host staging")', () => {
 });
 
 describe('resolveHostStaging', () => {
-  it('takes B_pcie and α_pcie from the device host interface and B_host from the default host RAM', () => {
+  it('takes B_pcie and α_pcie from the device host interface and B_host from the default host RAM; TCP adds the socket copy', () => {
     const r = resolveHostStaging(
       RTX_5090,
       cluster(ETHERNET_10G_TCP, 2, 2),
@@ -111,6 +111,7 @@ describe('resolveHostStaging', () => {
     );
     expect(r.staging).toEqual({
       ...STAGING,
+      socketCopy: true,
       hostMemBandwidthBytesPerSec: DDR5_6000_2CH.bandwidthBytesPerSec,
       activeDevicesPerNode: 2,
     });
@@ -128,11 +129,11 @@ describe('resolveHostStaging', () => {
       { device: RTX_5090, topology: topo, host: { link: GEN3_X16 } },
       PAR,
     );
-    expect(given.staging?.hostLinkBandwidthBytesPerSec).toBe(
+    expect(given.staging?.pcie?.bandwidthBytesPerSec).toBe(
       GEN3_X16.bandwidthPerDirectionBytesPerSec,
     );
     const sxm = resolveHostStaging(H100_SXM, topo, { device: H100_SXM, topology: topo }, PAR);
-    expect(sxm.staging?.hostLinkBandwidthBytesPerSec).toBe(B_PCIE);
+    expect(sxm.staging?.pcie?.bandwidthBytesPerSec).toBe(B_PCIE);
     expect(sxm.warnings[0]).toMatch(/no host link known for .*H100.*PCIe 5\.0 x16/);
   });
 
@@ -163,7 +164,7 @@ describe('effectiveLink with host staging', () => {
     const nic: EffectiveLink = { bandwidthBytesPerSec: 50e9, latencySec: 1e-6 };
     const gen3 = {
       ...STAGING,
-      hostLinkBandwidthBytesPerSec: GEN3_X16.bandwidthPerDirectionBytesPerSec,
+      pcie: { latencySec: 1e-6, bandwidthBytesPerSec: GEN3_X16.bandwidthPerDirectionBytesPerSec },
     };
     expectClose(stagedLink(nic, gen3, 1e6).bandwidthBytesPerSec, 15.753846153846155e9);
   });
@@ -282,7 +283,7 @@ describe('staged totals: the fill excludes the stage that sets β (docs §6 "Int
   it('PCIe binds (50 GB/s NIC, PCIe 3.0 x16, host memory not binding)', () => {
     const pcie3: HostStaging = {
       ...STAGING,
-      hostLinkBandwidthBytesPerSec: GEN3_X16.bandwidthPerDirectionBytesPerSec,
+      pcie: { latencySec: 1e-6, bandwidthBytesPerSec: GEN3_X16.bandwidthPerDirectionBytesPerSec },
       hostMemBandwidthBytesPerSec: 1e15,
     };
     const bPcie = GEN3_X16.bandwidthPerDirectionBytesPerSec;
@@ -359,13 +360,13 @@ describe('simulate with host staging', () => {
     hardware: { device, topology },
   });
 
-  it('warns once and slows decode for 2 × RTX 5090 over 10GbE; GPUDirect undoes it exactly', () => {
+  it('warns once and slows decode for 2 × RTX 5090 over 10GbE; GPUDirect RDMA undoes it exactly', () => {
     const topo = cluster(ETHERNET_10G_TCP);
     const r = simulate(input(RTX_5090, topo));
     const gdr = simulate(
       input(
         { ...RTX_5090, gpuDirectRdma: true },
-        cluster({ ...ETHERNET_10G_TCP, gpuDirectRdma: true }),
+        cluster({ ...ETHERNET_10G_TCP, gpuDirectRdma: true, transport: 'rdma' }),
       ),
     );
     expect(r.warnings.filter((w) => w.includes('staged through host memory'))).toHaveLength(1);

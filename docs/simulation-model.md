@@ -603,8 +603,32 @@ costed in §6
   direction, never a bidirectional sum (vendor "900 GB/s NVLink" bidirectional → 450 GB/s).
 - **Theoretical bandwidth, hardware-floor latency**: bandwidth is the line-rate ceiling (PCIe: GT/s × lanes ×
   128/130 ÷ 8, before packet overhead); `latencySec` is a one-way hardware / verbs-level floor (P2P write,
-  `ib_write_lat`, the transport's measured minimum for TCP / RDMA over Thunderbolt and USB4), never an NCCL /
-  RCCL software floor. Latencies no vendor publishes are `estimated`.
+  `ib_write_lat`), never an NCCL / RCCL software floor. Latencies no vendor publishes are `estimated`.
+- **One α definition for every inter-node transport** (`src/sim/hw/types.ts: LinkSpec.latencySec`, the header of
+  `src/sim/hw/presets/links.ts`): the one-way small-message floor as a collective library sees it = **half the
+  average (or median) round trip of a tuned small-message ping-pong** over that transport (`ib_write_lat` /
+  `ibv_uc_pingpong` for RDMA, a 1-byte TCP ping-pong for TCP). An ICMP ping is not used (untuned ICMP on Strix Halo
+  USB4 gave 0.119 ms minimum vs a 14.1 µs tuned TCP minimum, ≈ 8× too high), nor the minimum sample (on Strix Halo
+  USB4 the minima would even invert RDMA vs TCP: 7.39 vs 7.07 µs, while the averages are 8.33 vs 8.7 µs). The
+  per-step time of a small all-reduce is used only as an upper bound when no ping-pong exists (TB4 / TB5 TCP).
+- **Transport** (`LinkSpec.transport`, `'rdma' | 'tcp'`; `LINK_MEDIA`, `links.test.ts`): every inter-node preset says
+  how the collective library moves bytes, intra-node presets leave it absent. `'tcp'` means kernel sockets, so it
+  needs `gpuDirectRdma: false` (`validateLink`) and pays the socket copy (§6 "TCP socket copy"). **RDMA ≤ TCP on one
+  medium**: RDMA is zero-copy and kernel-bypass (the NIC moves the registered buffer itself), while TCP adds the
+  kernel's syscalls, copies and protocol processing on top of the same wire, so on the same ports and cable RDMA's
+  `latencySec` can never exceed TCP's, and neither can its `forwardingLatencySec` (a user-space verbs re-post vs a
+  kernel receive and send). `LINK_MEDIA` lists the presets per physical medium as data; a test checks every
+  RDMA / TCP pair of a medium and that every preset with a `transport` is listed exactly once, so new presets join.
+
+  | medium               | `'rdma'`                   | `'tcp'`                               | α RDMA / TCP             |
+  | -------------------- | -------------------------- | ------------------------------------- | ------------------------ |
+  | Thunderbolt 5        | `TB5_RDMA`                 | `TB5_TCP`                             | 7 / 45 µs                |
+  | Thunderbolt 4        | —                          | `TB4_TCP`                             | — / 45 µs                |
+  | Strix Halo USB4      | `USB4_HALO_RDMA`           | `USB4_HALO_TCP`                       | 8 / 9 µs                 |
+  | DGX Spark ConnectX-7 | `SPARK_CONNECTX_7`         | — (no Spark TCP preset)               | 1.5 / — µs               |
+  | InfiniBand NDR / XDR | `IB_NDR_400`, `IB_XDR_800` | —                                     | 1 / — µs                 |
+  | 5GbE / 10GbE         | —                          | `ETHERNET_5G_TCP`, `ETHERNET_10G_TCP` | — / 10 µs (direct cable) |
+
 - **Host bounce**: stock GeForce PCIe links are `p2p: 'host_bounce'` (`HOST_BOUNCE_PCIE_LINKS`, Gen4 / Gen5 × x8 /
   x16), with `hostBounce.hostMemBandwidthBytesPerSec` an assumed dual-channel DDR5-6000 host (96 GB/s,
   estimated: replace for the actual host) and `extraLatencySec` 12 µs (community P2P matrices). The
@@ -636,16 +660,18 @@ NCCL_PTR_HOST`), and so do Gloo (`cuda_allreduce_ring.cc:82,102`) and MLX. On RD
   (`src/graph/paths.cc:511-536`). HGX nodes meet this (DGX B200: 8 ConnectX-7, one per GPU); a workstation NIC on
   another root port would not, which no preset models.
 
-- **TCP link latencies** (rechecked; `src/sim/hw/presets/links.ts`, `ui/components/linkHelp.tsx`). Each is a one-way
-  hardware / OS floor between two machines (half a tuned TCP ping-pong round trip, or an upper bound derived from a
-  measured collective), not what a socket collective library achieves:
+- **Link latencies, RDMA and TCP, one method** (`src/sim/hw/presets/links.ts`, `ui/components/linkHelp.tsx`). Each is
+  the one-way floor by the definition above, not what a socket collective library achieves:
 
-  | link                 | old   | new                  | evidence                                                                                                                                                                                                                                                                                                                                                                         |
-  | -------------------- | ----- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | `TB4_TCP`, `TB5_TCP` | 70 µs | **45 µs**, estimated | MLX PR 2808 (https://github.com/ml-explore/mlx/pull/2808): a 4-Mac TCP-ring all-reduce takes 290–300 µs, 6 steps of ≈ 48 µs including reduction and dispatch. At 70 µs the engine's best 4-node all-reduce (tree, 4α = 280 µs) would equal the measured software, so 70 µs was no floor. The 0.142 ms ICMP minimum RTT (MacBook Air ↔ Linux PC, untuned) stays as context only. |
-  | `ETHERNET_10G_TCP`   | 10 µs | 10 µs, estimated     | No 10GbE desktop ping-pong found: carried over from the 5GbE direct measurement. Cross-checks: 10GBASE-T PHY 2–4 µs; IX (OSDI'14) Linux 10GbE one-way 24 µs through a switch with epoll; switched ≈ 15 µs.                                                                                                                                                                       |
-  | `ETHERNET_5G_TCP`    | 10 µs | 10 µs                | Level1Techs (Framework Desktop built-in 5GbE, tuned 1-byte ping-pong): direct min RTT 19.9 µs. Through a 10G switch the same port measured 29.4–32.3 µs (≈ 15 µs one way), a switched figure (the note that called it "10GbE" was corrected).                                                                                                                                    |
-  | `USB4_HALO_TCP`      | 10 µs | 10 µs                | Level1Techs: min RTT 14.1–17.4 µs; 10 µs keeps it above the 8 µs RDMA preset.                                                                                                                                                                                                                                                                                                    |
+  | link                 | old    | new                | evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+  | -------------------- | ------ | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `TB5_RDMA`           | 50 µs  | **7 µs**, measured | `ibv_uc_pingpong` M4 Pro ↔ M3 Ultra over TB5: "1000 iters in 0.01 seconds = 13.72 usec/iter" (one iteration = one round trip ⇒ 6.86 µs one way; Anemll, https://x.com/anemll/status/1993182652204187929). Cross-check: JACCL 4-way all-reduce ≈ 9–10 µs at 1–2 KB, one mesh step for small messages (MLX PR 2808), an upper bound. The former 50 µs was Jeff Geerling's "memory access latency … <50us", read off the all-reduce plot: a collective upper bound, not a link α. (An earlier note attributed the ping-pong to MLX PR #3900; its source is the Anemll post.) |
+  | `TB4_TCP`, `TB5_TCP` | 45 µs  | 45 µs, estimated   | No tuned TCP ping-pong over a Thunderbolt bridge found. MLX PR 2808 (https://github.com/ml-explore/mlx/pull/2808): a 4-Mac TCP-ring all-reduce takes 290–300 µs flat over 1–32 KB, 2(N−1) = 6 steps of ≈ 48 µs including thread hand-offs and the reduction, an upper bound; 45 µs sits just below it. The 0.142 ms ICMP RTT (MacBook Air ↔ Linux PC, untuned) is context only.                                                                                                                                                                                           |
+  | `USB4_HALO_RDMA`     | 8 µs   | 8 µs, measured     | Level1Techs usb4_rdma `ib_write_lat` 2 B, n = 10000: average 8.33 µs (minimum 7.39, 99 % 9.98). Hellas: ≈ 7 µs at 64 B. The verbs are emulated over the same USB4 DMA rings as TCP, so RDMA ≈ TCP is plausible here.                                                                                                                                                                                                                                                                                                                                                       |
+  | `USB4_HALO_TCP`      | 10 µs  | **9 µs**, measured | Level1Techs (post 3), tuned 1-byte TCP ping-pong: RTT average Base 20.25 / Partial 17.35 / Full 19.56 µs (minimum 15.15 / 14.13 / 17.41 µs); α = the best-tuned average / 2 = 8.7 µs, rounded to 9 µs.                                                                                                                                                                                                                                                                                                                                                                     |
+  | `SPARK_CONNECTX_7`   | 1.5 µs | 1.5 µs, measured   | `ib_write_lat` 2 B, t_typical (median) 1.45 µs (alessandrosangiorgi.net). No Spark TCP preset, so no pair.                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+  | `ETHERNET_10G_TCP`   | 10 µs  | 10 µs, estimated   | No 10GbE desktop ping-pong found: carried over from the 5GbE direct measurement. Cross-checks: 10GBASE-T PHY 2–4 µs; IX (OSDI'14) Linux 10GbE one-way 24 µs through a switch with epoll; Cloudflare's tuned switched UDP echo average 30.7 µs RTT.                                                                                                                                                                                                                                                                                                                         |
+  | `ETHERNET_5G_TCP`    | 10 µs  | 10 µs              | Level1Techs (Framework Desktop built-in 5GbE, tuned 1-byte ping-pong): direct RTT average 20.8–22.8 µs (minimum 19.9 µs). Through a 10G switch the same port measured average 31.8–40.3 µs (minimum 29.4–32.3): a switch adds ≈ 5 µs one way; α is the direct-cable figure.                                                                                                                                                                                                                                                                                                |
 
   What a collective library over sockets measures in practice, for scale (the Network link's "?" says so too): NCCL
   on sockets 57–64 µs for a small all-reduce between two nodes of 4 GH200 over Slingshot TCP
@@ -707,19 +733,18 @@ NCCL_PTR_HOST`), and so do Gloo (`cuda_allreduce_ring.cc:82,102`) and MLX. On RD
   completion poll, re-post and PCIe round trip; RoCE cannot route through a Spark in hardware), so a 2-hop path costs
   2 × 1.5 + 4.5 = 7.5 µs (+6 µs, the measurement) and a 3-hop one 13.5 µs. `TB5_RDMA`: no cap (one Thunderbolt
   controller per port, TN3205; 1 → 4 cables scale ≈ linearly to ~36.5 GB/s, MLX PR #3900; the SoC ceiling for 5–6
-  concurrent ports is unmeasured) and α_f = 3 µs, the host turnaround of a user-space verbs relay (JACCL's 9–12 µs
-  small 4-way all-reduce minus its ~7 µs one-way transfer, half the 14 µs `ibv_uc_pingpong` round trip; TN3205: "the
-  application is responsible for forwarding"): physically 2 hops = 2 × 7 + 3 = 17 µs and 3 hops = 27 µs; with this
-  preset's 50 µs `latencySec`, kept in this task although ~7 µs was measured (see the latency-audit follow-up), 103
-  and 156 µs. `TB5_TCP` (new: the Thunderbolt bridge on TB5 ports at the 80 Gb/s = 10 GB/s per-direction line rate,
-  Intel's TB5 brief; not an achieved goodput, none is cleanly measured) and `TB4_TCP` (40 Gb/s, the M3 Max): α 45 µs
-  (estimated, ≤ the ≈ 48 µs MLX TCP-ring step; see "TCP link latencies" above) and α_f = 20 µs, the user-space
-  receive-to-send turnaround, about a third of the ~45–48 µs one-way TCP time that is itself almost all software
-  (MLX TCP ring ~48 µs per step; TN3205: the bridge forwards in software); 2 hops 2 × 45 + 20 = 110 µs, 3 hops
-  3 × 45 + 2 × 20 = 175 µs. `USB4_HALO_RDMA` α_f = 3 µs (as TB5 RDMA; 2 hops 19 µs, 3 hops
-  30 µs), `USB4_HALO_TCP` 5 µs (the kernel's forwarding turnaround on a tuned stack, half the 10 µs one-way; 25 /
-  40 µs). `presets.test.ts` pins these hop examples. No link was renamed; `LEGACY_LINK_IDS` (empty) is where a rename
-  would be recorded for old URLs, and a TB5 Mac URL naming the TB4 bridge still resolves to that link.
+  concurrent ports is unmeasured) and α_f = 3 µs, the host turnaround of a user-space verbs relay (JACCL's ≈ 9.5 µs
+  small all-reduce step minus the 7 µs one-way α; TN3205: "the application is responsible for forwarding"): 2 hops =
+  2 × 7 + 3 = 17 µs and 3 hops = 27 µs. `TB5_TCP` (the Thunderbolt bridge on TB5 ports at the 80 Gb/s = 10 GB/s
+  per-direction line rate, Intel's TB5 brief; not an achieved goodput, none is cleanly measured) and `TB4_TCP`
+  (40 Gb/s, the M3 Max): α 45 µs (estimated, ≤ the ≈ 48 µs MLX TCP-ring step; see "Link latencies" above) and
+  α_f = 20 µs, the user-space receive-to-send turnaround, about a third of the ~45–48 µs one-way TCP time that is
+  itself almost all software (MLX TCP ring ~48 µs per step; TN3205: the bridge forwards in software); 2 hops
+  2 × 45 + 20 = 110 µs, 3 hops 3 × 45 + 2 × 20 = 175 µs. `USB4_HALO_RDMA` α_f = 3 µs (as TB5 RDMA; 2 hops 19 µs,
+  3 hops 30 µs), `USB4_HALO_TCP` 5 µs (the kernel's forwarding turnaround on a tuned stack, about half the 9 µs
+  one-way; 23 / 37 µs). On each medium RDMA's α_f ≤ TCP's (3 ≤ 20 and 3 ≤ 5 µs; `LINK_MEDIA`). `presets.test.ts`
+  pins these hop examples. No link was renamed; `LEGACY_LINK_IDS` (empty) is where a rename would be recorded for old
+  URLs, and a TB5 Mac URL naming the TB4 bridge still resolves to that link.
 - **Link ids**: `LinkSpec` has no id; `linkPresetId(link)` slugs the name (`'PCIe 5.0 x16 (host bounce)'` →
   `'pcie-5-0-x16-host-bounce'`), unique over `LINK_PRESETS`. Builder ids and the UI's URL use it.
 - **Multi-port links and fabric shapes** (`src/sim/hw/types.ts: LinkSpec, FabricShape, TopologySpec.interNodeFabric`):
@@ -1047,11 +1072,12 @@ communication and compute for memory.
 
 ### Inter-node host staging
 
-`src/sim/engine/staging.ts: needsHostStaging`; `collectives.ts: effectiveLink, stagedStageRates, stagedLink,
-stagingBandwidthCapBytesPerSec, collectiveTime`; `fabricCollectives.ts: fabricLinkParams, fabricCollectiveTime,
-fabricAllReduceSec`; `placement.ts: collectivePath, ppSendPath, hasInterNodeTraffic`. A device with dedicated memory
-cannot hand device memory to a NIC
-without GPUDirect RDMA, so each inter-node message is staged through host memory.
+`src/sim/engine/staging.ts: needsHostStaging, resolveHostStaging`; `collectives.ts: effectiveLink, stagedStageRates,
+stagedLink, stagingBandwidthCapBytesPerSec, collectiveTime`; `fabricCollectives.ts: fabricLinkParams,
+fabricCollectiveTime, fabricAllReduceSec`; `placement.ts: collectivePath, ppSendPath, hasInterNodeTraffic`. A device
+with dedicated memory cannot hand device memory to a NIC without GPUDirect RDMA, so each inter-node message is staged
+through host memory over PCIe. This section is that PCIe part; the TCP socket copy (next section) rides the same
+pipeline (`HostStaging.socketCopy`) and applies to every device over TCP, unified memory included.
 
 **When.** `staged ⇔ device.memory.kind = 'dedicated' ∧ nodes > 1 ∧ (interNode.gpuDirectRdma = false ∨
 device.gpuDirectRdma = false)` (§4 "Links and topologies" for the fields and the capability table). So every
@@ -1067,29 +1093,32 @@ the message and a flag into host memory, a CPU proxy thread makes the socket cal
 reads host memory over PCIe. No `cudaMemcpy`, no stream sync. A message larger than one buffer step pipelines GPU
 copy, wire and GPU copy; one within a step pays them one after another.
 
-**Parameters** (`HostStaging`, no new free number):
+**Parameters** (`HostStaging`, no new free number; `B_pcie`, `α_pcie` in `HostStaging.pcie`, absent when nothing
+PCIe-stages):
 
 | symbol   | meaning                                    | value                                                                                                   |
 | -------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
 | `B_pcie` | the device's PCIe host link, per direction | `hardware.host.link ?? hostPcieLink(device.hostInterface)`, else PCIe 5.0 x16 with a warning            |
 | `α_pcie` | one PCIe crossing                          | that link's `latencySec`, 1 µs (estimated)                                                              |
-| `B_host` | node DRAM, read + write combined           | `hardware.host.ram ?? DEFAULT_HOST_RAM` (DDR5-6000 2ch, 96 GB/s)                                        |
+| `B_host` | node DRAM, read + write combined           | `hardware.host.ram ?? DEFAULT_HOST_RAM` (DDR5-6000 2ch, 96 GB/s); the pool peak on unified memory       |
 | `c`      | one pipeline step of the staging buffer    | `HOST_STAGING_STEP_BYTES` = 4 MiB / 8 = 512 KiB (NCCL `NCCL_BUFFSIZE` default 4 MiB / `NCCL_STEPS` = 8) |
 | `n_stg`  | devices of one node staging at once        | `min(devicesPerNode, tp·dp)`                                                                            |
 
 **Formula** (`stagedStageRates`, `stagedLink`, applied inside `effectiveLink` after the host-bounce lines), in α-β
-terms. A staged message crosses three stages: GPU → pinned host buffer (PCIe), the wire, host buffer → GPU (PCIe).
-In a collective every node sends and receives at once, so each stage's rate, per device and per direction, is:
+terms, here with PCIe staging only (`socketCopy` false; the general form with the copy is in "TCP socket copy", and
+with no copy it computes exactly these operations). A staged message crosses three stages: GPU → pinned host buffer
+(PCIe), the wire, host buffer → GPU (PCIe). In a collective every node sends and receives at once, so each stage's
+rate, per device and per direction, is:
 
 ```
-r_copy = min(B_pcie, B_host / n_stg)            GPU ↔ host buffer: 1 DRAM access per byte per device
+r_pcie = min(B_pcie, B_host / n_stg)            GPU ↔ host buffer: 1 DRAM access per byte per device
 r_net  = min(B, B_host / (2·n_stg))             wire: NIC read at the sender + NIC write at the receiver
 B_hj   = B_host / (4·n_stg)                     all stages at once (the pipelined steady state): 4 accesses
-B_eff  = min(r_copy, r_net, B_hj) = min(B, B_pcie, B_host / (4·n_stg))          β rate
+B_eff  = min(r_pcie, r_net, B_hj) = min(B, B_pcie, B_host / (4·n_stg))          β rate
 
 s = min(m, c),  k = m / s steps                  m = the message of one step
-t_pipe = Σ_i s/r_i + (k − 1)·s/B_eff = m/B_eff + (2·s/r_copy + s/r_net − s/B_eff)
-α_eff = α + 2·α_pcie + (2·s/r_copy + s/r_net − s/B_eff)
+t_pipe = Σ_i s/r_i + (k − 1)·s/B_eff = m/B_eff + (2·s/r_pcie + s/r_net − s/B_eff)
+α_eff = α + 2·α_pcie + (2·s/r_pcie + s/r_net − s/B_eff)
 ```
 
 - `2·α_pcie` = α_stage = 2 µs (estimated): one PCIe write plus flag at the sender, one PCIe poll / read at the
@@ -1101,9 +1130,9 @@ t_pipe = Σ_i s/r_i + (k − 1)·s/B_eff = m/B_eff + (2·s/r_copy + s/r_net − 
   and the four-access share bounds the pipelined β.
 - The fill / drain term is one step through every stage except the one that sets B_eff (it is ≥ 0, since
   Σ 1/r_i ≥ 1/B_eff), so nothing is counted twice when PCIe or host memory binds. A small message (`m ≤ c`, one
-  step) pays the serial sum `m/r_copy + m/r_net + m/r_copy`. NIC-bound with host memory not binding, the fill is
+  step) pays the serial sum `m/r_pcie + m/r_net + m/r_pcie`. NIC-bound with host memory not binding, the fill is
   `2·s/B_pcie`. The fill is serial with the step chain, so it goes into α (latency), never β.
-- Worked checks (`collectives.test.ts`): a 50 GB/s NIC, α 1 µs, PCIe 3.0 x16, host memory not binding: a 4 KiB send
+- Worked checks (`staging.test.ts`): a 50 GB/s NIC, α 1 µs, PCIe 3.0 x16, host memory not binding: a 4 KiB send
   costs 3.60192 µs (serial); an 8 MiB send costs `3 µs + m/B_pcie + c/B + c/B_pcie` = 579.24576 µs. Host-bound
   (50 GB/s NIC, PCIe 5.0 x16, 96 GB/s, n_stg 1): β = m / 24 GB/s, fill = `2c/63.015 GB/s + c/48 GB/s − c/24 GB/s`.
 - `m` per step, chosen per algorithm before the ring / tree / best comparison, so each candidate gets its own staged
@@ -1119,14 +1148,14 @@ t_pipe = Σ_i s/r_i + (k − 1)·s/B_eff = m/B_eff + (2·s/r_copy + s/r_net − 
 - Staging is not host bounce: the flat all-to-all keeps one α (no `(n−1)·α` rule). On an oversubscribed
   hierarchical switch, staging applies after the `B/o` reduction (its caps are the device's own).
 - Fabric shapes (`fabricLinkParams`): every hop gets the staging α, and `B_L = min(B_L, B_stg)`, `C = min(C,
-B_stg)`, with `B_stg = stagingBandwidthCapBytesPerSec = min(B_pcie, B_host/(4·n_stg))` (the staging bandwidth is per
-  device, whatever the port count). A relay already holds the bytes in host
-  memory, so charging the staging α per hop over-counts relays: a documented approximation; no dedicated-memory preset
-  uses a ring or chain.
+B_stg)`, with `B_stg = stagingBandwidthCapBytesPerSec = min(B_pcie, B_host/((2·a + 2)·n_stg))` (a = 1 here, so
+  `B_host/(4·n_stg)`; the staging bandwidth is per device, whatever the port count). A relay already holds the bytes
+  in host memory, so charging the staging α per hop over-counts relays: a documented approximation; no
+  dedicated-memory preset uses a ring or chain.
 - The α terms land in `CollectiveTime.latencySec` (→ `PhaseResult.comm.latencySec`), the β terms in `bandwidthSec`,
   so the UI's comm latency / bandwidth split shows staging with no UI change.
-- On TCP the bandwidth terms never bind (PCIe 5.0 x16 63 GB/s, a 96 GB/s host's share 24 GB/s for one device, vs
-  1.25 GB/s for 10GbE); the 2 µs per message is what counts.
+- On TCP the bandwidth terms never bind (PCIe 5.0 x16 63 GB/s, a 96 GB/s host's share 12 GB/s for one device once
+  the socket copy joins, vs 1.25 GB/s for 10GbE); the 2 µs per message is what counts.
 - **Known inconsistency**: intra-node host bounce keeps 12 µs (the `cudaMemcpyPeer` driver path, community P2P
   matrices), while inter-node staging uses the 2 µs mapped-memory floor that NCCL's SHM and NET transports reach.
   Revisiting the intra-node value is a follow-up.
@@ -1135,7 +1164,86 @@ Example (`src/ui/state/urlScenario.test.ts`): 2 machines × 1 RTX 5090 over 10Gb
 nvfp4, experts offloaded with f 0.7. Decode @ 8k: comm α 1.970 → 2.380 ms per token (≈ 205 inter-node message steps ×
 (2 µs + a fill of ≈ 0.04–0.08 µs)), 193.0 → 178.8 tok/s @ 8k; the TCP latency recheck leaves 10GbE at 10 µs (no
 change); the default prefetch accuracy (§12 "Expert prefetch") then takes it to 162.0 tok/s @ 8k (exposed transfer
-0.31 → 0.89 ms). Prefill @ 8k: 2489.7 → 2487.0 tok/s, unchanged by prefetch.
+0.31 → 0.89 ms); the TCP socket copy (next section) adds 2.380 → 2.402 ms of α (≈ 0.11 µs per step): 161.4 tok/s
+@ 8k. Prefill @ 8k: 2489.7 → 2487.0 tok/s, unchanged by prefetch, 2483.5 tok/s with the copy.
+
+### TCP socket copy
+
+`src/sim/engine/staging.ts: needsSocketCopy, resolveHostStaging`; `collectives.ts: stagingCopyAccessesPerByte,
+stagedStageRates, stagedLink, stagingBandwidthCapBytesPerSec`; `fabricCollectives.ts: fabricLinkParams`; constant
+`src/sim/hw/presets/links.ts: SOCKET_COPY_STEP_BYTES`; tests `src/sim/engine/socketCopy.test.ts`.
+
+**When.** `socketCopy ⇔ nodes > 1 ∧ interNode.transport = 'tcp'` (§4 "Links and topologies", `LinkSpec.transport`),
+for every device: unified memory (Mac, Strix Halo, DGX Spark over TCP) and dedicated GPUs alike. RDMA links
+(`transport: 'rdma'`), single-node topologies and intra-node paths never pay it; with neither the copy nor PCIe staging
+the path carries no `interStaging`, exactly as before. No warning is added (the result barely moves).
+
+**Mechanism.** A socket transport hands the kernel a user buffer: `send()` copies it into kernel socket buffers
+(skbs), `recv()` copies it out into the receiver's user buffer, each a CPU memcpy in host DRAM (a read and a write per
+byte). RDMA is zero-copy: the NIC reads and writes the registered buffer itself. NCCL's socket transport calls plain
+`send()` / `recv()` with `MSG_DONTWAIT | MSG_NOSIGNAL` (`src/os/linux.cc:351-355`, commit 3e46c089f4ae), so it does not
+use `MSG_ZEROCOPY`; Gloo and MLX's ring (macOS has no `MSG_ZEROCOPY`) are plain sockets too. The kernel copies and
+transmits a large send in TCP segments of up to 64 KiB (Linux `GSO_LEGACY_MAX_SIZE`), so the copies pipeline with
+the wire in steps.
+
+**Parameters** (`HostStaging`):
+
+| symbol   | meaning                                 | value                                                                                                                                               |
+| -------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `B_host` | the DRAM the copy runs in, read + write | unified memory: the pool peak `device.memory.bandwidthBytesPerSec`; dedicated: `hardware.host.ram ?? DEFAULT_HOST_RAM`                              |
+| `c`      | one pipeline step                       | `SOCKET_COPY_STEP_BYTES` = 64 KiB (Linux `include/linux/netdevice.h:2333`, v6.12; ESTIMATED for macOS) without PCIe staging; with it NCCL's 512 KiB |
+| `n_stg`  | devices of one node copying at once     | `min(devicesPerNode, tp·dp)`                                                                                                                        |
+
+**Formula** (the general `stagedLink`; with `socketCopy` false it is the PCIe-only formula above, the same IEEE
+operations, pinned with `Object.is` in `socketCopy.test.ts`). A message crosses up to five stages: PCIe copy-out,
+socket copy-in (user → kernel), the wire, socket copy-out (kernel → user), PCIe copy-in. An absent stage has rate ∞,
+so its term is 0:
+
+```
+a      = (pcie ? 1 : 0) + (socketCopy ? 2 : 0)   DRAM accesses per byte of ONE end's copies (DMA 1; memcpy = read + write 2)
+r_pcie = min(B_pcie, B_host / n_stg)            (∞ without PCIe staging)
+r_sock = B_host / (2·n_stg)                     (∞ without the socket copy)
+r_net  = min(B, B_host / (2·n_stg))             NIC read at the sender + NIC write at the receiver
+B_hj   = B_host / ((2·a + 2)·n_stg)             all stages at once: 2 ends × a + 2 NIC accesses
+B_eff  = min(r_pcie, r_sock, r_net, B_hj) = min(B, B_pcie, B_hj)                     β rate
+
+s      = min(m, c)
+α_eff  = α + 2·α_pcie + (2·s/r_pcie + 2·s/r_sock + s/r_net − s/B_eff)            (α_pcie = 0 without PCIe)
+B_stg  = min(B_pcie, B_hj)                       stagingBandwidthCapBytesPerSec (fabric C cap; B_pcie = ∞ without PCIe)
+```
+
+| case                             | a   | B_hj               | what the copy adds                                                                                                                  |
+| -------------------------------- | --- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| PCIe staging only (RDMA, no GDR) | 1   | `B_host/(4·n_stg)` | nothing: bit-identical to before                                                                                                    |
+| unified memory over TCP          | 2   | `B_mem/(6·n_stg)`  | small m, wire-bound: `Δα = 2·m/r_sock = 4·n_stg·m/B_mem`; large: β = `m/min(B, B_mem/(6·n_stg))` plus a fill ≤ `2·c/r_sock`         |
+| dedicated GPU over TCP           | 3   | `B_host/(8·n_stg)` | the PCIe staging plus `2·s/r_sock` of fill per step (step c stays NCCL's 512 KiB: conservative, the kernel pipelines within a step) |
+
+- **Copies per message step**: two (the sender's copy-in, the receiver's copy-out), on every algorithm step, with the
+  per-algorithm step message `m` of "Inter-node host staging" (ring `S/n`, tree `S`, send `S`, hierarchical inter
+  phase `S/n` or `S/n1`, fabric shapes as there).
+- **No fixed latency.** The measured TCP α (half a tuned 1-byte ping-pong, §4) already holds the syscalls and a
+  1-byte copy, so the copy adds only its size-dependent part `2·s/r_sock` (the latency share) plus the DRAM cap on β.
+  For scale, the whole kernel copy is ≈ 20 % of a 3.4 µs Linux UDP echo on 10GbE (Arrakis, OSDI'14, Table 1: copy in
+  0.24 + out 0.44 µs; https://www.usenix.org/system/files/conference/osdi14/osdi14-paper-peter_simon.pdf), and it
+  matters mostly for long flows (Cai et al., SIGCOMM'21, https://www.cs.cornell.edu/~ragarwal/pubs/network-stack.pdf).
+- **Dedicated GPUs over TCP are not double-counted.** PCIe staging models the GPU ↔ pinned host buffer copy and the
+  NIC's DMA of that buffer; NCCL's socket proxy then calls `send()` / `recv()` on the pinned buffer and the kernel
+  copies it into and out of skbs. That is a third, physically separate copy, so dedicated + TCP = PCIe copy + socket
+  copy at each end. A dedicated GPU on RDMA without GPUDirect (a GeForce on InfiniBand) keeps the PCIe copy only.
+- **Magnitude: small on the presets.** B_mem is 0.4–1.2 TB/s on Macs and 256 GB/s on Strix Halo, so `r_sock ≥ 128
+GB/s` and `B_mem/6 ≥ 42 GB/s`, far above the 2.5–10 GB/s links: a 4 KiB decode step gains 0.02–0.06 µs and β never
+  binds. The RDMA vs TCP gap on one cable comes from α (§4 "Link latencies", TB5 7 vs 45 µs), not from the copy.
+- Worked checks (`socketCopy.test.ts`): unified TCP, n 1, B 10 GB/s, B_mem 800 GB/s: a 4 KiB step gains 8192 B / 400
+  GB/s = 0.02048 µs with β unchanged; an 8 MiB step has β = 838.8608 µs and a fill of 2·64 KiB / 400 GB/s = 0.32768 µs.
+  Host-bound (B_mem 30 GB/s): r_sock 15, r_net 10, B_hj 5 GB/s, β(8 MiB) = 1677.7216 µs, fill = 64 KiB · (2/15 + 1/10 −
+  1/5) / (1 GB/s) = 2.18453 µs. Dedicated 10GbE on PCIe 5.0 x16, 96 GB/s: a 4 KiB step gains 8192 / 48 GB/s =
+  0.170667 µs, β unchanged (B_hj = 12 GB/s).
+
+Example (`src/ui/state/rdmaTcpScenario.test.ts`): DeepSeek-V4.1-Flash on 2 × M5 Ultra (64-core GPU), TP 2, lookup
+tables on SSD, over Thunderbolt 5. Decode @ 8k with DSpark (code): TB5 TCP 150.12 → 150.02 tok/s with the copy (comm α
+8.190 → 8.208 ms per token); without spec-dec 66.81 → 66.80 tok/s (7.515 → 7.518 ms). TB5 RDMA (no copy) after the α
+fix: 201.8 tok/s @ 8k with DSpark (comm α 9.10 → 1.27 ms) and 116.0 tok/s @ 8k without (8.35 → 1.17 ms), so RDMA now
+decodes faster than TCP, as it must.
 
 ### Fabric shapes
 
@@ -1433,6 +1541,13 @@ Documented approximations (each isolated in one constant or rule):
   links; mesh striping over k cables is ideal; every shape but switched needs one device per node; intra-node links
   stay switched (`XGMI_MI300X_8_GPU` encodes its full mesh as aggregate injection under the switched formulas, which
   equals the mesh's direct β but keeps the ring's 2(n−1)α; re-modelling it is a follow-up).
+- TCP socket copy (§6 "TCP socket copy"): the CPU memcpy runs at the DRAM peak (B_host; the CPU's own copy rate is
+  not datasheet-published, so this is optimistic); `MSG_ZEROCOPY` / `TCP_ZEROCOPY_RECEIVE` are not assumed (NCCL's
+  socket transport, Gloo and MLX's ring do not use them by default); a dedicated GPU over TCP keeps NCCL's 512 KiB
+  step for the copy stages too (conservative: the kernel pipelines within a step); a TCP relay forwarded by the
+  kernel's IP stack is charged the copy fill per hop although it never copies to user space (≤ 2·s/r_sock per relay);
+  the NIC's DRAM accesses are charged only on staged paths (TCP or PCIe staging), never on zero-copy RDMA; the copy
+  traffic does not contend with compute for unified memory (the existing exclusion of collective memory traffic).
 - Offload (§12): the DMA write of streamed bytes into device memory is not charged to its bandwidth; expected
   misses and requests are real numbers (no rounding; the staging buffer rounds up); the prefetch window is the whole
   stage's core time and wrong guesses cost only otherwise idle link time (§12 "Expert prefetch"); the host link

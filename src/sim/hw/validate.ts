@@ -273,7 +273,8 @@ export function validateHost(h: HostSpec, label = 'host'): string[] {
 /**
  * Errors of a link spec; empty = valid. Checks: numbers finite and ≥ 0 and sourced; bandwidth > 0;
  * `hostBounce` present iff `p2p === 'host_bounce'`, with host memory bandwidth > 0; an
- * `allPortsCapPerDirectionBytesPerSec` at least the per-port bandwidth.
+ * `allPortsCapPerDirectionBytesPerSec` at least the per-port bandwidth; `transport: 'tcp'` only with
+ * `gpuDirectRdma: false` (a socket takes host pointers only).
  */
 export function validateLink(l: LinkSpec, label = `link ${l.name}`): string[] {
   const errors = [...leafErrors(l, l.sources, l.estimated, label), ...provenanceRecordErrors(l.sources, l.estimated, label)];
@@ -287,6 +288,9 @@ export function validateLink(l: LinkSpec, label = `link ${l.name}`): string[] {
   const cap = l.allPortsCapPerDirectionBytesPerSec;
   if (cap !== undefined && !(cap >= l.bandwidthPerDirectionBytesPerSec)) {
     errors.push(`${label}: allPortsCapPerDirectionBytesPerSec (${cap}) must be ≥ bandwidthPerDirectionBytesPerSec (${l.bandwidthPerDirectionBytesPerSec}): one port alone reaches its own rate`);
+  }
+  if (l.transport === 'tcp' && l.gpuDirectRdma !== false) {
+    errors.push(`${label}: transport 'tcp' needs gpuDirectRdma: false (a socket takes host pointers only)`);
   }
   return errors;
 }

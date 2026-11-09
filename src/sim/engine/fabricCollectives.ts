@@ -62,11 +62,14 @@ export interface FabricLinkParams {
 
 /**
  * {@link FabricLinkParams} of `link` in `shape`, with `activeDevices` as in `effectiveLink` (group size for
- * collectives, 1 for send/recv). With `staging` (inter-node host staging, docs §6 "Inter-node host staging") every
- * hop pays the staging α (`stagedLink`, m = `stepMessageBytes`), and both B_L and C are capped by
- * B_stg = min(B_pcie, B_host/(4·n_stg)): staging bandwidth is the device's own, whatever the port count.
- * Documented approximation: a relay already holds the bytes in host memory, so charging the staging α on every hop
- * over-counts per relay; no dedicated-memory preset uses a ring or chain.
+ * collectives, 1 for send/recv). With `staging` (inter-node host staging and / or the TCP socket copy, docs §6
+ * "Inter-node host staging", "TCP socket copy") every hop pays the staging α (`stagedLink`, m = `stepMessageBytes`),
+ * and both B_L and C are capped by B_stg = min(B_pcie, B_host/((2·a + 2)·n_stg)) (`stagingBandwidthCapBytesPerSec`;
+ * B_pcie = ∞ without PCIe staging): staging bandwidth is the device's own, whatever the port count.
+ * Documented approximations: a relay already holds the bytes in host memory, so charging the PCIe staging α on every
+ * hop over-counts per relay (no dedicated-memory preset uses a ring or chain); a TCP relay forwarded by the kernel's
+ * IP stack never copies to user space, so charging the socket-copy fill per hop over-counts by ≤ 2·s/r_sock per relay
+ * (≈ 0.3–1 µs on the presets, inside `forwardingLatencySec`'s own uncertainty).
  */
 export function fabricLinkParams(
   link: LinkSpec,

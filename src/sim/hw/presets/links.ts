@@ -1,8 +1,11 @@
 /**
  * Interconnect ceilings: SI B/s per device per direction, never bidirectional sums.
  * Latencies are one-way hardware/verbs proxies, not NCCL/RCCL launch floors. Unpublished or transferred
- * latency assumptions are explicitly estimated. See docs/simulation-model.md §4 ("Links and topologies"),
- * §6 ("Collectives"), and engine/collectives.ts.
+ * latency assumptions are explicitly estimated. Inter-node α has ONE definition for every transport (RDMA and TCP
+ * alike): the one-way small-message floor as a collective library sees it = half the average (or median) round trip
+ * of a tuned small-message ping-pong over that transport. An ICMP ping or the minimum sample is never the α; the
+ * per-step time of a small all-reduce is only an upper bound. On one physical medium RDMA ≤ TCP (`LINK_MEDIA`).
+ * See docs/simulation-model.md §4 ("Links and topologies"), §6 ("Collectives"), and engine/collectives.ts.
  */
 import type { LinkSpec, SourceRef } from '../types';
 
@@ -19,6 +22,10 @@ const SPARK_CLUSTERING_URL = 'https://docs.nvidia.com/dgx/dgx-spark/spark-cluste
 const SPARK_RING_FORUM_URL =
   'https://forums.developer.nvidia.com/t/dgx-spark-networking-open-source-switchless-roce-collectives-nccl-profiles-and-fabric-tooling-for-multi-spark-inference/385049/1';
 const TN3205_URL = 'https://developer.apple.com/documentation/technotes/tn3205-low-latency-communication-with-rdma-over-thunderbolt';
+/** Anemll on X: `ibv_uc_pingpong` over Thunderbolt 5 RDMA, M4 Pro ↔ M3 Ultra (screenshot of the run). */
+const TB5_RDMA_PINGPONG_URL = 'https://x.com/anemll/status/1993182652204187929';
+/** Hellas: ibverbs over Thunderbolt / USB4 on Linux, `ib_write_lat` at 64 B. */
+const HELLAS_IBVERBS_URL = 'https://blog.hellas.ai/blog/thunderbolt-ibverbs/';
 /** MLX PR #2808: JACCL (RDMA over Thunderbolt 5) vs the TCP ring, 4-Mac all-reduce timings. */
 export const MLX_JACCL_PR_URL = 'https://github.com/ml-explore/mlx/pull/2808';
 const MLX_MULTI_CABLE_PR_URL = 'https://github.com/ml-explore/mlx/pull/3900';
@@ -38,23 +45,39 @@ const CUDA_GPUDIRECT_RDMA_URL = 'https://docs.nvidia.com/cuda/gpudirect-rdma/ind
 export const HOST_STAGING_STEP_BYTES = (4 * 1024 * 1024) / 8;
 
 /**
- * Why TCP links have no GPUDirect path: socket transports take host pointers only, so a GPU with its own memory
- * stages every message through pinned host memory (`gpuDirectRdma: false`).
+ * c_sock: the step in which a TCP sender's kernel copies a message from the user buffer into socket buffers while
+ * the NIC sends the previous step (and the receiver's `recv()` copies the previous step out). Linux builds TCP
+ * segments of at most `GSO_LEGACY_MAX_SIZE` = 65536 bytes for the NIC (TSO / GRO coalesce to 64 KiB), so a send is
+ * copied and transmitted in 64 KiB pieces. Unit: bytes.
+ * Source: Linux `include/linux/netdevice.h:2333` (v6.12,
+ * https://github.com/torvalds/linux/blob/v6.12/include/linux/netdevice.h#L2333). ESTIMATED for macOS (XNU's
+ * socket buffer chunking is not documented); the result is insensitive to it: the copy fill is at most
+ * 2·c_sock / r_sock ≈ 0.3–1 µs per message on the presets. Used only when no PCIe staging step applies (unified
+ * memory over TCP). See docs/simulation-model.md §6 ("TCP socket copy") and `engine/staging.ts`.
+ */
+export const SOCKET_COPY_STEP_BYTES = 64 * 1024;
+
+/**
+ * Why TCP links have no GPUDirect path, and why they are `transport: 'tcp'`: socket transports take host pointers
+ * only, so a GPU with its own memory stages every message through pinned host memory (`gpuDirectRdma: false`), and
+ * every TCP message is copied by the kernel at both ends (`send()` / `recv()`, no `MSG_ZEROCOPY`).
  */
 const TCP_HOST_POINTERS_SOURCE: SourceRef = {
   url: `${NCCL_SRC_URL}/transport/net_socket.cc#L57`,
   title: 'NCCL socket transport: ptrSupport = NCCL_PTR_HOST',
-  fields: ['gpuDirectRdma'],
+  fields: ['gpuDirectRdma', 'transport'],
   note: 'The socket plugin reports host-pointer support only, so NCCL places the network buffers in pinned host ' +
-    'memory (net.cc:936, :1121, ncclCudaHostCalloc). Gloo\'s CUDA all-reduce likewise copies to a pinned host ' +
-    'workspace (https://github.com/pytorch/gloo, gloo/cuda_allreduce_ring.cc:82,102); MLX\'s ring is host sockets.',
+    'memory (net.cc:936, :1121, ncclCudaHostCalloc). Its socket progress calls plain send() / recv() on that buffer ' +
+    '(MSG_DONTWAIT | MSG_NOSIGNAL, no MSG_ZEROCOPY: src/os/linux.cc:351-355), so the kernel copies every message in ' +
+    'and out. Gloo\'s CUDA all-reduce likewise copies to a pinned host workspace (https://github.com/pytorch/gloo, ' +
+    'gloo/cuda_allreduce_ring.cc:82,102); MLX\'s ring is host sockets.',
 };
 
 /** InfiniBand to a data-center GPU: the NIC DMAs into device memory (GPUDirect RDMA / AMD PeerDirect). */
 const IB_SOURCE: SourceRef = {
   url: CUDA_GPUDIRECT_RDMA_URL,
   title: 'NVIDIA CUDA: GPUDirect RDMA',
-  fields: ['gpuDirectRdma'],
+  fields: ['gpuDirectRdma', 'transport'],
   note: '"GPUDirect RDMA is available on both Tesla and Quadro GPUs"; AMD Instinct via PeerDirect (ROCm GPU-enabled ' +
     'MPI, https://rocm.docs.amd.com/en/latest/how-to/gpu-enabled-mpi.html). Caveat: by default NCCL uses it only when ' +
     'the GPU and NIC sit under the same PCIe switch (PXB; src/graph/paths.cc:511-536), which HGX/DGX boards meet ' +
@@ -65,16 +88,16 @@ const IB_SOURCE: SourceRef = {
 const SPARK_SOURCE: SourceRef = {
   url: 'https://forums.developer.nvidia.com/t/enabling-gpu-direct-rdma-for-dgx-spark-clustering/352051/2',
   title: 'NVIDIA forum: GPUDirect RDMA on DGX Spark',
-  fields: ['gpuDirectRdma'],
+  fields: ['gpuDirectRdma', 'transport'],
   note: 'NVIDIA: "the GPUDirect RDMA technology is not supported" on Spark; buffers go through cudaHostAlloc + ' +
-    'ib_reg_mr. No effect in the engine: the Spark is unified memory, which never stages.',
+    'ib_reg_mr (verbs, RoCE: zero-copy from host memory). No staging in the engine: the Spark is unified memory.',
 };
 
 /** RDMA over Thunderbolt 5 (macOS) and USB4 (Strix Halo): host/unified memory only, SoCs only. */
 const SOC_RDMA_SOURCE: SourceRef = {
   url: TN3205_URL,
   title: 'Apple TN3205: RDMA over Thunderbolt (host memory regions)',
-  fields: ['gpuDirectRdma'],
+  fields: ['gpuDirectRdma', 'transport'],
   note: 'RDMA into host (unified) memory only; no discrete-GPU memory path exists on these links (also the Strix ' +
     `Halo usb4_rdma notes, ${HALO_RDMA_URL}). No effect in the engine: only unified-memory SoCs use them.`,
 };
@@ -344,6 +367,7 @@ export const IB_NDR_400: LinkSpec = {
   latencySec: 1e-6,
   p2p: 'direct',
   gpuDirectRdma: true,
+  transport: 'rdma',
   sources: [
     IB_SOURCE,
     {
@@ -376,6 +400,7 @@ export const IB_XDR_800: LinkSpec = {
   latencySec: 1e-6,
   p2p: 'direct',
   gpuDirectRdma: true,
+  transport: 'rdma',
   sources: [
     IB_SOURCE,
     {
@@ -407,6 +432,7 @@ export const SPARK_CONNECTX_7: LinkSpec = {
   forwardingLatencySec: 4.5e-6,
   p2p: 'direct',
   gpuDirectRdma: false,
+  transport: 'rdma',
   sources: [
     SPARK_SOURCE,
     {
@@ -439,7 +465,7 @@ export const SPARK_CONNECTX_7: LinkSpec = {
       title: 'DGX Spark RoCE link validation',
       kind: 'community',
       fields: ['latencySec'],
-      note: 'ib_write_lat minimum run 1.45 µs rounded to 1.5 µs; another run 2.01 µs. ' +
+      note: 'ib_write_lat 2 B, t_typical (median) 1.45 µs, rounded to 1.5 µs; another run 2.01 µs. ' +
         'NCCL small-message 24–43 µs includes software overhead and is not used.',
     }
   ],
@@ -502,10 +528,11 @@ export const TB5_RDMA: LinkSpec = {
   kind: 'thunderbolt',
   name: 'Thunderbolt 5 RDMA (macOS 26.2+)',
   bandwidthPerDirectionBytesPerSec: 80e9 / 8,
-  latencySec: 50e-6,
+  latencySec: 7e-6,
   forwardingLatencySec: 3e-6,
   p2p: 'direct',
   gpuDirectRdma: false,
+  transport: 'rdma',
   sources: [
     SOC_RDMA_SOURCE,
     {
@@ -521,11 +548,21 @@ export const TB5_RDMA: LinkSpec = {
       note: 'Apple silicon Macs with TB5, starting macOS 26.2; point-to-point RDMA interfaces.',
     },
     {
+      url: TB5_RDMA_PINGPONG_URL,
+      title: 'Anemll: ibv_uc_pingpong over Thunderbolt 5 RDMA, M4 Pro ↔ M3 Ultra',
+      kind: 'community',
+      fields: ['latencySec'],
+      note: '"1000 iters in 0.01 seconds = 13.72 usec/iter": one iteration is one round trip, so 6.86 µs one way, ' +
+        'rounded to 7 µs; an average over 1000 round trips, as the α definition takes ' +
+        '(screenshot https://pbs.twimg.com/media/G6k0RngagAAIBuy.jpg?name=orig).',
+    },
+    {
       url: 'https://www.jeffgeerling.com/blog/2025/15-tb-vram-on-mac-studio-rdma-over-thunderbolt-5/',
       title: 'Mac Studio RDMA over Thunderbolt 5',
       kind: 'community',
       fields: ['latencySec'],
-      note: 'Reported memory-access latency <50 µs, an upper bound, not a hardware/verbs floor. ' +
+      note: 'Context only, not the α: "lowering memory access latency from 300us down to <50us" reads off the ' +
+        'all-reduce plot (JACCL vs the TCP ring), a collective upper bound, not a one-way link floor. ' +
         'Application throughput ~50–60 Gb/s; other file-transfer tests 3.5–3.8 GB/s.',
     },
     {
@@ -541,29 +578,26 @@ export const TB5_RDMA: LinkSpec = {
       kind: 'community',
       fields: ['forwardingLatencySec'],
       note: '1 → 4 cables between two Macs: ~9.25 → ~36.5 GB/s all_sum bandwidth (~3.95×), so ports add up and no ' +
-        'all-ports cap is set. ibv_uc_pingpong round trip ~14 µs (~7 µs one way, the measured per-hop wire + verbs time) on the same stack.',
+        'all-ports cap is set.',
     },
     {
       url: MLX_JACCL_PR_URL,
       title: 'MLX PR #2808: JACCL (RDMA over TB5) 4-way all-reduce timings',
       kind: 'community',
-      fields: ['forwardingLatencySec'],
-      note: 'JACCL 4-way mesh all-reduce ~9–12 µs at 1–8 KB on M3 Ultra Mac Studios, vs ~290–300 µs for the TCP ring backend.',
+      fields: ['latencySec', 'forwardingLatencySec'],
+      note: 'JACCL 4-way mesh all-reduce ~9–10 µs at 1–2 KB (~9–12 µs up to 8 KB) on M3 Ultra Mac Studios, vs ' +
+        '~290–300 µs for the TCP ring backend. A small all-reduce is one step of the mesh algorithm ' +
+        '(mlx/distributed/jaccl/lib/jaccl/mesh_impl.h:416), so ~9.5 µs is an upper bound on α, consistent with 7 µs.',
     },
   ],
   estimated: [
     {
-      field: 'latencySec',
-      reason: 'Hardware floor unknown; 50 µs is a conservative proxy from a reported <50 µs upper bound, not a ' +
-        'verified one-way floor.'
-    },
-    {
       field: 'forwardingLatencySec',
-      reason: 'ESTIMATED, relay handling only: the engine charges α for every hop crossed (the ~7 µs measured one-way ' +
-        'transfer; 50 µs in this preset), so the relay adds just the host turnaround between the incoming completion and ' +
-        'the outgoing post of a two-sided send: ~3 µs, the difference between JACCL\'s 9–12 µs small 4-way all-reduce and ' +
-        'its ~7 µs one-way transfer, the software step of a user-space verbs relay. Physically a 2-hop relay is ' +
-        '2 × 7 + 3 = 17 µs and a 3-hop one 3 × 7 + 2 × 3 = 27 µs; with this preset\'s 50 µs α, 103 and 156 µs.',
+      reason: 'ESTIMATED, relay handling only: the engine charges α (7 µs, the measured one-way ping-pong) for every hop ' +
+        'crossed, so the relay adds just the host turnaround between the incoming completion and the outgoing post of a ' +
+        'two-sided send: ~3 µs, the difference between JACCL\'s ~9.5 µs small all-reduce step and the 7 µs one-way ' +
+        'transfer, the software step of a user-space verbs relay. A 2-hop relay is 2 × 7 + 3 = 17 µs and a 3-hop one ' +
+        '3 × 7 + 2 × 3 = 27 µs.',
     },
   ],
 };
@@ -589,10 +623,12 @@ const TB_TCP_LATENCY_SOURCE: SourceRef = {
 };
 /** Why the Thunderbolt bridge's TCP α is 45 µs (estimated). */
 const TB_TCP_LATENCY_REASON =
-  '45 µs, ESTIMATED as a floor below the ≤ 48 µs per step of MLX\'s TCP ring over Thunderbolt (a 4-Mac all-reduce in ' +
-  '290–300 µs = 6 ring steps of ≈ 48 µs including reduction and dispatch, MLX PR 2808). At the former 70 µs the ' +
-  'engine\'s best 4-node all-reduce (tree, 4α = 280 µs) would equal the measured software, so 70 µs was not a floor. ' +
-  'The ICMP source (0.142 ms min RTT) is a MacBook Air ↔ Linux PC, untuned, kept as context.';
+  '45 µs, ESTIMATED: no tuned TCP ping-pong over a Thunderbolt bridge was found, so the floor sits just below the ' +
+  'measured upper bound, MLX\'s TCP ring over Thunderbolt (a 4-Mac all-reduce in 290–300 µs, flat over 1–32 KB = ' +
+  '2(N − 1) = 6 ring steps of ≈ 48 µs, each including thread hand-offs and the reduction; MLX PR 2808). The ICMP ' +
+  'bridge ping (0.142 ms RTT, MacBook Air ↔ Linux PC, untuned) is not a floor: on Strix Halo USB4 untuned ICMP ' +
+  '(0.119 ms minimum) overstated the tuned TCP ping-pong (14.1 µs minimum RTT) about 8×. RDMA over the same TB5 ' +
+  'cable measures 7 µs one way (TB5_RDMA), so TCP stays the slower transport, as it must (LINK_MEDIA).';
 /** Why a TCP relay adds ~20 µs on top of the per-hop α of the Thunderbolt bridge. */
 const TB_TCP_FORWARDING_REASON =
   'ESTIMATED, relay handling only: α (45 µs, below MLX\'s ≈ 48 µs TCP ring step) already holds each hop\'s send ' +
@@ -614,6 +650,7 @@ export const TB4_TCP: LinkSpec = {
   forwardingLatencySec: 20e-6,
   p2p: 'direct',
   gpuDirectRdma: false,
+  transport: 'tcp',
   sources: [
     TCP_HOST_POINTERS_SOURCE,
     {
@@ -659,6 +696,7 @@ export const TB5_TCP: LinkSpec = {
   forwardingLatencySec: 20e-6,
   p2p: 'direct',
   gpuDirectRdma: false,
+  transport: 'tcp',
   sources: [
     TCP_HOST_POINTERS_SOURCE,
     {
@@ -705,6 +743,7 @@ export const USB4_HALO_RDMA: LinkSpec = {
   forwardingLatencySec: 3e-6,
   p2p: 'direct',
   gpuDirectRdma: false,
+  transport: 'rdma',
   sources: [
     SOC_RDMA_SOURCE,
     {
@@ -713,7 +752,16 @@ export const USB4_HALO_RDMA: LinkSpec = {
       kind: 'community',
       fields: [BANDWIDTH_FIELD, 'latencySec'],
       note: 'AMD host-to-host single lane: rx_speed/tx_speed 20 Gb/s, not 40 Gb/s each way. ' +
-        'Native usb4_rdma ib_write_lat avg 8.33 µs, min 7.39 µs, rounded to 8 µs. Requires experimental driver.',
+        'Native usb4_rdma "ib_write_lat 2B (n=10000) ... avg 8.33us (min 7.39, 99% 9.98)" (post 22): α = the average, ' +
+        'rounded to 8 µs. Requires experimental driver.',
+    },
+    {
+      url: HELLAS_IBVERBS_URL,
+      title: 'Hellas: ibverbs over Thunderbolt / USB4',
+      kind: 'community',
+      fields: ['latencySec'],
+      note: '~7 µs one-way ib_write_lat at 64 B, a cross-check. Caveat: these verbs are emulated over the same USB4 DMA ' +
+        'rings as thunderbolt-net TCP, so RDMA ≈ TCP here is plausible (8 vs 9 µs on averages).',
     }
   ],
   estimated: [
@@ -728,18 +776,20 @@ export const USB4_HALO_RDMA: LinkSpec = {
 };
 
 /**
- * Strix Halo stock thunderbolt-net USB4 TCP: same 20 Gb/s negotiated line rate, estimated 10 µs one-way, and an
- * estimated 5 µs of relay handling per intermediate node (Linux IP forwarding through the host on a 4-node ring).
+ * Strix Halo stock thunderbolt-net USB4 TCP: same 20 Gb/s negotiated line rate, 9 µs one-way (half the tuned
+ * 1-byte TCP ping-pong average), and an estimated 5 µs of relay handling per intermediate node (Linux IP forwarding
+ * through the host on a 4-node ring).
  */
 export const USB4_HALO_TCP: LinkSpec = {
   ...USB4_HALO_RDMA,
   name: 'Strix Halo USB4 TCP (20 Gb/s negotiated)',
-  latencySec: 10e-6,
+  latencySec: 9e-6,
   forwardingLatencySec: 5e-6,
   gpuDirectRdma: false,
+  transport: 'tcp',
   sources: [
     TCP_HOST_POINTERS_SOURCE,
-    ...USB4_HALO_RDMA.sources.filter((s) => s !== SOC_RDMA_SOURCE).map((s) => ({
+    ...USB4_HALO_RDMA.sources.filter((s) => s.url === HALO_RDMA_URL).map((s) => ({
       ...s,
       fields: [BANDWIDTH_FIELD],
     })),
@@ -748,20 +798,19 @@ export const USB4_HALO_TCP: LinkSpec = {
       title: 'Strix Halo USB4 TCP ping-pong benchmark',
       kind: 'community',
       fields: ['latencySec'],
-      note: 'Tuned 1-byte TCP ping-pong RTT 17.4–20.3 µs: approximately 10 µs one-way.',
+      note: 'Tuned 1-byte TCP ping-pong (Python), post 3: RTT average Base 20.25 / Partial 17.35 / Full 19.56 µs ' +
+        '(minimum 15.15 / 14.13 / 17.41 µs). α = half the best-tuned average, 17.35 / 2 = 8.7 µs, rounded to 9 µs. ' +
+        'RDMA ≤ TCP holds on averages (8.33 vs 8.7 µs); on minima it would invert (7.39 vs 7.07 µs), which is why α ' +
+        'never uses the minimum.',
     }
   ],
   estimated: [
     {
-      field: 'latencySec',
-      reason: 'Half the tuned TCP ping-pong RTT; software-inclusive proxy because hardware-only floor is unknown.'
-    },
-    {
       field: 'forwardingLatencySec',
-      reason: 'ESTIMATED, relay handling only: α (10 µs, half the tuned ping-pong RTT) already holds each hop\'s send ' +
+      reason: 'ESTIMATED, relay handling only: α (9 µs, half the tuned ping-pong RTT) already holds each hop\'s send ' +
         'stack, wire and receive stack, so the relay adds the kernel\'s IP-forwarding turnaround (or a user-space ' +
-        'receive-to-send on a tuned stack), ~5 µs, half the one-way time; no relay measurement exists. A 2-hop relay is ' +
-        '2 × 10 + 5 = 25 µs, a 3-hop one 3 × 10 + 2 × 5 = 40 µs.',
+        'receive-to-send on a tuned stack), ~5 µs, about half the one-way time; no relay measurement exists. A 2-hop ' +
+        'relay is 2 × 9 + 5 = 23 µs, a 3-hop one 3 × 9 + 2 × 5 = 37 µs.',
     },
   ],
 };
@@ -774,7 +823,8 @@ const TEN_GBE_LATENCY_CROSS_CHECK: SourceRef = {
   fields: ['latencySec'],
   note: 'Linux 10GbE one-way 24 µs (NetPIPE 64 B, epoll, Intel 82599 through a Broadcom Trident+ switch) vs 5.7 µs ' +
     'kernel-bypass; "3µs latency across a pair of 10 GbE NICs". 10GBASE-T PHY latency is 2–4 µs ' +
-    '(https://en.wikipedia.org/wiki/10_Gigabit_Ethernet). Upper cross-checks for the estimated 10 µs direct floor.',
+    '(https://en.wikipedia.org/wiki/10_Gigabit_Ethernet); a tuned UDP echo through a switch averages 30.7 µs RTT ' +
+    '(https://blog.cloudflare.com/how-to-achieve-low-latency/). Upper cross-checks for the estimated 10 µs direct floor.',
 };
 /** Ethernet TCP ceiling in B/s, with the Strix Halo 5GbE one-way latency proxy. */
 function ethernetTcp(gigabitsPerSec: 5 | 10): LinkSpec {
@@ -785,6 +835,7 @@ function ethernetTcp(gigabitsPerSec: 5 | 10): LinkSpec {
     latencySec: 10e-6,
     p2p: 'direct',
     gpuDirectRdma: false,
+    transport: 'tcp',
     sources: [
       TCP_HOST_POINTERS_SOURCE,
       {
@@ -800,9 +851,9 @@ function ethernetTcp(gigabitsPerSec: 5 | 10): LinkSpec {
         title: 'Strix Halo Ethernet TCP ping-pong benchmark',
         kind: 'community',
         fields: ['latencySec'],
-        note: '5GbE direct RTT 20.8–22.8 µs, minimum 19.9 µs (tuned 1-byte ping-pong, Framework Desktop built-in 5GbE). ' +
-          'Through a 10G switch (Unifi Pro XG 8) the same built-in 5GbE port measured min RTT 29.4–32.3 µs (≈ 15 µs one ' +
-          'way): a switched figure, not this direct-cable floor.',
+        note: '5GbE direct RTT average 20.8–22.8 µs, minimum 19.9 µs (tuned 1-byte ping-pong, Framework Desktop ' +
+          'built-in 5GbE). Through a 10G switch (Unifi Pro XG 8) the same port measured RTT average 31.8–40.3 µs ' +
+          '(minimum 29.4–32.3 µs): a switch adds ≈ 5 µs one way. α is the direct-cable figure.',
       },
       ...(gigabitsPerSec === 10 ? [TEN_GBE_LATENCY_CROSS_CHECK] : []),
     ],
@@ -810,7 +861,7 @@ function ethernetTcp(gigabitsPerSec: 5 | 10): LinkSpec {
       {
         field: 'latencySec',
         reason: gigabitsPerSec === 5
-          ? '10 µs = half the ~20 µs 5GbE direct TCP RTT (direct cable; ≈ 15 µs through a switch).'
+          ? '10 µs ≈ half the 20.8–22.8 µs average 5GbE direct TCP RTT (direct cable; a switch adds ≈ 5 µs one way).'
           : '10 µs carried over from the 5GbE direct measurement (half its ~20 µs tuned TCP RTT): no 10GbE desktop ' +
             'ping-pong was found. The floor is the kernel stack plus PHY, not line rate (a 1-byte frame serializes in < 0.1 ' +
             'µs); 10GBASE-T PHYs add 2–4 µs, like NBASE-T. Cross-checks: ≈ 15 µs switched (5GbE through a 10G switch); ' +
@@ -833,4 +884,33 @@ export const LINK_PRESETS: LinkSpec[] = [
   RTX_3090_NVLINK, NVLINK_4, NVLINK_5, IB_NDR_400, IB_XDR_800, SPARK_CONNECTX_7,
   XGMI_MI300X_PER_PEER, XGMI_MI300X_8_GPU, TB5_RDMA, TB5_TCP, TB4_TCP,
   USB4_HALO_RDMA, USB4_HALO_TCP, ETHERNET_5G_TCP, ETHERNET_10G_TCP,
+];
+
+/**
+ * Link presets on one physical medium (the same ports, cable and controller / NIC), split by transport. RDMA is
+ * zero-copy and kernel-bypass: the NIC moves the registered buffer itself, while TCP adds the kernel's socket stack
+ * (syscalls, copies, protocol processing) on top of the same wire. So on one medium RDMA's one-way floor `latencySec`
+ * can never exceed TCP's, and neither can its relay handling `forwardingLatencySec` (a user-space verbs re-post vs a
+ * kernel receive and send). `links.test.ts` checks both for every pair, and that every preset with a `transport` is
+ * listed here exactly once, so a new preset joins the check. Data only: the engine never reads it.
+ */
+export interface LinkMedium {
+  /** The physical medium, e.g. `'thunderbolt-5'` (informational, unique). */
+  medium: string;
+  /** Presets over this medium with `transport: 'rdma'`. */
+  rdma: LinkSpec[];
+  /** Presets over this medium with `transport: 'tcp'`. */
+  tcp: LinkSpec[];
+}
+
+/** Every inter-node preset by physical medium (see {@link LinkMedium}): the RDMA ≤ TCP latency invariant's pairs. */
+export const LINK_MEDIA: LinkMedium[] = [
+  { medium: 'thunderbolt-5', rdma: [TB5_RDMA], tcp: [TB5_TCP] },
+  { medium: 'thunderbolt-4', rdma: [], tcp: [TB4_TCP] },
+  { medium: 'strix-halo-usb4', rdma: [USB4_HALO_RDMA], tcp: [USB4_HALO_TCP] },
+  { medium: 'connectx-7-dgx-spark', rdma: [SPARK_CONNECTX_7], tcp: [] },
+  { medium: 'infiniband-ndr', rdma: [IB_NDR_400], tcp: [] },
+  { medium: 'infiniband-xdr', rdma: [IB_XDR_800], tcp: [] },
+  { medium: '5gbe', rdma: [], tcp: [ETHERNET_5G_TCP] },
+  { medium: '10gbe', rdma: [], tcp: [ETHERNET_10G_TCP] },
 ];

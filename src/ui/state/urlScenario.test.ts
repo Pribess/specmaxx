@@ -5,6 +5,8 @@
  * - inter-node host staging (docs §6 "Inter-node host staging"): undone by giving the GPU and the link GPUDirect;
  * - the TCP latency recheck (docs §6): undone by restoring the link's old α (10GbE kept 10 µs, so no change);
  * - the expert-prefetch accuracy (docs §12 "Expert prefetch"): undone by perfect prediction (the former 'ideal').
+ * - the TCP socket copy (docs §6 "TCP socket copy"): undone by marking the link `transport: 'rdma'` (same numbers,
+ *   still no GPUDirect, so the PCIe staging stays).
  * Set SCENARIO_REPORT=1 to print the rows.
  */
 
@@ -60,7 +62,10 @@ function row(input: SimInput): Row {
 
 /** The input with one modelling change undone (deep copies; `input` is not mutated). */
 const UNDO = {
-  /** Host staging off: GPUDirect on both the device and the inter-node link (the convention before staging). */
+  /**
+   * Host staging off: GPUDirect on both the device and the inter-node link (the convention before staging), so the link
+   * is marked RDMA too (a TCP link cannot have GPUDirect).
+   */
   staging(input: SimInput): SimInput {
     const { device, topology } = input.hardware;
     if (topology.interNode === undefined) throw new Error('expected an inter-node link');
@@ -69,7 +74,10 @@ const UNDO = {
       hardware: {
         ...input.hardware,
         device: { ...device, gpuDirectRdma: true },
-        topology: { ...topology, interNode: { ...topology.interNode, gpuDirectRdma: true } },
+        topology: {
+          ...topology,
+          interNode: { ...topology.interNode, gpuDirectRdma: true, transport: 'rdma' },
+        },
       },
     };
   },
@@ -85,6 +93,21 @@ const UNDO = {
       },
     };
   },
+  /**
+   * The TCP socket copy off (docs §6 "TCP socket copy"): the same link numbers marked `transport: 'rdma'`, keeping
+   * `gpuDirectRdma: false`, so the PCIe staging stays and only the kernel copies go.
+   */
+  socketCopy(input: SimInput): SimInput {
+    const { topology } = input.hardware;
+    if (topology.interNode === undefined) throw new Error('expected an inter-node link');
+    return {
+      ...input,
+      hardware: {
+        ...input.hardware,
+        topology: { ...topology, interNode: { ...topology.interNode, transport: 'rdma' } },
+      },
+    };
+  },
   /** Perfect expert prediction, p = 1 (the former offload overlap 'ideal'). */
   prefetch(input: SimInput): SimInput {
     const offload = input.deployment?.offload;
@@ -96,15 +119,17 @@ const UNDO = {
   },
 };
 
-/** The report rows: every change undone, then each one added back in turn. */
+/** The report rows: every change undone, then each one added back in turn (the socket copy last). */
 function variants(
   input: SimInput,
-): Record<'before' | 'staging' | 'latency' | 'prefetch', SimInput> {
+): Record<'before' | 'staging' | 'latency' | 'prefetch' | 'socketCopy', SimInput> {
+  const noCopy = UNDO.socketCopy(input);
   return {
-    before: UNDO.staging(UNDO.latency(UNDO.prefetch(input))),
-    staging: UNDO.latency(UNDO.prefetch(input)),
-    latency: UNDO.prefetch(input),
-    prefetch: input,
+    before: UNDO.staging(UNDO.latency(UNDO.prefetch(noCopy))),
+    staging: UNDO.latency(UNDO.prefetch(noCopy)),
+    latency: UNDO.prefetch(noCopy),
+    prefetch: noCopy,
+    socketCopy: input,
   };
 }
 
@@ -143,11 +168,24 @@ const ROW_PREFETCH: Row = {
   cycleSec: 6.172338e-3,
   exposedTransferSec: 0.8866978e-3,
 };
+/**
+ * +socket copy: ≈ 205 inter-node message steps × 2·m/r_sock (r_sock = 96/2 = 48 GB/s, ≈ 0.11 µs per step) = +22 µs
+ * of α per token (−0.36 % decode); β unchanged (B_hj = 96/8 = 12 GB/s ≫ 1.25 GB/s).
+ */
+const ROW_SOCKET: Row = {
+  ...ROW_PREFETCH,
+  decodeTokPerSec: 161.4273,
+  prefillTokPerSec: 2483.5175,
+  cycleSec: 6.194738e-3,
+  commLatencySec: 2.402326e-3,
+  exposedCommSec: 2.402326e-3,
+};
 const PINNED: Record<keyof ReturnType<typeof variants>, Row> = {
   before: ROW_BEFORE,
   staging: ROW_STAGING,
   latency: ROW_STAGING, // 10GbE keeps 10 µs
   prefetch: ROW_PREFETCH,
+  socketCopy: ROW_SOCKET,
 };
 
 describe('URL scenario: Qwen3.8-Flash-Next on 2 × RTX 5090 over 10GbE TCP', () => {
