@@ -7,7 +7,20 @@
  */
 
 import type { AccumulateType, MathFormat } from '../ir/dtype';
-import type { ComputeEngine, DeviceSpec, EstimatedField, GemmTiling, LinkSpec, MatmulPeak, SourceRef } from './types';
+import type {
+  ComputeEngine,
+  DeviceSpec,
+  EstimatedField,
+  GemmTiling,
+  LinkSpec,
+  MatmulPeak,
+  PcieGeneration,
+  PcieLanes,
+  SourceRef,
+} from './types';
+
+/** A dtype key of `ComputeEngine.vectorFlopsPerSec`: `'fp64' | 'fp32' | 'fp16' | 'bf16'`. */
+export type VectorDtype = keyof ComputeEngine['vectorFlopsPerSec'];
 
 /** Provenance every modifier must carry (project rule: every number is sourced). */
 export interface ModifierProvenance {
@@ -42,7 +55,28 @@ export type DeviceModifier =
    * Power/clock limit: multiply ALL matmul and vector peaks and the SFU rate of one engine (default: every engine)
    * by the dimensionless `factor` (> 0). Memory bandwidth is unaffected (use `memoryBandwidth` for that).
    */
-  | ({ kind: 'clockScale'; engineId?: string; factor: number } & ModifierProvenance);
+  | ({ kind: 'clockScale'; engineId?: string; factor: number } & ModifierProvenance)
+  /**
+   * Multiply the vector (non-tensor, SIMT) peaks `vectorFlopsPerSec` of one engine (default: every engine) by the
+   * dimensionless `factor` (> 0): only the `dtype` entry when given, else every listed entry. Must match ≥ 1 listed
+   * entry. Matmul peaks and the SFU rate are unaffected. Example: an FP32 FMA throttled to 1/32 of its issue rate and
+   * restored by a driver patch = `{ dtype: 'fp32', factor: 32 }`.
+   */
+  | ({ kind: 'vectorScale'; engineId?: string; dtype?: VectorDtype; factor: number } & ModifierProvenance)
+  /**
+   * Change the compute-unit count (SMs, CUs) of one engine (default: every engine) to `computeUnits` (an integer
+   * ≥ 1), and scale its matmul and vector peaks and SFU rate by the dimensionless ratio computeUnits' / computeUnits
+   * (per-unit rates and the clock unchanged; the new count also sets the wave granularity of the shape-efficiency
+   * model). Memory bandwidth is unaffected. Example: re-enabling fused-off SMs, 70 → 74 = `{ computeUnits: 74 }`.
+   */
+  | ({ kind: 'computeUnits'; engineId?: string; computeUnits: number } & ModifierProvenance)
+  /**
+   * Change the PCIe host interface (`DeviceSpec.hostInterface`, which the default host link and the inter-node host
+   * staging are built from): each GIVEN field replaces that field alone, so a speed unlock (`generation: 2`) and a
+   * width unlock (`lanes: 16`) on different axes combine to Gen2 x16. At least one field; the device must have a
+   * `hostInterface`. Units: PCIe generation (integer), electrical lanes (count).
+   */
+  | ({ kind: 'hostInterface'; generation?: PcieGeneration; lanes?: PcieLanes } & ModifierProvenance);
 
 /** One typed partial override of a {@link LinkSpec}. Applied in list order by {@link applyLinkModifiers}. */
 export type LinkModifier =
@@ -100,6 +134,7 @@ function copyDevice(d: DeviceSpec): DeviceSpec {
     ...d,
     engines: d.engines.map(copyEngine),
     memory: { ...d.memory, capacityOptionsBytes: [...d.memory.capacityOptionsBytes] },
+    ...(d.hostInterface !== undefined ? { hostInterface: { ...d.hostInterface } } : {}),
     sources: copySources(d.sources),
     estimated: d.estimated.map((e) => ({ ...e })),
     ...(d.appliedModifiers !== undefined ? { appliedModifiers: [...d.appliedModifiers] } : {}),
@@ -148,10 +183,22 @@ function positiveErrors(value: number, label: string): string[] {
   return Number.isFinite(value) && value > 0 ? [] : [`${label} must be a finite number > 0 (got ${value})`];
 }
 
+/** True if a `hostInterface` modifier's `generation` is a PCIe generation 1–5 (the values the type allows). */
+function isPcieGeneration(g: number): boolean {
+  return [1, 2, 3, 4, 5].includes(g);
+}
+
+/** True if a `hostInterface` modifier's `lanes` is 4, 8 or 16 (the values the type allows). */
+function isPcieLanes(l: number): boolean {
+  return [4, 8, 16].includes(l);
+}
+
 /**
  * Errors of ONE device modifier against the spec it is applied to (the base after the earlier modifiers):
- * provenance present, numbers finite and > 0, `engineId` (if given) exists, a `peakScale` filter matches
- * ≥ 1 peak. Empty = valid. Used by {@link applyDeviceModifiers} (throws) and by `validateDeviceModifiers`.
+ * provenance present, numbers finite and > 0, `engineId` (if given) exists, a `peakScale` / `vectorScale` filter
+ * matches ≥ 1 peak, a `computeUnits` count is an integer ≥ 1, a `hostInterface` modifier names ≥ 1 valid field of a
+ * device that has a host interface. Empty = valid. Used by {@link applyDeviceModifiers} (throws) and by
+ * `validateDeviceModifiers`.
  */
 export function deviceModifierErrors(spec: DeviceSpec, mod: DeviceModifier): string[] {
   const label = `modifier ${mod.kind}`;
@@ -165,7 +212,8 @@ export function deviceModifierErrors(spec: DeviceSpec, mod: DeviceModifier): str
       errors.push(...positiveErrors(mod.bandwidthBytesPerSec, `${label}: bandwidthBytesPerSec`));
       break;
     case 'peakScale':
-    case 'clockScale': {
+    case 'clockScale':
+    case 'vectorScale': {
       errors.push(...positiveErrors(mod.factor, `${label}: factor`));
       if (mod.engineId !== undefined && !spec.engines.some((e) => e.id === mod.engineId)) {
         errors.push(`${label}: unknown engineId '${mod.engineId}'`);
@@ -176,8 +224,30 @@ export function deviceModifierErrors(spec: DeviceSpec, mod: DeviceModifier): str
           .reduce((count, e) => count + e.matmulPeaks.filter((p) => peakMatches(mod, p)).length, 0);
         if (matched === 0) errors.push(`${label}: filter matches no matmul peak (typo?)`);
       }
+      if (mod.kind === 'vectorScale') {
+        const matched = spec.engines
+          .filter((e) => engineSelected(mod.engineId, e))
+          .reduce((count, e) => count + vectorKeysMatching(e.vectorFlopsPerSec, mod.dtype).length, 0);
+        if (matched === 0) errors.push(`${label}: dtype matches no listed vector peak (typo?)`);
+      }
       break;
     }
+    case 'computeUnits':
+      if (!(Number.isInteger(mod.computeUnits) && mod.computeUnits >= 1)) {
+        errors.push(`${label}: computeUnits must be an integer ≥ 1 (got ${mod.computeUnits})`);
+      }
+      if (mod.engineId !== undefined && !spec.engines.some((e) => e.id === mod.engineId)) {
+        errors.push(`${label}: unknown engineId '${mod.engineId}'`);
+      }
+      break;
+    case 'hostInterface':
+      if (spec.hostInterface === undefined) errors.push(`${label}: the device has no hostInterface to change`);
+      if (mod.generation === undefined && mod.lanes === undefined) errors.push(`${label}: give generation, lanes or both`);
+      if (mod.generation !== undefined && !isPcieGeneration(mod.generation)) {
+        errors.push(`${label}: generation must be 1, 2, 3, 4 or 5 (got ${mod.generation})`);
+      }
+      if (mod.lanes !== undefined && !isPcieLanes(mod.lanes)) errors.push(`${label}: lanes must be 4, 8 or 16 (got ${mod.lanes})`);
+      break;
     default: {
       const _never: never = mod;
       throw new Error(`unknown device modifier ${String(_never)}`);
@@ -233,6 +303,19 @@ export function describeDeviceModifier(mod: DeviceModifier): string {
     }
     case 'clockScale':
       return `variant: clockScale ${mod.engineId ?? 'all engines'} ×${mod.factor} (${mod.note})`;
+    case 'vectorScale': {
+      const filter = [mod.engineId, mod.dtype].filter((x) => x !== undefined).join('/');
+      return `variant: vectorScale ${filter === '' ? 'all' : filter} ×${mod.factor} (${mod.note})`;
+    }
+    case 'computeUnits':
+      return `variant: computeUnits ${mod.engineId ?? 'all engines'} → ${mod.computeUnits} (${mod.note})`;
+    case 'hostInterface': {
+      const parts = [
+        ...(mod.generation !== undefined ? [`Gen${mod.generation}`] : []),
+        ...(mod.lanes !== undefined ? [`x${mod.lanes}`] : []),
+      ];
+      return `variant: hostInterface ${parts.join(' ')} (${mod.note})`;
+    }
     default: {
       const _never: never = mod;
       throw new Error(`unknown device modifier ${String(_never)}`);
@@ -267,15 +350,22 @@ function deviceModifierPaths(spec: DeviceSpec, mod: DeviceModifier): string[] {
     case 'peakScale':
       return spec.engines.flatMap((e, i) => (engineSelected(mod.engineId, e) ? [`engines.${i}.matmulPeaks`] : []));
     case 'clockScale':
+      return spec.engines.flatMap((e, i) => (engineSelected(mod.engineId, e) ? enginePeakPaths(e, i) : []));
+    case 'vectorScale':
       return spec.engines.flatMap((e, i) =>
         engineSelected(mod.engineId, e)
-          ? [
-              `engines.${i}.matmulPeaks`,
-              `engines.${i}.vectorFlopsPerSec`,
-              ...(e.sfuOpsPerSec !== undefined ? [`engines.${i}.sfuOpsPerSec`] : []),
-            ]
+          ? vectorKeysMatching(e.vectorFlopsPerSec, mod.dtype).map((k) => `engines.${i}.vectorFlopsPerSec.${k}`)
           : [],
       );
+    case 'computeUnits':
+      return spec.engines.flatMap((e, i) =>
+        engineSelected(mod.engineId, e) ? [`engines.${i}.computeUnits`, ...enginePeakPaths(e, i)] : [],
+      );
+    case 'hostInterface':
+      return [
+        ...(mod.generation !== undefined ? ['hostInterface.generation'] : []),
+        ...(mod.lanes !== undefined ? ['hostInterface.lanes'] : []),
+      ];
     default: {
       const _never: never = mod;
       throw new Error(`unknown device modifier ${String(_never)}`);
@@ -283,6 +373,40 @@ function deviceModifierPaths(spec: DeviceSpec, mod: DeviceModifier): string[] {
   }
 }
 
+/** The vector-peak dtypes of `v` a modifier's optional `dtype` filter selects (omitted = every listed dtype). */
+function vectorKeysMatching(v: ComputeEngine['vectorFlopsPerSec'], dtype: VectorDtype | undefined): VectorDtype[] {
+  return (Object.keys(v) as VectorDtype[]).filter((k) => v[k] !== undefined && (dtype === undefined || k === dtype));
+}
+
+/** `v` with the entries {@link vectorKeysMatching} `dtype` multiplied by the dimensionless `factor`. Unit: FLOP/s. */
+function scaleVectorPeaks(
+  v: ComputeEngine['vectorFlopsPerSec'],
+  factor: number,
+  dtype?: VectorDtype,
+): ComputeEngine['vectorFlopsPerSec'] {
+  const out: ComputeEngine['vectorFlopsPerSec'] = { ...v };
+  for (const key of vectorKeysMatching(v, dtype)) out[key] = v[key]! * factor;
+  return out;
+}
+
+/** `e` with every matmul and vector peak and its SFU rate multiplied by the dimensionless `factor`. */
+function scaleEngineRates(e: ComputeEngine, factor: number): ComputeEngine {
+  return {
+    ...e,
+    matmulPeaks: e.matmulPeaks.map((p) => ({ ...p, flopsPerSec: p.flopsPerSec * factor })),
+    vectorFlopsPerSec: scaleVectorPeaks(e.vectorFlopsPerSec, factor),
+    ...(e.sfuOpsPerSec !== undefined ? { sfuOpsPerSec: e.sfuOpsPerSec * factor } : {}),
+  };
+}
+
+/** The rate paths of engine `i` (matmul and vector peaks, and the SFU rate when set): what an engine-wide scale covers. */
+function enginePeakPaths(e: ComputeEngine, i: number): string[] {
+  return [
+    `engines.${i}.matmulPeaks`,
+    `engines.${i}.vectorFlopsPerSec`,
+    ...(e.sfuOpsPerSec !== undefined ? [`engines.${i}.sfuOpsPerSec`] : []),
+  ];
+}
 /** Applies ONE (already checked) device modifier to a spec we own (a copy), returning the new spec. */
 function applyOneDeviceModifier(spec: DeviceSpec, mod: DeviceModifier): DeviceSpec {
   switch (mod.kind) {
@@ -306,29 +430,45 @@ function applyOneDeviceModifier(spec: DeviceSpec, mod: DeviceModifier): DeviceSp
             : e,
         ),
       };
-    case 'clockScale': {
+    case 'clockScale':
       // Formula: peak' = peak · factor   for every matmul AND vector peak and the SFU rate of the selected engines
       // See docs/simulation-model.md §4 ("Device variants and modifiers")
-      const scaleVector = (v: ComputeEngine['vectorFlopsPerSec']): ComputeEngine['vectorFlopsPerSec'] => {
-        const out: ComputeEngine['vectorFlopsPerSec'] = {};
-        for (const key of Object.keys(v) as (keyof ComputeEngine['vectorFlopsPerSec'])[]) {
-          const value = v[key];
-          if (value !== undefined) out[key] = value * mod.factor;
-        }
-        return out;
+      return {
+        ...spec,
+        engines: spec.engines.map((e) => (engineSelected(mod.engineId, e) ? scaleEngineRates(e, mod.factor) : e)),
       };
+    case 'vectorScale':
+      // Formula: vector' = vector · factor   for the matching vector peaks of the selected engines
+      // See docs/simulation-model.md §4 ("Device variants and modifiers")
       return {
         ...spec,
         engines: spec.engines.map((e) =>
           engineSelected(mod.engineId, e)
-            ? {
-                ...e,
-                matmulPeaks: e.matmulPeaks.map((p) => ({ ...p, flopsPerSec: p.flopsPerSec * mod.factor })),
-                vectorFlopsPerSec: scaleVector(e.vectorFlopsPerSec),
-                ...(e.sfuOpsPerSec !== undefined ? { sfuOpsPerSec: e.sfuOpsPerSec * mod.factor } : {}),
-              }
+            ? { ...e, vectorFlopsPerSec: scaleVectorPeaks(e.vectorFlopsPerSec, mod.factor, mod.dtype) }
             : e,
         ),
+      };
+    case 'computeUnits':
+      // Formula: units' = computeUnits;  peak' = peak · units' / units   (matmul, vector, SFU of the selected engines)
+      // See docs/simulation-model.md §4 ("Device variants and modifiers")
+      return {
+        ...spec,
+        engines: spec.engines.map((e) => {
+          if (!engineSelected(mod.engineId, e)) return e;
+          const unitRatio = mod.computeUnits / e.computeUnits;
+          return { ...scaleEngineRates(e, unitRatio), computeUnits: mod.computeUnits };
+        }),
+      };
+    case 'hostInterface': {
+      // Each given field replaces its own field: Gen2 (one axis) + x16 (another) = Gen2 x16.
+      // Checked before: the device has a hostInterface.
+      const current = spec.hostInterface!;
+      return {
+        ...spec,
+        hostInterface: {
+          generation: mod.generation ?? current.generation,
+          lanes: mod.lanes ?? current.lanes,
+        },
       };
     }
     default: {

@@ -298,7 +298,8 @@ export function reduce(state: AppState, action: AppAction): AppState {
     case 'setUnlock': {
       const unlocks =
         action.optionId === undefined ? without(hw.unlocks, action.axisId) : { ...hw.unlocks, [action.axisId]: action.optionId };
-      return { ...state, hw: { ...hw, unlocks, capacityIndex: 0 } };
+      // An unlock change can change the PCIe host interface (CMP 170HX): a local link it no longer runs is dropped.
+      return { ...state, hw: normalizeCabling(normalizeLocalLink({ ...hw, unlocks, capacityIndex: 0 })) };
     }
     case 'setEngine': {
       const next = action.engineId === undefined ? without(hw, 'engineId') : { ...hw, engineId: action.engineId };
@@ -325,7 +326,8 @@ export function reduce(state: AppState, action: AppAction): AppState {
       // A local link restricted to other counts (the 2-card NVLink bridge) moves the count to one it joins.
       const devicesPerNode =
         action.level === 'intra' && action.linkId !== undefined ? devicesPerNodeForLocalLink(hw, action.linkId) : hw.devicesPerNode;
-      return { ...state, hw: normalizeCabling({ ...base, devicesPerNode, [editsKey(action.level)]: {} }) };
+      // A local link the (unlocked) PCIe host interface cannot run is refused: the default stays.
+      return { ...state, hw: normalizeCabling(normalizeLocalLink({ ...base, devicesPerNode, [editsKey(action.level)]: {} })) };
     }
     case 'setCabling': {
       const base = action.cabling === undefined ? without(hw, 'cabling') : { ...hw, cabling: action.cabling };

@@ -110,6 +110,21 @@ export const LLAMA3_70B = simpleDecoder({
 });
 
 /**
+ * Llama-2-7B (`llama`, the llama-bench reference model, TheBloke/Llama-2-7B-GGUF): h 4096, 32 layers, 32 heads,
+ * 32 KV heads (MHA), head dim 128, SwiGLU 11008, vocab 32000, untied (6.74 B parameters, as llama-bench prints).
+ */
+export const LLAMA2_7B = simpleDecoder({
+  name: 'Llama-2-7B',
+  source: 'https://huggingface.co/meta-llama/Llama-2-7b-hf/blob/main/config.json',
+  hidden: 4096,
+  vocab: 32000,
+  tieEmbeddings: false,
+  layers: 32,
+  mixer: { kind: 'gqa', heads: 32, kvHeads: 32, headDim: 128 },
+  ffn: { kind: 'dense', intermediate: 11008 },
+});
+
+/**
  * QwQ-32B (`qwen2`, Qwen2.5-32B shape): h 5120, 64 layers, 40 heads, 8 KV heads, head dim 128 (5120 / 40), q/k/v
  * biases, SwiGLU 27648, vocab 152064, untied (sliding window disabled: `use_sliding_window: false`).
  */

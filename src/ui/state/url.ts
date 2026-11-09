@@ -444,7 +444,8 @@ export function decodeState(search: string): DecodedState {
     if (findLink(id) !== undefined) hw[field] = currentLinkId(id);
     else drop(key, id);
   }
-  // A catalog local link that cannot join the decoded devices per machine (the 2-card NVLink bridge at n=4) is dropped.
+  // A catalog local link that cannot join the decoded devices per machine (the 2-card NVLink bridge at n=4), or that the
+  // decoded unlocks' PCIe host interface cannot run (a CMP 170HX PCIe 2.0 link without the Gen2 unlock), is dropped.
   if (hw.intraLinkId !== undefined && normalizeLocalLink(hw).intraLinkId === undefined) {
     drop('il', get('il') ?? hw.intraLinkId);
     delete hw.intraLinkId;

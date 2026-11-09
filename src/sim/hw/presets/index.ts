@@ -5,6 +5,7 @@
  *
  * Files:
  * - `nvidia.ts`: GeForce RTX 3090 / 4090 / 5090 and their community unlock axes.
+ * - `nvidia-cmp.ts`: the CMP 170HX (GA100 mining card) and its community unlock axes.
  * - `nvidia-datacenter.ts`: DGX Spark (GB10), H100 SXM, H200 SXM, B200, B300.
  * - `apple.ts`: M5 Ultra, M5 Max, M4 Max, M3 Ultra, M3 Max (binned GPU-core SKUs as separate presets).
  * - `amd.ts`: Radeon AI PRO R9700, RX 9070 XT, Ryzen AI Max+ 395 (Strix Halo), Instinct MI300X / MI325X / MI355X / MI455X.
@@ -31,6 +32,7 @@ import {
 import { APPLE_DEVICE_PRESETS } from './apple';
 import { INTEL_DEVICE_PRESETS } from './intel';
 import { NVIDIA_CONSUMER_DEVICE_PRESETS, RTX_3090, RTX_3090_UNLOCKS, RTX_4090, RTX_4090_UNLOCKS, RTX_5090, RTX_5090_UNLOCKS } from './nvidia';
+import { CMP_170HX, CMP_170HX_UNLOCKS, NVIDIA_CMP_DEVICE_PRESETS } from './nvidia-cmp';
 import {
   A100_SXM4_80GB,
   A100_SXM4_40GB,
@@ -53,6 +55,7 @@ import {
 } from './nvidia-pro';
 
 export * from './nvidia';
+export * from './nvidia-cmp';
 export * from './nvidia-pro';
 export * from './nvidia-datacenter';
 export * from './apple';
@@ -72,7 +75,7 @@ export interface DevicePresetGroup {
 }
 
 /**
- * The device presets by group, in display order: consumer / prosumer hardware first (GeForce, Apple, AMD Radeon
+ * The device presets by group, in display order: consumer / prosumer hardware first (GeForce, the CMP mining card, Apple, AMD Radeon
  * and Strix Halo, Intel Arc, DGX Spark), datacenter accelerators last. Every vendor array's device appears in
  * exactly one group (enforced by presets.test.ts).
  *
@@ -81,6 +84,7 @@ export interface DevicePresetGroup {
  */
 export const DEVICE_PRESET_GROUPS: DevicePresetGroup[] = [
   { name: 'NVIDIA GeForce', devices: NVIDIA_CONSUMER_DEVICE_PRESETS },
+  { name: 'NVIDIA CMP (mining)', devices: NVIDIA_CMP_DEVICE_PRESETS },
   { name: 'NVIDIA RTX PRO', devices: NVIDIA_PRO_DEVICE_PRESETS },
   { name: 'Apple silicon', devices: APPLE_DEVICE_PRESETS },
   { name: 'AMD Radeon / Ryzen AI', devices: [RADEON_AI_PRO_R9700, RADEON_RX_9070_XT, RYZEN_AI_MAX_PLUS_395] },
@@ -120,6 +124,7 @@ export const DEVICE_UNLOCKS: Record<string, UnlockAxis[]> = {
   [RTX_5090.id]: RTX_5090_UNLOCKS,
   [RTX_PRO_6000_WS.id]: RTX_PRO_6000_WS_UNLOCKS,
   [RTX_PRO_6000_MAX_Q.id]: RTX_PRO_6000_MAX_Q_UNLOCKS,
+  [CMP_170HX.id]: CMP_170HX_UNLOCKS,
 };
 
 /** The unlock axes of `device` (empty when it has none). */

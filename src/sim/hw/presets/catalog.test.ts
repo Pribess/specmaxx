@@ -8,15 +8,20 @@ import {
   NVLINK_2_PAIR,
   PCIE_4_X16_DIRECT,
 } from './links';
+import { applyDeviceModifiers } from '../modifiers';
+import { localLinkAllows, resolveLocalLink } from './catalog';
+import type { DeviceSpec, HostInterfaceSpec } from '../types';
+import { allUnlockSelections, resolveUnlocks } from '../unlocks';
 import { validateTopology } from '../validate';
 import {
   CABLING_IDS, POPULAR_SETUPS, allowedCablings, allowedLocalLinks, cablingLabel, cablingOf, catalogDeviceIds, composeTopology,
   defaultCabling, fabricOf, linkById, networkOf, popularSetupById, resolveNetwork, setupErrors, setupLabel, setupOptionsFor,
   type CablingId, type SetupChoice,
 } from './catalog';
-import { DEVICE_PRESETS } from './index';
+import { DEVICE_PRESETS, deviceUnlocks } from './index';
 import {
-  ETHERNET_10G_TCP, IB_NDR_400, IB_XDR_800, NVLINK_4, NVLINK_5, PCIE_4_X16, PCIE_5_X16, PCIE_5_X16_DIRECT,
+  ETHERNET_10G_TCP, IB_NDR_400, IB_XDR_800, NVLINK_4, NVLINK_5, PCIE_1_X16, PCIE_1_X4, PCIE_2_X16, PCIE_2_X4, PCIE_4_X16,
+  PCIE_5_X16, PCIE_5_X16_DIRECT,
   PCIE_4_X8, PCIE_4_X8_DIRECT, PCIE_5_X8, PCIE_5_X8_DIRECT, RTX_3090_NVLINK, SPARK_CONNECTX_7, TB4_TCP, TB4_TCP_20G, TB5_RDMA,
   TB5_TCP,
   USB4_HALO_RDMA, XGMI_MI300X_8_GPU,
@@ -129,12 +134,16 @@ describe('setup catalog: every device', () => {
     expect(linkPresetId(o.networks[0].link)).toBe(inter);
   });
 
-  it('covers every pre-catalog device in the defaults table (the M3 Max is new: Thunderbolt 4 TCP only)', () => {
+  it('covers every pre-catalog device in the defaults table (new since: the M3 Max, Thunderbolt 4 TCP only; the CMP 170HX)', () => {
     const covered = new Set(OLD_DEFAULTS.map(([id]) => id));
     const uncovered = DEVICE_PRESETS.map((d) => d.id).filter(
-      (id) => !covered.has(id) && !/^(rtx-pro-|a100-|v100-)/.test(id),
+      (id) => !covered.has(id) && !/^(rtx-pro-|a100-|v100-)/.test(id) && id !== 'cmp-170hx',
     );
     expect(uncovered.sort()).toEqual(['apple-m3-max-30c', 'apple-m3-max-40c']);
+    // The CMP 170HX (added after the catalog) defaults to its stock PCIe 1.0 x4 (the only link its stock interface runs)
+    // and 10GbE.
+    expect(resolveLocalLink(setupOptionsFor('cmp-170hx'), undefined, 2)).toBe(PCIE_1_X4);
+    expect(linkPresetId(setupOptionsFor('cmp-170hx').networks[0].link)).toBe(linkPresetId(ETHERNET_10G_TCP));
     for (const id of uncovered) {
       const o = setupOptionsFor(id);
       expect(o.networks.map((n) => linkPresetId(n.link))).toEqual([linkPresetId(TB4_TCP), linkPresetId(TB4_TCP_20G)]);
@@ -177,19 +186,63 @@ describe('setup catalog: PCIe links never exceed the card', () => {
    */
   const NO_HOST_INTERFACE_PCIE = ['instinct-mi325x', 'instinct-mi355x', 'instinct-mi455x'];
 
-  it.each(DEVICE_PRESETS.map((d) => [d.id] as const))('%s: every offered PCIe link is no wider and no newer than hostInterface', (id) => {
-    const device = DEVICE_PRESETS.find((d) => d.id === id)!;
-    const pcie = setupOptionsFor(id).localLinks.filter((l) => l.link.kind === 'pcie');
-    if (device.hostInterface === undefined) {
-      expect(pcie.length === 0 || NO_HOST_INTERFACE_PCIE.includes(id), `${id} offers PCIe without a hostInterface`).toBe(true);
-      return;
-    }
-    const { generation, lanes } = device.hostInterface;
-    for (const opt of pcie) {
-      const link = pcieGenLanes(opt.link.name);
-      expect(link.generation, `${id}: ${opt.link.name} vs Gen${generation}`).toBeLessThanOrEqual(generation);
-      expect(link.lanes, `${id}: ${opt.link.name} vs x${lanes}`).toBeLessThanOrEqual(lanes);
-    }
+  /** Every unlock selection of a device with its effective host interface (stock included: the empty selection). */
+  function unlockStates(device: DeviceSpec): { selection: Record<string, string>; iface: HostInterfaceSpec | undefined }[] {
+    const axes = deviceUnlocks(device);
+    return allUnlockSelections(axes).map((selection) => ({
+      selection,
+      iface: applyDeviceModifiers(device, resolveUnlocks(axes, selection).deviceModifiers).hostInterface,
+    }));
+  }
+
+  it.each(DEVICE_PRESETS.map((d) => [d.id] as const))(
+    '%s: under every unlock selection and count, every offered PCIe link is no wider and no newer than the effective hostInterface',
+    (id) => {
+      const device = DEVICE_PRESETS.find((d) => d.id === id)!;
+      const options = setupOptionsFor(id);
+      const pcie = options.localLinks.filter((l) => l.link.kind === 'pcie');
+      // Every PCIe option states its generation and lanes, matching its link's name.
+      for (const opt of pcie) expect(opt.pcie, `${id}: ${opt.link.name}`).toEqual(pcieGenLanes(opt.link.name));
+      if (device.hostInterface === undefined) {
+        expect(pcie.length === 0 || NO_HOST_INTERFACE_PCIE.includes(id), `${id} offers PCIe without a hostInterface`).toBe(true);
+        return;
+      }
+      for (const { selection, iface } of unlockStates(device)) {
+        for (const n of options.devicesPerNodeCounts) {
+          const offered = allowedLocalLinks(options, n, iface).filter((l) => l.link.kind === 'pcie');
+          for (const opt of offered) {
+            const link = pcieGenLanes(opt.link.name);
+            const label = `${id} ${JSON.stringify(selection)} ×${n}: ${opt.link.name} vs Gen${iface!.generation} x${iface!.lanes}`;
+            expect(link.generation, label).toBeLessThanOrEqual(iface!.generation);
+            expect(link.lanes, label).toBeLessThanOrEqual(iface!.lanes);
+          }
+          if (n > 1) expect(allowedLocalLinks(options, n, iface).length, `${id} ×${n}: some local link`).toBeGreaterThan(0);
+        }
+      }
+      // A device without PCIe unlocks hides nothing: its stock interface runs every PCIe link it lists.
+      if (deviceUnlocks(device).length === 0) {
+        expect(allowedLocalLinks(options, 2).filter((l) => l.link.kind === 'pcie')).toEqual(pcie.filter((l) => localLinkAllows(l, 2)));
+      }
+    },
+  );
+
+  it('CMP 170HX: each unlock state offers exactly the PCIe links its interface runs, fastest first (default = first)', () => {
+    const cmp = DEVICE_PRESETS.find((d) => d.id === 'cmp-170hx')!;
+    const options = setupOptionsFor('cmp-170hx');
+    const axes = deviceUnlocks(cmp);
+    const offered = (s: Record<string, string>) =>
+      allowedLocalLinks(options, 2, applyDeviceModifiers(cmp, resolveUnlocks(axes, s).deviceModifiers).hostInterface).map((l) => l.link);
+    expect(offered({})).toEqual([PCIE_1_X4]);
+    expect(offered({ 'compute-path': 'locked-workarounds' })).toEqual([PCIE_1_X4]);
+    expect(offered({ 'pcie-capacitor-mod': 'x16' })).toEqual([PCIE_1_X16, PCIE_1_X4]);
+    expect(offered({ 'compute-path': 'cmpunlocker' })).toEqual([PCIE_2_X4, PCIE_1_X4]);
+    expect(offered({ 'compute-path': 'cmpunlocker-hbm-1890', 'pcie-capacitor-mod': 'x16' })).toEqual([PCIE_2_X16, PCIE_1_X16, PCIE_2_X4, PCIE_1_X4]);
+    // The stock default and composeTopology / setupErrors use the stock interface unless told the unlocked one.
+    expect(resolveLocalLink(options, undefined, 2)).toBe(PCIE_1_X4);
+    expect(resolveLocalLink(options, undefined, 2, { generation: 2, lanes: 16 })).toBe(PCIE_2_X16);
+    const stock2x16: SetupChoice = { deviceId: 'cmp-170hx', devicesPerNode: 2, nodes: 1, localLinkId: linkPresetId(PCIE_2_X16) };
+    expect(setupErrors(stock2x16)).toEqual(["PCIe 2.0 x16 exceeds the card's PCIe 1.0 x4 host interface"]);
+    expect(setupErrors({ ...stock2x16, hostInterface: { generation: 2, lanes: 16 } })).toEqual([]);
   });
 
   it('Arc B580 (PCIe 4.0 x8): Gen4 x8 host bounce by default, Gen4 x8 direct as the option; Arc Pro B60 (Gen5 x8): x8 only', () => {
@@ -312,11 +365,12 @@ describe('setupErrors', () => {
       'NVLink bridge joins exactly 2 devices per machine (got 4)',
     ]);
     expect(setupErrors({ deviceId: 'rtx-3090', devicesPerNode: 8, nodes: 1, localLinkId: bridge })).toHaveLength(1);
-    // The RTX 3090 exception above predates the count-restricted A100/V100 links tested separately below.
+    // The RTX 3090 exception above predates the count-restricted A100/V100 links tested separately below. No
+    // host-interface limit here: the CMP's PCIe filter is tested above.
     for (const id of DEVICE_PRESETS.map((d) => d.id).filter((id) => !/^(a100-|v100-)/.test(id))) {
       const opts = setupOptionsFor(id);
       for (const n of opts.devicesPerNodeCounts.filter((x) => x > 1)) {
-        expect(allowedLocalLinks(opts, n).length, `${id} ×${n}`).toBe(opts.localLinks.length - (id === 'rtx-3090' && n !== 2 ? 1 : 0));
+        expect(opts.localLinks.filter((l) => localLinkAllows(l, n)).length, `${id} ×${n}`).toBe(opts.localLinks.length - (id === 'rtx-3090' && n !== 2 ? 1 : 0));
       }
     }
   });

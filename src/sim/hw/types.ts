@@ -181,14 +181,25 @@ export interface DeviceSpec {
 }
 
 /**
- * A PCIe host interface: generation (Gen3 8 GT/s, Gen4 16 GT/s, Gen5 32 GT/s per lane) and electrical lane count.
+ * A PCIe generation: Gen1 2.5, Gen2 5, Gen3 8, Gen4 16, Gen5 32 GT/s per lane (Gen1 / Gen2 with 8b/10b line coding,
+ * Gen3 and later with 128b/130b; `hw/presets/links.ts: pcieLineRateBytesPerSec`). Gen1 / Gen2 exist for cards whose
+ * link is fused down (NVIDIA CMP 170HX: Gen1 stock, Gen2 after a driver patch). Integer, no unit.
+ */
+export type PcieGeneration = 1 | 2 | 3 | 4 | 5;
+
+/** Electrical PCIe lane count of a link or edge connector: 4, 8 or 16. Count. */
+export type PcieLanes = 4 | 8 | 16;
+
+/**
+ * A PCIe host interface: generation ({@link PcieGeneration}) and electrical lane count.
  * Integers, no unit; the bandwidth they imply is `hostPcieLink(generation, lanes).bandwidthPerDirectionBytesPerSec`.
+ * A `hostInterface` device modifier (`hw/modifiers.ts`) can change either field (a PCIe speed or width unlock).
  */
 export interface HostInterfaceSpec {
-  /** PCIe generation (3, 4 or 5). */
-  generation: 3 | 4 | 5;
+  /** PCIe generation (1–5). */
+  generation: PcieGeneration;
   /** Electrical lanes (4, 8 or 16). Count. */
-  lanes: 4 | 8 | 16;
+  lanes: PcieLanes;
 }
 
 /**

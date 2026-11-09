@@ -7,10 +7,12 @@
  * per-step time of a small all-reduce is only an upper bound. On one physical medium RDMA ≤ TCP (`LINK_MEDIA`).
  * See docs/simulation-model.md §4 ("Links and topologies"), §6 ("Collectives"), and engine/collectives.ts.
  */
-import type { LinkSpec, SourceRef } from '../types';
+import type { LinkSpec, PcieGeneration, PcieLanes, SourceRef } from '../types';
 
 const BANDWIDTH_FIELD = 'bandwidthPerDirectionBytesPerSec';
 const PCIE_SIG_URL = 'https://pcisig.com/faq?field_category_value%5B%5D=pci_express_5.0&keys=';
+/** PCI-SIG: how PCIe 3.0's 8 GT/s doubles PCIe 2.0's 5 GT/s (table of Gen1 2.5 / Gen2 5 / Gen3 8 GT/s, 8b/10b vs 128b/130b). */
+const PCIE_SIG_GEN123_URL = 'https://pcisig.com/how-does-pcie-30-8gts-double-pcie-20-5gts-bit-rate';
 const GEFORCE_P2P_URL = 'https://github.com/tinygrad/open-gpu-kernel-modules/issues/29';
 const GB200_LATENCY_URL = 'https://arxiv.org/pdf/2607.16100';
 /** Level1Techs: tuned TCP ping-pong over Strix Halo USB4 and its built-in 5GbE (direct and switched). */
@@ -109,21 +111,32 @@ const SOC_RDMA_SOURCE: SourceRef = {
  */
 export const LEGACY_LINK_IDS: Record<string, string> = {};
 
-/** Per-lane signalling rate by PCIe generation (PCI-SIG: Gen3 8, Gen4 16, Gen5 32 GT/s). Unit: GT/s. */
-const PCIE_GT_PER_LANE: Record<3 | 4 | 5, number> = { 3: 8, 4: 16, 5: 32 };
+/**
+ * Per-lane signalling rate by PCIe generation (PCI-SIG: Gen1 2.5, Gen2 5, Gen3 8, Gen4 16, Gen5 32 GT/s). Unit: GT/s.
+ * Sources: {@link PCIE_SIG_GEN123_URL} (Gen1–Gen3), {@link PCIE_SIG_URL} (Gen4, Gen5).
+ */
+const PCIE_GT_PER_LANE: Record<PcieGeneration, number> = { 1: 2.5, 2: 5, 3: 8, 4: 16, 5: 32 };
 
 /**
- * PCIe line rate per direction after 128b/130b encoding (Gen3, Gen4 and Gen5 all use it), BEFORE TLP/DLLP packet
- * overhead: the bits the wire carries, not the payload bytes a transfer moves. Unit: B/s per direction. Not a link
- * bandwidth by itself: every PCIe link preset uses {@link pcieBandwidthPerDirectionBytesPerSec}, this × the payload
- * efficiency {@link PCIE_PAYLOAD_EFFICIENCY}.
- *
- * Formula: R_line = GT/s per lane × 1e9 × lanes × 128/130 / 8 bits per byte.
- * E.g. Gen5 x16 = 32e9 × 16 × 128/130 / 8 = 63.015e9 B/s; Gen4 x16 = 31.508e9; Gen3 x16 = 15.754e9.
+ * Line-code efficiency by PCIe generation: data bits per transferred bit. Gen1 and Gen2 use 8b/10b (0.8), Gen3 and
+ * later 128b/130b (0.985) (PCI-SIG, {@link PCIE_SIG_GEN123_URL}). Dimensionless.
  */
-export function pcieLineRateBytesPerSec(generation: 3 | 4 | 5, lanes: 4 | 8 | 16): number {
+const PCIE_LINE_CODE_EFFICIENCY: Record<PcieGeneration, number> = { 1: 8 / 10, 2: 8 / 10, 3: 128 / 130, 4: 128 / 130, 5: 128 / 130 };
+
+/**
+ * PCIe line rate per direction after line coding (8b/10b on Gen1 / Gen2, 128b/130b on Gen3–Gen5), BEFORE TLP/DLLP
+ * packet overhead: the bits the wire carries, not the payload bytes a transfer moves. Unit: B/s per direction. Not a
+ * link bandwidth by itself: every PCIe link preset uses {@link pcieBandwidthPerDirectionBytesPerSec}, this × the
+ * payload efficiency {@link PCIE_PAYLOAD_EFFICIENCY}.
+ *
+ * Formula: R_line = GT/s per lane × 1e9 × lanes × code / 8 bits per byte,  code = 8/10 (Gen1, Gen2) or 128/130.
+ * E.g. Gen5 x16 = 32e9 × 16 × 128/130 / 8 = 63.015e9 B/s; Gen4 x16 = 31.508e9; Gen3 x16 = 15.754e9;
+ * Gen2 x16 = 5e9 × 16 × 0.8 / 8 = 8.0e9; Gen1 x4 = 2.5e9 × 4 × 0.8 / 8 = 1.0e9.
+ */
+export function pcieLineRateBytesPerSec(generation: PcieGeneration, lanes: PcieLanes): number {
   const transfersPerSec = PCIE_GT_PER_LANE[generation] * 1e9;
-  return transfersPerSec * lanes * (128 / 130) / 8;
+  const code = PCIE_LINE_CODE_EFFICIENCY[generation];
+  return transfersPerSec * lanes * code / 8;
 }
 
 /**
@@ -146,8 +159,9 @@ const PCIE_VLLM_OFFLOAD_BENCH_URL = 'https://github.com/Pinned-Memory/vLLM-offlo
  * - MPS = 256 B, the maximum payload size per TLP. ASSUMED: the common root-port setting on desktop and server
  *   platforms (128 B gives 0.842, 512 B 0.955); the platform sets it, not the card.
  * - overhead = 24 B = 6 dwords per TLP without the optional ECRC (Intel AN 855): framing and sequence number
- *   (Gen3+: the 4-byte STP token carries the sequence number), a 4-dword header (64-bit addresses, as GPU and
- *   host buffers above 4 GB need) and the 4-byte LCRC. With a 3-dword header AN 855 gets 256 / (256 + 20) = 92%.
+ *   (Gen3+: the 4-byte STP token carries the sequence number; Gen1 / Gen2: 1-byte STP + 2-byte sequence + 1-byte END,
+ *   also 4 bytes), a 4-dword header (64-bit addresses, as GPU and host buffers above 4 GB need) and the 4-byte LCRC.
+ *   With a 3-dword header AN 855 gets 256 / (256 + 20) = 92%.
  *
  * Still an upper bound: ACK/NAK and flow-control DLLPs and SKP ordered sets are excluded (AN 855: "ignores any
  * DLLPs and PLPs"). Measured pinned copies sit below it: Gen4 x16 R_line 31.51 × η = 28.81 GB/s against a measured
@@ -161,11 +175,11 @@ export const PCIE_PAYLOAD_EFFICIENCY = 256 / (256 + 24);
  * PCIe link bandwidth per direction: the payload ceiling of {@link pcieLineRateBytesPerSec} after TLP framing.
  * Unit: B/s per direction. The ONE place every PCIe link preset gets its bandwidth from.
  *
- * Formula: B = R_line × η_PCIe = GT/s × 1e9 × lanes × 128/130 / 8 × 256/280.
+ * Formula: B = R_line × η_PCIe = GT/s × 1e9 × lanes × code / 8 × 256/280   (code 128/130, or 8/10 on Gen1 / Gen2).
  * E.g. Gen5 x16 = 63.015e9 × 0.9143 = 57.614e9 B/s; Gen4 x16 = Gen5 x8 = 28.807e9; Gen4 x8 = Gen3 x16 = 14.403e9;
- * Gen4 x4 = 7.202e9.
+ * Gen4 x4 = 7.202e9; Gen2 x16 = 7.314e9; Gen2 x4 = 1.829e9; Gen1 x16 = 3.657e9; Gen1 x4 = 0.914e9.
  */
-export function pcieBandwidthPerDirectionBytesPerSec(generation: 3 | 4 | 5, lanes: 4 | 8 | 16): number {
+export function pcieBandwidthPerDirectionBytesPerSec(generation: PcieGeneration, lanes: PcieLanes): number {
   return pcieLineRateBytesPerSec(generation, lanes) * PCIE_PAYLOAD_EFFICIENCY;
 }
 
@@ -182,6 +196,24 @@ const PCIE_PAYLOAD_SOURCE: SourceRef = {
 };
 
 /**
+ * The PCI-SIG source of the Gen1 / Gen2 rates and their 8b/10b coding, added to the bandwidth sources of Gen1 / Gen2
+ * links ({@link pcieGen12Sources}); the Gen3–Gen5 links cite the PCIe 5.0 FAQ.
+ */
+const PCIE_GEN12_SOURCE: SourceRef = {
+  url: PCIE_SIG_GEN123_URL,
+  title: 'PCI-SIG: How does the PCIe 3.0 8GT/s "double" the PCIe 2.0 5GT/s bit rate?',
+  fields: [BANDWIDTH_FIELD],
+  note: 'Table: PCIe 1.x 2.5 GT/s and PCIe 2.x 5.0 GT/s with 8b/10b encoding, PCIe 3.0 8.0 GT/s with 128b/130b. ' +
+    'Line rate = GT/s × lanes × 8/10 ÷ 8 (Gen1 x4 = 1.0 GB/s, Gen2 x16 = 8.0 GB/s per direction); × 256/280 TLP ' +
+    'payload efficiency (AN 855).',
+};
+
+/** The extra rate source of a Gen1 / Gen2 link (none for Gen3–Gen5, whose links keep their PCIe 5.0 FAQ citation). */
+function pcieGen12Sources(generation: PcieGeneration): SourceRef[] {
+  return generation <= 2 ? [PCIE_GEN12_SOURCE] : [];
+}
+
+/**
  * Why the PCIe α stays 1 µs (docs/review/practicality-review.md F7): the measured small-message PCIe all-reduce
  * floors (one-shot 6.1 µs and NCCL 13.5 µs at 1 KB, 4× RTX PRO 6000) include the collective's kernel launch and a
  * system-scope barrier, and no source found splits off the hardware share (the review's ≈ 2–3 µs is an estimate,
@@ -193,8 +225,8 @@ const PCIE_ALPHA_NOT_RAISED =
   'those include kernel launch and a system-scope barrier, and no measurement isolates the hardware share.';
 
 /** PCIe link (device to device): payload bandwidth {@link pcieBandwidthPerDirectionBytesPerSec}, α 1 µs. */
-function pcieLink(generation: 3 | 4 | 5, lanes: 8 | 16, direct: boolean): LinkSpec {
-  // B = R_line × η_PCIe = transfers/s × lanes × 128/130 / 8 × 256/280.
+function pcieLink(generation: PcieGeneration, lanes: PcieLanes, direct: boolean): LinkSpec {
+  // B = R_line × η_PCIe = transfers/s × lanes × code / 8 × 256/280   (code 128/130, or 8/10 on Gen1 / Gen2).
   const bandwidthPerDirectionBytesPerSec = pcieBandwidthPerDirectionBytesPerSec(generation, lanes);
   const sources: SourceRef[] = [
     {
@@ -205,6 +237,7 @@ function pcieLink(generation: 3 | 4 | 5, lanes: 8 | 16, direct: boolean): LinkSp
         'Gen5 32 GT/s, Gen4 16 GT/s, Gen3 8 GT/s; x32 Gen5 raw 128 GB/s each direction. ' +
         'Line rate = GT/s × lanes × 128/130 ÷ 8; × 256/280 TLP payload efficiency (AN 855 below).',
     },
+    ...pcieGen12Sources(generation),
     PCIE_PAYLOAD_SOURCE,
     {
       url: GEFORCE_P2P_URL,
@@ -281,6 +314,20 @@ export const PCIE_5_X8_DIRECT: LinkSpec = {
   ],
 };
 
+/**
+ * Fused-down PCIe of the NVIDIA CMP 170HX, host-staged (no P2P: the community BAR1 P2P patches are not modelled).
+ * Gen1 x4 is the card as shipped; Gen1 x16 after the AC-coupling capacitor mod; Gen2 x4 / x16 after the cmpunlocker
+ * Gen2 patch (without / with the capacitor mod). Payload per PCIe hop per direction: Gen1 x4 ≈ 0.914 GB/s, Gen1 x16
+ * ≈ 3.657, Gen2 x4 ≈ 1.829, Gen2 x16 ≈ 7.314 GB/s (8b/10b line coding). See `presets/nvidia-cmp.ts`.
+ */
+export const PCIE_1_X4 = pcieLink(1, 4, false);
+/** PCIe Gen1 x16, host-staged (CMP 170HX with the capacitor mod); ≈ 3.657 GB/s per direction. */
+export const PCIE_1_X16 = pcieLink(1, 16, false);
+/** PCIe Gen2 x4, host-staged (CMP 170HX with the cmpunlocker Gen2 patch); ≈ 1.829 GB/s per direction. */
+export const PCIE_2_X4 = pcieLink(2, 4, false);
+/** PCIe Gen2 x16, host-staged (CMP 170HX with the Gen2 patch and the capacitor mod); ≈ 7.314 GB/s per direction. */
+export const PCIE_2_X16 = pcieLink(2, 16, false);
+
 /** nvbandwidth issue: achieved host↔device copy-engine rates (not presets; the `linkBandwidth` modifier can derate). */
 const NVBANDWIDTH_ACHIEVED_URL = 'https://github.com/NVIDIA/nvbandwidth/issues/53';
 
@@ -296,7 +343,7 @@ const NVBANDWIDTH_ACHIEVED_URL = 'https://github.com/NVIDIA/nvbandwidth/issues/5
  * staged message (α_stage = 2·α).
  * See docs/simulation-model.md §4 ("Host and storage tiers") and §6 ("Inter-node host staging").
  */
-export function hostPcieLink(generation: 3 | 4 | 5, lanes: 4 | 8 | 16): LinkSpec {
+export function hostPcieLink(generation: PcieGeneration, lanes: PcieLanes): LinkSpec {
   const bandwidthPerDirectionBytesPerSec = pcieBandwidthPerDirectionBytesPerSec(generation, lanes);
   return {
     kind: 'pcie',
@@ -315,6 +362,7 @@ export function hostPcieLink(generation: 3 | 4 | 5, lanes: 4 | 8 | 16): LinkSpec
           'payload efficiency (AN 855 below). Achieved host copies are lower still (nvbandwidth memcpy_ce ≈ 24.8 GB/s ' +
           `H2D on Gen4 x16, ${NVBANDWIDTH_ACHIEVED_URL}); they are not hardware ceilings and are not fitted here.`,
       },
+      ...pcieGen12Sources(generation),
       PCIE_PAYLOAD_SOURCE,
       {
         url: GDRCOPY_URL,
@@ -349,7 +397,8 @@ export function hostPcieLink(generation: 3 | 4 | 5, lanes: 4 | 8 | 16): LinkSpec
 
 /**
  * Every host link {@link hostPcieLink} builds, for a "Host link" picker: Gen3 / Gen4 / Gen5 × x4 / x8 / x16, newest
- * and widest first.
+ * and widest first. Gen1 / Gen2 host links are not offered as overrides: they arise only from a device's own (possibly
+ * unlock-modified) `hostInterface` (the CMP 170HX).
  */
 export const HOST_PCIE_LINKS: LinkSpec[] = ([5, 4, 3] as const).flatMap((g) =>
   ([16, 8, 4] as const).map((lanes) => hostPcieLink(g, lanes)),
@@ -1123,6 +1172,8 @@ export const ETHERNET_10G_TCP = ethernetTcp(10);
 
 /** All stock host-bounced GeForce PCIe lane configurations; unlock modifiers can switch each to direct P2P. */
 export const HOST_BOUNCE_PCIE_LINKS: LinkSpec[] = [PCIE_4_X16, PCIE_4_X8, PCIE_5_X16, PCIE_5_X8];
+/** The CMP 170HX's fused-down host-bounced PCIe links (Gen1 / Gen2 × x4 / x16), fastest first. */
+export const CMP_PCIE_LINKS: LinkSpec[] = [PCIE_2_X16, PCIE_1_X16, PCIE_2_X4, PCIE_1_X4];
 /** All link presets, including per-peer and full-node xGMI conventions. Every entry must validate. */
 export const LINK_PRESETS: LinkSpec[] = [
   PCIE_3_X16_DIRECT,
@@ -1133,7 +1184,7 @@ export const LINK_PRESETS: LinkSpec[] = [
   NVLINK_2_MESH_4,
   NVLINK_2_PAIR,
   IB_HDR_200,
-  ...HOST_BOUNCE_PCIE_LINKS, PCIE_4_X16_DIRECT, PCIE_4_X8_DIRECT, PCIE_5_X16_DIRECT, PCIE_5_X8_DIRECT,
+  ...HOST_BOUNCE_PCIE_LINKS, PCIE_4_X16_DIRECT, PCIE_4_X8_DIRECT, PCIE_5_X16_DIRECT, PCIE_5_X8_DIRECT, ...CMP_PCIE_LINKS,
   RTX_3090_NVLINK, NVLINK_4, NVLINK_5, IB_NDR_400, IB_XDR_800, SPARK_CONNECTX_7,
   XGMI_MI300X_PER_PEER, XGMI_MI300X_8_GPU, TB5_RDMA, TB5_TCP, TB4_TCP, TB4_TCP_20G,
   USB4_HALO_RDMA, USB4_HALO_TCP, ETHERNET_5G_TCP, ETHERNET_10G_TCP,

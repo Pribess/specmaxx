@@ -278,6 +278,7 @@ describe('DeviceSpec.hostInterface', () => {
     const expected: Record<string, [number, number]> = {
       'rtx-5090': [5, 16],
       'rtx-4090': [4, 16],
+      'cmp-170hx': [1, 4], // as shipped: Gen1 fused, lanes 4–15 without capacitors
       'rtx-3090': [4, 16],
       'a100-pcie-80gb': [4, 16],
       'a100-pcie-40gb': [4, 16],

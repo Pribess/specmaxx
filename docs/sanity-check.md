@@ -17,8 +17,8 @@ Code: [`src/sim/__sanity__/`](../src/sim/__sanity__/)
 | File | What |
 |---|---|
 | `harness.ts` | `simulateReport(input)`: model + weight quant + hardware (+ unlocks, + host link / RAM / SSD) + workload (+ deployment knobs: offload, speculative decoding) → `simulate()`; quant presets (GGUF, MLX, FP8, NVFP4, …); `simpleDecoder` for hand-written specs |
-| `models.ts` | hand-written specs of sibling models the HF loader does not map (gpt-oss, GLM-4.5-Air, Qwen3-30B-A3B, Llama-3.x-70B, QwQ-32B, Qwen3-Next-80B-A3B), dims from each repo's config.json |
-| `reports.ts` | the 105 reports as typed data (the 45 described here plus 60 added by the [practicality review](review/practicality-review.md)), each with its harness input and its check mode |
+| `models.ts` | hand-written specs of sibling models the HF loader does not map (gpt-oss, GLM-4.5-Air, Qwen3-30B-A3B, Llama-2-7B, Llama-3.x-70B, QwQ-32B, Qwen3-Next-80B-A3B), dims from each repo's config.json |
+| `reports.ts` | the 108 reports as typed data (the 45 described here, 60 added by the [practicality review](review/practicality-review.md), 3 CMP 170HX unlock stages), each with its harness input and its check mode |
 | `reports.test.ts` | the assertion, the known-exception check, a weight-file-size cross-check, and the printed ratio table |
 | `configs.testutil.ts` | loads HF configs from `__sanity__/configs/` or the shared fixtures |
 
@@ -91,7 +91,10 @@ out right, but it is a workaround (follow-up 5).
   setup classes (single GPU, multi-GPU PCIe, single Mac, Mac TB5 clusters, DGX Spark ×1/2/4, Strix Halo, DDR and SSD
   expert offload, speculative decoding). `reports.ts` now holds **105 reports** and 181 metrics: 158 asserted, 6 known
   exceptions and 17 excluded. The tables and distributions below cover the original 45; the per-class distributions,
-  the chart and the exceptions for all 105 are in that review's §2.
+  the chart and the exceptions for all 105 are in that review's §2. Three more rows since (F-W48–F-W50, six asserted
+  metrics): Llama-2-7B Q4_0 on the CMP 170HX, locked with the stock build, locked with the DP2A / `--fmad=false`
+  build (`compute-path: locked-workarounds`) and unlocked by cmpunlocker (`compute-path: cmpunlocker`); report ÷ sim
+  0.10–0.66.
 
 - **F13 SSD correction (2026-11-09):** F-W12/F-W13 are now asserted, not exceptions. The checkpoint is
   `antirez/deepseek-v4.1-flash-gguf/DeepSeek-V4.1-Flash-Q4.gguf`, 518,596,067,328 B (HF file listing/header).

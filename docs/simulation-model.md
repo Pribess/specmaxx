@@ -619,6 +619,9 @@ property of the link.
 | `memoryBandwidth`    | replaces `memory.bandwidthBytesPerSec`                                                                                           | `memory.bandwidthBytesPerSec`                                                          |
 | `peakScale`          | multiplies every matmul peak matching ALL given filters (engineId, input, accumulate, sparsity) by `factor`; must match ≥ 1 peak | `engines.<i>.matmulPeaks`                                                              |
 | `clockScale`         | multiplies all matmul AND vector peaks and the SFU rate of an engine (default all) by `factor`; memory bandwidth unchanged       | `engines.<i>.matmulPeaks`, `engines.<i>.vectorFlopsPerSec`, `engines.<i>.sfuOpsPerSec` |
+| `vectorScale`        | multiplies the vector peaks of an engine (default all) by `factor`: only the `dtype` entry when given, else every listed one; must match ≥ 1 | `engines.<i>.vectorFlopsPerSec.<dtype>` (each scaled entry)                            |
+| `computeUnits`       | sets `computeUnits` of an engine (default all) to N and multiplies its matmul and vector peaks and SFU rate by N / units (per-unit rate and clock kept) | `engines.<i>.computeUnits`, `engines.<i>.matmulPeaks`, `engines.<i>.vectorFlopsPerSec`, `engines.<i>.sfuOpsPerSec` |
+| `hostInterface`      | replaces `hostInterface.generation` and / or `.lanes`, each given field alone (Gen2 from one axis + x16 from another = Gen2 x16); needs a `hostInterface` | `hostInterface.generation`, `hostInterface.lanes` (the given ones)                     |
 | link `p2p`           | sets `p2p`; `'direct'` drops `hostBounce`, `'host_bounce'` requires it                                                           | `p2p`, `hostBounce`                                                                    |
 | link `linkBandwidth` | replaces `bandwidthPerDirectionBytesPerSec`                                                                                      | `bandwidthPerDirectionBytesPerSec`                                                     |
 
@@ -627,8 +630,13 @@ property of the link.
 - Pure: the base is never mutated (explicit spreads; `structuredClone` is not in the ES2022 lib).
 - **Provenance**: every modifier carries a `note` and `sources` (or an `estimatedReason`); applying appends them
   to the spec's `sources` / `estimated` and records the list in `appliedModifiers`.
-- Validation: `factor > 0`, the engineId exists, a `peakScale` filter matches something (so a typo cannot
-  silently do nothing), provenance present, and the result passes `validateDevice`.
+- Validation: `factor > 0`, the engineId exists, a `peakScale` / `vectorScale` filter matches something (so a typo
+  cannot silently do nothing), a `computeUnits` count is an integer ≥ 1, a `hostInterface` modifier gives ≥ 1 valid
+  field (generation 1–5, lanes 4 / 8 / 16) of a device that has a host interface, provenance present, and the result
+  passes `validateDevice`.
+- The modified `hostInterface` is the one every consumer reads: the engine's default host link for offloading
+  (`engine/host.ts: resolveHost`) and inter-node host staging (`engine/staging.ts`) take the effective device after
+  the modifiers, and the UI builds its host link and its "(device)" label from the resolved device.
 - `simulate` applies `HardwareStack.deviceModifiers` and `linkModifiers` **once, up front**
   (`src/sim/engine/simulate.ts: effectiveHardware`); all cost code sees plain specs. Each applied modifier
   becomes a `variant: …` line in `SimResult.warnings`, and `SimResult.effectiveDevice` is the modified spec.
@@ -642,6 +650,7 @@ spot values against the datasheet).
 | File                           | Covers                                                                                                                                                                          | Export                                                                                                                   |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `presets/nvidia.ts`            | GeForce RTX 3090, 4090, 5090 and their unlock axes                                                                                                                              | `NVIDIA_CONSUMER_DEVICE_PRESETS`, `RTX_3090_UNLOCKS`, `RTX_4090_UNLOCKS`, `RTX_5090_UNLOCKS`                             |
+| `presets/nvidia-cmp.ts`        | CMP 170HX 8 GB (GA100 mining card, no vendor datasheet: review / community sources, peaks derived from A100 per-SM rates) and its unlock axes                                    | `NVIDIA_CMP_DEVICE_PRESETS`, `CMP_170HX_UNLOCKS`                                                                         |
 | `presets/nvidia-pro.ts` | RTX PRO Blackwell 6000 Workstation / Max-Q, 5000 (48/72GB), 4000 SFF; sustained-clock options | `NVIDIA_PRO_DEVICE_PRESETS`, `RTX_PRO_6000_WS_UNLOCKS`, `RTX_PRO_6000_MAX_Q_UNLOCKS` |
 | `presets/nvidia-datacenter.ts` | DGX Spark (GB10), H100 SXM, H200 SXM, B200, B300, A100 SXM4 / PCIe 40/80GB, V100 SXM2 / PCIe 16/32GB                                                                            | `NVIDIA_DATACENTER_DEVICE_PRESETS`                                                                                       |
 | `presets/apple.ts`             | M5 Ultra, M5 Max, M4 Max, M3 Ultra, M3 Max; binned GPU-core counts as separate SKUs                                                                                             | `APPLE_DEVICE_PRESETS`                                                                                                   |
@@ -715,7 +724,38 @@ Axes per consumer card (`src/sim/hw/presets/nvidia.ts`):
 
 Rejected as UI choices (no capacity test or debunked; listed with links at the end of `nvidia.ts`): 3090 48 GB,
 4090 96 GB, 5090 64 / 96 / 128 GB, a Blackwell tensor unlock. The 3090 NVLink bridge is a topology
-(`RTX_3090_NVLINK_2`), not an unlock. Other vendors' devices have no unlock axes.
+(`RTX_3090_NVLINK_2`), not an unlock.
+
+Axes of the NVIDIA CMP 170HX (`src/sim/hw/presets/nvidia-cmp.ts`; stock = the card as shipped: FP32 FMA, FP64 and
+every tensor instruction fused to 1/32 issue rate, 8 GB, PCIe Gen1 x4). Stock peaks are the A100's per-SM rates
+× 70 SMs × 1.41 GHz, ÷ 32 where fused (FP16 tensor 6.32 with FP16 and with FP32 accumulate, BF16 6.32, INT8
+12.63 TOP/s, FP32 0.395, HFMA2 50.5 TFLOP/s). The axes are listed in stage order (firmware, driver, board), which is
+the order their modifiers apply; every option is a complete stage, so every combination is physically possible
+(`nvidia-cmp.test.ts` checks the prerequisites of all 24):
+
+| Axis (`id`)          | Option: modifiers                                                                                                                                                                                                   | Source class                                      |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `vbios-6d`           | `6d`: `memoryBandwidth` 1728 MHz × 2 × 4096 bit / 8 = 1769.47 GB/s, `clockScale` 1470 / 1410                                                                                                                        | community (PixelML, vBIOS flash guide)            |
+| `compute-path`       | `locked-workarounds`: `vectorScale` fp32 ×16 (FADD + FMUL, 6.32 TFLOP/s); `peakScale` fp16 / **fp16-accumulate** dense ×8, 2:4 ×4 (HFMA2, 50.5); `peakScale` int8 dense ×2 (DP2A, 25.3 TOP/s, estimated)              | community (arabel1a, llama.cpp #24616)            |
+|                      | `cmpunlocker`: `peakScale` all ×32; `vectorScale` fp32 and fp64 ×32; `memoryCapacity` [64 GB, 32 GB]; `hostInterface` generation 2                                                                                 | community (cmpunlocker, Consensus wiki, PixelML)  |
+|                      | `cmpunlocker-hbm-1890`: the same (once) plus `memoryBandwidth` 1890 MHz × 2 × 4096 / 8 = 1935.36 GB/s (the HBM PLL overclock needs cmpunlocker's PLM patch, so it exists only here; it overrides 6D's 1769)            | community (170tune, wanghar)                      |
+|                      | `cmpunlocker-74sm`, `cmpunlocker-74sm-hbm-1890`: the two above plus `computeUnits` 74 (cmpunlocker PR #58 re-enables 4 fused-off SMs: every compute rate × 74/70, 74-SM waves; part of the patched driver, so only here) | community (cmpunlocker PR #58)                    |
+| `pcie-capacitor-mod` | `x16`: `hostInterface` lanes 16                                                                                                                                                                                     | community + review (Consensus wiki, niconiconi)   |
+
+The two PCIe unlocks compose through two `hostInterface` modifiers: Gen1 x4 → Gen2 x4 (cmpunlocker), Gen1 x16
+(capacitor mod), Gen2 x16 (both). The device-to-device links follow: the setup catalog offers a PCIe local link only
+while it fits the EFFECTIVE host interface (`catalog.ts: LocalLinkOption.pcie, localLinkFits, allowedLocalLinks`;
+`SetupChoice.hostInterface`), so a stock card offers PCIe 1.0 x4 only and both unlocks offer all four, fastest first
+(the default). The UI normalizes a chosen link the unlocks no longer allow (reducer `setUnlock`, URL decoding) and
+never simulates one (`src/ui/state/hardware.ts: effectiveHostInterface, normalizeLocalLink, resolveLinks`).
+
+Peak choice for FP16 GEMMs: the table lists both accumulators (equal on GA100). The default fp32-accumulate request
+resolves to the fp32-accumulate entry, which `locked-workarounds` leaves at 6.32 TFLOP/s (the fused tensor rate,
+equal to an FP32-accumulating CUDA-core kernel's FMUL + FADD rate); only an fp16-accumulate request reaches the half2
+rate, because HFMA2 accumulates in half. llama.cpp GGUF prefill (MMQ) uses the int8 entry. Not modelled (the preset's
+JSDoc says why):
+PCIe Gen3 (10 GB SKU only, after a permanent fuse burn), the x8 half capacitor mod, the static-BAR1 P2P patches, the
+10 GB SKU, power-cap tuning. Other devices have no unlock axes.
 
 ### Links and topologies
 
@@ -734,13 +774,15 @@ pcieBandwidthPerDirectionBytesPerSec, pcieLineRateBytesPerSec`): every PCIe link
   device's host link for offload streaming, inter-node PCIe staging, the NVMe slot ceiling) carries payload at
 
   ```
-  R_line = GT/s per lane × 1e9 × lanes × 128/130 / 8          (128b/130b encoding, Gen3–Gen5)
+  R_line = GT/s per lane × 1e9 × lanes × code / 8              (code 128/130 on Gen3–Gen5, 8/10 on Gen1 / Gen2)
   η_PCIe = MPS / (MPS + overhead) = 256 / (256 + 24) = 0.914    (TLP framing, Intel AN 855)
   B      = R_line × η_PCIe                                      (Gen5 x16 57.61, Gen4 x16 28.81, Gen4 x8 14.40 GB/s)
   ```
 
-  `overhead` = 24 B per TLP without ECRC (STP token with the sequence number, a 4-dword header for 64-bit
-  addresses, LCRC); `MPS` = 256 B maximum payload size, an assumed platform setting (128 B would give 0.842). DLLPs
+  Gen1 2.5 and Gen2 5 GT/s per lane use 8b/10b (PCI-SIG), so Gen2 x16 = 7.31 and Gen1 x4 = 0.914 GB/s (the CMP
+  170HX links `CMP_PCIE_LINKS` and its host link). `overhead` = 24 B per TLP without ECRC (STP token with the
+  sequence number, a 4-dword header for 64-bit addresses, LCRC); `MPS` = 256 B maximum payload size, an assumed
+  platform setting (128 B would give 0.842). DLLPs
   (ACK, flow control) and SKP ordered sets are left out, so `B` stays an upper bound: measured pinned copies on
   Gen4 x16 reach 24.8–26.2 GB/s against 28.81. Only PCIe: NVLink, InfiniBand, Ethernet, Thunderbolt and USB4 keep
   their vendor data rates. Source and review: docs/review/practicality-review.md F8.
@@ -950,12 +992,13 @@ offloaded no result depends on them.
   `sustainedRead?: { fraction, blockBytes, queueDepth, threads }` records low-QD / same-run deep-queue large-read
   bandwidth (dimensionless), measured block size (bytes), and measurement queue/thread counts. It affects only
   the opt-in SSD read-rate scenario (§12); absent data warns and falls back to the datasheet rate.
-- **Host link**: `hostPcieLink(generation, lanes)` = GT/s × lanes × 128/130 ÷ 8 × 256/280 per direction (Gen3 8,
-  Gen4 16, Gen5 32 GT/s per lane; the payload efficiency above), the same formula as the device-to-device PCIe links
-  (Gen5 x16 = 57.614 GB/s), α = 1 µs
-  estimated. `DeviceSpec.hostInterface?: { generation, lanes }` is the card's cited edge connector (electrical lanes:
-  Arc Pro B60 is x16 mechanical, x8 electrical); the engine builds the default host link from it. SXM / OAM modules
-  and SoCs carry none.
+- **Host link**: `hostPcieLink(generation, lanes)` = GT/s × lanes × code ÷ 8 × 256/280 per direction (Gen1 2.5 and
+  Gen2 5 GT/s with code 8/10; Gen3 8, Gen4 16, Gen5 32 GT/s with 128/130; the payload efficiency above), the same
+  formula as the device-to-device PCIe links (Gen5 x16 = 57.614 GB/s), α = 1 µs estimated.
+  `DeviceSpec.hostInterface?: { generation, lanes }` is the card's cited edge connector (electrical lanes: Arc Pro
+  B60 is x16 mechanical, x8 electrical; CMP 170HX Gen1 x4 as shipped); the engine builds the default host link from
+  it, after the device modifiers, so a `hostInterface` unlock (CMP Gen2 patch, capacitor mod) changes the link the
+  offload streams over. SXM / OAM modules and SoCs carry none. The UI's host-link override lists Gen3–Gen5 only.
 - **Defaults**: `DDR5_6000_2CH` (host RAM) and `NVME_990_PRO_2TB` (SSD), used with a warning when the stack names
   no tier.
 - **CPU compute** (`HostComputeSpec`): a hook for a future CPU-compute offload mode, not costed; the mode is

@@ -6,7 +6,9 @@
 import { describe, expect, it } from 'vitest';
 import { resolveQuant, simpleDecoder } from '../__sanity__/harness';
 import { GPT_OSS_120B, QWEN3_235B_A22B } from '../__sanity__/models';
-import { DEVICE_PRESETS, singleDevice } from '../hw/presets/index';
+import { applyDeviceModifiers } from '../hw/modifiers';
+import { DEVICE_PRESETS, deviceUnlocks, singleDevice } from '../hw/presets/index';
+import { resolveUnlocks } from '../hw/unlocks';
 import { B200, H100_SXM } from '../hw/presets/nvidia-datacenter';
 import type { ComputeEngine, DeviceSpec } from '../hw/types';
 import type { ModelSpec } from '../ir/model';
@@ -113,8 +115,19 @@ describe('decode attention stays KV-bandwidth-bound on every preset engine', () 
       kv: 'fp8_e4m3',
     },
   } as const;
-  for (const device of DEVICE_PRESETS) {
-    it(device.id, () => {
+  /**
+   * Presets whose stock vector FP32 peak is the FMA rate of an issue-throttled card, checked on the variant whose FP32
+   * peak is the unthrottled FADD / FMUL path the softmax uses (max, subtract, sum: no FMA). CMP 170HX: FMA fused to
+   * 1/32 (0.39 TFLOP/s), FADD / FMUL not (6.32 TFLOP/s, the `locked-workarounds` unlock).
+   */
+  const SOFTMAX_VARIANT: Record<string, Record<string, string>> = { 'cmp-170hx': { 'compute-path': 'locked-workarounds' } };
+  for (const preset of DEVICE_PRESETS) {
+    it(preset.id, () => {
+      const selection = SOFTMAX_VARIANT[preset.id];
+      const device =
+        selection === undefined
+          ? preset
+          : applyDeviceModifiers(preset, resolveUnlocks(deviceUnlocks(preset), selection).deviceModifiers);
       const stripped = withoutSfu(device);
       device.engines.forEach((engine, i) => {
         for (const [name, shape] of Object.entries(shapes)) {

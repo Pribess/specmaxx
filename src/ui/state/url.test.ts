@@ -287,6 +287,21 @@ describe('URL codec', () => {
     expect(four.state.hw.intraLinkId).toBeUndefined();
   });
 
+  it('CMP 170HX: a PCIe link the decoded unlocks cannot run is dropped; with the unlocks it round-trips', () => {
+    const stale = decodeState('d=cmp-170hx&n=2&il=pcie-2-0-x16-host-bounce');
+    expect(stale.dropped).toEqual(['il=pcie-2-0-x16-host-bounce']);
+    expect(stale.state.hw.intraLinkId).toBeUndefined();
+    expect(resolveHardware(stale.state.hw).topology.intraNode?.name).toBe('PCIe 1.0 x4 (host bounce)');
+    const capOnly = decodeState('d=cmp-170hx&u=pcie-capacitor-mod.x16&n=2&il=pcie-2-0-x16-host-bounce');
+    expect(capOnly.dropped).toEqual(['il=pcie-2-0-x16-host-bounce']);
+    expect(resolveHardware(capOnly.state.hw).topology.intraNode?.name).toBe('PCIe 1.0 x16 (host bounce)');
+    const q = 'd=cmp-170hx&u=compute-path.cmpunlocker,pcie-capacitor-mod.x16&n=2&il=pcie-2-0-x16-host-bounce';
+    const ok = decodeState(q);
+    expect(ok.dropped).toEqual([]);
+    expect(ok.state.hw.intraLinkId).toBe('pcie-2-0-x16-host-bounce');
+    expect(encodeState(ok.state)).toBe(q);
+  });
+
   it('encodes the deployment and host keys in a readable canonical form', () => {
     const q = 'hr=ddr5-6400-8ch&hrc=512&ssd=nvme-t705-2tb&hl=4x8&ox=ssd&oxl=3&oxf=0.25&oxh=fine&odl=40&odt=ssd&olt=ram&ols=interleaved&oqd=32&opf=0&sd=dflash2&sdr=hyp&sdk=5&sda=0.8';
     const { state: s, dropped } = decodeState(q);

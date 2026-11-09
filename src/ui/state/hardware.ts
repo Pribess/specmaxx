@@ -11,7 +11,17 @@
  * `validateDevice` / `validateLink` and is honestly marked.
  */
 
-import type { DeviceSpec, EstimatedField, HardwareStack, HostMemorySpec, HostSpec, LinkSpec, NvmeSpec, TopologySpec } from '../../sim/hw/types';
+import type {
+  DeviceSpec,
+  EstimatedField,
+  HardwareStack,
+  HostInterfaceSpec,
+  HostMemorySpec,
+  HostSpec,
+  LinkSpec,
+  NvmeSpec,
+  TopologySpec,
+} from '../../sim/hw/types';
 import type { LinkModifier } from '../../sim/hw/modifiers';
 import { applyDeviceModifiers, applyLinkModifiers, describeDeviceModifier, describeLinkModifier } from '../../sim/hw/modifiers';
 import { resolveUnlocks } from '../../sim/hw/unlocks';
@@ -34,6 +44,7 @@ import {
   allowedCablings,
   allowedLocalLinks,
   localLinkAllows,
+  localLinkFits,
   defaultCabling,
   fabricOf,
   setupOptionsFor,
@@ -77,13 +88,44 @@ export interface DefaultLinks {
 }
 
 /**
- * Default links of `device`: the first local link and the first network of its setup catalog entry
+ * Default links of `device`: the first local link that fits `hostInterface` (the device's EFFECTIVE PCIe interface,
+ * after unlocks; default: the preset's stock one) and the first network of its setup catalog entry
  * (`setupOptionsFor`). The catalog reproduces the hand-picked defaults the UI had before it (catalog.test.ts).
  */
-export function defaultLinks(device: Pick<DeviceSpec, 'id'>): DefaultLinks {
+export function defaultLinks(
+  device: Pick<DeviceSpec, 'id'>,
+  hostInterface: HostInterfaceSpec | undefined = findDevice(device.id)?.hostInterface,
+): DefaultLinks {
   const options = setupOptionsFor(device.id);
-  const intraNode = options.localLinks[0]?.link;
+  const intraNode = (options.localLinks.find((l) => localLinkFits(l, hostInterface)) ?? options.localLinks[0])?.link;
   return { ...(intraNode !== undefined ? { intraNode } : {}), interNode: options.networks[0].link };
+}
+
+/**
+ * The PCIe host interface of a choice's device after its unlocks (e.g. the CMP 170HX's Gen2 patch and capacitor mod),
+ * which bounds the local links offered; undefined for an unknown device or one without a host interface.
+ */
+export function effectiveHostInterface(hw: Pick<HardwareChoice, 'deviceId'> & Partial<Pick<HardwareChoice, 'unlocks'>>): HostInterfaceSpec | undefined {
+  const base = findDevice(hw.deviceId);
+  if (base === undefined) return undefined;
+  const mods = resolveUnlocks(deviceUnlocks(base), hw.unlocks ?? {}).deviceModifiers;
+  return mods.length > 0 ? applyDeviceModifiers(base, mods).hostInterface : base.hostInterface;
+}
+
+/**
+ * The intra-node link id in effect: the chosen id unless it names a catalogued local link the effective host
+ * interface cannot run (a stale choice after an unlock was removed), else the default. Uncatalogued ids (old URLs)
+ * are kept, as before. Undefined when there is no local link.
+ */
+function intraLinkIdInEffect(hw: HardwareChoice): string | undefined {
+  const iface = effectiveHostInterface(hw);
+  if (hw.intraLinkId !== undefined) {
+    const id = currentLinkId(hw.intraLinkId);
+    const opt = setupOptionsOf(hw).localLinks.find((l) => linkPresetId(l.link) === id);
+    if (opt === undefined || localLinkFits(opt, iface)) return id;
+  }
+  const intra = defaultLinks({ id: hw.deviceId }, iface).intraNode;
+  return intra && linkPresetId(intra);
 }
 
 /**
@@ -120,10 +162,13 @@ export function nearestCount(offered: number[], n: number): number {
   return best ?? n;
 }
 
-/** The effective link ids of a choice, only at the levels that exist: the chosen id, else the device default. */
+/**
+ * The effective link ids of a choice, only at the levels that exist: the chosen id, else the device default (for the
+ * intra-node link: a chosen catalog link the effective host interface cannot run counts as not chosen).
+ */
 export function effectiveLinkIds(hw: HardwareChoice): { intra?: string; inter?: string } {
   const defaults = defaultLinks({ id: hw.deviceId });
-  const intra = hw.devicesPerNode > 1 ? (hw.intraLinkId !== undefined ? currentLinkId(hw.intraLinkId) : defaults.intraNode && linkPresetId(defaults.intraNode)) : undefined;
+  const intra = hw.devicesPerNode > 1 ? intraLinkIdInEffect(hw) : undefined;
   const inter = hw.nodes > 1 ? (hw.interLinkId !== undefined ? currentLinkId(hw.interLinkId) : linkPresetId(defaults.interNode)) : undefined;
   return { ...(intra !== undefined ? { intra } : {}), ...(inter !== undefined ? { inter } : {}) };
 }
@@ -140,25 +185,31 @@ export function networkOptionOf(hw: HardwareChoice): NetworkOption | undefined {
 
 /** The catalog local link of the choice's intra-node link (chosen or default), or undefined when not listed. */
 export function localLinkOptionOf(hw: HardwareChoice): LocalLinkOption | undefined {
-  const id = hw.intraLinkId !== undefined ? currentLinkId(hw.intraLinkId) : undefined;
-  const locals = setupOptionsOf(hw).localLinks;
-  return id === undefined ? locals[0] : locals.find((l) => linkPresetId(l.link) === id);
+  const id = intraLinkIdInEffect(hw);
+  return setupOptionsOf(hw).localLinks.find((l) => linkPresetId(l.link) === id);
 }
 
-/** The catalog local links that join the choice's devices per machine (e.g. the 2-card NVLink bridge only at 2). */
-export function localLinkChoices(hw: Pick<HardwareChoice, 'deviceId' | 'devicesPerNode'>): LocalLinkOption[] {
-  return allowedLocalLinks(setupOptionsOf(hw), hw.devicesPerNode);
+/**
+ * The catalog local links that join the choice's devices per machine (e.g. the 2-card NVLink bridge only at 2) and fit
+ * its effective PCIe host interface (the CMP 170HX's PCIe unlocks: stock offers only PCIe 1.0 x4).
+ */
+export function localLinkChoices(
+  hw: Pick<HardwareChoice, 'deviceId' | 'devicesPerNode'> & Partial<Pick<HardwareChoice, 'unlocks'>>,
+): LocalLinkOption[] {
+  return allowedLocalLinks(setupOptionsOf(hw), hw.devicesPerNode, effectiveHostInterface(hw));
 }
 
 /**
  * The choice with a chosen intra-node link that cannot join its devices per machine (a catalog link restricted to
- * other counts, e.g. the 2-card NVLink bridge at 4 GPUs) dropped, with its edits, so the default link applies. A link
- * the catalog does not list (an older URL) is kept.
+ * other counts, e.g. the 2-card NVLink bridge at 4 GPUs) or that its effective host interface cannot run (a CMP 170HX
+ * PCIe 2.0 link after the Gen2 unlock is removed) dropped, with its edits, so the default link applies. A link the
+ * catalog does not list (an older URL) is kept.
  */
 export function normalizeLocalLink(hw: HardwareChoice): HardwareChoice {
   if (hw.intraLinkId === undefined || hw.devicesPerNode <= 1) return hw;
-  const opt = localLinkOptionOf(hw);
-  if (opt === undefined || localLinkAllows(opt, hw.devicesPerNode)) return hw;
+  const id = currentLinkId(hw.intraLinkId);
+  const opt = setupOptionsOf(hw).localLinks.find((l) => linkPresetId(l.link) === id);
+  if (opt === undefined || (localLinkAllows(opt, hw.devicesPerNode) && localLinkFits(opt, effectiveHostInterface(hw)))) return hw;
   const { intraLinkId: _i, ...rest } = hw;
   void _i;
   return { ...rest, intraEdits: {} };
@@ -207,13 +258,19 @@ export function normalizeCabling(hw: HardwareChoice): HardwareChoice {
   return rest;
 }
 
+/** True if two host interfaces are the same generation and width (both absent counts as the same). */
+function sameInterface(a: HostInterfaceSpec | undefined, b: HostInterfaceSpec | undefined): boolean {
+  return a?.generation === b?.generation && a?.lanes === b?.lanes;
+}
 /**
- * The catalog's view of a choice (for `setupLabel`): device, memory per device, counts, the effective link ids
- * and cabling. `memCapacityBytes` is the capacity in use (unlocks may change the options). Unit: bytes.
+ * The catalog's view of a choice (for `setupLabel`): device, memory per device, counts, the effective link ids,
+ * cabling and (when unlocks change it) the effective PCIe host interface. `memCapacityBytes` is the capacity in use
+ * (unlocks may change the options). Unit: bytes.
  */
 export function setupChoiceOf(hw: HardwareChoice, memCapacityBytes?: number): SetupChoice {
   const links = effectiveLinkIds(hw);
   const cabling = effectiveCabling(hw);
+  const iface = effectiveHostInterface(hw);
   return {
     deviceId: hw.deviceId,
     ...(memCapacityBytes !== undefined ? { memCapacityBytes } : {}),
@@ -222,6 +279,7 @@ export function setupChoiceOf(hw: HardwareChoice, memCapacityBytes?: number): Se
     ...(links.intra !== undefined ? { localLinkId: links.intra } : {}),
     ...(links.inter !== undefined ? { networkLinkId: links.inter } : {}),
     ...(cabling !== undefined ? { cabling } : {}),
+    ...(iface !== undefined && !sameInterface(iface, findDevice(hw.deviceId)?.hostInterface) ? { hostInterface: iface } : {}),
   };
 }
 
@@ -403,13 +461,16 @@ export interface ResolvedLinks {
  * Unknown link ids fall back to the default.
  */
 export function resolveLinks(hw: HardwareChoice, resolved: ResolvedDevice): ResolvedLinks {
-  const defaults = defaultLinks(resolved.base);
+  const defaults = defaultLinks(resolved.base, resolved.unlocked.hostInterface);
   const out: ResolvedLinks = {};
   if (hw.devicesPerNode > 1) {
-    const preset = (hw.intraLinkId !== undefined ? findLink(hw.intraLinkId) : undefined) ?? defaults.intraNode;
+    // A chosen catalog link the unlocked host interface cannot run falls back to the default (and drops its edits).
+    const id = intraLinkIdInEffect(hw);
+    const chosenKept = hw.intraLinkId === undefined || id === currentLinkId(hw.intraLinkId);
+    const preset = (id !== undefined ? findLink(id) : undefined) ?? defaults.intraNode;
     if (preset !== undefined) {
       const mods = preset.p2p === 'host_bounce' ? resolved.intraNodeLinkModifiers : [];
-      out.intra = resolveLink(preset, mods, hw.intraEdits);
+      out.intra = resolveLink(preset, mods, chosenKept ? hw.intraEdits : {});
     }
   }
   if (hw.nodes > 1) {

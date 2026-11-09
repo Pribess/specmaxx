@@ -214,11 +214,12 @@ describe('validateDevice: hostInterface', () => {
 
   it('accepts a cited PCIe interface', () => {
     expect(validateDevice(withInterface({ generation: 5, lanes: 16 }))).toEqual([]);
+    expect(validateDevice(withInterface({ generation: 1, lanes: 4 }))).toEqual([]); // CMP 170HX stock
   });
 
   it('rejects an unknown generation or lane count, and an uncited one', () => {
     expect(validateDevice(withInterface({ generation: 6, lanes: 2 }))).toEqual([
-      'device synth-gpu.hostInterface: generation must be 3, 4 or 5 (got 6)',
+      'device synth-gpu.hostInterface: generation must be 1, 2, 3, 4 or 5 (got 6)',
       'device synth-gpu.hostInterface: lanes must be 4, 8 or 16 (got 2)',
     ]);
     expect(validateDevice({ ...SYNTH_GPU, hostInterface: { generation: 4, lanes: 8 } }).filter((e) => e.includes('not covered'))).toHaveLength(2);

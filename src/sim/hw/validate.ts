@@ -188,10 +188,10 @@ export function validateDevice(d: DeviceSpec): string[] {
   return errors;
 }
 
-/** Errors of a PCIe host interface: generation one of 3 / 4 / 5, lanes one of 4 / 8 / 16 (values the type allows). */
+/** Errors of a PCIe host interface: generation one of 1 to 5, lanes one of 4 / 8 / 16 (values the type allows). */
 function hostInterfaceErrors(h: HostInterfaceSpec, label: string): string[] {
   const errors: string[] = [];
-  if (![3, 4, 5].includes(h.generation)) errors.push(`${label}: generation must be 3, 4 or 5 (got ${h.generation})`);
+  if (![1, 2, 3, 4, 5].includes(h.generation)) errors.push(`${label}: generation must be 1, 2, 3, 4 or 5 (got ${h.generation})`);
   if (![4, 8, 16].includes(h.lanes)) errors.push(`${label}: lanes must be 4, 8 or 16 (got ${h.lanes})`);
   return errors;
 }

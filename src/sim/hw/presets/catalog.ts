@@ -12,7 +12,7 @@
  */
 
 import { fabricShapeErrors, portsNeeded } from '../fabric';
-import type { DeviceSpec, FabricShape, LinkSpec, SourceRef, TopologySpec } from '../types';
+import type { DeviceSpec, FabricShape, HostInterfaceSpec, LinkSpec, SourceRef, TopologySpec } from '../types';
 import {
   AMD_DEVICE_PRESETS, INSTINCT_MI300X, INSTINCT_MI325X, INSTINCT_MI355X, INSTINCT_MI455X, RADEON_AI_PRO_R9700,
   RADEON_RX_9070_XT, RYZEN_AI_MAX_PLUS_395,
@@ -32,11 +32,13 @@ import {
   NVLINK_2_PAIR,
   PCIE_3_X16_DIRECT,
   PCIE_3_X16,
+  PCIE_1_X16, PCIE_1_X4, PCIE_2_X16, PCIE_2_X4,
   PCIE_4_X16, PCIE_4_X16_DIRECT, PCIE_4_X8, PCIE_4_X8_DIRECT, PCIE_5_X16, PCIE_5_X16_DIRECT, PCIE_5_X8,
   PCIE_5_X8_DIRECT, RTX_3090_NVLINK, SPARK_CONNECTX_7, TB4_TCP, TB4_TCP_20G, TB5_RDMA, TB5_TCP, USB4_HALO_RDMA, USB4_HALO_TCP,
   XGMI_MI300X_8_GPU, XGMI_MI300X_PER_PEER,
 } from './links';
 import { NVIDIA_CONSUMER_DEVICE_PRESETS, RTX_3090, RTX_4090, RTX_5090 } from './nvidia';
+import { CMP_170HX, NVIDIA_CMP_DEVICE_PRESETS } from './nvidia-cmp';
 import {
   A100_SXM4_80GB,
   A100_SXM4_40GB,
@@ -85,6 +87,12 @@ export interface LocalLinkOption {
   /** Short name, e.g. `'PCIe 5.0 x16'`, `'NVLink 5'`. */
   shortName: string;
   /**
+   * PCIe links only: the generation and electrical lanes the link runs at. It is offered only while the card's
+   * EFFECTIVE host interface (`DeviceSpec.hostInterface` after unlock modifiers) is at least as new and as wide
+   * ({@link localLinkFits}). Absent on non-PCIe links. Integers, no unit.
+   */
+  pcie?: HostInterfaceSpec;
+  /**
    * Devices per machine this link supports; absent = every count the device offers. The RTX 3090 NVLink bridge
    * joins exactly two cards (`[2]`): no four-card NVLink island exists for it. Counts.
    */
@@ -129,6 +137,12 @@ export interface SetupChoice {
   networkLinkId?: string;
   /** Cabling between machines; absent = `defaultCabling` of the network. Used when nodes > 1. */
   cabling?: CablingId;
+  /**
+   * The device's EFFECTIVE PCIe host interface (after unlock modifiers, e.g. the CMP 170HX's Gen2 patch and capacitor
+   * mod); absent = the preset's stock `hostInterface`. Bounds the PCIe local links offered and accepted
+   * ({@link localLinkFits}).
+   */
+  hostInterface?: HostInterfaceSpec;
 }
 
 /** A curated popular setup, picked in one go. */
@@ -402,14 +416,22 @@ const IB_XDR: NetworkOption = {
   sources: [{ url: 'https://www.nvidia.com/en-us/data-center/dgx-b300/', title: 'DGX B300 specifications', fields: PORTS, note: 'One ConnectX-8 800 Gb/s NIC per GPU; the fabric is switched.' }],
 };
 
-const PCIE5_HOST: LocalLinkOption = { link: PCIE_5_X16, shortName: 'PCIe 5.0 x16' };
-const PCIE5_X8_HOST: LocalLinkOption = { link: PCIE_5_X8, shortName: 'PCIe 5.0 x8' };
-const PCIE5_DIRECT: LocalLinkOption = { link: PCIE_5_X16_DIRECT, shortName: 'PCIe 5.0 x16 P2P' };
-const PCIE5_X8_DIRECT_OPT: LocalLinkOption = { link: PCIE_5_X8_DIRECT, shortName: 'PCIe 5.0 x8 P2P' };
-const PCIE4_HOST: LocalLinkOption = { link: PCIE_4_X16, shortName: 'PCIe 4.0 x16' };
-const PCIE4_X8_HOST: LocalLinkOption = { link: PCIE_4_X8, shortName: 'PCIe 4.0 x8' };
-const PCIE4_DIRECT: LocalLinkOption = { link: PCIE_4_X16_DIRECT, shortName: 'PCIe 4.0 x16 P2P' };
-const PCIE4_X8_DIRECT_OPT: LocalLinkOption = { link: PCIE_4_X8_DIRECT, shortName: 'PCIe 4.0 x8 P2P' };
+/** A PCIe local link option of generation `generation` and `lanes` electrical lanes (see `LocalLinkOption.pcie`). */
+function pcieOption(link: LinkSpec, shortName: string, generation: HostInterfaceSpec['generation'], lanes: HostInterfaceSpec['lanes']): LocalLinkOption {
+  return { link, shortName, pcie: { generation, lanes } };
+}
+const PCIE5_HOST = pcieOption(PCIE_5_X16, 'PCIe 5.0 x16', 5, 16);
+const PCIE5_X8_HOST = pcieOption(PCIE_5_X8, 'PCIe 5.0 x8', 5, 8);
+const PCIE5_DIRECT = pcieOption(PCIE_5_X16_DIRECT, 'PCIe 5.0 x16 P2P', 5, 16);
+const PCIE5_X8_DIRECT_OPT = pcieOption(PCIE_5_X8_DIRECT, 'PCIe 5.0 x8 P2P', 5, 8);
+const PCIE4_HOST = pcieOption(PCIE_4_X16, 'PCIe 4.0 x16', 4, 16);
+const PCIE4_X8_HOST = pcieOption(PCIE_4_X8, 'PCIe 4.0 x8', 4, 8);
+const PCIE4_DIRECT = pcieOption(PCIE_4_X16_DIRECT, 'PCIe 4.0 x16 P2P', 4, 16);
+const PCIE4_X8_DIRECT_OPT = pcieOption(PCIE_4_X8_DIRECT, 'PCIe 4.0 x8 P2P', 4, 8);
+const PCIE1_X4_HOST = pcieOption(PCIE_1_X4, 'PCIe 1.0 x4', 1, 4);
+const PCIE1_X16_HOST = pcieOption(PCIE_1_X16, 'PCIe 1.0 x16', 1, 16);
+const PCIE2_X4_HOST = pcieOption(PCIE_2_X4, 'PCIe 2.0 x4', 2, 4);
+const PCIE2_X16_HOST = pcieOption(PCIE_2_X16, 'PCIe 2.0 x16', 2, 16);
 
 /** GPUs per machine and machines offered for a PCIe card or a datacenter accelerator. */
 const GPU_COUNTS = [1, 2, 4, 8];
@@ -437,12 +459,14 @@ function mac(device: DeviceSpec, networks: NetworkOption[], nodeCounts = MAC_NOD
 }
 
 /**
- * The catalog, by device id. Defaults ([0] of `localLinks` / `networks`) reproduce the UI's pre-catalog
- * `defaultLinks` for every device that existed (catalog.test.ts pins them): GeForce PCIe generation host-bounced,
- * Arc Pro B60 direct x8, Arc B580 PCIe 4.0 x8 host-bounced (its Gen4 x8 edge), other cards PCIe 5.0 x16
- * host-bounced, datacenter NVLink / xGMI (PCIe 5.0 x16 direct for the MI325X–MI455X, whose xGMI numbers are not in
- * the library) + InfiniBand, Macs TB5 RDMA, Strix Halo USB4 RDMA, Spark ConnectX-7. No PCIe link offered to a card is
- * wider or of a later generation than the card's `hostInterface` (catalog.test.ts checks every entry).
+ * The catalog, by device id. Defaults (the first local link that fits the stock `hostInterface`, `networks[0]`)
+ * reproduce the UI's pre-catalog `defaultLinks` for every device that existed (catalog.test.ts pins them): GeForce PCIe
+ * generation host-bounced, Arc Pro B60 direct x8, Arc B580 PCIe 4.0 x8 host-bounced (its Gen4 x8 edge), other cards
+ * PCIe 5.0 x16 host-bounced, datacenter NVLink / xGMI (PCIe 5.0 x16 direct for the MI325X–MI455X, whose xGMI numbers
+ * are not in the library) + InfiniBand, Macs TB5 RDMA, Strix Halo USB4 RDMA, Spark ConnectX-7. PCIe links are offered
+ * only while they fit the EFFECTIVE host interface ({@link allowedLocalLinks}); catalog.test.ts checks every device
+ * under every unlock selection. The CMP 170HX lists its four links fastest first, so the default follows its PCIe
+ * unlocks: stock Gen1 x4 only; capacitor mod Gen1 x16 / x4; Gen2 patch Gen2 x4 / Gen1 x4; both all four (Gen2 x16).
  */
 const CATALOG: DeviceSetupOptions[] = [
   pcieCard(RTX_5090, 'RTX 5090', [PCIE5_HOST, PCIE5_X8_HOST, PCIE5_DIRECT, PCIE5_X8_DIRECT_OPT]),
@@ -467,6 +491,8 @@ const CATALOG: DeviceSetupOptions[] = [
     PCIE5_X8_HOST,
   ]),
   pcieCard(RTX_PRO_4000_SFF, 'RTX PRO 4000 SFF', [PCIE5_X8_DIRECT_OPT, PCIE5_X8_HOST]),
+  // Fastest first; each is offered only under the unlocks that give it (host bounce only: P2P is not modelled).
+  pcieCard(CMP_170HX, 'CMP 170HX', [PCIE2_X16_HOST, PCIE1_X16_HOST, PCIE2_X4_HOST, PCIE1_X4_HOST]),
   mac(M5_ULTRA_80C, M5_ULTRA_STUDIO_NETWORKS),
   mac(M5_ULTRA_64C, M5_ULTRA_STUDIO_NETWORKS),
   mac(M5_MAX_40C, M5_MAX_STUDIO_NETWORKS),
@@ -519,8 +545,8 @@ const CATALOG: DeviceSetupOptions[] = [
   },
   {
     ...pcieCard(V100_PCIE, 'V100 PCIe', [
-      { link: PCIE_3_X16_DIRECT, shortName: 'PCIe 3.0 x16 P2P' },
-      { link: PCIE_3_X16, shortName: 'PCIe 3.0 x16' },
+      pcieOption(PCIE_3_X16_DIRECT, 'PCIe 3.0 x16 P2P', 3, 16),
+      pcieOption(PCIE_3_X16, 'PCIe 3.0 x16', 3, 16),
     ]),
     nodeCounts: [1],
   },
@@ -533,7 +559,8 @@ const CATALOG: DeviceSetupOptions[] = [
 /** Every device preset (the vendor arrays; `presets/index.ts` groups the same devices for the picker). */
 const ALL_DEVICES: DeviceSpec[] = [
   ...NVIDIA_PRO_DEVICE_PRESETS,
-  ...NVIDIA_CONSUMER_DEVICE_PRESETS, ...NVIDIA_DATACENTER_DEVICE_PRESETS, ...APPLE_DEVICE_PRESETS, ...AMD_DEVICE_PRESETS, ...INTEL_DEVICE_PRESETS,
+  ...NVIDIA_CONSUMER_DEVICE_PRESETS, ...NVIDIA_CMP_DEVICE_PRESETS, ...NVIDIA_DATACENTER_DEVICE_PRESETS, ...APPLE_DEVICE_PRESETS, ...AMD_DEVICE_PRESETS,
+  ...INTEL_DEVICE_PRESETS,
 ];
 
 const CATALOG_BY_ID = new Map(CATALOG.map((o) => [o.deviceId, o]));
@@ -584,12 +611,30 @@ export function localLinkAllows(opt: LocalLinkOption, devicesPerNode: number): b
 }
 
 /**
- * The local links of a device that support `devicesPerNode` devices in one machine, in catalog order (`[0]` is the
- * default for that count, when any). The UI's local-link picker lists these; a link dropped by a count change (the
- * RTX 3090 NVLink bridge at 4 cards) falls back to the first of them.
+ * Whether a local link runs on a card with host interface `hostInterface`: a non-PCIe link always; a PCIe link
+ * (`LocalLinkOption.pcie`) when its generation and lanes are ≤ the interface's. An unknown interface (OAM modules,
+ * which carry none) allows every link.
  */
-export function allowedLocalLinks(options: DeviceSetupOptions, devicesPerNode: number): LocalLinkOption[] {
-  return options.localLinks.filter((l) => localLinkAllows(l, devicesPerNode));
+export function localLinkFits(opt: LocalLinkOption, hostInterface: HostInterfaceSpec | undefined): boolean {
+  return (
+    opt.pcie === undefined ||
+    hostInterface === undefined ||
+    (opt.pcie.generation <= hostInterface.generation && opt.pcie.lanes <= hostInterface.lanes)
+  );
+}
+
+/**
+ * The local links of a device that support `devicesPerNode` devices in one machine and fit its effective host
+ * interface (`hostInterface`, after unlocks; absent = the preset's stock one), in catalog order (`[0]` is the default
+ * for that count and interface, when any). The UI's local-link picker lists these; a link dropped by a count change
+ * (the RTX 3090 NVLink bridge at 4 cards) or an unlock change (the CMP 170HX's PCIe mods) falls back to the first.
+ */
+export function allowedLocalLinks(
+  options: DeviceSetupOptions,
+  devicesPerNode: number,
+  hostInterface: HostInterfaceSpec | undefined = deviceById(options.deviceId)?.hostInterface,
+): LocalLinkOption[] {
+  return options.localLinks.filter((l) => localLinkAllows(l, devicesPerNode) && localLinkFits(l, hostInterface));
 }
 
 /** A resolved network: the link in use and its catalog option (undefined when the device does not list the link). */
@@ -612,20 +657,27 @@ export function resolveNetwork(options: DeviceSetupOptions, networkLinkId: strin
 }
 
 /**
- * The local link of a choice: the chosen preset, else the device's default local link for that count (the first
- * one that supports `devicesPerNode`; undefined for SoCs). A chosen link that does not support the count is still
- * returned (`setupErrors` reports it; the UI falls back before composing).
+ * The local link of a choice: the chosen preset, else the device's default local link for that count and host
+ * interface (the first of {@link allowedLocalLinks}; undefined for SoCs). A chosen link that does not support the
+ * count or the interface is still returned (`setupErrors` reports it; the UI falls back before composing).
  */
-export function resolveLocalLink(options: DeviceSetupOptions, localLinkId: string | undefined, devicesPerNode = 2): LinkSpec | undefined {
+export function resolveLocalLink(
+  options: DeviceSetupOptions,
+  localLinkId: string | undefined,
+  devicesPerNode = 2,
+  hostInterface?: HostInterfaceSpec,
+): LinkSpec | undefined {
   const chosen = localLinkId !== undefined ? linkById(localLinkId) : undefined;
-  return chosen ?? allowedLocalLinks(options, devicesPerNode)[0]?.link ?? options.localLinks[0]?.link;
+  const iface = hostInterface ?? deviceById(options.deviceId)?.hostInterface;
+  return chosen ?? allowedLocalLinks(options, devicesPerNode, iface)[0]?.link ?? options.localLinks[0]?.link;
 }
 
 /**
  * Errors of a setup choice; empty = valid. Checks: a known device; a memory option of that device; integer counts
  * ≥ 1; link ids that are link presets (a link the device does not list is allowed: old URLs, shown as "other", a
  * switch being its only cabling); with several devices per machine, a catalogued local link that supports that count
- * (the RTX 3090 NVLink bridge joins exactly two cards); with machines > 1, the cabling (or the default) against the
+ * (the RTX 3090 NVLink bridge joins exactly two cards) and fits the effective host interface (`c.hostInterface`, else
+ * the stock one: no PCIe 2.0 x16 on a stock CMP 170HX); with machines > 1, the cabling (or the default) against the
  * network's ports and switch (`fabricShapeErrors`), `mesh2` only where the network stripes two cables, no switchless
  * shape beyond the vendor's direct-cabling limit.
  */
@@ -645,6 +697,10 @@ export function setupErrors(c: SetupChoice): string[] {
     const opt = localLinkOf(options, c.localLinkId);
     if (opt !== undefined && !localLinkAllows(opt, c.devicesPerNode)) {
       errors.push(`${opt.shortName} joins exactly ${opt.devicesPerNodeCounts!.join(' or ')} devices per machine (got ${c.devicesPerNode})`);
+    }
+    const iface = c.hostInterface ?? device.hostInterface;
+    if (opt !== undefined && !localLinkFits(opt, iface)) {
+      errors.push(`${opt.shortName} exceeds the card's PCIe ${iface!.generation}.0 x${iface!.lanes} host interface`);
     }
   }
   if (c.networkLinkId !== undefined && linkById(c.networkLinkId) === undefined) errors.push(`unknown link '${c.networkLinkId}'`);
@@ -676,7 +732,7 @@ export function composeTopology(c: SetupChoice): TopologySpec {
   const device = deviceById(c.deviceId);
   if (device === undefined) throw new Error(`unknown device '${c.deviceId}'`);
   const options = setupOptionsFor(c.deviceId);
-  const local = resolveLocalLink(options, c.localLinkId, c.devicesPerNode);
+  const local = resolveLocalLink(options, c.localLinkId, c.devicesPerNode, c.hostInterface);
   const { link: network, net } = resolveNetwork(options, c.networkLinkId);
   const cabling = c.nodes > 1 ? (c.cabling ?? defaultCabling(net, c.nodes, c.devicesPerNode)) : undefined;
   return nodeTopology({
@@ -708,7 +764,7 @@ export function setupLabel(c: SetupChoice): string {
   const mem = gbLabel(c.memCapacityBytes ?? device.memory.capacityOptionsBytes[0]);
   const base = `${options.shortName}${options.shortName.endsWith('GPU') ? ',' : ''} ${mem}`;
   const localName = (): string => {
-    const link = resolveLocalLink(options, c.localLinkId, c.devicesPerNode);
+    const link = resolveLocalLink(options, c.localLinkId, c.devicesPerNode, c.hostInterface);
     if (link === undefined) return 'no local link';
     return options.localLinks.find((l) => l.link === link)?.shortName ?? link.name;
   };

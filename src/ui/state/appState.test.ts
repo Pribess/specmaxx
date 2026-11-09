@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { linkPresetId } from '../../sim/hw/presets/topologies';
 import { DEFAULT_STATE, reduce, type AppState } from './appState';
+import { localLinkChoices, resolveHardware } from './hardware';
 
 const apply = (s: AppState, ...actions: Parameters<typeof reduce>[1][]) => actions.reduce(reduce, s);
 
@@ -77,6 +79,53 @@ describe('reduce', () => {
     expect(back.hw).toMatchObject({ devicesPerNode: 2, intraLinkId: 'rtx-3090-nvlink-bridge' });
     // An unrestricted link keeps the count.
     expect(reduce(four, { type: 'setLink', level: 'intra', linkId: 'pcie-4-0-x16-host-bounce' }).hw.devicesPerNode).toBe(4);
+  });
+
+  it('CMP 170HX: the local-link choices follow the PCIe unlocks, and removing an unlock drops a link it no longer runs', () => {
+    const ids = (s: AppState) => localLinkChoices(s.hw).map((l) => linkPresetId(l.link));
+    const stock = apply(DEFAULT_STATE, { type: 'setDevice', deviceId: 'cmp-170hx' }, { type: 'setCounts', devicesPerNode: 2 });
+    expect(ids(stock)).toEqual(['pcie-1-0-x4-host-bounce']);
+    expect(resolveHardware(stock.hw).topology.intraNode?.name).toBe('PCIe 1.0 x4 (host bounce)');
+    // A link the stock interface cannot run is refused.
+    expect(reduce(stock, { type: 'setLink', level: 'intra', linkId: 'pcie-2-0-x16-host-bounce' }).hw.intraLinkId).toBeUndefined();
+    const cap = reduce(stock, { type: 'setUnlock', axisId: 'pcie-capacitor-mod', optionId: 'x16' });
+    expect(ids(cap)).toEqual(['pcie-1-0-x16-host-bounce', 'pcie-1-0-x4-host-bounce']);
+    const drv = reduce(stock, { type: 'setUnlock', axisId: 'compute-path', optionId: 'cmpunlocker' });
+    expect(ids(drv)).toEqual(['pcie-2-0-x4-host-bounce', 'pcie-1-0-x4-host-bounce']);
+    const both = reduce(cap, { type: 'setUnlock', axisId: 'compute-path', optionId: 'cmpunlocker' });
+    expect(ids(both)).toEqual([
+      'pcie-2-0-x16-host-bounce',
+      'pcie-1-0-x16-host-bounce',
+      'pcie-2-0-x4-host-bounce',
+      'pcie-1-0-x4-host-bounce',
+    ]);
+    // With both unlocks the default is the fastest link; picking Gen2 x16 explicitly keeps it with its edits.
+    expect(resolveHardware(both.hw).topology.intraNode?.name).toBe('PCIe 2.0 x16 (host bounce)');
+    const picked = apply(
+      both,
+      { type: 'setLink', level: 'intra', linkId: 'pcie-2-0-x16-host-bounce' },
+      { type: 'setEdit', target: 'intra', path: 'latencySec', value: 2e-6 },
+    );
+    expect(picked.hw).toMatchObject({ intraLinkId: 'pcie-2-0-x16-host-bounce', intraEdits: { latencySec: 2e-6 } });
+    // Removing the driver patch (Gen2) drops the stale Gen2 link and its edits; the Gen1 x16 default applies.
+    const noDrv = reduce(picked, { type: 'setUnlock', axisId: 'compute-path', optionId: undefined });
+    expect(noDrv.hw.intraLinkId).toBeUndefined();
+    expect(noDrv.hw.intraEdits).toEqual({});
+    expect(resolveHardware(noDrv.hw).topology.intraNode?.name).toBe('PCIe 1.0 x16 (host bounce)');
+    // A Gen1 x16 pick survives removing the driver patch but not removing the capacitor mod.
+    const gen1x16 = reduce(both, { type: 'setLink', level: 'intra', linkId: 'pcie-1-0-x16-host-bounce' });
+    expect(reduce(gen1x16, { type: 'setUnlock', axisId: 'compute-path', optionId: undefined }).hw.intraLinkId).toBe('pcie-1-0-x16-host-bounce');
+    expect(reduce(gen1x16, { type: 'setUnlock', axisId: 'pcie-capacitor-mod', optionId: undefined }).hw.intraLinkId).toBeUndefined();
+  });
+
+  it('CMP 170HX: a stale link in the state (set without the reducer) is never simulated', () => {
+    const stale: AppState = {
+      ...DEFAULT_STATE,
+      hw: { ...DEFAULT_STATE.hw, deviceId: 'cmp-170hx', devicesPerNode: 2, intraLinkId: 'pcie-2-0-x16-host-bounce', intraEdits: { latencySec: 2e-6 } },
+    };
+    const r = resolveHardware(stale.hw);
+    expect(r.topology.intraNode?.name).toBe('PCIe 1.0 x4 (host bounce)');
+    expect(r.topology.intraNode?.latencySec).toBe(1e-6); // the stale link's edits are not applied either
   });
 
   it('setLink clears that level edits; setEdit undefined removes one edit; resetEdits clears', () => {

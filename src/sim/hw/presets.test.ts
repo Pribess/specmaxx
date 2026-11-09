@@ -14,6 +14,7 @@ import {
   INTEL_DEVICE_PRESETS,
   LEGACY_LINK_IDS,
   LINK_PRESETS,
+  NVIDIA_CMP_DEVICE_PRESETS,
   NVIDIA_CONSUMER_DEVICE_PRESETS,
   NVIDIA_PRO_DEVICE_PRESETS,
   NVIDIA_DATACENTER_DEVICE_PRESETS,
@@ -135,6 +136,7 @@ describe('preset library: every device preset', () => {
     const vendorArrays = [
       NVIDIA_CONSUMER_DEVICE_PRESETS,
       NVIDIA_PRO_DEVICE_PRESETS,
+      NVIDIA_CMP_DEVICE_PRESETS,
       NVIDIA_DATACENTER_DEVICE_PRESETS,
       APPLE_DEVICE_PRESETS,
       AMD_DEVICE_PRESETS,
@@ -323,6 +325,10 @@ describe('preset library: links and topologies', () => {
       'thunderbolt-5-rdma-macos-26-2',
       'thunderbolt-5-bridge-tcp',
       'thunderbolt-4-bridge-tcp',
+      'pcie-2-0-x16-host-bounce',
+      'pcie-1-0-x16-host-bounce',
+      'pcie-2-0-x4-host-bounce',
+      'pcie-1-0-x4-host-bounce',
       'thunderbolt-4-bridge-tcp-20-gb-s-negotiated',
       'strix-halo-usb4-native-rdma-20-gb-s-negotiated',
       'strix-halo-usb4-tcp-20-gb-s-negotiated',
@@ -347,8 +353,9 @@ describe('preset library: unlock axes', () => {
 
   const withUnlocks = DEVICE_PRESETS.filter((d) => deviceUnlocks(d).length > 0).map((d) => [d.id, d] as const);
 
-  it('GeForce and RTX PRO 6000 cards have unlock axes', () => {
+  it('GeForce, RTX PRO 6000 and CMP 170HX cards have unlock axes', () => {
     expect(withUnlocks.map(([id]) => id).sort()).toEqual([
+      'cmp-170hx',
       'rtx-3090',
       'rtx-4090',
       'rtx-5090',
@@ -416,6 +423,11 @@ describe('preset library: simulate() smoke test (REF_DENSE_8B, bf16, batch 1, pr
 });
 
 describe('SFU rates (sfuOpsPerSec, docs §4 "SFU rate")', () => {
+  /**
+   * Devices whose vector FP32 peak is issue-throttled while the SFU is not, so the lane bound is checked against the
+   * unthrottled FP32 rate (vector FP32 × divider). CMP 170HX: FP32 FMA fused to 1/32, MUFU exp2 not (arabel1a timings).
+   */
+  const FP32_THROTTLE_DIVIDER: Record<string, number> = { 'cmp-170hx': 32 };
   for (const d of DEVICE_PRESETS) {
     it(`${d.id}: every engine sets one, covered, between 1/64 and 1/2 of the vector FP32 FLOP/s`, () => {
       d.engines.forEach((e, i) => {
@@ -426,7 +438,7 @@ describe('SFU rates (sfuOpsPerSec, docs §4 "SFU rate")', () => {
           d.sources.some((s) => s.fields.includes(field)) || d.estimated.some((x) => x.field === field);
         expect(covered, field).toBe(true);
         // At most one exp per FP32 lane per clock (vector FP32 counts 2 FLOP per lane per clock), at least 1/32 lane.
-        const vec = e.vectorFlopsPerSec.fp32!;
+        const vec = e.vectorFlopsPerSec.fp32! * (FP32_THROTTLE_DIVIDER[d.id] ?? 1);
         expect(sfu!, e.id).toBeLessThanOrEqual(vec / 2);
         expect(sfu!, e.id).toBeGreaterThanOrEqual(vec / 64);
       });
@@ -443,7 +455,7 @@ describe('SFU rates (sfuOpsPerSec, docs §4 "SFU rate")', () => {
   });
   it('Apple: the GEMV row limit is set on every engine (NAX falls back to the SIMD ALUs)', () => {
     for (const d of APPLE_DEVICE_PRESETS) for (const e of d.engines) expect(e.gemvMaxRows, `${d.id} ${e.id}`).toBe(1);
-    for (const d of [...NVIDIA_CONSUMER_DEVICE_PRESETS, ...NVIDIA_DATACENTER_DEVICE_PRESETS, ...AMD_DEVICE_PRESETS, ...INTEL_DEVICE_PRESETS]) {
+    for (const d of [...NVIDIA_CONSUMER_DEVICE_PRESETS, ...NVIDIA_CMP_DEVICE_PRESETS, ...NVIDIA_DATACENTER_DEVICE_PRESETS, ...AMD_DEVICE_PRESETS, ...INTEL_DEVICE_PRESETS]) {
       for (const e of d.engines) expect(e.gemvMaxRows, d.id).toBeUndefined();
     }
   });
