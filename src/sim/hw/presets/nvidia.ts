@@ -8,6 +8,14 @@ import type { DeviceSpec, GemmTiling, MatmulPeak, SourceRef } from '../types';
 import type { UnlockAxis } from '../unlocks';
 import { gbPerSec, gb, tflops } from '../units';
 import { GEFORCE_NO_GPUDIRECT_SOURCES } from './gpudirect';
+import { NVIDIA_SM_SFU, nvidiaSfu } from './sfu';
+
+/** RTX 5090 SFU: 170 SMs × 16 exp2/clk at the 2407 MHz of the FP32 104.8 TFLOP/s peak (CUDA guide, cc 12.0). */
+const RTX_5090_SFU = nvidiaSfu(NVIDIA_SM_SFU, 170, tflops(104.8));
+/** RTX 3090 SFU: 82 SMs × 16 exp2/clk at the 1695 MHz of the FP32 35.6 TFLOP/s peak (CUDA guide, cc 8.6). */
+const RTX_3090_SFU = nvidiaSfu(NVIDIA_SM_SFU, 82, tflops(35.6));
+/** RTX 4090 SFU: 128 SMs × 16 exp2/clk at the 2520 MHz of the FP32 82.6 TFLOP/s peak (CUDA guide, cc 8.9). */
+const RTX_4090_SFU = nvidiaSfu(NVIDIA_SM_SFU, 128, tflops(82.6));
 
 /** NVIDIA RTX Blackwell GPU Architecture whitepaper (Appendix A, Table 3: GeForce RTX 5090 specs, pp. 46–48). */
 const RTX_BLACKWELL_WHITEPAPER_URL =
@@ -116,6 +124,7 @@ export const RTX_5090: DeviceSpec = {
         // FP64 = 1/64 of the FP32 rate (whitepaper p. 14 note): 104.8 / 64 = 1.6375 TFLOP/s.
         fp64: tflops(104.8 / 64),
       },
+      sfuOpsPerSec: RTX_5090_SFU.sfuOpsPerSec,
       gemmTiling: {
         default: geforceTiling(16),
         fp16: geforceTiling(16),
@@ -178,6 +187,7 @@ export const RTX_5090: DeviceSpec = {
       ]),
       note: 'f16/bf16 m16n8k16; tf32 m16n8k8; e4m3/e5m2 and s8 m16n8k32; block-scaled fp4 (kind::mxf4nvf4) m16n8k64.',
     },
+    ...RTX_5090_SFU.sources,
   ],
   estimated: RTX_5090_TILING_KEYS.flatMap((k) => [
     {
@@ -188,7 +198,7 @@ export const RTX_5090: DeviceSpec = {
       field: `engines.0.gemmTiling.${k}.ctasPerUnit`,
       reason: 'One resident CTA per SM for large tiles (register/shared-memory bound); not a vendor spec.',
     },
-  ]),
+  ]).concat(RTX_5090_SFU.estimated),
 };
 
 // Ampere / Ada tables retain NVIDIA's rounded rates, not later comparison-table rounding.
@@ -281,6 +291,7 @@ export const RTX_3090: DeviceSpec = {
         // Figure 2: FP64 = FP32 / 64; vector FP16/BF16 are not tensor peaks.
         fp64: tflops(35.6 / 64),
       },
+      sfuOpsPerSec: RTX_3090_SFU.sfuOpsPerSec,
       gemmTiling: {
         default: geforceTiling(16),
         fp16: geforceTiling(16),
@@ -330,8 +341,9 @@ export const RTX_3090: DeviceSpec = {
         'PCIe 4.0 slot providing up to 64 GB/sec of peak bandwidth" (64 GB/s = both directions, raw).',
     },
     ...AMPERE_TILING_EVIDENCE.sources,
+    ...RTX_3090_SFU.sources,
   ],
-  estimated: AMPERE_TILING_EVIDENCE.estimated,
+  estimated: [...AMPERE_TILING_EVIDENCE.estimated, ...RTX_3090_SFU.estimated],
 };
 
 /**
@@ -365,6 +377,7 @@ export const RTX_4090: DeviceSpec = {
         // Figure 1: FP64 = FP32 / 64.
         fp64: tflops(82.6 / 64),
       },
+      sfuOpsPerSec: RTX_4090_SFU.sfuOpsPerSec,
       gemmTiling: {
         default: geforceTiling(16),
         fp16: geforceTiling(16),
@@ -420,8 +433,9 @@ export const RTX_4090: DeviceSpec = {
       note: '"Bus Interface PCIe 4.0 x16". The whitepaper names the generation only.',
     },
     ...ADA_TILING_EVIDENCE.sources,
+    ...RTX_4090_SFU.sources,
   ],
-  estimated: ADA_TILING_EVIDENCE.estimated,
+  estimated: [...ADA_TILING_EVIDENCE.estimated, ...RTX_4090_SFU.estimated],
 };
 
 /**

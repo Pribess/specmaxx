@@ -116,6 +116,9 @@ function expectRel(actual: number, expected: number, label: string, rel = 1e-3):
  * verify reads U(6) = 256·(1 − (1 − 6/256)⁶) = 33.96 routed experts per layer instead of min(E, 6·6) = 36 (−5.7 %
  * expert bytes): RDMA + DSpark 201.80 → 206.40 tok/s, TCP + DSpark 150.02 → 152.55 (no-copy 150.12 → 152.65); the
  * batch-1 rows without spec-dec (U(1) = k) and every prefill (U = E) are unchanged.
+ * The Apple GEMV path (docs §4 "GEMV path") then moved the plain-decode rows only (DSpark's 6-row verify keeps the
+ * MMA path): RDMA 115.99 → 138.37 tok/s, TCP 66.80 → 73.66, mostly the fp32 hyper-connection GEMMs (m 1, n 24,
+ * k 20480), which had paid the 8-row MMA padding and a single-tile wave on 64 cores on the vector-fp32 fallback.
  */
 const PINNED: Record<keyof ReturnType<typeof rows>, Partial<Row>> = {
   /** TB5 RDMA, α 50 → 7 µs: each of the ≈ 167 (182 with DSpark) TP all-reduce steps per token pays 43 µs less α. */
@@ -131,10 +134,10 @@ const PINNED: Record<keyof ReturnType<typeof rows>, Partial<Row>> = {
     prefillTokPerSec: 5133.6106,
     commLatencySec: 8.208275e-3,
   },
-  rdma: { decodeTokPerSec: 115.9919, prefillTokPerSec: 5198.503, commLatencySec: 1.169e-3 },
-  tcpNoCopy: { decodeTokPerSec: 66.81235, prefillTokPerSec: 5177.6523, commLatencySec: 7.515e-3 },
+  rdma: { decodeTokPerSec: 138.3729, prefillTokPerSec: 5198.503, commLatencySec: 1.169e-3 },
+  tcpNoCopy: { decodeTokPerSec: 73.67649, prefillTokPerSec: 5177.6523, commLatencySec: 7.515e-3 },
   /** + the socket copy: +2.8 µs of α per token. */
-  tcp: { decodeTokPerSec: 66.79964, prefillTokPerSec: 5177.5336, commLatencySec: 7.517847e-3 },
+  tcp: { decodeTokPerSec: 73.66105, prefillTokPerSec: 5177.5336, commLatencySec: 7.517847e-3 },
 };
 
 describe('TB5 RDMA vs TCP repro (DeepSeek-V4.1-Flash, 2 × M5 Ultra 64c, TP 2)', () => {

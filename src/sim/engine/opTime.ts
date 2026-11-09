@@ -2,14 +2,23 @@
  * Per-op time on one device: the roofline `max(compute, memory)` for compute ops, the vector peak for
  * elementwise ops and recurrent steps, memory only for embedding gathers, the alpha-beta model for
  * collectives, and the tier/link read rule for off-device transfers (`TransferOp`, design doc §2.3). One
- * exhaustive `switch (op.kind)`.
- * See docs/simulation-model.md §7 ("Per-op time") and §12 ("Transfer path").
+ * exhaustive `switch (op.kind)`. Attention adds its softmax (exp on the SFU, overlapped with the MMAs); a GEMM of
+ * few rows may take the engine's GEMV path.
+ * See docs/simulation-model.md §7 ("Per-op time", "Attention softmax"), §4 ("GEMV path") and §12 ("Transfer path").
  *
  * Inputs are plain specs: device and link modifiers were already applied by `simulate` (docs §4 "Device
  * variants and modifiers"), so nothing here knows about variants.
  */
 
-import { attentionPairs, indexerPairs, opBytes, opFlops, type ByteBreakdown } from '../ir/metrics';
+import {
+  attentionPairs,
+  attentionScores,
+  indexerPairs,
+  opBytes,
+  opFlops,
+  SOFTMAX_VECTOR_FLOP_PER_SCORE,
+  type ByteBreakdown,
+} from '../ir/metrics';
 import type {
   AttentionOp,
   CollectiveOp,
@@ -21,7 +30,7 @@ import type {
   TransferOp,
 } from '../ir/ops';
 import type { AccumulateType, MathFormat } from '../ir/dtype';
-import { gemmComputeSec, type GemmShape } from '../hw/efficiency';
+import { gemmComputeSec, gemvComputeSec, type GemmShape } from '../hw/efficiency';
 import { matmulPeakFlopsPerSec, vectorPeakFlopsPerSec } from '../hw/peaks';
 import type { ComputeEngine } from '../hw/types';
 import { collectiveTime, type AllReduceAlgorithm, type CollectivePath } from './collectives';
@@ -77,9 +86,9 @@ export function roofline(computeSec: number, memorySec: number): { sec: number; 
 export function opTime(op: Op, ctx: OpTimeContext): OpResult {
   switch (op.kind) {
     case 'gemm':
-      return tensorOpTime(op, gemmShape(op), op.math, op.accumulate, op.sparsity, ctx);
+      return gemmOpTime(op, ctx);
     case 'attention':
-      return tensorOpTime(op, attentionShape(op), op.math, op.accumulate, 'dense', ctx);
+      return attentionOpTime(op, ctx);
     case 'indexer':
       return tensorOpTime(op, indexerShape(op), op.math, op.accumulate, 'dense', ctx);
     case 'recurrent':
@@ -179,6 +188,64 @@ function tensorOpTime(
     usedInput: peak.usedInput,
     usedAccumulate: peak.usedAccumulate,
   };
+}
+
+/** Math formats a GEMV kernel runs on the vector ALUs (the engine lists vector peaks for these; others have none). */
+const GEMV_MATH: ReadonlySet<MathFormat> = new Set<MathFormat>(['fp16', 'bf16', 'fp32']);
+
+/**
+ * A GEMM: the tensor-core roofline, or the engine's GEMV path when it is faster (docs §4 "GEMV path"). The GEMV
+ * path applies when the engine sets `gemvMaxRows`, `m ≤ gemvMaxRows`, the weights are dense and the math is fp16,
+ * bf16 or fp32 (int8 / fp8 / fp4 math has no vector peak, so it keeps the MMA path). Then
+ * `t_compute = min(t_mma, F / vectorPeak(math))`; the memory term is unchanged.
+ */
+function gemmOpTime(op: GemmOp, ctx: OpTimeContext): OpResult {
+  const mma = tensorOpTime(op, gemmShape(op), op.math, op.accumulate, op.sparsity, ctx);
+  const maxRows = ctx.engine.gemvMaxRows;
+  if (maxRows === undefined || op.m > maxRows || op.sparsity !== 'dense' || !GEMV_MATH.has(op.math)) return mma;
+  const vectorPeak = vectorPeakFlopsPerSec(ctx.engine, op.math as 'fp16' | 'bf16' | 'fp32');
+  // Formula: t_compute = min(t_mma, t_gemv),  t_gemv = F / vectorPeak(math)
+  // See docs/simulation-model.md §4 ("GEMV path")
+  const gemvSec = gemvComputeSec(mma.flops, vectorPeak);
+  if (gemvSec >= mma.computeSec) return mma;
+  const { sec, bound } = roofline(gemvSec, mma.memorySec);
+  const { usedInput: _input, usedAccumulate: _accumulate, ...rest } = mma;
+  void _input;
+  void _accumulate;
+  return { ...rest, computeSec: gemvSec, sec, bound, efficiency: 1, peakFlopsPerSec: vectorPeak, computePath: 'gemv' };
+}
+
+/**
+ * Softmax time of an attention op on `engine` (docs §7 "Attention softmax"): one FP32 exp2 per score on the SFU plus
+ * {@link SOFTMAX_VECTOR_FLOP_PER_SCORE} FLOP per score at the vector FP32 peak, the two pipes in series with each
+ * other (conservative). `undefined` when the engine has no `sfuOpsPerSec` (softmax not costed). Unit: seconds.
+ */
+export function attentionSoftmaxSec(op: AttentionOp, engine: ComputeEngine): number | undefined {
+  const sfuOpsPerSec = engine.sfuOpsPerSec;
+  if (sfuOpsPerSec === undefined) return undefined;
+  const scores = attentionScores(op);
+  // Formula: S = seqs·heads·pairs;  t_exp = S / sfuOpsPerSec;  t_vec = 5·S / vectorPeak(fp32);  t_softmax = t_exp + t_vec
+  // See docs/simulation-model.md §7 ("Attention softmax")
+  const expSec = scores / sfuOpsPerSec;
+  const vectorSec = (SOFTMAX_VECTOR_FLOP_PER_SCORE * scores) / vectorPeakFlopsPerSec(engine, 'fp32');
+  return expSec + vectorSec;
+}
+
+/**
+ * Fused attention: the tensor-core roofline of QKᵀ and PV, with the softmax overlapped with the MMAs
+ * (FlashAttention-3/4 ping-pong scheduling: one warpgroup's softmax runs while another's MMAs do).
+ * `t_compute = max(t_mma, t_softmax)`; `Math.max` returns `t_mma` itself when the softmax does not bind, so such ops
+ * are bit-identical to an engine without `sfuOpsPerSec`. The memory term is unchanged.
+ */
+function attentionOpTime(op: AttentionOp, ctx: OpTimeContext): OpResult {
+  const mma = tensorOpTime(op, attentionShape(op), op.math, op.accumulate, 'dense', ctx);
+  const softmaxSec = attentionSoftmaxSec(op, ctx.engine);
+  if (softmaxSec === undefined) return mma;
+  // Formula: t_compute = max(t_mma, t_exp + t_vec)   (softmax overlapped with the MMAs)
+  // See docs/simulation-model.md §7 ("Attention softmax")
+  const computeSec = Math.max(mma.computeSec, softmaxSec);
+  const { sec, bound } = roofline(computeSec, mma.memorySec);
+  return { ...mma, computeSec, sec, bound, softmaxSec };
 }
 
 // ---------------------------------------------------------------------------------------------------------------

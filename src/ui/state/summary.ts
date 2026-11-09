@@ -381,7 +381,9 @@ function roofline(result: SimResult, input: SimInput): RooflineSummary {
   );
   const flopsByPeak = new Map<string, { flops: number; peak: number }>();
   for (const { op } of phaseOps(result.prefill)) {
-    if (op.op.kind !== 'gemm' || op.peakFlopsPerSec === undefined) continue;
+    // GEMV-path GEMMs (computePath 'gemv') ran at the vector peak, not a matmul peak: not a roofline candidate.
+    if (op.op.kind !== 'gemm' || op.peakFlopsPerSec === undefined || op.computePath === 'gemv')
+      continue;
     const label = `${op.usedInput ?? op.op.math}, ${op.usedAccumulate ?? op.op.accumulate} accumulate, ${op.op.sparsity === 'dense' ? 'dense' : '2:4 sparse'}`;
     const entry = flopsByPeak.get(label) ?? { flops: 0, peak: op.peakFlopsPerSec };
     entry.flops += op.flops;

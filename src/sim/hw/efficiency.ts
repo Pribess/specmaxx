@@ -100,3 +100,16 @@ export function gemmComputeSec(
   const idealSec = usefulFlops / peakFlopsPerSec;
   return { ...best, efficiency: idealSec / best.computeSec };
 }
+
+/**
+ * Compute time of a GEMM run as a GEMV kernel (SIMD dot products on the vector ALUs, no MMA instruction), per docs
+ * §4 "GEMV path": the useful FLOP `usefulFlops` (FLOP, `2·batch·m·n·k`) at the vector peak
+ * `vectorPeakFlopsPerSec` (FLOP/s, per device) of the GEMM's math format. No MMA padding and no wave quantization,
+ * the same rule as elementwise ops (one output per lane, every lane busy). Only used for `m ≤
+ * ComputeEngine.gemvMaxRows`, where the op is memory-bound in practice. Unit: seconds.
+ */
+export function gemvComputeSec(usefulFlops: number, vectorPeakFlopsPerSec: number): number {
+  // Formula: t_gemv = F / vectorPeak(math)
+  // See docs/simulation-model.md §4 ("GEMV path")
+  return usefulFlops / vectorPeakFlopsPerSec;
+}

@@ -234,3 +234,20 @@ describe('validateDevice: gpuDirectRdma', () => {
     ]);
   });
 });
+
+describe('validateDevice: sfuOpsPerSec and gemvMaxRows', () => {
+  const withEngine = (extra: object): DeviceSpec => ({ ...SYNTH_GPU, engines: [{ ...SYNTH_GPU.engines[0], ...extra }] });
+  it('accepts a positive SFU rate and an integer row limit (covered by the engines source)', () => {
+    expect(validateDevice(withEngine({ sfuOpsPerSec: 1e12, gemvMaxRows: 4 }))).toEqual([]);
+  });
+  it('rejects a zero, negative or NaN SFU rate', () => {
+    for (const v of [0, -1, NaN, Infinity]) {
+      expect(validateDevice(withEngine({ sfuOpsPerSec: v })).some((e) => e.includes('sfuOpsPerSec must be a finite number > 0'))).toBe(true);
+    }
+  });
+  it('rejects a row limit that is not an integer ≥ 1', () => {
+    for (const v of [0, 1.5, -2]) {
+      expect(validateDevice(withEngine({ gemvMaxRows: v })).some((e) => e.includes('gemvMaxRows must be an integer ≥ 1'))).toBe(true);
+    }
+  });
+});

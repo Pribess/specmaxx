@@ -18,7 +18,7 @@ More: [model IR](simulation-model.md#2-model-ir), [operation catalogue](simulati
 
 A device is described by its peak arithmetic rate **per number format** (bf16, fp8, fp4, int8 and so on, with a separate sparse rate where the hardware has one), its memory bandwidth and capacity, and its links to other devices.
 
-Peak rates are only reached by large, well-shaped matrices. Matrix units work on fixed tiles and the chip works in waves of tiles, so a small or awkward shape leaves part of the hardware idle. The estimate applies this tile and wave rounding to every matrix multiply, which is why single-token decode never reaches the headline TFLOPS.
+Peak rates are only reached by large, well-shaped matrices. Matrix units work on fixed tiles and the chip works in waves of tiles, so a small or awkward shape leaves part of the hardware idle. The estimate applies this tile and wave rounding to every matrix multiply, which is why single-token decode never reaches the headline TFLOPS. On Apple GPUs, single-token matrix-vector products run on the plain vector units without that rounding, as Apple's MLX and llama.cpp kernels do.
 
 Presets cite their vendor sources. Some values are marked as estimated where no vendor publishes them.
 
@@ -33,7 +33,9 @@ Each operation takes the longer of two times (the **roofline**):
 
 If compute is longer the op is *compute bound*, otherwise *bandwidth bound*. The time of a step is the sum of its operations (on the busiest device). Communication is added using a latency-plus-bandwidth cost, and by default the bandwidth part may overlap with compute while the latency part may not.
 
-More: [per-op time](simulation-model.md#per-op-time), [stage time and overlap](simulation-model.md#stage-time-and-overlap).
+Attention also pays for its softmax: one exponential per score on the special-function units, plus a few vector operations, overlapped with its matrix multiplies. This only shows on long prompts on fast datacenter GPUs, where the exponentials can take longer than the matrix work.
+
+More: [per-op time](simulation-model.md#per-op-time), [attention softmax](simulation-model.md#attention-softmax), [stage time and overlap](simulation-model.md#stage-time-and-overlap).
 
 ## Prefill and decode
 
@@ -100,7 +102,7 @@ More: [dtypes](simulation-model.md#dtypes-math-and-accumulate), [EXL3](simulatio
 
 ## What is not modelled
 
-Anything that depends on a particular inference engine: paged attention, continuous batching, chunked prefill (except its effect on the memory fit), scheduling and kernel-launch overhead, CUDA graphs. Also left out: dequantization arithmetic, softmax cost, cache reuse beyond reading each operand once, clock throttling, in-network reduction, link contention, and framework memory unless you set a runtime reserve.
+Anything that depends on a particular inference engine: paged attention, continuous batching, chunked prefill (except its effect on the memory fit), scheduling and kernel-launch overhead, CUDA graphs. Also left out: dequantization arithmetic, exponentials computed on the ordinary arithmetic units instead of the special-function units (a trick some newer attention kernels use), cache reuse beyond reading each operand once, clock throttling, in-network reduction, link contention, and framework memory unless you set a runtime reserve.
 
 The reference lists every exclusion and each approximation that remains.
 

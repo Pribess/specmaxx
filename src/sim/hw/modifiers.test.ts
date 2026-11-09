@@ -53,6 +53,20 @@ describe('device modifiers (T19)', () => {
     expect(d.memory.bandwidthBytesPerSec).toBe(RTX_5090.memory.bandwidthBytesPerSec); // 1.792e12
   });
 
+  it('clockScale 0.8 scales the SFU rate with the vector peaks (same clock), and its provenance covers it', () => {
+    const base = RTX_5090.engines[0].sfuOpsPerSec ?? NaN;
+    const d = applyDeviceModifiers(RTX_5090, [CLOCK_08]);
+    expectClose(d.engines[0].sfuOpsPerSec ?? NaN, base * 0.8);
+    // An estimated clock scale records an estimate on every path it changes, the SFU rate included.
+    const est = applyDeviceModifiers(RTX_5090, [{ kind: 'clockScale', factor: 0.8, note: 'sustained clock', sources: [], estimatedReason: 'test' }]);
+    expect(est.estimated.some((x) => x.field === 'engines.0.sfuOpsPerSec')).toBe(true);
+    // An engine without the field stays without it.
+    const { sfuOpsPerSec: _sfu, ...engine } = RTX_5090.engines[0];
+    void _sfu;
+    const bare = applyDeviceModifiers({ ...RTX_5090, engines: [engine] }, [CLOCK_08]);
+    expect(bare.engines[0].sfuOpsPerSec).toBeUndefined();
+  });
+
   it('composition: clockScale 0.8 then peakScale ×2 → 335.2e12', () => {
     const d = applyDeviceModifiers(RTX_5090, [CLOCK_08, BF16_FP32_X2]);
     expectClose(peak(d, 'bf16', 'fp32', 'dense'), 209.5e12 * 0.8 * 2); // 335.2e12

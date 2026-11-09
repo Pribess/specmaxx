@@ -579,6 +579,7 @@ export interface DisplayUnit {
 export const UNITS = {
   tflops: { label: 'TFLOP/s', scale: 1e12 },
   tops: { label: 'TOPS', scale: 1e12 },
+  tOpsPerSec: { label: 'T ops/s', scale: 1e12 },
   gbps: { label: 'GB/s', scale: 1e9 },
   gb: { label: 'GB', scale: 1e9 },
   mb: { label: 'MB', scale: 1e6 },
@@ -612,6 +613,8 @@ export interface EditableField {
   unit: DisplayUnit;
   /** Current value of the spec given, SI (as the field defines it). */
   value: number;
+  /** Help lines for a "?" icon, for fields whose meaning is not obvious (one short sentence per line). */
+  help?: string[];
 }
 
 /**
@@ -633,7 +636,8 @@ export function editableFields(device: DeviceSpec): EditableField[] {
   for (const { path, value } of numericLeafPaths(device)) {
     if (!isEditableDevicePath(path)) continue;
     const parts = path.split('.');
-    const field = (label: string, group: FieldGroup, unit: DisplayUnit) => fields.push({ path, label, group, unit, value });
+    const field = (label: string, group: FieldGroup, unit: DisplayUnit, help?: string[]) =>
+      fields.push({ path, label, group, unit, value, ...(help ? { help } : {}) });
     if (path === 'memory.bandwidthBytesPerSec') field('Memory bandwidth', 'memory', UNITS.gbps);
     else if (parts[0] === 'memory' && parts[1] === 'capacityOptionsBytes') {
       field(device.memory.capacityOptionsBytes.length > 1 ? `Capacity option ${Number(parts[2]) + 1}` : 'Capacity', 'memory', UNITS.gb);
@@ -648,6 +652,17 @@ export function editableFields(device: DeviceSpec): EditableField[] {
         field(`${prefix}${peak.input}, ${peak.accumulate} accumulate, ${peak.sparsity === 'dense' ? 'dense' : '2:4 sparse'}`, 'matmul', integer ? UNITS.tops : UNITS.tflops);
       } else if (rest[0] === 'vectorFlopsPerSec') field(`${prefix}vector ${rest[1]}`, 'vector', UNITS.tflops);
       else if (rest[0] === 'memBandwidthCapBytesPerSec') field(`${prefix}engine memory-bandwidth cap`, 'memory', UNITS.gbps);
+      else if (rest[0] === 'sfuOpsPerSec') {
+        field(`${prefix}SFU exp rate`, 'vector', UNITS.tOpsPerSec, [
+          'Exponentials per second on the special-function units.',
+          'Attention needs one per score, so a low rate slows long prompts.',
+        ]);
+      } else if (rest[0] === 'gemvMaxRows') {
+        field(`${prefix}GEMV path: max rows`, 'tiling', UNITS.count, [
+          'Up to this many tokens, matrix products run on the plain vector units.',
+          'They then skip the padding of the matrix units.',
+        ]);
+      }
       else if (rest[0] === 'computeUnits') field(`${prefix}compute units`, 'tiling', UNITS.count);
       else field(`${prefix}${rest.join(' ')}`, 'tiling', UNITS.elements);
     } else field(path, 'tiling', UNITS.count);

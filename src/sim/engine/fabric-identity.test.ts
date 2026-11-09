@@ -17,6 +17,13 @@
  * Regenerated for the MoE routing review fixes (docs/review/practicality-review.md F5, F12): only the 12 `simulate`
  * keys of the tiny-hybrid MoE at ep > 1 (batch 4) moved: decode −0.01 … +3.7 % (expected distinct experts instead of
  * min(E_loc, A)), prefill 0 … −4.2 % (EP load imbalance ρ = 1.2). Collectives, UI rigs and every dense key unchanged.
+ * Regenerated for the attention softmax (docs §7 "Attention softmax") and the Apple GEMV path (docs §4 "GEMV
+ * path"). Moved keys, 44, and only these: `hgx-b200-1` / `hgx-b200-2` dense8b prefill (softmax binds on B200 at
+ * hd 128: tok/s − 0.6 … − 1.3 %, with the exposed-comm and best-algorithm split that follows from the longer compute);
+ * `m3-ultra-tb5-4` tiny-hybrid decode (GEMV path: + 0.8 … + 3.4 %; exposedCommSec in the last ulp); `synth-cluster`
+ * (H100 devices) tiny-hybrid prefill exposedCommSec only (the tiny model's small heads let the softmax bind, − 0.4 …
+ * − 3.0 % exposed comm).
+ * Decode outside Apple, and every collective key, are unchanged bit for bit.
  * Numbers are compared with exact equality (Object.is; JSON round-trips doubles exactly).
  *
  * Three levels:

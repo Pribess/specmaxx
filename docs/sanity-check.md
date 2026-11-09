@@ -122,9 +122,9 @@ generated / depth.
 | [lm-23](https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-NVFP4?run=cmt5s1z0103m7pu01km9fczpa) | C | Qwen3.8-27B | NVFP4 | 1× DGX Spark | vLLM | 1/74/256/74 | 374 | 1055 | 0.35 | 10.1 | 14.8 | 0.68 | m/m |
 | [lm-24](https://localmaxxing.com/en/models/Qwen/Qwen3.8-Flash-Next?run=cmw1704i40ajcoa01fwx8w8m9) | B | Qwen3.8-Flash-Next | UD-IQ3_XXS | 3× R9700 layer split | llama.cpp rdna-boosts ROCm | 1/573/256/573 | 1013 | 5812 | 0.17 | 47.5 | 156 | 0.30 | m/m |
 | [lm-27](https://localmaxxing.com/en/models/unsloth/Qwen3.8-Flash-Next-GGUF?run=cmvpm4rw10292ng01k4wnsipr) | A | Qwen3.8-Flash-Next | UD-Q2_K_XL | Ryzen AI Max+ 395 | llama.cpp b11901 Vulkan | 1/345/256/345 | 298 | 1463 | 0.20 | 32.0 | 65.2 | 0.49 | m/m |
-| [lm-28](https://localmaxxing.com/en/models/Qwen/Qwen3.8-Flash-Next?run=cmtexccjm00bgn0011lvaqdyi) | C | Qwen3.8-Flash-Next | MLX 4-bit g32 | Apple M3 Ultra 80c | oMLX 0.6.3 | 1/619/256/619 | 310 | 1999 | 0.15 | 14.8 | 129 | 0.11 | c/m |
+| [lm-28](https://localmaxxing.com/en/models/Qwen/Qwen3.8-Flash-Next?run=cmtexccjm00bgn0011lvaqdyi) | C | Qwen3.8-Flash-Next | MLX 4-bit g32 | Apple M3 Ultra 80c | oMLX 0.6.3 | 1/619/256/619 | 310 | 1999 | 0.15 | 14.8 | 151 | **0.098** | c/m |
 | [lm-32](https://localmaxxing.com/en/models/nvidia/GLM-5.3-Flash-FP4-Local?run=cmvfggz3n014srf01ulz9qf41) | A | GLM-5.3-Flash | NVFP4 + FP8 (Marlin), KV fp8 | 8× RTX 3090 TP8/EP8 | vLLM 0.28.1 SM86 fork | 1/278/966/278 | 721 | 5920 | 0.12 | 81.3 | 233 | 0.35 | m/m |
-| [lm-34](https://localmaxxing.com/en/models/zai-org/GLM-5.3-Flash?run=cmtipc711066gp401ddtg1b3p) | C | GLM-5.3-Flash | MLX 4-bit | Apple M3 Ultra 80c | oMLX 0.6.4 | 1/574/256/574 | 345 | 857 | 0.40 | 32.9 | 69.5 | 0.47 | c/m |
+| [lm-34](https://localmaxxing.com/en/models/zai-org/GLM-5.3-Flash?run=cmtipc711066gp401ddtg1b3p) | C | GLM-5.3-Flash | MLX 4-bit | Apple M3 Ultra 80c | oMLX 0.6.4 | 1/574/256/574 | 345 | 857 | 0.40 | 32.9 | 82.5 | 0.40 | c/m |
 | [lm-35](https://localmaxxing.com/en/models/zai-org/GLM-5.3-Flash?run=cmum3byy10j02lq01b6821y8t) | B | GLM-5.3-Flash | NVFP4 (local checkpoint; simulated as the nvidia NVFP4 layout), KV fp8 | 4× DGX Spark TP4 | vLLM 0.30.1 Ray | 1/253/768/253 | — | — | — | 74.6 | 46.6 | **1.60 (exception, unresolved)** | –/m |
 | [lm-36](https://localmaxxing.com/en/models/deepseek-ai/DeepSeek-V4.1-Flash?run=cmuhen2200drdlq01fa2qr70h) | C | DeepSeek-V4.1-Flash | FP8 + MXFP4 | 4× DGX Spark TP4 | SGLang (DSpark; sim k 5, E[τ] 2.85) | 1/274/1024/274 | 888 | 942 | **0.94** | 76.0 | 72.2 | **1.05** | m/m |
 | [lm-38](https://localmaxxing.com/en/models/unsloth/Inkling-Small-GGUF?run=cms90mh5r0045pm01lf9n6cre) | B | Inkling-Small | UD-IQ4_XS | 6× RTX 3090 layer split | llama.cpp inkling-exp CUDA | 1/367/508/367 | 148 | 2222 | **0.067** | 47.4 | 149 | 0.32 | m/m |
@@ -134,9 +134,9 @@ generated / depth.
 | [web-02](https://github.com/ggml-org/llama.cpp/blob/master/benches/dgx-spark/dgx-spark.md) | — | gpt-oss-120b | MXFP4 GGUF | 1× DGX Spark | llama.cpp b7941 CUDA | 1/2048/32/32768 | 1567 | 7416 | 0.21 | 42.8 | 57.1 | 0.75 | m/m |
 | [web-04](https://github.com/ggml-org/llama.cpp/blob/master/benches/dgx-spark/dgx-spark.md) | — | gpt-oss-120b | MXFP4 GGUF | 1× DGX Spark | llama-batched-bench B=32 | 32/4096/32/4096 | 2411 agg | 22916 | 0.11 | 262 agg | 191 | **1.37 (exception)** | c/m |
 | [web-07](https://www.reddit.com/r/LocalLLaMA/comments/1o7k7zz/dgx_spark_compiled_llamacpp_benchmarks_compared/) | — | GLM-4.5-Air | Q4_K (5.45 bpw) | 1× DGX Spark | llama.cpp CUDA (Oct 2025) | 1/2048/32/0 | 841 | 4609 | 0.18 | 22.6 | 31.1 | 0.73 | m/m |
-| [web-12](https://www.reddit.com/r/LocalLLaMA/comments/1o7k7zz/dgx_spark_compiled_llamacpp_benchmarks_compared/) | — | gpt-oss-120b | MXFP4 GGUF | Apple M4 Max 40c | llama.cpp Metal | 1/2048/32/0 | 871 | 1707 | 0.51 | 62.9 | 150 | 0.42 | c/**c** |
-| [web-14](https://github.com/ggml-org/llama.cpp/discussions/15396) | — | gpt-oss-20b | MXFP4 GGUF | Apple M3 Ultra 80c | llama.cpp b6310 Metal | 1/2048/128/0 | 2816 | 4542 | 0.62 | 115.5 | 309 | 0.37 | c/m |
-| [web-26](https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/BENCHMARKS.md) | — | Qwen3-30B-A3B | MLX 4-bit | Apple M4 Max 40c 64 GB | mlx-lm 0.28.2 | 1/2048/128/2048 | 1754 | 2561 | 0.68 | 113.3 | 269 | 0.42 | c/m |
+| [web-12](https://www.reddit.com/r/LocalLLaMA/comments/1o7k7zz/dgx_spark_compiled_llamacpp_benchmarks_compared/) | — | gpt-oss-120b | MXFP4 GGUF | Apple M4 Max 40c | llama.cpp Metal | 1/2048/32/0 | 871 | 1707 | 0.51 | 62.9 | 153 | 0.41 | c/m |
+| [web-14](https://github.com/ggml-org/llama.cpp/discussions/15396) | — | gpt-oss-20b | MXFP4 GGUF | Apple M3 Ultra 80c | llama.cpp b6310 Metal | 1/2048/128/0 | 2816 | 4542 | 0.62 | 115.5 | 318 | 0.36 | c/m |
+| [web-26](https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/BENCHMARKS.md) | — | Qwen3-30B-A3B | MLX 4-bit | Apple M4 Max 40c 64 GB | mlx-lm 0.28.2 | 1/2048/128/2048 | 1754 | 2561 | 0.68 | 113.3 | 281 | 0.40 | c/m |
 | [web-29](https://www.reddit.com/r/LocalLLaMA/comments/1m6b151/updated_strix_halo_ryzen_ai_max_395_llm_benchmark/) | — | Qwen3-30B-A3B | UD-Q4_K_XL | Ryzen AI Max+ 395 | llama.cpp b5863 Vulkan | 1/512/128/0 | 605 | 5311 | 0.11 | 66.3 | 131 | 0.51 | m/m |
 | [web-31](https://www.reddit.com/r/LocalLLaMA/comments/1m6b151/updated_strix_halo_ryzen_ai_max_395_llm_benchmark/) | — | Llama-3.x-70B | i1-Q4_K_M | Ryzen AI Max+ 395 | llama.cpp b5863 HIP / Vulkan | 1/512/128/0 | 94.7 | 426 | 0.22 | 4.5 | 6.0 | 0.75 | c/m |
 | [web-36](https://www.reddit.com/r/LocalLLaMA/comments/1x023z4/qwen38flashnext_on_6x3090_6x4090_without_nvlink/) | — | Qwen3.8-Flash-Next | UD-Q4_K_XL, KV q8_0 | 6× RTX 4090 layer split | llama.cpp df03399b8 stock | 1/50000/128/50000 | 1728 | 27140 | **0.064** | 46.2 | 184 | 0.25 | c/m |
@@ -161,12 +161,12 @@ Every metric is included: the three known exceptions (web-04, lm-35, web-53 deco
 | Phase | n | min | p25 | median | p75 | max |
 |---|---|---|---|---|---|---|
 | prefill | 38 | 0.008 | 0.123 | 0.200 | 0.390 | 0.942 |
-| decode | 45 | 0.115 | 0.376 | 0.639 | 0.749 | 2.117 |
+| decode | 45 | 0.098 | 0.376 | 0.639 | 0.749 | 2.117 |
 
 | Ratio bucket | [0, 0.1) | [0.1, 0.25) | [0.25, 0.5) | [0.5, 0.75) | [0.75, 0.9) | [0.9, 1) | ≥ 1 |
 |---|---|---|---|---|---|---|---|
 | prefill | 5 | 19 | 6 | 6 | 1 | 1 | 0 |
-| decode | 0 | 4 | 14 | 17 | 6 | 0 | 4 |
+| decode | 1 | 3 | 14 | 17 | 6 | 0 | 4 |
 
 What this shows:
 
@@ -202,13 +202,13 @@ Two more observations, consistent with the bound but worth knowing:
   296 tokens of a 27B model in 153 ms, about 104 TFLOP/s. The stock fp16 / fp32-accumulate peak is 71 TFLOP/s
   (GA102 whitepaper), so the stock preset would give ratio 1.5. With the unlock the run notes state (142 TFLOP/s),
   the ratio is 0.76.
-- **Some Apple decode GEMMs are compute-bound in the simulator (web-12: decode bound "compute").** Decode GEMMs have
-  one token row. The shape-efficiency model pads that row to the device's tensor tile ([§4 "Shape
-  efficiency"](simulation-model.md#shape-efficiency)), giving efficiency ≈ 0.07–0.1, and on the M3/M4 SIMD engines
-  (13–29 TFLOP/s for 410–819 GB/s) the compute term of some decode GEMMs passes their memory term. Real Metal kernels
-  run these as GEMVs (`mul_mv`) without padding. The effect is small: summing only the memory terms gives 153 tok/s
-  instead of 150 for the M4 Max gpt-oss-120b row, and 115 instead of 111 for a dense 8B Q4 decode on the M4 Max
-  (2–3 %). Follow-up 2.
+- **Apple decode GEMMs run on the GEMV path.** Decode GEMMs have one token row. The shape-efficiency model pads
+  that row to the tensor tile ([§4 "Shape efficiency"](simulation-model.md#shape-efficiency)), which on the M3/M4 SIMD
+  engines made some decode GEMMs compute-bound (web-12 decode was "compute"). Real Metal kernels run them as GEMVs
+  (MLX `gemv` / `qmv`, llama.cpp `mul_mv`), and the simulator now does too for m ≤ 1 ([§4 "GEMV
+  path"](simulation-model.md#gemv-path)): web-12 150 → 153 tok/s (now memory-bound), web-14 309 → 318, web-26 269 →
+  281. Fine-grained 4–5 bpw MoE models gain most, because their expert GEMVs had the most padded compute: lm-28
+  129 → 151 tok/s, lm-34 69.5 → 82.5.
 
 ### Ratio below 0.1 (gross overestimate or report artefact)
 
@@ -218,14 +218,21 @@ Two more observations, consistent with the bound but worth knowing:
 | web-50 / web-51 prefill (MI300X, llama.cpp HIP) | 0.041 / 0.057 | **Engine.** llama.cpp's ROCm kernels of July 2025 are not tuned for CDNA3 (the post says vLLM / ATOM are much faster). The simulator uses the int8 MFMA peak (2.6 POP/s), which is right for an upper bound. Decode is also low (0.14 / 0.29) on a 5.3 TB/s part, which points to engine overhead, not to a wrong preset. |
 | lm-38 prefill (Inkling-Small, 6× 3090 layer split) | 0.067 | **Report / engine.** Custom `inkling-exp` branch, client TTFT on 367 tokens (2.5 s), no flags or notes. Decode is 0.32. |
 | web-36 prefill (Flash-Next, 6× 4090, 50k prompt, stock llama.cpp) | 0.063 | **Engine.** The poster's patched fork prefills the same 50k session at 7050 tok/s (ratio 0.26); stock upstream loses most of it to the indexer top-k path, by the poster's own analysis. |
+| lm-28 decode (Flash-Next, M3 Ultra, oMLX MLX 4-bit) | 0.098 | **Engine.** A 7 B-active MoE at 14.8 tok/s on 819 GB/s: engine / MoE-gather-bound per the researchers. It was 0.115 until the GEMV path (F14) removed the padded MMA compute of its expert GEMVs. |
 
-Others near the threshold, noted but not flagged: lm-28 decode 0.115 (oMLX on Flash-Next: a 7 B-active MoE at
-14.8 tok/s on 819 GB/s, engine / MoE-gather-bound per the researchers), lm-15 prefill 0.11 and web-29 prefill 0.11
-(TTFT and early Strix Halo builds).
+Others near the threshold, noted but not flagged: lm-15 prefill 0.11 and web-29 prefill 0.11 (TTFT and early Strix
+Halo builds).
 
 ## Fixes made
 
-- **No preset or engine number was changed.** No report could be traced to a wrong hardware number. The
+- **Practicality-review fixes F6 and F14** ([the review](review/practicality-review.md)) changed the model: attention
+  now pays its softmax (exp on the SFU, overlapped with the MMAs, [§7 "Attention softmax"](simulation-model.md#attention-softmax)),
+  and Apple decode GEMMs of one token row take the GEMV path. Only Apple rows moved (the table above: lm-28, lm-34,
+  web-12, web-14, web-26 decode; fresh rows F-LM25/26/27/53/54 decode by +0.1 % to +25 % (F-LM54 249 → 312 tok/s),
+  F-W13 decode 4.874 → 4.873, F-LM53 prefill +0.01 %); the datacenter prompts here are too short for the softmax to
+  bind. Every check keeps
+  its verdict.
+- **No report was traced to a wrong hardware number.** The
   underestimates are the MoE routing limit (web-04, a modelling choice), lm-35, whose checkpoint layout is unknown
   (unresolved, see above), and web-53, which uses an offload mode the simulator does not cost. The six file-size
   cross-checks put the simulated weight bytes within −3.6 % to +1.0 % of the GGUF files, so the bpw mapping holds.
@@ -254,9 +261,8 @@ Others near the threshold, noted but not flagged: lm-28 decode 0.115 (oMLX on Fl
    weights now follow the iid-uniform expectation `E·(1 − (1 − k/E)^T)`. A skewed-routing option (fewer distinct
    experts than uniform) would still be needed to assert web-04: uniform routing gives 191 tok/s, below the
    reported 262.
-2. **GEMV path for decode** (minor; `src/sim/hw/efficiency.ts` / `engine/opTime.ts`). Price GEMMs with very few
-   token rows without padding the token dimension to the tensor tile, as real GEMV kernels do. Today M3/M4 Apple
-   decode loses 2–3 % to it (web-12).
+2. ~~**GEMV path for decode**~~ Done (F14): GEMMs with m ≤ `gemvMaxRows` run at the vector peak without MMA padding
+   on the Apple engines ([§4 "GEMV path"](simulation-model.md#gemv-path)).
 3. **Prefill at depth** (`workload.prefillDepth`). `simulate` always prefills from an empty cache. llama-bench
    `pp @ dN` and LocalMaxxing depth rows can only be checked against the depth-0 bound.
 4. **fp32-accumulate default on GeForce.** It halves the fp16 tensor rate on GeForce parts (§2). It is right for the

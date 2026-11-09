@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attendedPairs, attentionPairs, indexerPairs, kvTokensRead, opBytes, opFlops } from './metrics';
+import { attendedPairs, attentionPairs, attentionScores, indexerPairs, kvTokensRead, opBytes, opFlops } from './metrics';
 import type { AttentionOp, ElementwiseOp, GemmOp, IndexerOp, RecurrentOp, TransferOp } from './ops';
 import { lowerBlock, type LoweringContext } from '../lower/lower';
 import { REF_DENSE_8B } from '../models/reference';
@@ -432,5 +432,66 @@ describe('deployment fields (design doc §7.1): defaults reproduce today, overri
       stateWriteBytes: 0,
       totalBytes: 0,
     });
+  });
+});
+
+describe('attentionScores: softmax scores the kernel computes (docs §7 "Attention softmax")', () => {
+  const base: AttentionOp = {
+    kind: 'attention',
+    name: 'attn.core',
+    seqs: 1,
+    heads: 32,
+    kvHeads: 8,
+    qkHeadDim: 128,
+    vHeadDim: 128,
+    qLen: 4096,
+    kvLen: 4096,
+    causal: true,
+    kvSelection: { kind: 'full' },
+    kvRead: { format: { dtype: 'bf16' }, elemsPerToken: 2048 },
+    kvWrite: { format: { dtype: 'bf16' }, elemsPerToken: 2048 },
+    math: 'bf16',
+    accumulate: 'fp32',
+    activationDtype: 'bf16',
+  };
+  it('causal prefill: exactly heads·P(P+1)/2 (about half the square)', () => {
+    expect(attentionScores(base)).toBe(32 * ((4096 * 4097) / 2));
+  });
+  it('non-causal: heads·qLen·kvLen', () => {
+    expect(attentionScores({ ...base, causal: false })).toBe(32 * 4096 * 4096);
+  });
+  it('sliding window W: capped above the window, the triangle below it', () => {
+    // W = 128 < P: the first 128 queries see 1..128 keys, the rest 128 each.
+    const w = { ...base, kvSelection: { kind: 'window', windowTokens: 128 } } as const;
+    expect(attentionScores(w)).toBe(32 * ((128 * 129) / 2 + (4096 - 128) * 128));
+    // W = 8192 > P: identical to full causal.
+    expect(attentionScores({ ...base, kvSelection: { kind: 'window', windowTokens: 8192 } })).toBe(attentionScores(base));
+  });
+  it('top-k (DSA): each query scores at most k keys', () => {
+    const decode = { ...base, qLen: 1, kvLen: 100_001, kvSelection: { kind: 'topk', topK: 2048 } } as const;
+    expect(attentionScores(decode)).toBe(32 * 2048);
+  });
+  it('CSA secondary entries share the softmax and add their pairs', () => {
+    const op: AttentionOp = {
+      ...base,
+      qLen: 1,
+      kvLen: 1000,
+      kvSelection: { kind: 'window', windowTokens: 128 },
+      secondaryKv: {
+        tokensPerEntry: 4,
+        kvSelection: { kind: 'topk', topK: 32 },
+        kvRead: { format: { dtype: 'fp8_e4m3' }, elemsPerToken: 64 },
+        kvWrite: { format: { dtype: 'fp8_e4m3' }, elemsPerToken: 16 },
+      },
+    };
+    expect(attentionScores(op)).toBe(32 * (128 + 32));
+  });
+  it('decode: heads·kvLen per sequence, times seqs', () => {
+    const decode: AttentionOp = { ...base, qLen: 1, kvLen: 8193 };
+    expect(attentionScores(decode)).toBe(32 * 8193);
+    expect(attentionScores({ ...decode, seqs: 64 })).toBe(64 * 32 * 8193);
+  });
+  it('scores · 2·(qk + v) = the attention FLOP (same pairs as the MMAs)', () => {
+    expect(attentionScores(base) * 2 * (128 + 128)).toBe(opFlops(base));
   });
 });

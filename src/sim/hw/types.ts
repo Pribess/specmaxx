@@ -100,6 +100,22 @@ export interface ComputeEngine {
    * memory bandwidth, per device. Unit: B/s (read + write combined, like {@link MemorySpec.bandwidthBytesPerSec}).
    */
   memBandwidthCapBytesPerSec?: number;
+  /**
+   * Special-function-unit peak (NVIDIA SFU / MUFU, AMD transcendental unit, Intel extended-math, Apple's SIMD
+   * transcendental path) for FP32 `exp2`, per device. Unit: results/s (ops/s; one op = one exp2 result).
+   * Costs the softmax exponential of attention: one exp2 per score (the e^x → 2^(x·log2 e) scale folds into the
+   * preceding FMA), on a pipe separate from the vector FMA lanes counted in `vectorFlopsPerSec`
+   * (docs/simulation-model.md §7 "Attention softmax"). Absent = softmax not costed, the convention before it was
+   * modelled; every preset sets it (enforced by a test).
+   */
+  sfuOpsPerSec?: number;
+  /**
+   * Largest GEMM row count m (tokens per batch entry) this engine runs as a GEMV kernel: SIMD dot products on the
+   * vector ALUs, no MMA instruction, so m is not padded to the MMA shape and no tile / wave quantization applies.
+   * Such a GEMM (dense, fp16 / bf16 / fp32 math) costs `min(MMA time, F / vectorPeak(math))`
+   * (docs/simulation-model.md §4 "GEMV path"). Absent = the MMA path only. Unit: rows (tokens).
+   */
+  gemvMaxRows?: number;
 }
 
 /**

@@ -14,6 +14,7 @@
 
 import type { ComputeEngine, DeviceSpec, EstimatedField, GemmTiling, SourceRef } from '../types';
 import { gb, gbPerSec, tbPerSec } from '../units';
+import { APPLE_GPU_SFU, engineSfu, sfuOpsPerSec } from './sfu';
 
 const STUDIO_2025_URL = 'https://support.apple.com/en-us/122211';
 const STUDIO_2026_URL = 'https://support.apple.com/en-us/128107';
@@ -82,6 +83,16 @@ const SIMD_FP32_FLOP_PER_CLOCK_PER_CORE = 4 * 32 * 2;
 const M5_NA_FP16_FLOP_PER_CLOCK_PER_CORE = 1024;
 // Extrapolated INT8: 2 × FP16, consistent with A19 ~1900 vs nominal 2048 OP/core/clock and M5 Max 119 TOPS.
 const M5_NA_INT8_OP_PER_CLOCK_PER_CORE = 2 * M5_NA_FP16_FLOP_PER_CLOCK_PER_CORE;
+/**
+ * GEMV path row limit (`ComputeEngine.gemvMaxRows`): GEMMs with m ≤ 1 token run as SIMD dot products, no 8×8 MMA.
+ * Conservative: m = 1 is the vector path in both MLX and llama.cpp Metal for every weight format; larger limits are
+ * format- and chip-specific (MLX affine 4/8-bit qmv up to m 3 on M3/M4 and 5 on M5; llama.cpp Q4_0 / Q8_0 m 1).
+ */
+const APPLE_GEMV_MAX_ROWS = 1;
+/** MLX source of the vector (non-MMA) GEMV dispatch (main, commit fc344c98, 2026-11-06). */
+const MLX_GEMV_URL = 'https://github.com/ml-explore/mlx/blob/fc344c98/mlx/backend/metal/matmul.cpp';
+/** llama.cpp Metal mat-vec vs mat-mat dispatch (master, commit a0ad695, 2026-11-09). */
+const LLAMACPP_MUL_MV_URL = 'https://github.com/ggml-org/llama.cpp/blob/a0ad695/ggml/src/ggml-metal/ggml-metal-common.cpp';
 
 /** SIMD-group MMA dimensions in elements; CTA shapes and residency remain estimates. */
 function simdTiling(): GemmTiling {
@@ -155,6 +166,9 @@ function simdEngine(cores: number, clockHz: number, isM5: boolean): ComputeEngin
       fp16: halfFlopsPerSec,
       bf16: halfFlopsPerSec,
     },
+    // exp2 on the SIMD ALUs: cores × 32 × clock (estimate, sfu.ts APPLE_GPU_SFU).
+    sfuOpsPerSec: sfuOpsPerSec(cores, APPLE_GPU_SFU.exp2PerClockPerUnit, clockHz),
+    gemvMaxRows: APPLE_GEMV_MAX_ROWS,
     gemmTiling: {
       default: simdTiling(),
     },
@@ -194,6 +208,10 @@ function neuralEngine(cores: number, clockHz: number): ComputeEngine {
       // FP32 has no NAX acceleration: peak lookup falls back to the vector FP32 rate.
     ],
     vectorFlopsPerSec: vectorEngine.vectorFlopsPerSec,
+    // Softmax exp and GEMV (m ≤ 1) run on the same SIMD ALUs as the vector engine: NAX at m = 1 would pad to its
+    // MMA shape (1024/8 FLOP/core/clk) below the SIMD FP16 512.
+    sfuOpsPerSec: vectorEngine.sfuOpsPerSec,
+    gemvMaxRows: APPLE_GEMV_MAX_ROWS,
     gemmTiling: {
       default: neuralTiling(),
       fp32: simdTiling(),
@@ -246,6 +264,10 @@ function appleDevice(params: AppleDeviceParams): DeviceSpec {
   const simdRoot = hasNeuralAccelerators ? 'engines.1' : 'engines.0';
   const simdTilingPath = `${simdRoot}.gemmTiling.default`;
   const simdComputeFields = [`${simdRoot}.matmulPeaks`, `${simdRoot}.vectorFlopsPerSec`];
+  // Every engine (SIMD, and NAX on M5) runs softmax exp and the GEMV path on the SIMD ALUs.
+  const engineRoots = hasNeuralAccelerators ? ['engines.0', 'engines.1'] : ['engines.0'];
+  const gemvFields = engineRoots.map((root) => `${root}.gemvMaxRows`);
+  const sfus = engineRoots.map((root) => engineSfu(APPLE_GPU_SFU, gpuCores, 'GPU cores', gpuClockHz, `${root}.sfuOpsPerSec`));
   const fp32Derivation =
     `${gpuCores} GPU cores × 256 FLOP/core/clock × ${gpuClockHz} Hz = SIMD FP32 FLOP/s. `;
   let halfDerivation = 'FP16/BF16 vector and matmul rate equals the FP32 SIMD rate. ';
@@ -278,6 +300,24 @@ function appleDevice(params: AppleDeviceParams): DeviceSpec {
       ],
       note: 'simdgroup_matrix<T,8,8>: 8×8 matrix multiply-accumulate has K=8; half/bfloat/float types.',
     },
+    {
+      url: MLX_GEMV_URL,
+      title: 'MLX Metal backend: matmul.cpp GEMV dispatch (Apple ml-explore/mlx, commit fc344c98)',
+      kind: 'community',
+      fields: gemvFields,
+      note:
+        'Dense fp16/bf16 GEMMs with min(M, N) == 1 run the SIMD `gemv` kernel (matmul.cpp:1647), not the ' +
+        'simdgroup-MMA GEMM; quantized decode uses `qmv` (quantized.cpp:648–650, vector path up to m 3 on M3/M4 ' +
+        'affine 4/8-bit). Kernel code, not a hardware spec: m = 1 is the limit every format shares.',
+    },
+    {
+      url: LLAMACPP_MUL_MV_URL,
+      title: 'llama.cpp Metal: ggml_metal_mul_mv_mma_rows_min (commit a0ad695)',
+      kind: 'community',
+      fields: gemvFields,
+      note: 'ggml-metal-common.cpp:121–140: pure mat-vec (no simdgroup MMA) for m = 1 on Q4_0 / Q8_0 / Q6_K, m ≤ 2 F16 / Q4_K / MXFP4, m ≤ 3 BF16.',
+    },
+    ...sfus.flatMap((s) => s.sources),
   ];
   const simdEstimated: EstimatedField[] = [
     {
@@ -296,6 +336,7 @@ function appleDevice(params: AppleDeviceParams): DeviceSpec {
       field: `${simdTilingPath}.ctasPerUnit`,
       reason: 'One resident GEMM threadgroup per GPU core assumed; register/shared-memory use affects occupancy.',
     },
+    ...sfus.flatMap((s) => s.estimated),
   ];
 
   // Empty on M3/M4: no Neural Accelerator performance claim is attached to these devices.

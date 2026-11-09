@@ -353,7 +353,12 @@ compressed global entries next to its raw window) shares the same softmax: Q is 
 position p).
 
 - `pairs = attendedPairs(primary) + attendedPairs(secondary, r)` (`attentionPairs`, also used by the shape model)
-- `F = 2·seqs·heads·pairs·(qkHeadDim + vHeadDim)` (softmax not counted, §9)
+- `F = 2·seqs·heads·pairs·(qkHeadDim + vHeadDim)`: tensor FLOP of Q·Kᵀ and P·V only
+- softmax scores `S = seqs·heads·pairs` (`attentionScores`): the (query, key, head) triples the kernel computes, so
+  the causal triangle (≈ half the square at prefill), window and top-k caps and compressed entries count as for the
+  FLOP, and decode is `heads·kvLen` per sequence. The softmax is not in `F`, but it is in the op's time: one exp
+  and `SOFTMAX_VECTOR_FLOP_PER_SCORE` = 5 vector FLOP per score, overlapped with the MMAs (§7 "Attention
+  softmax"). Linear attention (`recurrent` ops) has no softmax.
 - read Q `seqs·qLen·heads·qk·bpe(act)`, write O `seqs·qLen·heads·v·bpe(act)`
 - kvRead `seqs·kvTokensRead·kvRead.elemsPerToken·bpe(kvRead)`; kvWrite `seqs·w·kvWrite.elemsPerToken·bpe(kvWrite)` with
   `w = kvWriteTokens ?? qLen` (`attentionBytes`; a block drafter attends over its new rows but keeps only the m_ctx
@@ -460,7 +465,9 @@ Schema: `src/sim/hw/types.ts` (`DeviceSpec`, `ComputeEngine`, `MatmulPeak`, `Gem
 - A device has ≥ 1 **compute engine** (GPU tensor cores, NPU, TPU MXU); a run uses exactly one
   (`HardwareStack.engineId`, default `engines[0]`). An engine lists matmul peaks, vector (non-tensor) peaks,
   compute units (the wave granularity) and tiling parameters, and may cap the memory bandwidth it can reach
-  (`memBandwidthCapBytesPerSec`, e.g. an NPU on a narrower fabric).
+  (`memBandwidthCapBytesPerSec`, e.g. an NPU on a narrower fabric). It also gives its SFU exp2 rate
+  (`sfuOpsPerSec`, "SFU rate" below) and, where kernels run GEMMs of a few rows on the vector ALUs, a GEMV row
+  limit (`gemvMaxRows`, "GEMV path" below).
 - **Memory** is `dedicated` (GDDR / HBM) or `unified` (one pool shared with the CPU and OS: Apple M-series, DGX
   Spark, Strix Halo). `capacityOptionsBytes` lists SKU configurations (`[0]` default;
   `HardwareStack.memCapacityBytes` must be one of them).
@@ -516,6 +523,61 @@ Worked examples on the synthetic GPU (100 units, tile 128×128, MMA 64×8×16; `
 Not modeled: split-K / stream-K (pessimistic for few-tile shapes, which are memory-bound anyway) and
 shared-memory bandwidth penalties of small tiles.
 
+### GEMV path
+
+`src/sim/hw/efficiency.ts: gemvComputeSec`; `src/sim/engine/opTime.ts: gemmOpTime`; `ComputeEngine.gemvMaxRows`.
+
+A GEMM with very few token rows does not need the MMA unit: GEMV kernels compute each output as a SIMD dot product
+on the vector ALUs, so the token row is not padded to the MMA shape and no tile or wave quantization applies. An
+engine that sets `gemvMaxRows` gets that path for a GEMM with `m ≤ gemvMaxRows`, dense weights and fp16 / bf16 /
+fp32 math (int8 / fp8 / fp4 math has no vector peak and keeps the MMA path):
+
+```
+t_gemv    = F / vectorPeak(math)               (like an elementwise op: every lane busy, no efficiency term)
+t_compute = min(t_mma, t_gemv)                 (t_mma: the shape-efficiency time above)
+```
+
+When the GEMV path wins, the op reports `computePath: 'gemv'`, `efficiency 1` and the vector peak as
+`peakFlopsPerSec`; the memory term is unchanged. The Apple engines set `gemvMaxRows = 1` (`presets/apple.ts`): MLX
+(`matmul.cpp` `gemv`, `quantized.cpp` `qmv`, commit fc344c98) and llama.cpp Metal (`ggml_metal_mul_mv_mma_rows_min`,
+commit a0ad695) both run m = 1 as a vector GEMV for every weight format; larger limits are format- and
+chip-specific (MLX affine 4-bit up to m 3 on M3/M4), so 1 is the conservative choice. On M3/M4 the SIMD FMA rate
+equals the `simdgroup_matrix` rate, so this removes the MMA padding only (the 8 × 8 tile made an m = 1 GEMM run at
+1/8 of the peak). On M5 the Neural Accelerator engine falls back to the SIMD ALUs for these GEMMs (its vector peaks
+are the SIMD engine's): NAX at m = 1 would run 1024/8 = 128 FLOP/core/clock, below the SIMD fp16 512. Example
+(`opTime.test.ts`): a MoE router GEMM (m 1, n 128, k 4096, bf16) on the M3 Ultra becomes memory-bound.
+Other engines leave `gemvMaxRows` absent, the MMA path only; their m = 1 GEMMs are memory-bound either way.
+
+### SFU rate
+
+`ComputeEngine.sfuOpsPerSec`; per-family rates and their provenance in `src/sim/hw/presets/sfu.ts` (`SfuRate`,
+`engineSfu`, `nvidiaSfu`). The special-function units (NVIDIA MUFU, AMD transcendental unit, Intel extended math,
+Apple's SIMD transcendental path) compute the softmax exponential, one FP32 `exp2` per attention score (§7
+"Attention softmax"). Per device, in results/s:
+
+```
+sfuOpsPerSec = compute units · exp2 results per clock per unit · clock     (the clock of the vector FP32 peak)
+```
+
+| Family (presets)                                                                               | exp2 / clock / unit | Status                                                                           |
+| ---------------------------------------------------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------- |
+| NVIDIA Ampere, Ada, Hopper, B200, GeForce Blackwell (RTX 3090 / 4090 / 5090, H100, H200, B200) | 16 / SM             | sourced: CUDA guide throughput table (cc 8.6, 8.9, 9.0, 10.0, 12.0)              |
+| NVIDIA GB10 (DGX Spark)                                                                        | 16 / SM             | estimate: cc 12.1 is not in the table; the cc 12.0 rate                          |
+| NVIDIA Blackwell Ultra (B300)                                                                  | 32 / SM             | sourced: Blackwell Ultra blog ("SFU throughput doubled"), FA4 paper              |
+| AMD CDNA3 (MI300X, MI325X)                                                                     | 16 / CU             | estimate: quarter-rate transcendentals (AMD RDNA deck "¼ rate (like GCN)", LLVM) |
+| AMD CDNA4 (MI355X)                                                                             | 32 / CU             | sourced 2×: CDNA 4 whitepaper "transcendental rates increased by 2x"             |
+| AMD MI455X                                                                                     | 64 / unit           | estimate, no source: CDNA4's ratio to vector FP32 (the upper-bound rule)         |
+| AMD RDNA 3.5 / 4 (Strix Halo, R9700, RX 9070 XT)                                               | 16 / CU             | estimate: one quarter-rate unit per SIMD32                                       |
+| Intel Xe2 (Arc Pro B70 / B65 / B60, B580)                                                      | 32 / Xe core        | estimate, no source: the upper end of 16–32                                      |
+| Apple M3 / M4 / M5 GPU (both M5 engines)                                                       | 32 / core           | estimate: philipturner/metal-benchmarks M1 measurement, assumed for M3+          |
+
+The vendors' "TeraExponentials/s" figures (Hopper 4.5, Blackwell 5, Blackwell Ultra 10.7) are full-die numbers
+(≈ 144 / 160 SMs); the presets use the per-SKU derivation instead (H100 4.19e12, B200 4.69e12, B300 9.38e12
+exp2/s). An estimate takes the upper end of its plausible range, because a rate that is too low could push the
+bound below a real kernel. `hw/presets.test.ts` checks that every engine sets a covered rate between 1/64 and 1/2
+of its vector FP32 FLOP/s (at most one exp per FP32 lane per clock), and that B300 = 2 × B200. Absent on an engine
+= the softmax is not costed (the synthetic test devices).
+
 ### Estimated fields
 
 Every numeric leaf of a preset is covered by a `sources[].fields` path (a prefix covers its subtree) or an
@@ -539,14 +601,14 @@ A variant (VRAM mod, tensor-rate unlock, power limit, P2P driver) is **a base sp
 partial overrides**, not a copied spec. Device and link modifiers are separate unions, because P2P is a
 property of the link.
 
-| Kind                 | Effect                                                                                                                           | Paths its provenance covers                                |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `memoryCapacity`     | replaces `memory.capacityOptionsBytes`                                                                                           | `memory.capacityOptionsBytes`                              |
-| `memoryBandwidth`    | replaces `memory.bandwidthBytesPerSec`                                                                                           | `memory.bandwidthBytesPerSec`                              |
-| `peakScale`          | multiplies every matmul peak matching ALL given filters (engineId, input, accumulate, sparsity) by `factor`; must match ≥ 1 peak | `engines.<i>.matmulPeaks`                                  |
-| `clockScale`         | multiplies all matmul AND vector peaks of an engine (default all) by `factor`; memory bandwidth unchanged                        | `engines.<i>.matmulPeaks`, `engines.<i>.vectorFlopsPerSec` |
-| link `p2p`           | sets `p2p`; `'direct'` drops `hostBounce`, `'host_bounce'` requires it                                                           | `p2p`, `hostBounce`                                        |
-| link `linkBandwidth` | replaces `bandwidthPerDirectionBytesPerSec`                                                                                      | `bandwidthPerDirectionBytesPerSec`                         |
+| Kind                 | Effect                                                                                                                           | Paths its provenance covers                                                            |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `memoryCapacity`     | replaces `memory.capacityOptionsBytes`                                                                                           | `memory.capacityOptionsBytes`                                                          |
+| `memoryBandwidth`    | replaces `memory.bandwidthBytesPerSec`                                                                                           | `memory.bandwidthBytesPerSec`                                                          |
+| `peakScale`          | multiplies every matmul peak matching ALL given filters (engineId, input, accumulate, sparsity) by `factor`; must match ≥ 1 peak | `engines.<i>.matmulPeaks`                                                              |
+| `clockScale`         | multiplies all matmul AND vector peaks and the SFU rate of an engine (default all) by `factor`; memory bandwidth unchanged       | `engines.<i>.matmulPeaks`, `engines.<i>.vectorFlopsPerSec`, `engines.<i>.sfuOpsPerSec` |
+| link `p2p`           | sets `p2p`; `'direct'` drops `hostBounce`, `'host_bounce'` requires it                                                           | `p2p`, `hostBounce`                                                                    |
+| link `linkBandwidth` | replaces `bandwidthPerDirectionBytesPerSec`                                                                                      | `bandwidthPerDirectionBytesPerSec`                                                     |
 
 - Applied **in list order**; scales compose multiplicatively (`clockScale 0.8` then `peakScale ×2` on bf16 =
   209.5 · 0.8 · 2 = 335.2 TFLOP/s).
@@ -1078,7 +1140,7 @@ residual add fused (`2·K + 1` FLOP per element), taps `dim·K·bpe(hp)`, state 
 
 `lower/gqa.ts` (Inkling). `attn.rel_proj (m T, n Hl·relDim, k h, module attention)` → `attn.rel_table (m T·Hl,
 n extent, k relDim, weights in highPrecision, replicated)`. The bias gather and add inside the attention kernel
-are vector work, excluded like softmax (§9).
+are vector work, not costed (§9; the softmax itself is, §7 "Attention softmax").
 
 ### Module formats
 
@@ -1539,9 +1601,10 @@ GB/s` and `B_mem/6 ≥ 42 GB/s`, far above the 2.5–10 GB/s links: a 4 KiB deco
 
 Example (`src/ui/state/rdmaTcpScenario.test.ts`): DeepSeek-V4.1-Flash on 2 × M5 Ultra (64-core GPU), TP 2, lookup
 tables on SSD, over Thunderbolt 5. Decode @ 8k with DSpark (code): TB5 TCP 150.12 → 150.02 tok/s with the copy (comm α
-8.190 → 8.208 ms per token); without spec-dec 66.81 → 66.80 tok/s (7.515 → 7.518 ms). TB5 RDMA (no copy) after the α
-fix: 201.8 tok/s @ 8k with DSpark (comm α 9.10 → 1.27 ms) and 116.0 tok/s @ 8k without (8.35 → 1.17 ms), so RDMA now
-decodes faster than TCP, as it must.
+8.190 → 8.208 ms per token); without spec-dec 73.68 → 73.66 tok/s (7.515 → 7.518 ms). TB5 RDMA (no copy) after the α
+fix: 201.8 tok/s @ 8k with DSpark (comm α 9.10 → 1.27 ms) and 138.4 tok/s @ 8k without (8.35 → 1.17 ms), so RDMA now
+decodes faster than TCP, as it must. (The rows without spec-dec include the Apple GEMV path of §4; before it they
+were 66.80 and 116.0 tok/s.)
 
 ### Fabric shapes
 
@@ -1643,16 +1706,19 @@ equal.
 
 ### Per-op time
 
-`src/sim/engine/opTime.ts: opTime, roofline, engineMemBandwidthBytesPerSec, elementwiseBytesUnderFusion`.
+`src/sim/engine/opTime.ts: opTime, roofline, engineMemBandwidthBytesPerSec, elementwiseBytesUnderFusion,
+attentionSoftmaxSec`.
 One exhaustive switch on `op.kind`. `memBW = min(memory.bandwidthBytesPerSec, engine.memBandwidthCapBytesPerSec ?? ∞)`.
 
-| Op                                               | Compute term                                                                                                                                                                                  | Memory term                                                                                                                                       |
-| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| gemm, attention, indexer, recurrent (chunked)    | `F / (peak·efficiency)`; peak from §4 "Peak lookup and fallback" for the op's (math, accumulate, sparsity); efficiency from §4 "Shape efficiency" with the tiling of the format actually used | `bytes/memBW`                                                                                                                                     |
-| recurrent (step), elementwise                    | `F / vectorPeak(dtype)` (state dtype for the step)                                                                                                                                            | `bytes/memBW`                                                                                                                                     |
-| embedding                                        | 0                                                                                                                                                                                             | `bytes/memBW`                                                                                                                                     |
-| collective                                       | §6 on the group's path (TP group, EP group, or this stage's PP boundary)                                                                                                                      | —                                                                                                                                                 |
-| transfer (off-device read, deployment `offload`) | —                                                                                                                                                                                             | the tier/link model of §12 (latency `transferLatencySec` + service `transferBandwidthSec`); `bound = 'transfer'`. No FLOP, no device-memory bytes |
+| Op                                               | Compute term                                                                                                                                                                                          | Memory term                                                                                                                                       |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| indexer, recurrent (chunked)                     | `t_mma = F / (peak·efficiency)`; peak from §4 "Peak lookup and fallback" for the op's (math, accumulate, sparsity); efficiency from §4 "Shape efficiency" with the tiling of the format actually used | `bytes/memBW`                                                                                                                                     |
+| gemm                                             | `t_mma`; with `m ≤ gemvMaxRows` (dense, fp16 / bf16 / fp32 math) `min(t_mma, F / vectorPeak(math))` (§4 "GEMV path")                                                                                  | `bytes/memBW`                                                                                                                                     |
+| attention                                        | `max(t_mma, t_exp + t_vec)` with `t_exp = S / sfuOpsPerSec`, `t_vec = 5·S / vectorPeak(fp32)` ("Attention softmax" below)                                                                             | `bytes/memBW`                                                                                                                                     |
+| recurrent (step), elementwise                    | `F / vectorPeak(dtype)` (state dtype for the step)                                                                                                                                                    | `bytes/memBW`                                                                                                                                     |
+| embedding                                        | 0                                                                                                                                                                                                     | `bytes/memBW`                                                                                                                                     |
+| collective                                       | §6 on the group's path (TP group, EP group, or this stage's PP boundary)                                                                                                                              | —                                                                                                                                                 |
+| transfer (off-device read, deployment `offload`) | —                                                                                                                                                                                                     | the tier/link model of §12 (latency `transferLatencySec` + service `transferBandwidthSec`); `bound = 'transfer'`. No FLOP, no device-memory bytes |
 
 `t = max(compute, memory)`; the larger term is the op's `bound` (a tie counts as compute). A tensor op whose
 lookup falls back to the vector peak keeps the efficiency term (conservative).
@@ -1661,6 +1727,77 @@ lookup falls back to the vector peak keeps the efficiency term (conservative).
 elementwise op its activation read and write; `'ideal'` sets them to 0 (fused into a neighbouring GEMM),
 keeping weight and state bytes. The default is the conservative one; for REF_DENSE_8B prefill the difference is
 ≈ 5% (§10).
+
+### Attention softmax
+
+`src/sim/engine/opTime.ts: attentionOpTime, attentionSoftmaxSec`; `src/sim/ir/metrics.ts: attentionScores,
+SOFTMAX_VECTOR_FLOP_PER_SCORE`; rates `ComputeEngine.sfuOpsPerSec` (§4 "SFU rate"). Tests:
+`engine/opTime.test.ts`, `engine/softmaxCost.test.ts`, `ir/metrics.test.ts`.
+
+Fused attention computes, per score, Q·Kᵀ and P·V on the tensor cores and the softmax in between: one
+exponential on the special-function units and a few FP32 vector ops (running max, scale-and-subtract into the exp
+argument, row sum, the convert of P to the MMA format, the online-softmax rescale of the output and the sum,
+amortised). With `S = seqs·heads·pairs` scores (§3 "Attention"):
+
+```
+t_mma     = F / (peak · efficiency)                 (the tensor roofline, as for any tensor op)
+t_exp     = S / sfuOpsPerSec                        (one exp2; the e^x → 2^(x·log2 e) scale folds into the FMA)
+t_vec     = 5 · S / vectorPeak(fp32)                (5 FLOP per score at the vector FP32 FLOP/s peak)
+t_compute = max(t_mma, t_exp + t_vec)               (softmax overlapped with the MMAs)
+t         = max(t_compute, t_memory)
+```
+
+- **Overlap.** FlashAttention-3 (Hopper) and -4 (Blackwell) ping-pong warpgroups so one tile's softmax runs while
+  another tile's MMAs do, so the headline is the overlapped bound. Inside the softmax, the SFU and the FMA pipes are
+  added (conservative: they are separate pipes, but the vector ops depend on the exp). `Math.max` returns `t_mma`
+  itself when the softmax does not bind, so such ops are bit-identical to the model before the softmax term.
+- **The 5 FLOP** count each op as 1 FLOP against a peak that counts an FMA as 2, i.e. half a lane-cycle per op: the
+  rate of packed FP32×2 issue (Blackwell `f32x2`, CDNA packed FP32), optimistic elsewhere, which keeps the bound an
+  upper bound. With 5 full lane-ops (10 FLOP) B200 Llama-3-8B fp8 would read ≈ − 9 % instead of − 4 % @ pp8k
+  (analytic: attention × 1.52 instead of × 1.23 on a 20 % attention share).
+- **Which ops.** Causal masking, sliding windows, top-k (DSA) and compressed (CSA) entries enter through `S`, the
+  scores the kernel computes (≈ half the square for a causal prefill). The indexer's ReLU scores and linear-attention
+  (`recurrent`) ops have no softmax term. Decode stays bound by the KV read: per score it reads `kvRead` bytes of
+  K and V, far more time than one exp (`softmaxCost.test.ts` asserts, for every preset engine and a GQA, a head-dim-64
+  fp8-KV and an absorbed-MLA decode at 4k and 128k, seqs 1 and 64, that the op's time and bound do not change).
+- **Where it binds.** The ratio of tensor to SFU throughput: per score `t_mma = 4·hd / peak`, so the softmax binds
+  when `peak / sfuOpsPerSec > 4·hd / (1 + 5·sfuOpsPerSec / vectorPeak)`. H100 bf16 (989 TFLOP/s, 4.19e12 exp2/s) at
+  hd 128 has t_mma 5.18e-13 s against a softmax of 3.13e-13 s per score: overlapped, it never binds. B200 (2.25
+  PFLOP/s, 4.69e12 exp2/s) at hd 128: 2.28e-13 against 2.80e-13 (× 1.23 on attention); at hd 64 × 2.46. The ratio
+  `peak / sfuOpsPerSec` (tensor FLOP per exp2) is 236 on H100 and 480 on B200, but 128 on MI300X and MI355X, which
+  therefore stay MMA-bound even at hd 64; consumer GPUs, DGX Spark, Intel and Apple (ratios ≤ 68) never bind.
+
+Probe (the practicality review's F6 table, reproduced; single device, batch 1, `elementwiseFusion 'none'`, bf16
+attention; before = the same device without `sfuOpsPerSec`):
+
+| Model, device                       | pp8k                              | pp32k                        | pp128k                     | serial @ pp8k     | pp32k               | pp128k              |
+| ----------------------------------- | --------------------------------- | ---------------------------- | -------------------------- | ----------------- | ------------------- | ------------------- |
+| Llama-3-8B fp8, B200                | 204,388 → 196,178 tok/s (− 4.0 %) | 129,382 → 116,359 (− 10.1 %) | 52,151 → 44,092 (− 15.5 %) | − 19.4 %          | − 37.8 %            | − 49.5 %            |
+| gpt-oss-120b (hd 64) mxfp4, B200    | 181,385 → 159,000 (− 12.3 %)      | 140,981 → 97,825 (− 30.6 %)  | 73,922 → 38,360 (− 48.1 %) | − 19.5 %          | − 42.7 %            | − 61.0 %            |
+| Llama-3-8B bf16, H100               | 54,493 (0 %)                      | 40,520 (0 %)                 | 19,732 (0 %)               | − 6.7 %           | − 17.6 %            | − 29.3 %            |
+| Llama-3-8B fp8, H100                | 89,290 (0 %)                      | 56,805 (0 %)                 | 22,924 (0 %)               | − 10.5 %          | − 23.0 %            | − 32.5 %            |
+| gpt-oss-120b mxfp4, B300            | − 4.7 %                           | − 13.6 %                     | 73,922 → 55,507 (− 24.9 %) | − 12.9 %          | − 31.6 %            | − 49.2 %            |
+| gpt-oss-120b mxfp4, MI355X / MI455X | 0 %                               | 0 %                          | 0 %                        | − 7.2 % / − 7.6 % | − 19.6 % / − 20.3 % | − 33.9 % / − 34.4 % |
+
+All rates are prefill tok/s at the stated prompt length. Decode on B200 and H100 is unchanged at 8k and 128k. The
+**serial** columns are a documented sensitivity only, not a setting: `T_serial = T + Σ_attention [max(t_memory,
+t_mma + t_softmax) − t]`, the bound if the softmax did not overlap the MMAs at all.
+
+**Cross-check against real kernels** (attention-only bound `F / t` for a causal 16k prefill, batch 2, 16 × hd 128
+or 32 × hd 64 heads; `softmaxCost.test.ts`). The bound must stay above published forward throughput:
+
+| Device, attention        | bound (TFLOP/s) | published                    |                |
+| ------------------------ | --------------- | ---------------------------- | -------------- |
+| H100, bf16, hd 64 / 128  | 817 / 982       | FlashAttention-3: 497 / 648  | above          |
+| H100, fp8, hd 64 / 128   | 817 / 1634      | FlashAttention-3: 613 / 1008 | above          |
+| B200, bf16, hd 128 (32k) | 1829            | FlashAttention-4: 1613       | above, by 13 % |
+
+**Known limitation (not in the headline): exp emulated on the FMA pipes.** FlashAttention-4 computes 10–25 % of
+its exponentials with a polynomial on the FMA units instead of the SFU, and an FP4-attention preprint (arXiv
+2609.04105, trading accuracy) reports 2998 TFLOP/s on GB200 at hd 128, above this MUFU-only bound (1829 on B200).
+The headline costs every exp on the SFU, as the CUDA guide rates it; a kernel that moves exps to the FMA pipes can
+exceed it on Blackwell. A sensitivity would add the FMA pipes' spare throughput to the SFU rate (an exp2
+polynomial costs ~10 FMA, so each 1 % of FMA-pipe time buys ~1/10 of an exp per lane-cycle).
 
 ### Stage time and overlap
 
@@ -1853,7 +1990,6 @@ Excluded on purpose (only hardware and math limits are modeled):
   on, they are the hardware/math bound given the stated acceptance, hit ratio and placement. Draft trees, the DSpark
   confidence scheduler, predictor accuracy and the CPU-compute offload mode (a hook validation rejects) are not
   modelled.
-- Softmax / SFU throughput (it can bind for head_dim ≤ 64).
 - Dequantization compute of weight-only quantized GEMMs (they run at the wider format's peak, §2).
 - Split-K / stream-K; L2 / cache reuse beyond compulsory traffic.
 - Clock throttling beyond an explicit `clockScale` modifier.
@@ -1865,6 +2001,15 @@ Excluded on purpose (only hardware and math limits are modeled):
 
 Documented approximations (each isolated in one constant or rule):
 
+- Attention softmax (§7 "Attention softmax"): `SOFTMAX_VECTOR_FLOP_PER_SCORE` = 5 FLOP per score at the vector FP32
+  FLOP/s peak (the FlashAttention O-rescale is folded into it); the SFU and FMA parts in series, the whole softmax
+  overlapped with the MMAs (the serial variant is a documented sensitivity, not a setting); every exp on the SFU
+  (FlashAttention-4's polynomial exp on the FMA pipes is not credited, so such kernels can exceed the Blackwell
+  bound); estimated SFU rates take the upper end (§4 "SFU rate"). Not costed: the indexer's ReLU and head weighting
+  (vector work next to its GEMM), and the linear-attention decay-gate exps (≈ chunkLen/2 per token per head, next
+  to the `(C+1)·(dk+dv)` FLOP of the chunk).
+- GEMV path (§4 "GEMV path"): `gemvMaxRows = 1` on Apple only (kernel dispatch, conservative); a GEMV runs at the
+  full vector peak of its math format.
 - Recurrent `c_s` constants (chunked 4; step GDN 7, Mamba2 5, linear 4) and the chunk length
   `min(chunkTokens ?? 64, qLen)`.
 - linear-attention `in_proj` carries `2·vH` gate outputs for GatedDeltaNet and linear, `vH` (dt) for Mamba2 (KDA:
@@ -1938,7 +2083,7 @@ Shortlist-model approximations (sub-percent unless noted):
 - n-gram tables count toward weight memory and total params, not active params; the last n−1 token ids the hashes
   need are not counted as state.
 - KDA `A_log` (vH) and `dt_bias` (vH·dk) are not modeled as weight reads; per-channel decay costs like GDN's.
-- The relative-position bias gather and add inside attention are excluded, like softmax.
+- The relative-position bias gather and add inside attention are excluded (vector work; the softmax is costed, §7).
 - A cross-layer source on another pipeline stage: the consumer's stage is assumed to hold the data; no transfer is
   costed and the data is not counted twice in memory (a `simulate` warning names each case).
 
@@ -1962,6 +2107,8 @@ activations and the embedding row add 0.1%); every op is memory-bound.
 `2·622,329,856`; total 61,849,981,681,664 FLOP → `0.29523 s` at 209.5 TFLOP/s → bound **13,874 tok/s**.
 The simulator gives **12,892 tok/s** with `elementwiseFusion 'none'` (0.93 of the bound: GEMM shape efficiency
 0.96–1.0 and ≈ 29 GB of elementwise traffic ≈ 16 ms) and **13,575 tok/s** with `'ideal'` (0.98).
+The attention softmax (§7) does not bind here: per score 6.55e12 exp2/s and 104.8 TFLOP/s vector give 2.0e-13 s
+against the MMA's 512 FLOP / 209.5 TFLOP/s = 2.4e-12 s, so these numbers are unchanged by it.
 
 **Memory**: weights 16,381,470,720 B + KV at 4096 tokens 603,979,776 B + activation peak 301,989,888 B
 (the prefill `silu_mul`) = 17.29e9 B ≤ 32e9 B: fits.

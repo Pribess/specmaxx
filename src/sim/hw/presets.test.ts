@@ -368,3 +368,37 @@ describe('preset library: simulate() smoke test (REF_DENSE_8B, bf16, batch 1, pr
     expect(r.prefill.tokensPerSec).toBeGreaterThan(base.prefill.tokensPerSec); // bf16 tensor ×2
   });
 });
+
+describe('SFU rates (sfuOpsPerSec, docs §4 "SFU rate")', () => {
+  for (const d of DEVICE_PRESETS) {
+    it(`${d.id}: every engine sets one, covered, between 1/64 and 1/2 of the vector FP32 FLOP/s`, () => {
+      d.engines.forEach((e, i) => {
+        const sfu = e.sfuOpsPerSec;
+        expect(sfu, e.id).toBeGreaterThan(0);
+        const field = `engines.${i}.sfuOpsPerSec`;
+        const covered =
+          d.sources.some((s) => s.fields.includes(field)) || d.estimated.some((x) => x.field === field);
+        expect(covered, field).toBe(true);
+        // At most one exp per FP32 lane per clock (vector FP32 counts 2 FLOP per lane per clock), at least 1/32 lane.
+        const vec = e.vectorFlopsPerSec.fp32!;
+        expect(sfu!, e.id).toBeLessThanOrEqual(vec / 2);
+        expect(sfu!, e.id).toBeGreaterThanOrEqual(vec / 64);
+      });
+    });
+  }
+  it('B300 = 2 × B200 per SM per clock (Blackwell Ultra doubles the SFU exp rate)', () => {
+    const b200 = DEVICE_PRESETS.find((d) => d.id === 'b200')!.engines[0];
+    const b300 = DEVICE_PRESETS.find((d) => d.id === 'b300')!.engines[0];
+    expect(b300.sfuOpsPerSec! / b200.sfuOpsPerSec!).toBeCloseTo(2, 12);
+  });
+  it('H100 = 132 SMs × 16 × the 67 TFLOP/s vector clock = 67e12 / 16', () => {
+    const h100 = DEVICE_PRESETS.find((d) => d.id === 'h100-sxm')!.engines[0];
+    expect(h100.sfuOpsPerSec! / (67e12 / 16)).toBeCloseTo(1, 12);
+  });
+  it('Apple: the GEMV row limit is set on every engine (NAX falls back to the SIMD ALUs)', () => {
+    for (const d of APPLE_DEVICE_PRESETS) for (const e of d.engines) expect(e.gemvMaxRows, `${d.id} ${e.id}`).toBe(1);
+    for (const d of [...NVIDIA_CONSUMER_DEVICE_PRESETS, ...NVIDIA_DATACENTER_DEVICE_PRESETS, ...AMD_DEVICE_PRESETS, ...INTEL_DEVICE_PRESETS]) {
+      for (const e of d.engines) expect(e.gemvMaxRows, d.id).toBeUndefined();
+    }
+  });
+});

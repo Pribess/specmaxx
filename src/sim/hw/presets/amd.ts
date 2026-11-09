@@ -46,6 +46,10 @@ import type { MathFormat } from '../../ir/dtype';
 import type { ComputeEngine, DeviceSpec, EstimatedField, GemmTiling, MatmulPeak, SourceRef } from '../types';
 import { gb, gbPerSec, tbPerSec, tflops } from '../units';
 import { AMD_PEERDIRECT_SOURCE, NO_RDMA_SOURCE_ESTIMATE } from './gpudirect';
+import { AMD_CDNA3_SFU, AMD_CDNA4_SFU, AMD_MI455X_SFU, AMD_RDNA_SFU, engineSfu } from './sfu';
+
+/** Field path of every AMD preset's SFU rate (one engine each). */
+const SFU_FIELD = 'engines.0.sfuOpsPerSec';
 
 /** One mebibyte (cache sizes are binary). Unit: bytes. */
 const MIB = 1024 * 1024;
@@ -161,7 +165,7 @@ const RDNA4_TILING_KEYS = ['default', 'fp16', 'bf16', 'fp8', 'int8', 'int4'];
  * Matmul peak = CUs × per-CU WMMA rate × boost clock (dense and 4:2 sparse); vector fp32 = CUs × 64 SP × 2 FLOP
  * × boost (single issue), vector fp16 = 2× that (packed).
  */
-function rdna4Engine(name: string, computeUnits: number, boostClockHz: number): ComputeEngine {
+function rdna4Engine(name: string, computeUnits: number, boostClockHz: number, sfuOpsPerSec: number): ComputeEngine {
   const d = RDNA4_DENSE_FLOP_PER_CLK_PER_CU;
   const s = RDNA4_SPARSE_FLOP_PER_CLK_PER_CU;
   const fp32SingleIssueFlopsPerSec = cuPeakFlopsPerSec(computeUnits, RDNA_SP_PER_CU * 2, boostClockHz);
@@ -184,6 +188,7 @@ function rdna4Engine(name: string, computeUnits: number, boostClockHz: number): 
       // No vendor bf16 vector rate: omitted (falls back to fp32).
       fp16: 2 * fp32SingleIssueFlopsPerSec,
     },
+    sfuOpsPerSec,
     gemmTiling: {
       default: tiling(16, 16, 16, RDNA_CTA_TILES),
       fp16: tiling(16, 16, 16, RDNA_CTA_TILES),
@@ -247,8 +252,10 @@ const R9700_URL =
   'https://www.amd.com/en/products/graphics/workstations/radeon-ai-pro/ai-9000-series/amd-radeon-ai-pro-r9700.html';
 /** R9700 boost clock: "Boost Frequency Up to 2920 MHz" (game clock 2350 MHz). Unit: Hz. */
 const R9700_BOOST_CLOCK_HZ = 2.92e9;
+/** R9700 SFU: 64 CU × 16 exp2/clk × 2.92 GHz (estimate, quarter-rate transcendental unit). */
+const R9700_SFU = engineSfu(AMD_RDNA_SFU, 64, 'CU', R9700_BOOST_CLOCK_HZ, SFU_FIELD);
 /** The R9700's RDNA4 engine: 64 CU at the 2920 MHz boost clock. */
-const R9700_ENGINE = rdna4Engine('Navi 48 RDNA4 AI Accelerators (WMMA)', 64, R9700_BOOST_CLOCK_HZ);
+const R9700_ENGINE = rdna4Engine('Navi 48 RDNA4 AI Accelerators (WMMA)', 64, R9700_BOOST_CLOCK_HZ, R9700_SFU.sfuOpsPerSec);
 
 /**
  * AMD Radeon AI PRO R9700 (Navi 48, RDNA4, 64 CU, 32 GB GDDR6, 640 GB/s), all peaks at the 2920 MHz BOOST
@@ -295,6 +302,7 @@ export const RADEON_AI_PRO_R9700: DeviceSpec = {
       fields: ['hostInterface'],
       note: 'Host interface "PCIe® 5.0 x16".',
     },
+    ...R9700_SFU.sources,
   ],
   estimated: [
     NO_RDMA_SOURCE_ESTIMATE,
@@ -306,6 +314,7 @@ export const RADEON_AI_PRO_R9700: DeviceSpec = {
     })),
     rdnaVectorFp32Estimate(4096, 2.92, 47.8),
     ...ctaEstimates(RDNA4_TILING_KEYS, RDNA_CTA_REASON),
+    ...R9700_SFU.estimated,
   ],
 };
 
@@ -313,8 +322,15 @@ export const RADEON_AI_PRO_R9700: DeviceSpec = {
 const RX_9070_XT_URL = 'https://www.amd.com/en/products/graphics/desktops/radeon/9000-series/amd-radeon-rx-9070xt.html';
 /** RX 9070 XT boost clock: "Boost Frequency Up to 2970 MHz" (game clock 2400 MHz). Unit: Hz. */
 const RX_9070_XT_BOOST_CLOCK_HZ = 2.97e9;
+/** RX 9070 XT SFU: 64 CU × 16 exp2/clk × 2.97 GHz (estimate, quarter-rate transcendental unit). */
+const RX_9070_XT_SFU = engineSfu(AMD_RDNA_SFU, 64, 'CU', RX_9070_XT_BOOST_CLOCK_HZ, SFU_FIELD);
 /** The RX 9070 XT's RDNA4 engine: 64 CU at the 2970 MHz boost clock. */
-const RX_9070_XT_ENGINE = rdna4Engine('Navi 48 RDNA4 AI Accelerators (WMMA)', 64, RX_9070_XT_BOOST_CLOCK_HZ);
+const RX_9070_XT_ENGINE = rdna4Engine(
+  'Navi 48 RDNA4 AI Accelerators (WMMA)',
+  64,
+  RX_9070_XT_BOOST_CLOCK_HZ,
+  RX_9070_XT_SFU.sfuOpsPerSec,
+);
 
 /**
  * AMD Radeon RX 9070 XT (Navi 48, RDNA4, 64 CU, 16 GB GDDR6, 640 GB/s), AMD's top consumer card as of
@@ -366,6 +382,7 @@ export const RADEON_RX_9070_XT: DeviceSpec = {
       fields: ['engines.0.matmulPeaks'],
       note: '"The peak FP16 throughput is … 195 on the 9070 XT"; measured hipBLASLt 136.58 TFLOPS at M=N=K=8192.',
     },
+    ...RX_9070_XT_SFU.sources,
   ],
   estimated: [
     NO_RDMA_SOURCE_ESTIMATE,
@@ -377,6 +394,7 @@ export const RADEON_RX_9070_XT: DeviceSpec = {
     })),
     rdnaVectorFp32Estimate(4096, 2.97, 48.7),
     ...ctaEstimates(RDNA4_TILING_KEYS, RDNA_CTA_REASON),
+    ...RX_9070_XT_SFU.estimated,
   ],
 };
 
@@ -403,6 +421,8 @@ const CNC_STRIX_HALO_URL = 'https://chipsandcheese.com/p/amds-chiplet-apu-an-ove
 const RADEON_8060S_CLOCK_HZ = 2.9e9;
 /** Radeon 8060S compute units: "Graphics Core Count 40". */
 const RADEON_8060S_CUS = 40;
+/** Radeon 8060S SFU: 40 CU × 16 exp2/clk × 2.9 GHz (estimate, quarter-rate transcendental unit). */
+const RADEON_8060S_SFU = engineSfu(AMD_RDNA_SFU, RADEON_8060S_CUS, 'CU', RADEON_8060S_CLOCK_HZ, SFU_FIELD);
 /**
  * RDNA3 / RDNA 3.5 WMMA rates per CU per clock (GPUOpen "RX 7900 XTX FLOPS/clock/CU FP16 512 BF16 512 IU8 512
  * IU4 1024"); gfx1151 uses the RDNA3 WMMA instructions (AMD calculator maps GFX1151 to RDNA3). Dense only:
@@ -437,6 +457,7 @@ function radeon8060sEngine(): ComputeEngine {
       // Packed FP16 = 2× single-issue FP32 = 29.7 TFLOP/s (= WMMA fp16 / 2).
       fp16: 2 * fp32SingleIssueFlopsPerSec,
     },
+    sfuOpsPerSec: RADEON_8060S_SFU.sfuOpsPerSec,
     gemmTiling: {
       default: tiling(16, 16, 16, RDNA_CTA_TILES),
       fp16: tiling(16, 16, 16, RDNA_CTA_TILES),
@@ -553,6 +574,7 @@ export const RYZEN_AI_MAX_PLUS_395: DeviceSpec = {
       fields: ['l2Bytes'],
       note: '"40 compute units, 32MB of Infinity Cache, and a boost clock of up to 2.9GHz".',
     },
+    ...RADEON_8060S_SFU.sources,
   ],
   estimated: [
     ...peakPaths(RADEON_8060S_ENGINE.matmulPeaks, ['int8', 'int4']).map((field) => ({
@@ -575,6 +597,7 @@ export const RYZEN_AI_MAX_PLUS_395: DeviceSpec = {
         'instructions"). No AMD figure.',
     },
     ...ctaEstimates(RDNA3_TILING_KEYS, RDNA_CTA_REASON),
+    ...RADEON_8060S_SFU.estimated,
   ],
 };
 
@@ -603,6 +626,8 @@ const CDNA3_FLOP_PER_CLK_PER_CU = {
 const CDNA3_MI300_CUS = 304;
 /** MI300X / MI325X: "Peak Engine Clock 2100 MHz". Unit: Hz. */
 const CDNA3_MI300_CLOCK_HZ = 2.1e9;
+/** MI300X / MI325X SFU: 304 CU × 16 exp2/clk × 2.1 GHz (estimate, quarter-rate transcendentals). */
+const CDNA3_MI300_SFU = engineSfu(AMD_CDNA3_SFU, CDNA3_MI300_CUS, 'CU', CDNA3_MI300_CLOCK_HZ, SFU_FIELD);
 
 /** Representative hipBLASLt / Tensile macro tiles for MFMA GEMMs (elements, m × n); multiples of 16. Estimated. */
 const CDNA_CTA_TILES = [
@@ -646,6 +671,7 @@ function cdna3Engine(): ComputeEngine {
       fp32: cuPeakFlopsPerSec(cus, r.fp32Vector, clk),
       fp16: cuPeakFlopsPerSec(cus, r.fp16Vector, clk),
     },
+    sfuOpsPerSec: CDNA3_MI300_SFU.sfuOpsPerSec,
     gemmTiling: {
       default: tiling(16, 16, 16, CDNA_CTA_TILES),
       fp16: tiling(16, 16, 16, CDNA_CTA_TILES),
@@ -736,8 +762,9 @@ export const INSTINCT_MI300X: DeviceSpec = {
       note: '"Compute Units 304", "Matrix Cores 1216", "Peak Engine Clock 2100 MHz"; FP8 2.61 / sparse 5.22 PFLOPs; FP16 1.3 / 2.61 PFLOPs.',
     },
     ...CDNA3_SHARED_SOURCES,
+    ...CDNA3_MI300_SFU.sources,
   ],
-  estimated: ctaEstimates(CDNA3_TILING_KEYS, CDNA_CTA_REASON),
+  estimated: [...ctaEstimates(CDNA3_TILING_KEYS, CDNA_CTA_REASON), ...CDNA3_MI300_SFU.estimated],
 };
 
 /** Instinct MI325X data sheet. */
@@ -784,8 +811,9 @@ export const INSTINCT_MI325X: DeviceSpec = {
       note: '"6 TB/s max. peak theoretical", "Up to 6.0 GT/s".',
     },
     ...CDNA3_SHARED_SOURCES,
+    ...CDNA3_MI300_SFU.sources,
   ],
-  estimated: ctaEstimates(CDNA3_TILING_KEYS, CDNA_CTA_REASON),
+  estimated: [...ctaEstimates(CDNA3_TILING_KEYS, CDNA_CTA_REASON), ...CDNA3_MI300_SFU.estimated],
 };
 
 // ---------------------------------------------------------------------------------------------------------
@@ -816,6 +844,8 @@ const CDNA4_FLOP_PER_CLK_PER_CU = {
 const MI355X_CUS = 256;
 /** MI355X: "Peak Engine Clock 2400 MHz". Unit: Hz. */
 const MI355X_CLOCK_HZ = 2.4e9;
+/** MI355X SFU: 256 CU × 32 exp2/clk (CDNA4: 2× CDNA3) × 2.4 GHz. */
+const MI355X_SFU = engineSfu(AMD_CDNA4_SFU, MI355X_CUS, 'CU', MI355X_CLOCK_HZ, SFU_FIELD);
 
 /** CDNA4 tiling keys: MFMA 16×16×32 f16/bf16 (default), 16×16×64 i8, 16×16×128 f8f6f4 (fp8, fp6, fp4). */
 const CDNA4_TILING_KEYS = ['default', 'fp16', 'bf16', 'fp8', 'fp6', 'fp4', 'int8'];
@@ -856,6 +886,7 @@ function mi355xEngine(): ComputeEngine {
       fp32: cuPeakFlopsPerSec(cus, r.fp32Vector, clk),
       fp16: cuPeakFlopsPerSec(cus, r.fp16Vector, clk),
     },
+    sfuOpsPerSec: MI355X_SFU.sfuOpsPerSec,
     gemmTiling: {
       default: tiling(16, 16, 32, CDNA_CTA_TILES),
       fp16: tiling(16, 16, 32, CDNA_CTA_TILES),
@@ -928,8 +959,9 @@ export const INSTINCT_MI355X: DeviceSpec = {
         'F8"), i.e. FP8 at 2× and FP6/FP4 at 4× the FP16 rate. SMFMAC (4:2, "Only the A-matrix may be sparse"): ' +
         'v_smfmac_f32_16x16x64_{f16,bf16}, v_smfmac_i32_16x16x128_i8, v_smfmac_f32_16x16x128_{fp8,bf8}; no F8F6F4 variant.',
     },
+    ...MI355X_SFU.sources,
   ],
-  estimated: ctaEstimates(CDNA4_TILING_KEYS, CDNA_CTA_REASON),
+  estimated: [...ctaEstimates(CDNA4_TILING_KEYS, CDNA_CTA_REASON), ...MI355X_SFU.estimated],
 };
 
 // ---------------------------------------------------------------------------------------------------------
@@ -944,6 +976,8 @@ const MI455X_PAGE_URL = 'https://www.amd.com/en/products/accelerators/instinct/m
 
 /** MI455X tiling keys; every shape is a CDNA4 proxy (no CDNA5 ISA is public). */
 const MI455X_TILING_KEYS = ['default', 'fp16', 'bf16', 'fp8', 'fp6', 'fp4', 'int8'];
+/** MI455X SFU: 256 units × 64 exp2/clk × 2.4 GHz (estimate, no source; the upper-bound rule). */
+const MI455X_SFU = engineSfu(AMD_MI455X_SFU, 256, 'compute units', 2.4e9, SFU_FIELD);
 
 /**
  * AMD Instinct MI455X (CDNA5, 432 GB HBM4 in 12 stacks, 23.3 TB/s), peaks as AMD's datasheet table prints them
@@ -983,6 +1017,7 @@ export const INSTINCT_MI455X: DeviceSpec = {
         { input: 'fp32', accumulate: 'fp32', sparsity: 'dense', flopsPerSec: tflops(315) },
       ],
       vectorFlopsPerSec: { fp64: tflops(5), fp32: tflops(315), fp16: tflops(315) },
+      sfuOpsPerSec: MI455X_SFU.sfuOpsPerSec,
       gemmTiling: {
         default: tiling(16, 16, 32, CDNA_CTA_TILES),
         fp16: tiling(16, 16, 32, CDNA_CTA_TILES),
@@ -1025,14 +1060,15 @@ export const INSTINCT_MI455X: DeviceSpec = {
         '315 TFLOPs; FP64 5 TFLOPs; "Dedicated Memory Size 432 GB", "HBM4", "Stacks of Memory 12", "Peak Memory ' +
         'Bandwidth 23.3 TB/s", "L2 Cache 192 MB".',
     },
+    ...MI455X_SFU.sources,
   ],
   estimated: [
     {
       field: 'engines.0.computeUnits',
       reason:
         'The datasheet says "COMPUTE UNITS 256", the product page "Work Group Processors 256" (a WGP would be 2 CUs, ' +
-        'i.e. 512). 256 is used; the field only sets the wave granularity of the shape-efficiency model, and no peak ' +
-        'is derived from it.',
+        'i.e. 512). 256 is used; the field sets the wave granularity of the shape-efficiency model, and only the SFU ' +
+        'estimate (engines.0.sfuOpsPerSec, per unit) is derived from it.',
     },
     ...MI455X_TILING_KEYS.flatMap((k) =>
       ['mmaM', 'mmaN', 'mmaK'].map((f) => ({
@@ -1043,6 +1079,7 @@ export const INSTINCT_MI455X: DeviceSpec = {
       })),
     ),
     ...ctaEstimates(MI455X_TILING_KEYS, CDNA_CTA_REASON),
+    ...MI455X_SFU.estimated,
   ],
 };
 

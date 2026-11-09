@@ -314,13 +314,36 @@ function gemmBytes(op: GemmOp): ByteBreakdown {
 // ---------------------------------------------------------------------------------------------------------------
 // Attention
 
-/** FLOP of the fused attention core (Q·Kᵀ and P·V; softmax excluded). Unit: FLOP. */
+/** FLOP of the fused attention core (Q·Kᵀ and P·V; tensor FLOP only, the softmax is costed separately, §7). Unit: FLOP. */
 function attentionFlops(op: AttentionOp): number {
   const pairs = attentionPairs(op);
   // Formula: F = 2·seqs·heads·(pairs + pairs_secondary)·(qkHeadDim + vHeadDim)
   // See docs/simulation-model.md §3 "Attention"
   return 2 * op.seqs * op.heads * pairs * (op.qkHeadDim + op.vHeadDim);
 }
+
+/**
+ * Softmax scores of an attention op on one device: the (query, key, head) triples its kernel actually computes,
+ * each needing one exp and a few vector ops. It counts what {@link attentionPairs} counts: the causal triangle
+ * exactly (`P(P+1)/2` per head at prefill, about half the square), window and top-k caps, secondary (compressed)
+ * entries, and `kvLen` per head in decode. Linear attention has no softmax (recurrent ops are not attention ops).
+ * Unit: scores (count). See docs/simulation-model.md §3 "Attention" and §7 "Attention softmax".
+ */
+export function attentionScores(op: AttentionOp): number {
+  // Formula: S = seqs·heads·pairs
+  // See docs/simulation-model.md §3 "Attention"
+  return op.seqs * op.heads * attentionPairs(op);
+}
+
+/**
+ * FP32 vector FLOP per softmax score besides its exp, charged at the vector FP32 FLOP/s peak: running max (1),
+ * scale-and-subtract into the exp argument (1), row sum (1), the convert of P to the MMA input format (1), and the
+ * online-softmax rescale of the running output and sum (1, amortised per score). Each op counts 1 FLOP against a peak
+ * that counts an FMA as 2, i.e. half a lane-cycle per op: the rate of packed FP32×2 issue (Blackwell `f32x2`, CDNA
+ * packed FP32), optimistic elsewhere, which keeps the bound an upper bound. A documented approximation
+ * (docs/simulation-model.md §7 "Attention softmax", §9). Unit: FLOP/score.
+ */
+export const SOFTMAX_VECTOR_FLOP_PER_SCORE = 5;
 
 /**
  * Memory traffic of the fused attention core: Q in, O out, K/V read for touched tokens, K/V appended for

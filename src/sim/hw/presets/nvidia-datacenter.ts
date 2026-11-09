@@ -25,6 +25,7 @@ import type { MathFormat } from '../../ir/dtype';
 import type { ComputeEngine, DeviceSpec, EstimatedField, GemmTiling, MatmulPeak, SourceRef } from '../types';
 import { gb, gbPerSec, mb, tbPerSec, tflops } from '../units';
 import { NVIDIA_DC_GPUDIRECT_SOURCE } from './gpudirect';
+import { NVIDIA_BLACKWELL_DC_SFU, NVIDIA_BLACKWELL_ULTRA_SFU, NVIDIA_GB10_SFU, NVIDIA_SM_SFU, nvidiaSfu } from './sfu';
 
 // ---------------------------------------------------------------------------------------------------------------
 // Shared sources and helpers
@@ -121,6 +122,8 @@ const GB10_TF32_DENSE_TFLOPS = GB10_FP16_DENSE_TFLOPS / 2; // 62.5
  * count and clock; ServeTheHome's Hot Chips report quotes "31 TFLOPS", i.e. ≈ 2.52 GHz).
  */
 const GB10_VECTOR_FP32_FLOPS = 6144 * 2 * 2.4e9;
+/** GB10 SFU: 48 SMs × 16 exp2/clk at the 2.4 GHz of the vector peak (estimate: cc 12.1 = the cc 12.0 rate). */
+const GB10_SFU = nvidiaSfu(NVIDIA_GB10_SFU, 48, GB10_VECTOR_FP32_FLOPS);
 
 /** GB10 matmul peaks (all fp32-accumulate; the fp32-acc = fp16-acc rate rests on a community measurement). */
 const GB10_PEAKS: MatmulPeak[] = [
@@ -174,6 +177,7 @@ export const DGX_SPARK: DeviceSpec = {
         // FP64 = 1/64 of FP32 (Chips and Cheese): 29.49 / 64 = 0.461 TFLOP/s.
         fp64: GB10_VECTOR_FP32_FLOPS / 64,
       },
+      sfuOpsPerSec: GB10_SFU.sfuOpsPerSec,
       gemmTiling: tilingTable(
         16,
         8,
@@ -271,6 +275,7 @@ export const DGX_SPARK: DeviceSpec = {
       'f16/bf16 m16n8k16; tf32 m16n8k8; e4m3/e5m2 and s8 m16n8k32; block-scaled e2m1 (kind::mxf4nvf4, sm_120a/f) ' +
         'm16n8k64 (peak FP4 needs this form). wgmma "Requires sm_90a"; tcgen05 lists sm_100a/sm_100f/sm_110f only.',
     ),
+    ...GB10_SFU.sources,
   ],
   estimated: [
     ...peakPaths(GB10_PEAKS, (p) => !(p.input === 'fp4' && p.sparsity === '2:4')).map((field) => ({
@@ -297,6 +302,7 @@ export const DGX_SPARK: DeviceSpec = {
       reason: 'Vector BF16 = FP32 rate (RTX Blackwell SM, whitepaper App. C); GB10 publishes none.',
     },
     ...tilingEstimates(GB10_TILING_KEYS, 'Typical CUTLASS CTA tile shapes for sm_120 mma.sync GEMMs'),
+    ...GB10_SFU.estimated,
   ],
 };
 
@@ -333,6 +339,9 @@ const HOPPER_SXM_PEAKS: MatmulPeak[] = [
 /** Tiling keys of the Hopper engines. */
 const HOPPER_TILING_KEYS = ['default', 'fp16', 'bf16', 'tf32', 'fp8', 'int8'];
 
+/** Hopper SFU: 132 SMs × 16 exp2/clk at the ≈ 1.98 GHz the FP32 67 TFLOP/s peak implies (CUDA guide, cc 9.0). */
+const HOPPER_SFU = nvidiaSfu(NVIDIA_SM_SFU, 132, tflops(67));
+
 /** Hopper engine (shared by H100 SXM and H200 SXM: same GH100 configuration and the same table numbers). */
 function hopperSxmEngine(): ComputeEngine {
   return {
@@ -343,6 +352,7 @@ function hopperSxmEngine(): ComputeEngine {
     matmulPeaks: HOPPER_SXM_PEAKS.map((p) => ({ ...p })),
     // FP32 67 TFLOP/s and FP64 34 TFLOP/s (non-tensor); the FP64 Tensor Core 67 TFLOP/s is not modeled.
     vectorFlopsPerSec: { fp32: tflops(67), fp64: tflops(34) },
+    sfuOpsPerSec: HOPPER_SFU.sfuOpsPerSec,
     gemmTiling: tilingTable(
       64,
       8,
@@ -413,8 +423,12 @@ export const H100_SXM: DeviceSpec = {
         'TFLOPS with FP16 Accumulate 1000/2000", "with FP32 Accumulate 1000/2000"), hence fp32-accumulate entries only.',
     },
     HOPPER_TILING_SOURCE,
+    ...HOPPER_SFU.sources,
   ],
-  estimated: tilingEstimates(HOPPER_TILING_KEYS, 'Typical CUTLASS sm90 warp-specialized CTA tiles (m a multiple of 64)'),
+  estimated: [
+    ...tilingEstimates(HOPPER_TILING_KEYS, 'Typical CUTLASS sm90 warp-specialized CTA tiles (m a multiple of 64)'),
+    ...HOPPER_SFU.estimated,
+  ],
 };
 
 /**
@@ -451,6 +465,7 @@ export const H200_SXM: DeviceSpec = {
         'specifications. May be subject to change."',
     },
     HOPPER_TILING_SOURCE,
+    ...HOPPER_SFU.sources,
   ],
   estimated: [
     {
@@ -459,6 +474,7 @@ export const H200_SXM: DeviceSpec = {
     },
     { field: 'l2Bytes', reason: '50 MB as H100 SXM5 (Hopper blog): same GH100 configuration; the H200 page states no L2.' },
     ...tilingEstimates(HOPPER_TILING_KEYS, 'Typical CUTLASS sm90 warp-specialized CTA tiles (m a multiple of 64)'),
+    ...HOPPER_SFU.estimated,
   ],
 };
 
@@ -529,6 +545,9 @@ const B200_PEAKS: MatmulPeak[] = [
   { input: 'int8', accumulate: 'int32', sparsity: '2:4', flopsPerSec: tflops(9000) },
 ];
 
+/** B200 SFU: 148 SMs × 16 exp2/clk at the ≈ 1.98 GHz the FP32 75 TFLOP/s peak implies (CUDA guide, cc 10.0). */
+const B200_SFU = nvidiaSfu(NVIDIA_BLACKWELL_DC_SFU, 148, tflops(75));
+
 /**
  * NVIDIA B200 (HGX B200 / DGX B200 GPU; Blackwell, two dies, 148 SMs, 180 GB HBM3e, 7.7 TB/s, 1,000 W).
  *
@@ -552,6 +571,7 @@ export const B200: DeviceSpec = {
       matmulPeaks: B200_PEAKS,
       // FP32 75 TFLOP/s; FP64 (and FP64 Tensor Core) 37 TFLOP/s.
       vectorFlopsPerSec: { fp32: tflops(75), fp64: tflops(37) },
+      sfuOpsPerSec: B200_SFU.sfuOpsPerSec,
       gemmTiling: blackwellDcTiling(),
     },
   ],
@@ -608,8 +628,12 @@ export const B200: DeviceSpec = {
       note: '"The NVIDIA GB200 GPU increases the L2 cache capacity to 126 MB" (same B200 die).',
     },
     BLACKWELL_DC_TILING_SOURCE,
+    ...B200_SFU.sources,
   ],
-  estimated: tilingEstimates(BLACKWELL_DC_TILING_KEYS, 'Typical CUTLASS sm100 CTA tiles (m a multiple of 128)'),
+  estimated: [
+    ...tilingEstimates(BLACKWELL_DC_TILING_KEYS, 'Typical CUTLASS sm100 CTA tiles (m a multiple of 128)'),
+    ...B200_SFU.estimated,
+  ],
 };
 
 /**
@@ -635,6 +659,9 @@ const B300_PEAKS: MatmulPeak[] = [
   { input: 'int8', accumulate: 'int32', sparsity: '2:4', flopsPerSec: tflops(307) },
 ];
 
+/** B300 SFU: 148 SMs × 32 exp2/clk (2× B200, Blackwell Ultra blog) at the ≈ 1.98 GHz of the FP32 75 TFLOP/s peak. */
+const B300_SFU = nvidiaSfu(NVIDIA_BLACKWELL_ULTRA_SFU, 148, tflops(75));
+
 /**
  * NVIDIA B300 (HGX B300; Blackwell Ultra, two dies, 148 active SMs, 270 GB HBM3e, 7.7 TB/s, up to 1,100 W).
  *
@@ -658,6 +685,7 @@ export const B300: DeviceSpec = {
       matmulPeaks: B300_PEAKS,
       // FP32 75 TFLOP/s; FP64 (and FP64 Tensor Core) 1.2 TFLOP/s.
       vectorFlopsPerSec: { fp32: tflops(75), fp64: tflops(1.2) },
+      sfuOpsPerSec: B300_SFU.sfuOpsPerSec,
       gemmTiling: blackwellDcTiling(),
     },
   ],
@@ -702,8 +730,12 @@ export const B300: DeviceSpec = {
         '(https://developer.nvidia.com/blog/inside-nvidia-blackwell-ultra-the-chip-powering-the-ai-factory-era/).',
     },
     BLACKWELL_DC_TILING_SOURCE,
+    ...B300_SFU.sources,
   ],
-  estimated: tilingEstimates(BLACKWELL_DC_TILING_KEYS, 'Typical CUTLASS sm100 CTA tiles (m a multiple of 128)'),
+  estimated: [
+    ...tilingEstimates(BLACKWELL_DC_TILING_KEYS, 'Typical CUTLASS sm100 CTA tiles (m a multiple of 128)'),
+    ...B300_SFU.estimated,
+  ],
 };
 
 /**

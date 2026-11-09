@@ -73,6 +73,7 @@ export function CustomSpecEditor({ state, dispatch, built }: Props) {
                         label={`${f.label} ${f.unit.label}`}
                         step="any"
                         value={toDisplay(f.value, f.unit)}
+                        {...(f.help ? { help: helpLines(f.help) } : {})}
                         onChange={(v) =>
                           dispatch({
                             type: 'setEdit',

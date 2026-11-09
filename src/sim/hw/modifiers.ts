@@ -39,8 +39,8 @@ export type DeviceModifier =
       factor: number;
     } & ModifierProvenance)
   /**
-   * Power/clock limit: multiply ALL matmul and vector peaks of one engine (default: every engine) by the
-   * dimensionless `factor` (> 0). Memory bandwidth is unaffected (use `memoryBandwidth` for that).
+   * Power/clock limit: multiply ALL matmul and vector peaks and the SFU rate of one engine (default: every engine)
+   * by the dimensionless `factor` (> 0). Memory bandwidth is unaffected (use `memoryBandwidth` for that).
    */
   | ({ kind: 'clockScale'; engineId?: string; factor: number } & ModifierProvenance);
 
@@ -268,7 +268,13 @@ function deviceModifierPaths(spec: DeviceSpec, mod: DeviceModifier): string[] {
       return spec.engines.flatMap((e, i) => (engineSelected(mod.engineId, e) ? [`engines.${i}.matmulPeaks`] : []));
     case 'clockScale':
       return spec.engines.flatMap((e, i) =>
-        engineSelected(mod.engineId, e) ? [`engines.${i}.matmulPeaks`, `engines.${i}.vectorFlopsPerSec`] : [],
+        engineSelected(mod.engineId, e)
+          ? [
+              `engines.${i}.matmulPeaks`,
+              `engines.${i}.vectorFlopsPerSec`,
+              ...(e.sfuOpsPerSec !== undefined ? [`engines.${i}.sfuOpsPerSec`] : []),
+            ]
+          : [],
       );
     default: {
       const _never: never = mod;
@@ -301,7 +307,7 @@ function applyOneDeviceModifier(spec: DeviceSpec, mod: DeviceModifier): DeviceSp
         ),
       };
     case 'clockScale': {
-      // Formula: peak' = peak · factor   for every matmul AND vector peak of the selected engines
+      // Formula: peak' = peak · factor   for every matmul AND vector peak and the SFU rate of the selected engines
       // See docs/simulation-model.md §4 ("Device variants and modifiers")
       const scaleVector = (v: ComputeEngine['vectorFlopsPerSec']): ComputeEngine['vectorFlopsPerSec'] => {
         const out: ComputeEngine['vectorFlopsPerSec'] = {};
@@ -319,6 +325,7 @@ function applyOneDeviceModifier(spec: DeviceSpec, mod: DeviceModifier): DeviceSp
                 ...e,
                 matmulPeaks: e.matmulPeaks.map((p) => ({ ...p, flopsPerSec: p.flopsPerSec * mod.factor })),
                 vectorFlopsPerSec: scaleVector(e.vectorFlopsPerSec),
+                ...(e.sfuOpsPerSec !== undefined ? { sfuOpsPerSec: e.sfuOpsPerSec * mod.factor } : {}),
               }
             : e,
         ),

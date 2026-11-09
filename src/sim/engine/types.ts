@@ -225,6 +225,19 @@ export interface OpResult {
   usedInput?: MathFormat;
   /** Accumulator of the peak actually used (after fallback). */
   usedAccumulate?: AccumulateType;
+  /**
+   * Attention ops on an engine with `sfuOpsPerSec`: the softmax time `t_exp + t_vec` (exp2 on the SFU plus the
+   * per-score vector ops), which overlaps the MMAs: `computeSec = max(t_mma, softmaxSec)` with
+   * `t_mma = flops / (peakFlopsPerSec · efficiency)` (docs/simulation-model.md §7 "Attention softmax"). Absent on
+   * other ops. Unit: seconds.
+   */
+  softmaxSec?: number;
+  /**
+   * GEMM ops only: `'gemv'` when the engine's GEMV path (`ComputeEngine.gemvMaxRows`, §4 "GEMV path") was faster
+   * than the MMA path and set `computeSec` (then `peakFlopsPerSec` is the vector peak and `efficiency` 1); absent =
+   * the MMA path.
+   */
+  computePath?: 'gemv';
   /** Collectives only: which link level carried it. */
   linkLevel?: 'intra' | 'inter' | 'hierarchical';
 }

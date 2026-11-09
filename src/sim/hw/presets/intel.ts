@@ -33,6 +33,7 @@
 
 import type { ComputeEngine, DeviceSpec, EstimatedField, GemmTiling, MatmulPeak, SourceRef } from '../types';
 import { gb, gbPerSec, tflops } from '../units';
+import { engineSfu, INTEL_XE2_SFU, type EngineSfu } from './sfu';
 import { NO_RDMA_SOURCE_ESTIMATE } from './gpudirect';
 
 // ---------------------------------------------------------------------------------------------------------
@@ -137,6 +138,8 @@ interface Xe2EngineParams {
  * `xeCores × ops/clk/core × maxClockHz` from the Xe2 per-core rates. All peaks dense, per device.
  */
 function xe2Engine(name: string, p: Xe2EngineParams): ComputeEngine {
+  // SFU (extended math) exp2: xeCores × 32 × clock (estimate, sfu.ts INTEL_XE2_SFU).
+  const sfu = xe2Sfu(p.xeCores, p.maxClockHz);
   // FP16/BF16 XMX, fp32 accumulate: xeCores × 2048 FLOP/clk × clock.
   const fp16XmxFlopsPerSec = p.xeCores * XE2_XMX_FP16_FLOP_PER_CLOCK_PER_CORE * p.maxClockHz;
   // INT4 XMX, int32 accumulate: xeCores × 8192 OP/clk × clock.
@@ -156,6 +159,7 @@ function xe2Engine(name: string, p: Xe2EngineParams): ComputeEngine {
     computeUnits: p.xeCores,
     matmulPeaks,
     vectorFlopsPerSec: { fp32: p.fp32VectorFlopsPerSec, fp16: fp16VectorFlopsPerSec },
+    sfuOpsPerSec: sfu.sfuOpsPerSec,
     gemmTiling: {
       default: xe2Tiling(16),
       fp16: xe2Tiling(16),
@@ -164,6 +168,14 @@ function xe2Engine(name: string, p: Xe2EngineParams): ComputeEngine {
       int4: xe2Tiling(64),
     },
   };
+}
+
+/**
+ * The SFU rate of an Xe2 engine with `xeCores` cores at `maxClockHz` (the clock of its vector peak), with the
+ * provenance of `engines.0.sfuOpsPerSec` (spread into each device's `sources` and `estimated`).
+ */
+function xe2Sfu(xeCores: number, maxClockHz: number): EngineSfu {
+  return engineSfu(INTEL_XE2_SFU, xeCores, 'Xe cores', maxClockHz, 'engines.0.sfuOpsPerSec');
 }
 
 /** Citation of the DPAS instruction shapes (mmaM/N/K of every tiling key). */
@@ -303,8 +315,13 @@ export const ARC_PRO_B70: DeviceSpec = {
     },
     pcghSource(['l2Bytes'], 'B70 column: BMG-G31 WKSTN, 368 mm², 27.7 B transistors; Level-2-Cache (MiB) 24; boost 2800 MHz; FP32 22.9 TFLOPS.'),
     XE2_DPAS_SHAPE_SOURCE,
+    ...xe2Sfu(32, B70_MAX_CLOCK_HZ).sources,
   ],
-  estimated: [NO_RDMA_SOURCE_ESTIMATE, ...xe2Estimates({ card: 'Arc Pro B70', xeCores: 32, maxClockGHz: 2.8, vendorInt8Tops: 367 })],
+  estimated: [
+    NO_RDMA_SOURCE_ESTIMATE,
+    ...xe2Estimates({ card: 'Arc Pro B70', xeCores: 32, maxClockGHz: 2.8, vendorInt8Tops: 367 }),
+    ...xe2Sfu(32, B70_MAX_CLOCK_HZ).estimated,
+  ],
 };
 
 /** B65 / B60 max clock (ark "Graphics Clock 2400 MHz"; datasheet: peaks "as defined by maximum clock frequency"). Unit: Hz. */
@@ -350,8 +367,13 @@ export const ARC_PRO_B65: DeviceSpec = {
     },
     pcghSource(['l2Bytes'], 'B65 column: BMG-G31 WKSTN (cut down), 2560 FP32 ALUs, 160 matrix units; Level-2-Cache (MiB) 18; boost 2400 MHz.'),
     XE2_DPAS_SHAPE_SOURCE,
+    ...xe2Sfu(20, B60_B65_MAX_CLOCK_HZ).sources,
   ],
-  estimated: [NO_RDMA_SOURCE_ESTIMATE, ...xe2Estimates({ card: 'Arc Pro B65', xeCores: 20, maxClockGHz: 2.4, vendorInt8Tops: 197 })],
+  estimated: [
+    NO_RDMA_SOURCE_ESTIMATE,
+    ...xe2Estimates({ card: 'Arc Pro B65', xeCores: 20, maxClockGHz: 2.4, vendorInt8Tops: 197 }),
+    ...xe2Sfu(20, B60_B65_MAX_CLOCK_HZ).estimated,
+  ],
 };
 
 /**
@@ -405,8 +427,13 @@ export const ARC_PRO_B60: DeviceSpec = {
     },
     pcghSource(['l2Bytes'], 'B60 column: BMG-G21 WKSTN, 272 mm²; Level-2-Cache (MiB) 18; boost 2400 MHz; FP32 12.3 TFLOPS.'),
     XE2_DPAS_SHAPE_SOURCE,
+    ...xe2Sfu(20, B60_B65_MAX_CLOCK_HZ).sources,
   ],
-  estimated: [NO_RDMA_SOURCE_ESTIMATE, ...xe2Estimates({ card: 'Arc Pro B60', xeCores: 20, maxClockGHz: 2.4, vendorInt8Tops: 197 })],
+  estimated: [
+    NO_RDMA_SOURCE_ESTIMATE,
+    ...xe2Estimates({ card: 'Arc Pro B60', xeCores: 20, maxClockGHz: 2.4, vendorInt8Tops: 197 }),
+    ...xe2Sfu(20, B60_B65_MAX_CLOCK_HZ).estimated,
+  ],
 };
 
 /**
@@ -463,6 +490,7 @@ export const ARC_B580: DeviceSpec = {
       note: '"L3 cache size 18 MB" (Chips and Cheese: "The entire GPU shares an 18 MB L2 cache"); 256 KB L1 / 128 KB SLM per Xe core.',
     },
     XE2_DPAS_SHAPE_SOURCE,
+    ...xe2Sfu(20, B580_MAX_CLOCK_HZ).sources,
   ],
   estimated: [
     NO_RDMA_SOURCE_ESTIMATE,
@@ -474,6 +502,7 @@ export const ARC_B580: DeviceSpec = {
         `Chips and Cheese (${CNC_BATTLEMAGE_URL}: "at 2.85 GHz").`,
     },
     ...xe2Estimates({ card: 'Arc B580', xeCores: 20, maxClockGHz: 2.85, vendorInt8Tops: 233 }),
+    ...xe2Sfu(20, B580_MAX_CLOCK_HZ).estimated,
   ],
 };
 

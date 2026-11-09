@@ -105,7 +105,8 @@ function isIntegerInput(input: MathFormat): boolean {
 
 /**
  * Physical-consistency errors of one engine (provenance is checked on the device). Every rate the engine divides
- * by (matmul peaks, vector peaks, the memory-bandwidth cap) must be > 0.
+ * by (matmul peaks, vector peaks, the memory-bandwidth cap, the SFU rate) must be > 0; a GEMV row limit is an
+ * integer ≥ 1.
  */
 function engineErrors(e: ComputeEngine, label: string): string[] {
   const errors: string[] = [];
@@ -121,6 +122,12 @@ function engineErrors(e: ComputeEngine, label: string): string[] {
   if (e.vectorFlopsPerSec.fp32 === undefined) errors.push(`${label}: vectorFlopsPerSec.fp32 is required (the last peak fallback)`);
   if (e.memBandwidthCapBytesPerSec !== undefined && !(e.memBandwidthCapBytesPerSec > 0)) {
     errors.push(`${label}: memBandwidthCapBytesPerSec must be > 0 (got ${e.memBandwidthCapBytesPerSec})`);
+  }
+  if (e.sfuOpsPerSec !== undefined && !(Number.isFinite(e.sfuOpsPerSec) && e.sfuOpsPerSec > 0)) {
+    errors.push(`${label}: sfuOpsPerSec must be a finite number > 0 (got ${e.sfuOpsPerSec})`);
+  }
+  if (e.gemvMaxRows !== undefined && !(Number.isInteger(e.gemvMaxRows) && e.gemvMaxRows >= 1)) {
+    errors.push(`${label}: gemvMaxRows must be an integer ≥ 1 (got ${e.gemvMaxRows})`);
   }
   const keys = new Set<string>();
   for (const p of e.matmulPeaks) {
