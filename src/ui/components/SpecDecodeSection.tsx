@@ -6,9 +6,9 @@ import {
   presetMethod,
   type AcceptancePreset,
 } from '../../sim/engine/specdec';
-import { knownDrafters } from '../../sim/models/hf/drafter';
+import type { ModelSpec } from '../../sim/ir/model';
+import { drafterChoices, drafterFromCommit } from './drafterOptions';
 import {
-  HYPOTHETICAL_DRAFTER,
   MAX_ACCEPTANCE,
   MAX_DRAFT_LENGTH,
   SPEC_DEC_USE_CASES,
@@ -126,13 +126,13 @@ export function SpecDecodeSection({
         }
         help={helpLines(ppBlocked ? [...METHOD_HELP, ...PP_HELP] : METHOD_HELP)}
       />
-      {spec !== undefined && spec.method !== 'mtp' && (
+      {spec !== undefined && spec.method !== 'mtp' && model !== undefined && (
         <DrafterField
           method={spec.method}
           targetId={state.model.id}
+          model={model}
           chosen={spec.drafter}
           sourceKind={source?.kind}
-          sourceRepo={source?.kind === 'repo' ? source.repoId : undefined}
           onChange={(drafterId) => set({ drafter: drafterId })}
         />
       )}
@@ -222,26 +222,27 @@ function basisHint(preset: AcceptancePreset): string | undefined {
   }
 }
 /**
- * The drafter of a block method: a Hub repo id typed or picked from the known drafters of the target, or the
- * hypothetical stand-in. An empty commit returns to the default (`chosen` undefined).
+ * The drafter of a block method: a Hub repo id typed or picked from the known drafters of the target, the
+ * hypothetical stand-in, or "Model default" (the checkpoint's own drafter or the known released one), which is always
+ * in the list so the user can return to it. Committing the default (or an empty text) clears the override.
  */
 function DrafterField({
   method,
   targetId,
+  model,
   chosen,
   sourceKind,
-  sourceRepo,
   onChange,
 }: {
   method: 'dflash2' | 'dspark';
   targetId: string;
+  model: ModelSpec;
   chosen: string | undefined;
   sourceKind: 'repo' | 'checkpoint' | 'hypothetical' | undefined;
-  sourceRepo: string | undefined;
   onChange(drafter: string | undefined): void;
 }) {
-  const shown =
-    sourceKind === 'hypothetical' ? '' : sourceKind === 'checkpoint' ? '' : (sourceRepo ?? '');
+  const choices = drafterChoices(method, targetId, model, chosen);
+  const shown = choices.text;
   const [text, setText] = useState(shown);
   // A new effective drafter (another method or model) resets the text, adjusted during render.
   const [prevShown, setPrevShown] = useState(shown);
@@ -249,36 +250,27 @@ function DrafterField({
     setPrevShown(shown);
     setText(shown);
   }
-  const options: PickerOption[] = [
-    ...knownDrafters(targetId)
-      .filter((d) => d.method === method)
-      .map((d) => ({ value: d.repoId, label: d.repoId, group: 'Released drafters' })),
-    {
-      value: HYPOTHETICAL_DRAFTER,
-      label: 'Hypothetical drafter',
-      description: '5 layers, 32/8 heads, window 2048',
-      group: 'Stand-in',
-    },
-  ];
-  const placeholder =
-    sourceKind === 'checkpoint' ? 'The checkpoint’s own drafter' : 'Hypothetical drafter';
   return (
     <div className="drafter-field">
       <Combobox
         label="Drafter"
         value={text}
         onValueChange={setText}
-        options={options}
-        placeholder={placeholder}
+        options={choices.options}
+        selected={choices.selected}
+        placeholder="Hugging Face repo ID"
         onCommit={(value) => {
-          const v = value.trim();
-          if (v === '') onChange(undefined);
-          else if (v === HYPOTHETICAL_DRAFTER || isValidModelId(v))
-            onChange(v === chosen ? chosen : v);
-          else setText(shown);
+          const next = drafterFromCommit(value, choices, isValidModelId);
+          if (next === 'invalid') setText(shown);
+          else {
+            // Re-committing the current choice changes nothing, but restores its label if the text was edited.
+            setText(shown);
+            onChange(next);
+          }
         }}
         help={helpLines([
           'The small model that drafts the tokens, from its Hugging Face config.',
+          'Model default is the checkpoint’s own or the released drafter.',
           'Hypothetical is a configurable stand-in, not a real model.',
         ])}
       />

@@ -53,7 +53,7 @@ test('DFlash 2 loads its released drafter config from the Hub', async ({ page })
   await mockHf(page);
   await page.goto('/?sd=dflash2');
   await expect(page.getByRole('combobox', { name: 'Drafter', exact: true })).toHaveValue(
-    'incoai/Qwen3.8-27B-DFlash2',
+    'Model default (incoai/Qwen3.8-27B-DFlash2)',
   );
   await expect(page.getByTestId('spec-dec')).toBeVisible();
   await expect(page.getByTestId('hypothetical-badge')).toHaveCount(0);

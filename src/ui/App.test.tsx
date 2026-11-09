@@ -536,3 +536,59 @@ describe('speculative-decoding acceptance hints', () => {
     expect(await within(section).findByText('⚠ pooled from k = 7, 15')).toBeTruthy();
   });
 });
+
+describe('drafter picker', () => {
+  it('offers the checkpoint’s own drafter as the model default and returns to it from Hypothetical', async () => {
+    history.replaceState(null, '', '/?m=deepseek-ai/DeepSeek-V4.1-Flash&sd=dspark');
+    mount();
+    const section = await screen.findByTestId('specdec-section');
+    const drafter = within(section).getByRole('combobox', { name: 'Drafter' }) as HTMLInputElement;
+    const defaultLabel = 'Model default (checkpoint’s DSpark drafter)';
+    expect(drafter.value).toBe(defaultLabel);
+
+    fireEvent.focus(drafter);
+    fireEvent.click(await screen.findByRole('option', { name: /Hypothetical drafter/ }));
+    await waitFor(() => expect(new URLSearchParams(location.search).get('sdr')).toBe('hyp'));
+    expect(drafter.value).toBe('Hypothetical drafter');
+
+    fireEvent.focus(drafter);
+    const options = await screen.findAllByRole('option');
+    expect(options.map((o) => o.textContent)).toEqual([
+      expect.stringContaining(defaultLabel),
+      expect.stringContaining('Hypothetical drafter'),
+    ]);
+    fireEvent.click(options[0]);
+    await waitFor(() => expect(new URLSearchParams(location.search).has('sdr')).toBe(false));
+    expect(drafter.value).toBe(defaultLabel);
+    expect(within(section).queryByTestId('hypothetical-badge')).toBeNull();
+  });
+});
+
+describe('drafter picker keyboard and custom repos', () => {
+  it('highlights the model default with the keyboard, and lists everything after a custom repo is committed', async () => {
+    history.replaceState(null, '', '/?m=deepseek-ai/DeepSeek-V4.1-Flash&sd=dspark&sdr=hyp');
+    mount();
+    const section = await screen.findByTestId('specdec-section');
+    const drafter = within(section).getByRole('combobox', { name: 'Drafter' }) as HTMLInputElement;
+    fireEvent.focus(drafter);
+    await screen.findAllByRole('option');
+    fireEvent.keyDown(drafter, { key: 'ArrowDown' });
+    const first = screen.getAllByRole('option')[0];
+    expect(first.textContent).toContain('Model default');
+    await waitFor(() => expect(first.getAttribute('aria-selected')).toBe('true'));
+    fireEvent.keyDown(drafter, { key: 'Enter' });
+    await waitFor(() => expect(new URLSearchParams(location.search).has('sdr')).toBe(false));
+
+    fireEvent.change(drafter, { target: { value: 'someone/my-drafter' } });
+    fireEvent.keyDown(drafter, { key: 'Enter' });
+    await waitFor(() =>
+      expect(new URLSearchParams(location.search).get('sdr')).toBe('someone/my-drafter'),
+    );
+    expect(drafter.value).toBe('someone/my-drafter');
+    fireEvent.focus(drafter);
+    expect((await screen.findAllByRole('option')).map((o) => o.textContent)).toEqual([
+      expect.stringContaining('Model default'),
+      expect.stringContaining('Hypothetical drafter'),
+    ]);
+  });
+});

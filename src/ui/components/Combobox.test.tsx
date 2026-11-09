@@ -128,3 +128,45 @@ describe('Combobox', () => {
     expect(screen.getByRole('button', { name: 'About Hugging Face model ID' })).toBeTruthy();
   });
 });
+
+describe('Combobox selected', () => {
+  const shownOptions = () => screen.getAllByRole('option').map((o) => o.textContent);
+
+  it('lists every option while the text is the selected option’s label or the id of a selected non-option', () => {
+    const { rerender } = render(
+      <Combobox
+        label="Pick"
+        value="Qwen3.8-27B"
+        onValueChange={() => {}}
+        options={MODELS}
+        selected="Qwen/Qwen3.8-27B"
+        onCommit={() => {}}
+      />,
+    );
+    fireEvent.focus(screen.getByRole('combobox', { name: 'Pick' }));
+    expect(shownOptions()).toHaveLength(3);
+    rerender(
+      <Combobox
+        label="Pick"
+        value="my-org/custom"
+        onValueChange={() => {}}
+        options={MODELS}
+        selected="my-org/custom"
+        onCommit={() => {}}
+      />,
+    );
+    expect(shownOptions()).toHaveLength(3);
+    // Edited text searches again.
+    rerender(
+      <Combobox
+        label="Pick"
+        value="flash"
+        onValueChange={() => {}}
+        options={MODELS}
+        selected="my-org/custom"
+        onCommit={() => {}}
+      />,
+    );
+    expect(shownOptions()).toEqual(['Qwen3.8-Flash-Next']);
+  });
+});

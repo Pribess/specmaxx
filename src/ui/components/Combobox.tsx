@@ -47,6 +47,7 @@ export function Combobox({
   options,
   onCommit,
   placeholder,
+  selected,
   help,
 }: {
   /** Visible label; the accessible name of the input. */
@@ -60,6 +61,11 @@ export function Combobox({
   /** Enter with no active suggestion commits the typed text; picking a suggestion commits its value. */
   onCommit(value: string): void;
   placeholder?: string;
+  /**
+   * Value of the option the text stands for, when the text is its label rather than a search: it gets the check
+   * mark, and the list shows every option until the text is edited.
+   */
+  selected?: string;
   /** Rendered as a "?" help icon next to the label. */
   help?: ReactNode;
 }) {
@@ -71,7 +77,15 @@ export function Combobox({
   const [open, setOpen] = useState(false);
   const [activeValue, setActiveValue] = useState<string | undefined>(undefined);
 
-  const shown = useMemo(() => fuzzyFilter(options, value), [options, value]);
+  // While the text is still what the selected option shows (its label, or the repo id of a choice that is no
+  // option), the whole list is shown: nothing has been searched for.
+  const selectedOption =
+    selected === undefined ? undefined : options.find((o) => o.value === selected);
+  const unedited = selected !== undefined && value === (selectedOption?.label ?? selected);
+  const shown = useMemo(
+    () => (unedited ? options : fuzzyFilter(options, value)),
+    [options, value, unedited],
+  );
   const flat = useMemo(() => groupOptions(shown).flatMap((g) => g.options), [shown]);
   const activeIdx = flat.findIndex((o) => o.value === activeValue);
   const activeOpt = activeIdx >= 0 ? flat[activeIdx] : undefined;
@@ -178,7 +192,7 @@ export function Combobox({
                 label={label}
                 listRef={setListEl}
                 options={shown}
-                selectedValue={value}
+                selectedValue={selected ?? value}
                 onPick={(o) => commit(o.value)}
               />
             </Popover.Content>
