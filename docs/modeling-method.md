@@ -77,6 +77,8 @@ More: [memory fit](simulation-model.md#memory-fit), [activation peak](simulation
 
 Optional, off by default. Part of the weights can live in host RAM or on an SSD instead of device memory: experts of mixture-of-experts layers, or n-gram lookup tables. Each can be split by layer range, e.g. the experts of the first layers in host RAM and the rest on the SSD. Whatever is needed and not resident is fetched over the host link each step, which adds transfer time and frees device memory.
 
+The token-embedding table can move off the device too. Each token reads only one row of it, so this frees its whole size (about 2.5 GB for a 27B model) at almost no speed cost; llama.cpp keeps it in host RAM by default ([source](https://github.com/ggml-org/llama.cpp/blob/a4d4f2fd4ec85ec6a0a9ece4870416c1b6cc24f5/src/llama-model.cpp#L1780-L1782)). Models that reuse this table for their output (tied embeddings) keep it on the device.
+
 Whole-layer offload (copying entire layers to the GPU every step) was removed: local setups don't run that way (llama.cpp computes the layers it keeps off the GPU on the CPU instead), and for a MoE model it reads every expert each step. Partial offload of dense layers would return as a CPU-compute mode, not as streaming.
 
 Two parameters shape the result:
@@ -90,7 +92,7 @@ When one GPU reads from both host RAM and the SSD, the prefetched part of the tw
 
 **SSD read rate** defaults to the unchanged datasheet ceiling; the optional sustained scenario uses measured low-queue large-read fractions for expert reads, not small lookup rows. These workload-specific measurements are not a tighter proven upper bound.
 
-More: [offloading](simulation-model.md#12-offloading), [expert hit ratio](simulation-model.md#expert-hit-ratio), [expert prefetch](simulation-model.md#expert-prefetch), [overlap across tiers](simulation-model.md#overlap-across-tiers), [host and storage tiers](simulation-model.md#host-and-storage-tiers).
+More: [offloading](simulation-model.md#12-offloading), [expert hit ratio](simulation-model.md#expert-hit-ratio), [expert prefetch](simulation-model.md#expert-prefetch), [overlap across tiers](simulation-model.md#overlap-across-tiers), [token embedding off-device](simulation-model.md#token-embedding-off-device), [host and storage tiers](simulation-model.md#host-and-storage-tiers).
 
 ## Speculative decoding
 

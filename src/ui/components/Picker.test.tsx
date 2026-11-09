@@ -38,11 +38,13 @@ function Harness({
   initial,
   onChangeSpy,
   label = 'Device',
+  disabled,
 }: {
   options: PickerOption[];
   initial?: string;
   onChangeSpy?: (v: string) => void;
   label?: string;
+  disabled?: boolean;
 }) {
   const [value, setValue] = useState<string | undefined>(initial);
   return (
@@ -55,6 +57,7 @@ function Harness({
         setValue(v);
       }}
       help={<>Pick the device.</>}
+      disabled={disabled}
     />
   );
 }
@@ -85,6 +88,20 @@ describe('Picker', () => {
     expect(options[1].getAttribute('aria-selected')).toBe('true');
     expect(trigger().getAttribute('aria-expanded')).toBe('true');
     expect(trigger().getAttribute('aria-controls')).toBe(list.id);
+  });
+
+  it('does not open when disabled, by click or key, and keeps the help icon', () => {
+    const spy = vi.fn();
+    render(<Harness options={SMALL} initial="b" onChangeSpy={spy} disabled />);
+    const t = trigger() as HTMLButtonElement;
+    expect(t.disabled).toBe(true);
+    expect(t.textContent).toContain('Beta');
+    fireEvent.click(t);
+    fireEvent.keyDown(t, { key: 'Enter' });
+    fireEvent.keyDown(t, { key: 'ArrowDown' });
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'About Device' })).toBeTruthy();
   });
 
   it('picks on click and closes', () => {

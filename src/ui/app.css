@@ -533,6 +533,12 @@ button.help-icon[aria-expanded='true']::before {
   cursor: pointer;
 }
 .picker-trigger:hover { background: var(--field); }
+.picker-trigger:disabled {
+  border-color: var(--control-border);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.picker-trigger:disabled .picker-chevron { opacity: 0.4; }
 .picker-value {
   min-width: 0;
   overflow: hidden;

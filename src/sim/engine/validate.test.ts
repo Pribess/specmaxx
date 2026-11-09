@@ -12,7 +12,13 @@ import { REF_DENSE_8B, TINY_HC_NGRAM, TINY_HYBRID } from '../models/reference';
 import { singleDevice } from '../hw/presets';
 import type { TopologySpec } from '../hw/types';
 import type { DeploymentConfig, OffloadConfig, RoutedExpertRule, SimInput, SpecDecodeConfig } from './types';
-import { blockShardingErrors, deploymentErrors, SPEC_DEC_PP_ERROR, validateInput } from './validate';
+import {
+  blockShardingErrors,
+  deploymentErrors,
+  SPEC_DEC_PP_ERROR,
+  TIED_EMBEDDINGS_OFFLOAD_ERROR,
+  validateInput,
+} from './validate';
 import { simulate } from './simulate';
 import { countParams } from '../ir/params';
 import { modelSpecErrors } from '../ir/validateModel';
@@ -313,6 +319,25 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
     // A cited edge connector is enough.
     const withInterface = { ...SYNTH_GPU, hostInterface: { generation: 5, lanes: 16 } as const };
     expect(errorsOf({ ...noHost, hardware: { device: withInterface, topology: SYNTH_CLUSTER } })).toEqual([]);
+  });
+
+  it('token embedding off-device: rejected on a tied model, any tier on an untied one; a bad tier is an error', () => {
+    const tied: ModelSpec = { ...REF_DENSE_8B, tieEmbeddings: true };
+    expect(TIED_EMBEDDINGS_OFFLOAD_ERROR).toBe(
+      'deployment.offload.embeddings: the model ties its token embedding to the LM head (tie_word_embeddings), so the table stays on the device',
+    );
+    for (const tier of ['host_ram', 'nvme'] as const) {
+      expect(errorsOf(offload({ embeddings: { tier } }, tied))).toEqual([TIED_EMBEDDINGS_OFFLOAD_ERROR]);
+      expect(errorsOf(offload({ embeddings: { tier } }, REF_DENSE_8B))).toEqual([]);
+    }
+    expect(errorsOf(offload({ embeddings: { tier: 'device' } }, tied))).toEqual([]);
+    const bad = { embeddings: { tier: 'gpu' } } as unknown as OffloadConfig;
+    expect(errorsOf(offload(bad, REF_DENSE_8B))).toEqual([
+      `deployment.offload.embeddings.tier must be 'device', 'host_ram' or 'nvme' (got "gpu")`,
+    ]);
+    // An off-device embedding alone needs a host link on a dedicated device too.
+    const noHost = input({}, { deployment: { offload: { embeddings: { tier: 'host_ram' } } } });
+    expect(errorsOf(noHost)).toEqual(['deployment.offload: no host link known for synth-gpu; set hardware.host.link']);
   });
 
   describe('placement rule lists (mixed host RAM + SSD by layer range)', () => {

@@ -36,6 +36,8 @@ export function offloadChipText(p: OffloadPlacement): string {
       return `MoE experts${span}: ${tierName(p.tier)}, h ${(p.hitRatio ?? 0).toFixed(2)}`;
     case 'lookup_tables':
       return `n-gram tables${span}: ${tierName(p.tier)}`;
+    case 'token_embeddings':
+      return `Token embeddings: ${tierName(p.tier)}`;
   }
 }
 

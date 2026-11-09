@@ -32,6 +32,7 @@
  * | `odl`, `odt` | legacy whole-layer offload (removed), read only: accepted and ignored, never written | `odl=40` |
  * | `olt`, `ols` | lookup-tables tier `ram`, `ssd`, `split` (host RAM + SSD) (absent: on the device); (with `olt`) scale layout `separate`, `pinned`, `interleaved` (default: the tier's; with `split`, each side's tier's) | `olt=ram` |
  * | `olr`, `ole` | (with `olt=split`) layers with a table kept in host RAM, integer ≥ 0 (default: half, rounded down), which end is in host RAM: `last` (default `first`, never written) | `olr=24` |
+ * | `oet` | token-embedding table tier `ram`, `ssd` (absent: on the device; `split` is not allowed) | `oet=ssd` |
  * | `oqd` | (with offload) queue depth, integer ≥ 1 (default: the tier's rated maximum) | `oqd=32` |
  * | `osr` | (with SSD offload) SSD read rate: `datasheet` (default), `sustained` | `osr=sustained` |
  * | `opf` | (with offload) prefetch accuracy p 0–1 (default 0.8) | `opf=0.9` |
@@ -101,7 +102,7 @@ export function latencyFloorSecFromMicros(us: number): number {
 export const URL_KEYS = [
   'm', 'rev', 'w', 'bpw', 'hbpw', 'a', 'kv', 'lt', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'fab', 'x', 'xi', 'xe',
   'hr', 'hrc', 'ssd', 'hl', 'gpu', 'rr', 'tp', 'pp', 'dp', 'ep', 'b', 'p', 'c', 'pc', 'ov', 'fu', 'ar', 'lf', 'ed', 'oo',
-  'ox', 'oxl', 'oxf', 'oxh', 'odl', 'odt', 'olt', 'ols', 'oqd', 'osr', 'opf', 'sd', 'sdr', 'sdk', 'sdu', 'sda',
+  'ox', 'oxl', 'oxf', 'oxh', 'odl', 'odt', 'olt', 'ols', 'oet', 'oqd', 'osr', 'opf', 'sd', 'sdr', 'sdk', 'sdu', 'sda',
   'oxr', 'oxe',
   'olr', 'ole',
 ] as const;
@@ -243,6 +244,7 @@ export function encodeState(s: AppState): string {
     if (o.tables.scaleLayout !== undefined) put('ols', SCALE_LAYOUT_KEYS[o.tables.scaleLayout]);
     putSplit(put, 'olr', 'ole', o.tables.split);
   }
+  if (o.embeddings !== undefined) put('oet', TIER_KEYS[o.embeddings.tier]);
   put('oqd', o.queueDepth);
   put('osr', o.ssdReadRate);
   put('opf', o.prefetchAccuracy);
@@ -353,7 +355,9 @@ function decodeDeployment(get: (key: string) => string | undefined, drop: (key: 
   const scaleLayout = read('ols', tablesTier !== undefined, (r) => keyOf(SCALE_LAYOUT_KEYS, r));
   const tablesSplit = readSplit('olr', 'ole', tablesTier === 'split');
   if (tablesTier !== undefined) offload.tables = { tier: tablesTier, split: tablesSplit, scaleLayout };
-  const any = offload.experts !== undefined || offload.tables !== undefined;
+  const embeddingsTier = read('oet', true, (r) => keyOf(TIER_KEYS, r));
+  if (embeddingsTier !== undefined) offload.embeddings = { tier: embeddingsTier };
+  const any = offload.experts !== undefined || offload.tables !== undefined || embeddingsTier !== undefined;
   offload.queueDepth = read('oqd', any, (r) => parseInteger(r, 1, MAX_VALUE));
   offload.ssdReadRate = read('osr', offloadsToSsd(offload), (r) =>
     r === 'datasheet' || r === 'sustained' ? r : undefined,

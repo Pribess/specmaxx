@@ -163,6 +163,15 @@ export interface OffloadConfig {
    * one-rule list (same meaning, bit-identical results); `[]` = none. See design doc §2.11.
    */
   lookupTables?: LookupTableRule | readonly LookupTableRule[];
+  /**
+   * Token-embedding placement (a 1-gram lookup table: each token gathers one row of `h` elements, no matmul); absent
+   * or `{ tier: 'device' }` = on the device (identity). The table is not layer-indexed: it lives on pipeline stage 0
+   * only, so this is one placement, not a rule list. Rejected by validation for a model with tied embeddings
+   * (`ModelSpec.tieEmbeddings`: the LM head reuses the matrix for a GEMM every step). On unified memory a
+   * `'host_ram'` placement is dropped with a warning (host RAM is the device pool). See docs/simulation-model.md §12
+   * ("Token embedding off-device").
+   */
+  embeddings?: EmbeddingRule;
 }
 
 /**
@@ -206,6 +215,17 @@ export interface LookupTableRule {
    * `'interleaved'` for a repacked table (one read per row).
    */
   scaleLayout?: 'separate' | 'pinned_host' | 'interleaved';
+}
+
+/**
+ * The token-embedding placement rule: where the stage-0 table shard (`ceil(vocab/tp)·h·bpe(quant.embeddings)` bytes
+ * per device) lives. Off the device, each step reads its gathered rows from `tier` (docs/simulation-model.md §12
+ * "Token embedding off-device"). There is no scale-layout choice: a block-scaled format reads each row as two
+ * requests, its value bytes and its block-scale bytes (the `'separate'` layout of n-gram tables); nothing is pinned.
+ */
+export interface EmbeddingRule {
+  /** Where the token-embedding table lives; `'device'` = on the device (identity). */
+  tier: 'device' | OffloadTier;
 }
 
 /**
@@ -447,7 +467,10 @@ export interface PhaseResult {
 export interface DeviceMemory {
   /** Stage index. */
   stage: number;
-  /** Resident weights on this device (incl. embedding / LM-head shards on the first / last stage). Unit: bytes. */
+  /**
+   * Resident weights on this device (incl. embedding / LM-head shards on the first / last stage; the embedding shard
+   * only while it is on the device, `OffloadConfig.embeddings`). Unit: bytes.
+   */
   weightBytes: number;
   /**
    * Bytes of n-gram lookup-table shards resident on this device (`ceil(rows/tp)·d·bpe(lookup)` per table of the
@@ -533,6 +556,12 @@ export interface TierBytes {
   routedExperts: number;
   /** The speculative drafter's own routed experts (`includeDraft`). Unit: bytes. */
   draftExperts: number;
+  /**
+   * The token-embedding table shard of a stage-0 device (`OffloadConfig.embeddings` off the device):
+   * `ceil(vocab/tp)·h·bpe(quant.embeddings)` per device; 0 on other stages and with the table on the device.
+   * Unit: bytes.
+   */
+  tokenEmbeddings: number;
 }
 
 /** Bytes placed on one off-device storage tier of a node, against its capacity (design doc §2.7). */
@@ -541,8 +570,8 @@ export interface TierMemory {
   tier: OffloadTier;
   /**
    * Bytes the node's devices place on the tier: the FULL offloaded groups (all experts of the offloaded layers,
-   * whole table shards), since the device cache is a copy; plus pinned table scales on host
-   * RAM. Unit: bytes (per node, summed over its devices).
+   * whole table shards, the token-embedding shard of each stage-0 device), since the device cache is a copy; plus
+   * pinned table scales on host RAM. Unit: bytes (per node, summed over its devices).
    */
   bytes: number;
   /** `bytes` by category, of the fullest node (its parts sum to `bytes`). Unit: bytes. */

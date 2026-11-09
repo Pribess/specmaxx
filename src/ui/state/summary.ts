@@ -180,8 +180,8 @@ export interface Breakdown {
 
 /** A weight group the deployment keeps off-device, for the result chips. */
 export interface OffloadPlacement {
-  /** Which group: routed (MoE) experts or the n-gram lookup tables. */
-  group: 'routed_experts' | 'lookup_tables';
+  /** Which group: routed (MoE) experts, the n-gram lookup tables, or the token-embedding table. */
+  group: 'routed_experts' | 'lookup_tables' | 'token_embeddings';
   /** Tier holding the group. */
   tier: OffloadTier;
   /**
@@ -471,7 +471,7 @@ export function summarize(result: SimResult, input: SimInput, notes: string[] = 
 }
 
 /**
- * The off-device placements of `input.deployment.offload`, in the order experts, lookup tables; one per rule (a
+ * The off-device placements of `input.deployment.offload`, in the order experts, lookup tables, token embeddings; one per rule (a
  * host-RAM + SSD split gives two), each group's rules by first layer; tables kept on the device are left out.
  */
 export function offloadPlacements(input: SimInput): OffloadPlacement[] {
@@ -496,5 +496,8 @@ export function offloadPlacements(input: SimInput): OffloadPlacement[] {
       ...(tables.layers && { layers: { ...tables.layers } }),
     });
   }
+  const embeddings = offload.embeddings;
+  if (embeddings !== undefined && embeddings.tier !== 'device')
+    out.push({ group: 'token_embeddings', tier: embeddings.tier });
   return out;
 }

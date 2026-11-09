@@ -66,7 +66,7 @@ function w1(f: number | undefined, prefetch: Prefetch): SimResult {
 }
 
 /** A tier breakdown with every category empty; tests spread it and set the categories they expect. */
-const NO_TIER_BYTES = { lookupTables: 0, routedExperts: 0, draftExperts: 0 };
+const NO_TIER_BYTES = { lookupTables: 0, routedExperts: 0, draftExperts: 0, tokenEmbeddings: 0 };
 
 describe('W1 experts in DDR5 over PCIe 5.0 x16 (REF_MOE_30B_A3B, int4+0.5 routed experts, b 1, @8k)', () => {
   const baseline = w1(undefined, 'ideal');

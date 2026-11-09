@@ -130,6 +130,60 @@ for (const size of ['desktop', 'phone'] as const) {
       await page.evaluate(() => scrollTo(0, 0));
       await page.locator('section.hero').screenshot({ path: name('storage-hero') });
     });
+    test(`token embeddings ${size} ${colorScheme}`, async ({ page }) => {
+      await open(page, size, colorScheme);
+      const name = (s: string) => `${DIR}/embeddings-${s}-${size}-${colorScheme}.png`;
+      const openAdvanced = async (query: string) => {
+        await page.goto(`/${query}`);
+        await expect(page.getByTestId('decode-tps')).toHaveText(/[1-9]/);
+        // Phones collapse the Hardware panel; the Advanced block is closed until opened.
+        const hardware = page.locator('details.panel', {
+          has: page.locator('> summary', { hasText: 'Hardware' }),
+        });
+        if ((await hardware.getAttribute('open')) === null)
+          await hardware.locator('> summary').click();
+        const advanced = page.locator('details.advanced');
+        if ((await advanced.getAttribute('open')) === null)
+          await advanced.locator('> summary').click();
+        await page.addStyleTag({ content: '.compact-results { visibility: hidden !important }' });
+        await page.evaluate(() => document.fonts.ready);
+        const section = page.getByTestId('offload-advanced');
+        await section.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+        return section;
+      };
+      // Enabled: the picker on its default, then on Host RAM (the host pickers appear) with its help open.
+      let section = await openAdvanced('?m=Qwen/Qwen3.8-27B&oet=ram');
+      await page.getByRole('button', { name: 'About Token embeddings' }).focus();
+      await expect(
+        page.getByRole('tooltip').filter({ hasText: 'turns tokens into vectors' }),
+      ).toBeVisible();
+      await page.screenshot({ path: name('advanced-enabled') });
+      await page.keyboard.press('Escape');
+      await section.screenshot({ path: name('advanced-enabled-section') });
+      // Disabled: a tied model (the config served with tie_word_embeddings true); even an oet in the URL keeps it on the GPU.
+      await page.route(
+        'https://huggingface.co/Qwen/Qwen3.8-27B/resolve/**/config.json',
+        async (route) => {
+          const response = await route.fetch();
+          const body = (await response.text()).replaceAll(
+            '"tie_word_embeddings": false',
+            '"tie_word_embeddings": true',
+          );
+          await route.fulfill({ response, body });
+        },
+      );
+      // The Hub cache (sessionStorage) would serve the untied config again.
+      await page.evaluate(() => sessionStorage.clear());
+      section = await openAdvanced('?m=Qwen/Qwen3.8-27B&oet=ssd');
+      await expect(section.getByRole('combobox', { name: 'Token embeddings' })).toBeDisabled();
+      await page.getByRole('button', { name: 'About Token embeddings' }).focus();
+      await expect(
+        page.getByRole('tooltip').filter({ hasText: 'so it stays on the GPU' }),
+      ).toBeVisible();
+      await page.screenshot({ path: name('advanced-disabled-tied') });
+      await page.keyboard.press('Escape');
+      await section.screenshot({ path: name('advanced-disabled-tied-section') });
+    });
     test(`parallelism moe ${size} ${colorScheme}`, async ({ page }) => {
       await open(page, size, colorScheme);
       const name = (s: string) => `${DIR}/parallelism-${s}-${size}-${colorScheme}.png`;

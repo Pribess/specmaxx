@@ -489,20 +489,20 @@ describe('estimator inputs', () => {
     expect((container.querySelector('details.spec-editor') as HTMLDetailsElement).open).toBe(true);
   });
   it.each([
-    { name: 'offload off', query: '?m=Qwen/Qwen3.8-27B', offload: [] },
-    { name: 'an old whole-layer offload URL (ignored)', query: '?m=Qwen/Qwen3.8-27B&odl=32', offload: [] },
-    { name: 'a lookup-table model', query: '?m=Qwen/Qwen3.8-Flash-Next', offload: ['Lookup tables'] },
+    { name: 'offload off', query: '?m=Qwen/Qwen3.8-27B', offload: ['Token embeddings'] },
+    { name: 'an old whole-layer offload URL (ignored)', query: '?m=Qwen/Qwen3.8-27B&odl=32', offload: ['Token embeddings'] },
+    { name: 'a lookup-table model', query: '?m=Qwen/Qwen3.8-Flash-Next', offload: ['Token embeddings', 'Lookup tables'] },
     {
       name: 'expert offload on a lookup-table model',
       query: '?m=Qwen/Qwen3.8-Flash-Next&ox=ram',
-      offload: ['Lookup tables', 'Queue depth', 'Prefetch accuracy %'],
+      offload: ['Token embeddings', 'Lookup tables', 'Queue depth', 'Prefetch accuracy %'],
     },
     {
       name: 'a lookup-table split',
       query: '?m=deepseek-ai/DeepSeek-V4.1-Flash&olt=split',
-      offload: ['Lookup tables', 'Layers in host RAM', 'Host RAM holds', 'Scale layout', 'Queue depth', 'SSD read rate', 'Prefetch accuracy %'],
+      offload: ['Token embeddings', 'Lookup tables', 'Layers in host RAM', 'Host RAM holds', 'Scale layout', 'Queue depth', 'SSD read rate', 'Prefetch accuracy %'],
     },
-  ])('shows one Advanced, with an Offload subsection only when it applies ($name)', async ({ query, offload }) => {
+  ])('shows one Advanced, with an Offload subsection for every model ($name)', async ({ query, offload }) => {
     history.replaceState(null, '', `/${query}`);
     const { container } = mount();
     await screen.findByTestId('decode-tps');
@@ -512,10 +512,6 @@ describe('estimator inputs', () => {
     expect(advanced.open).toBe(false);
     expect(within(screen.getByTestId('offload-section')).queryByText('Advanced')).toBeNull();
     const section = screen.queryByTestId('offload-advanced');
-    if (offload.length === 0) {
-      expect(section).toBeNull();
-      return;
-    }
     expect(section).not.toBeNull();
     expect(advanced.contains(section)).toBe(true);
     // The subsection comes first, before the device unlocks and the spec editor.
@@ -525,6 +521,67 @@ describe('estimator inputs', () => {
     expect(section!.querySelector('legend')!.textContent).toBe('Offload');
     const labels = [...section!.querySelectorAll('.field-label')].map((l) => l.textContent?.trim());
     expect(labels).toEqual(offload);
+  });
+  it('token embeddings: Host RAM writes oet=ram and brings in the host controls; On GPU removes it', async () => {
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B');
+    mount();
+    await screen.findByTestId('decode-tps');
+    const picker = () =>
+      within(screen.getByTestId('offload-advanced')).getByRole('combobox', { name: 'Token embeddings' });
+    expect(picker().textContent).toBe('On GPU');
+    expect(screen.queryByRole('combobox', { name: 'Host RAM' })).toBeNull();
+    fireEvent.click(picker());
+    expect((await screen.findAllByRole('option')).map((o) => o.textContent?.replace('✓', ''))).toEqual([
+      'On GPU',
+      'Host RAM',
+      'SSD',
+    ]);
+    fireEvent.click(screen.getByRole('option', { name: 'Host RAM' }));
+    await waitFor(() => expect(location.search).toContain('oet=ram'));
+    expect(screen.getByRole('combobox', { name: 'Host RAM' })).toBeTruthy();
+    fireEvent.click(picker());
+    fireEvent.click(await screen.findByRole('option', { name: 'On GPU' }));
+    await waitFor(() => expect(location.search).not.toContain('oet='));
+    expect(screen.queryByRole('combobox', { name: 'Host RAM' })).toBeNull();
+  });
+  it('token embeddings on unified memory: In memory and SSD only; a shared oet=ram shows In memory', async () => {
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B&d=apple-m3-ultra-80c');
+    mount();
+    await screen.findByTestId('decode-tps');
+    const picker = () =>
+      within(screen.getByTestId('offload-advanced')).getByRole('combobox', { name: 'Token embeddings' });
+    expect(picker().textContent).toBe('In memory');
+    fireEvent.click(picker());
+    expect((await screen.findAllByRole('option')).map((o) => o.textContent?.replace('✓', ''))).toEqual([
+      'In memory',
+      'SSD',
+    ]);
+    cleanup();
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B&d=apple-m3-ultra-80c&oet=ram');
+    mount();
+    await screen.findByTestId('decode-tps');
+    expect(picker().textContent).toBe('In memory');
+  });
+  it('token embeddings of a tied model: a disabled picker whose help says why, and an oet in the URL is ignored', async () => {
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B&oet=ssd');
+    mount(async (id) => {
+      const r = await fixtureLoader(id);
+      return r.kind === 'ok' ? { ...r, model: { ...r.model, tieEmbeddings: true } } : r;
+    });
+    await screen.findByTestId('decode-tps');
+    const trigger = within(screen.getByTestId('offload-advanced')).getByRole('combobox', {
+      name: 'Token embeddings',
+    }) as HTMLButtonElement;
+    expect(trigger.disabled).toBe(true);
+    expect(trigger.textContent).toBe('On GPU');
+    // Nothing is placed: no SSD or host controls, no notice.
+    expect(screen.queryByRole('combobox', { name: 'SSD' })).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.focus(screen.getByRole('button', { name: 'About Token embeddings' }));
+    expect(
+      await screen.findByText('This model reuses this table for its output, so it stays on the GPU.'),
+    ).toBeTruthy();
+    expect(screen.getByTestId('decode-tps').textContent).toMatch(/[1-9]/);
   });
   it('labels the counts in plain language with a total', async () => {
     history.replaceState(null, '', '/?n=4');

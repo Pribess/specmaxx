@@ -524,7 +524,7 @@ describe('deployment identity, knobs absent (after latency audit G1–G8, G6 exc
     },
   );
   it.each(Object.entries(inputs).filter(([key]) => key.startsWith('models/')))(
-    'ID-2 %s: absent deployment deep-equals {} and lookupTables tier device',
+    'ID-2 %s: absent deployment deep-equals {}, lookupTables tier device and embeddings tier device',
     (_key, value) => {
       const absent = simulate(value);
       expect(simulate({ ...value, deployment: {} })).toEqual(absent);
@@ -532,14 +532,24 @@ describe('deployment identity, knobs absent (after latency audit G1–G8, G6 exc
       expect(
         simulate({ ...value, deployment: { offload: { lookupTables: { tier: 'device' } } } }),
       ).toEqual(absent);
+      expect(
+        simulate({ ...value, deployment: { offload: { embeddings: { tier: 'device' } } } }),
+      ).toEqual(absent);
     },
   );
   it.each(Object.entries(inputs))(
-    'ID-3 %s: empty placement rule lists (routedExperts [], lookupTables []) deep-equal absent deployment',
+    'ID-3 %s: empty placement rule lists (routedExperts [], lookupTables [], embeddings absent or device) deep-equal absent deployment',
     (_key, value) => {
+      const absent = simulate(value);
       expect(
         simulate({ ...value, deployment: { offload: { routedExperts: [], lookupTables: [] } } }),
-      ).toEqual(simulate(value));
+      ).toEqual(absent);
+      expect(
+        simulate({
+          ...value,
+          deployment: { offload: { routedExperts: [], lookupTables: [], embeddings: { tier: 'device' } } },
+        }),
+      ).toEqual(absent);
     },
   );
 });

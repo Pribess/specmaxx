@@ -109,6 +109,13 @@ export function effectiveAcceptance(
   return presetAcceptance(specDec.method, useCase, k, draft);
 }
 
+/**
+ * Shown in the disabled picker's "?" for a token-embedding placement on a model with tied
+ * embeddings: its LM head reuses the table in a GEMM every step, so it stays on the device.
+ */
+export const TIED_EMBEDDINGS_NOTE =
+  'This model reuses this table for its output, so it stays on the GPU.';
+
 /** True if any layer of the model has a routed-expert (MoE) block. */
 export function hasMoe(model: ModelSpec): boolean {
   return model.layers.some((l) => l.blocks.some((b) => b.kind === 'moe'));
@@ -196,6 +203,7 @@ export interface DeploymentResult {
 /**
  * The engine's `DeploymentConfig` of the state's deployment choices for `model`, with the problems:
  * - offload: experts only on MoE models, tables only on models with a table (else a warning and nothing is placed);
+ *   embeddings only on models without tied embeddings (else ignored silently, nothing is placed);
  *   a first offloaded layer at or past the last layer places nothing (a warning);
  * - a host-RAM + SSD split (`tier: 'split'`) becomes two rules over disjoint layer ranges (experts: both with the same
  *   f and h; tables: split by table layers, with the same scale layout); a split with an empty side, like a single
@@ -275,7 +283,14 @@ export function deploymentConfig(
           ranges.length === 1 ? rule(ranges[0], true) : ranges.map((r) => rule(r, false));
       }
     }
-    const placed = out.routedExperts !== undefined || out.lookupTables !== undefined;
+    // A tied table is also the LM head's matrix (a GEMM every step): it cannot leave the device. A choice carried
+    // by a shared URL is ignored without a notice (the picker is disabled and says why).
+    if (o.embeddings !== undefined && !model.tieEmbeddings)
+      out.embeddings = { tier: o.embeddings.tier };
+    const placed =
+      out.routedExperts !== undefined ||
+      out.lookupTables !== undefined ||
+      out.embeddings !== undefined;
     if (placed)
       offload = {
         ...out,

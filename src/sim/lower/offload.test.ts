@@ -56,7 +56,7 @@ describe('per-layer rule lookup (mixed placement by layer range)', () => {
 /**
  * q = prefetchedFraction(p, target) (docs/simulation-model.md §12 "Expert prefetch"): 0 at p = 0 for every group;
  * experts q = max(p, M/(E_loc − C)) (predicted copies, or an unconditional copy when nearly every non-resident
- * expert is needed); table rows 1 for any p > 0.
+ * expert is needed); n-gram table rows 1 for any p > 0; token-embedding rows 1 in prefill, 0 in decode.
  */
 describe('prefetchedFraction', () => {
   // Batch-1 decode of a 128-expert, top-8 layer with nothing resident: M = 8, E_loc − C = 128.
@@ -70,10 +70,18 @@ describe('prefetchedFraction', () => {
     expect(prefetchedFraction(0, { group: 'lookup_table' })).toBe(0);
   });
 
-  it('p = 1: perfect prediction, q = 1 for every group (exactly)', () => {
+  it('p = 1: perfect prediction, q = 1 for every group (exactly) but decode token-embedding rows', () => {
     expect(prefetchedFraction(1, decode)).toBe(1);
     expect(prefetchedFraction(1, prefill)).toBe(1);
     expect(prefetchedFraction(1, { group: 'lookup_table' })).toBe(1);
+  });
+
+  it('token-embedding rows: q = 1 in prefill and 0 in decode for any p > 0 (the decode row is the token just sampled)', () => {
+    for (const p of [0.01, 0.8, 1]) {
+      expect(prefetchedFraction(p, { group: 'token_embedding', phase: 'prefill' })).toBe(1);
+      expect(prefetchedFraction(p, { group: 'token_embedding', phase: 'decode' })).toBe(0);
+    }
+    expect(prefetchedFraction(0, { group: 'token_embedding', phase: 'prefill' })).toBe(0);
   });
 
   it('batch 1 keeps the measured recall: q = p exactly (no chance hits added)', () => {

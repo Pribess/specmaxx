@@ -10,6 +10,7 @@ import {
   resolveHost,
   tableLayerIndices,
   tablesOffDeviceByDesign,
+  TIED_EMBEDDINGS_NOTE,
   type HitRatioChoice,
   type HostChoice,
   type OffloadChoice,
@@ -154,7 +155,12 @@ function offloadControls({ state, dispatch, loaded, built }: PanelProps) {
   const device = built.hardware?.device.device;
   if (model === undefined || device === undefined) return undefined;
   const unified = device.memory.kind === 'unified';
-  const offload = state.deployment.offload ?? {};
+  const chosen = state.deployment.offload ?? {};
+  // A tied model's token-embedding choice (from a shared URL) places nothing, so it is ignored here: it shows as the
+  // default and turns no host control on.
+  const offload: OffloadChoice = model.tieEmbeddings
+    ? { ...chosen, embeddings: undefined }
+    : chosen;
   const designOffDevice = tablesOffDeviceByDesign(model);
   const setOffload = (next: OffloadChoice) =>
     dispatch({
@@ -420,9 +426,9 @@ export function OffloadSection(props: PanelProps) {
 }
 
 /**
- * Hardware → Advanced → "Offload" / "Storage": the lookup-table placement (models with n-gram tables), the scale
- * layout of off-device tables, the queue depth and the prefetch accuracy (with any offload on). Renders nothing when
- * none of them applies.
+ * Hardware → Advanced → "Offload" / "Storage": the token-embedding placement (every model; locked on the device for a
+ * model with tied embeddings), the lookup-table placement (models with n-gram tables), the scale layout of off-device
+ * tables, the queue depth and the prefetch accuracy (with any offload on).
  */
 export function OffloadAdvancedFields(props: PanelProps) {
   const controls = offloadControls(props);
@@ -435,17 +441,43 @@ export function OffloadAdvancedFields(props: PanelProps) {
     setOffload,
     placementOptions,
     placement,
+    tierOptions,
+    tier,
     anyOff,
   } = controls;
   const tables = offload.tables;
   // A split counts table layers: it needs at least 2 (Qwen PLE has 1, DeepSeek Engram 2).
   const tableLayerCount = tableLayerIndices(model).length;
-  if (!hasLookupTables(model) && !anyOff) return null;
+  const embeddingsTier = offload.embeddings?.tier ?? DEVICE;
+  // On unified memory host RAM is the device pool, so a URL-carried host-RAM choice shows as the default row.
+  const embeddingsValue = unified && embeddingsTier === 'host_ram' ? DEVICE : embeddingsTier;
+  const embeddingsOptions: PickerOption[] = tierOptions.map((o) =>
+    o.value === DEVICE ? { ...o, label: unified ? 'In memory' : 'On GPU' } : o,
+  );
   const placeTablesOnHost = () =>
     setOffload({ ...offload, tables: { tier: unified ? 'nvme' : 'host_ram' } });
   return (
     <fieldset className="unlock advanced-fields" data-testid="offload-advanced">
       <legend>{unified ? 'Storage' : 'Offload'}</legend>
+      <Picker
+        label="Token embeddings"
+        value={embeddingsValue}
+        options={embeddingsOptions}
+        disabled={model.tieEmbeddings}
+        onChange={(v) => {
+          const t = tier(v);
+          setOffload({ ...offload, embeddings: t === undefined ? undefined : { tier: t } });
+        }}
+        help={helpLines([
+          'Where the table that turns tokens into vectors lives.',
+          ...(model.tieEmbeddings
+            ? [TIED_EMBEDDINGS_NOTE]
+            : [
+                'Each token reads only one small row, so moving it off the GPU costs almost no speed.',
+                'Frees GPU memory for a longer context or a bigger quant.',
+              ]),
+        ])}
+      />
       {hasLookupTables(model) && (
         <div className="tables-field">
           <Picker

@@ -83,6 +83,16 @@ export interface TablePlacement {
 }
 
 /**
+ * The resolved token-embedding placement: the stage-0 table shard lives on `tier`, and each embedding gather reads
+ * its `R = T/tp` rows from there (docs/simulation-model.md §12 "Token embedding off-device"). The read layout is
+ * always `'separate'` and nothing is pinned, so the tier is the only field.
+ */
+export interface EmbeddingPlacement {
+  /** Tier holding the token-embedding table shard. */
+  tier: 'host_ram' | 'nvme';
+}
+
+/**
  * The off-device placement lowering applies, resolved from `OffloadConfig` with every default filled in (built once
  * per run by `simulate`). Each present group adds one `TransferOp` in front of the block that consumes it, only
  * when it has bytes to move. Layer ranges are `[from, to)` over `ModelSpec.layers` (zero-based indices).
@@ -105,6 +115,12 @@ export interface OffloadLowering {
    * disjoint. Layers no placement covers keep their tables on the device.
    */
   lookupTables?: readonly TablePlacement[];
+  /**
+   * Off-device token-embedding placement (`OffloadConfig.embeddings` with a tier other than `'device'`, kept after
+   * the unified-memory drop): stage 0's embedding gathers, and the drafter's shared-embedding gathers, read their
+   * rows from its `tier`. Absent = the table is on the device.
+   */
+  embeddings?: EmbeddingPlacement;
   /**
    * Unified memory: host RAM is the device pool, so pinned-host table scales (and any host-RAM group) are device
    * bytes, never a separate tier. Absent/false = dedicated memory (host RAM is its own tier).

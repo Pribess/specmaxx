@@ -27,6 +27,14 @@ import type { LayerRange, SimInput } from './types';
 /** The exact error for speculative decoding with pipeline parallelism (design doc §3.6). */
 export const SPEC_DEC_PP_ERROR = 'speculative decoding with pp > 1 is not supported yet';
 
+/**
+ * The exact error for an off-device token embedding (`deployment.offload.embeddings` on host RAM or NVMe) on a model
+ * with tied embeddings: the table is also the LM head's weight, read whole every step, so it stays on the device
+ * (docs/simulation-model.md §12 "Token embedding off-device").
+ */
+export const TIED_EMBEDDINGS_OFFLOAD_ERROR =
+  'deployment.offload.embeddings: the model ties its token embedding to the LM head (tie_word_embeddings), so the table stays on the device';
+
 /** Largest draft length k accepted (design doc §3.5). Count. */
 export const MAX_DRAFT_LENGTH = 16;
 
@@ -213,7 +221,9 @@ function inRange(x: number, lo: number, hi: number, hiOpen = false): boolean {
  * experts need a MoE model, `residentFraction` in [0, 1], a custom `h` in [0, 1] and `h = 0` when `f = 0` (no expert
  * is resident); layer ranges non-empty inside `[0, L)`, disjoint within a group, and required in a list of two or more
  * rules; `includeDraft` on one expert rule at most; an off-device lookup-table tier needs n-gram tables, and
- * `scaleLayout 'pinned_host'` needs the NVMe tier; the removed `denseLayers` is rejected. Any off-device group on a dedicated-memory device needs a host
+ * `scaleLayout 'pinned_host'` needs the NVMe tier; the removed `denseLayers` is rejected; `embeddings.tier` is
+ * `'device'`, `'host_ram'` or `'nvme'`, and off the device only for an untied model
+ * ({@link TIED_EMBEDDINGS_OFFLOAD_ERROR}). Any off-device group on a dedicated-memory device needs a host
  * link: `hardware.host.link` or the device's cited `hostInterface`. `hardware.host`, when given, is validated.
  *
  * Speculative decoding: rejected with pp > 1 (§3.6, {@link SPEC_DEC_PP_ERROR}); `draftLength` k an integer in
@@ -308,7 +318,24 @@ export function deploymentErrors(input: SimInput): string[] {
       }
     });
     errors.push(...overlapErrors(tables, 'deployment.offload.lookupTables'));
-    const offDevice = experts.length > 0 || offDeviceTables;
+    // Token embedding (docs/simulation-model.md §12 "Token embedding off-device"): a tied table is also the LM head's
+    // GEMM weight, read whole every step, so it must stay on the device; a duplicate copy is not modelled.
+    const embeddingTier: unknown = offload.embeddings?.tier;
+    if (
+      offload.embeddings !== undefined &&
+      embeddingTier !== 'device' &&
+      embeddingTier !== 'host_ram' &&
+      embeddingTier !== 'nvme'
+    ) {
+      errors.push(
+        `deployment.offload.embeddings.tier must be 'device', 'host_ram' or 'nvme' (got ${JSON.stringify(embeddingTier)})`,
+      );
+    }
+    const offDeviceEmbeddings = embeddingTier === 'host_ram' || embeddingTier === 'nvme';
+    if (offDeviceEmbeddings && model.tieEmbeddings) {
+      errors.push(TIED_EMBEDDINGS_OFFLOAD_ERROR);
+    }
+    const offDevice = experts.length > 0 || offDeviceTables || offDeviceEmbeddings;
     const device = hardware.device;
     if (
       offDevice &&

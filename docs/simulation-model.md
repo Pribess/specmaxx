@@ -1051,7 +1051,7 @@ gamma `dim·bpe(hp)` (×2 for layernorm); replicated on every TP rank (no sequen
 
 ### Embedding and LM head
 
-`lower/embedding.ts: lowerEmbedding, embeddingResidentWeightBytes`; `lower/head.ts: lowerHead, headTokens,
+`lower/embedding.ts: lowerEmbedding, embeddingResidentWeightBytes, embeddingShardBytes`; `lower/head.ts: lowerHead, headTokens,
 lmHeadResidentWeightBytes`. Embedding (stage 0) is vocab-parallel: `ceil(vocab/tp)` rows per rank, then an
 `all_reduce` of `T·h`. Head (last stage): final norm, then `lm_head m = Tout, n = ceil(vocab/tp), k = h`.
 **Prefill computes logits only for the last position** (`Tout = seqs`); decode `Tout = seqs·qLen`.
@@ -1059,6 +1059,8 @@ No full-logits gather: when tp > 1, cross-shard sampling adds one `all_gather(tp
 with full output `S = Tout·tp·8 B` (one fp32 score + uint32 token ID per rank and output position).
 Both phases and every draft head use `lower/head.ts: samplingExchangeOps` (`lowerHead` and
 `lower/draft.ts: sharedLmHeadOps`; audit G1). Block-drafter prefill has no head, hence no exchange.
+The embedding table may live in host RAM or on the SSD instead (`OffloadConfig.embeddings`, untied models only): a
+row fetch then goes in front of the gather (§12 "Token embedding off-device").
 
 ### MLA forms
 
@@ -2078,8 +2080,9 @@ Per device of stage s:
 
 - `W_s` = Σ resident block weights (non-MoE blocks: the weight bytes of a one-token lowering, so resident and
   streamed weights agree by construction; MoE: all local experts; n-gram: the table shard `ceil(rows/tp)·d·bpe(lookup)`
-  plus its projections and vectors) + the embedding shard on stage 0
-  (`ceil(vocab/tp)·h·bpe(emb)`) + the LM-head shard and final norm on the last stage. A tied head shares the
+  plus its projections and vectors) + the embedding shard on stage 0 while it is on the device
+  (`[s = 0 ∧ on device] W_emb`, `W_emb = ceil(vocab/tp)·h·bpe(emb)`; §12 "Token embedding off-device") + the LM-head
+  shard and final norm on the last stage. A tied head shares the
   embedding allocation only with pp = 1 and an identical stored format (dtype and `extraBitsPerElem`,
   `memory.ts: sameStoredFormat`); a tied head stored differently (e.g. bf16 embeddings, int4 head) is a second
   copy and counted in full.
@@ -2343,22 +2346,25 @@ These checklists are binding for later tasks. TypeScript's exhaustive `never` ch
 ## 12. Offloading
 
 Deployment knob `SimInput.deployment.offload` (design: `docs/design/offload-specdec-latency.md` §2). Off by
-default: absent, `{}` or `lookupTables: { tier: 'device' }` emit no transfer op, add no memory, never read
-`hardware.host`, and give bit-identical results (`engine/identity.test.ts`). With it on, the result is still the
-hardware/math bound given the stated hit ratio, queue depth and prefetch accuracy: only bytes crossing the host link
-and requests paying a latency are added. Worked examples W1, W3, W4 are tests in `engine/e2e-offload.test.ts`.
+default: absent, `{}`, `lookupTables: { tier: 'device' }` or `embeddings: { tier: 'device' }` emit no transfer op,
+add no memory, never read `hardware.host`, and give bit-identical results (`engine/identity.test.ts`). With it on,
+the result is still the hardware/math bound given the stated hit ratio, queue depth and prefetch accuracy: only bytes
+crossing the host link and requests paying a latency are added. Worked examples W1, W3, W4 are tests in
+`engine/e2e-offload.test.ts`.
 
 ### Placement
 
 `src/sim/engine/host.ts: resolveOffload`; `engine/offloadRules.ts: expertRules, lookupTableRules`;
 `lower/offload.ts: expertPlacementAt, tablePlacementAt, draftExpertPlacement`; `lower/moe.ts: expertFetchOp`;
-`lower/ngram.ts: tableFetchOp`. Two weight groups, each lowered to one `TransferOp` (§3 op catalogue: `kind
-'transfer'`) in front of the block that consumes it, **only when it has bytes to move**:
+`lower/ngram.ts: tableFetchOp`; `lower/embedding.ts: embeddingFetchOp`. Three weight groups, each lowered to one
+`TransferOp` (§3 op catalogue: `kind 'transfer'`) in front of the block that consumes it, **only when it has bytes
+to move**:
 
 | group                                 | selector                             | stays on device                                                   | `reads` / `usefulBytes` per step       |
 | ------------------------------------- | ------------------------------------ | ----------------------------------------------------------------- | -------------------------------------- |
 | `routed_experts` (`moe.expert_fetch`) | MoE layers in `layers` (default all) | `C = f·E_loc` experts, router, latent projections, shared experts | `[{ M, W_expert }]` / `M·W_expert`     |
 | `lookup_table` (`<block>.row_fetch`)  | n-gram tables in `layers` (default all) | projections, gate vectors, conv taps                           | per scale layout, below / `R·rowBytes` |
+| `token_embedding` (`embed.row_fetch`) | `embeddings` (stage 0; no layers)       | the gather's output only (no weights)                          | separate layout / `R·rowBytes`         |
 
 - `W_expert = gemmWeightBytes(gated ? 3 : 2, l, fe/etp, w_routed)`, `l = latentDim ?? h` (`moe.ts: expertWeightBytes`); the grouped
   expert GEMMs keep their `a` active experts, so the device-memory bytes of the step are unchanged.
@@ -2389,7 +2395,9 @@ and requests paying a latency are added. Worked examples W1, W3, W4 are tests in
   weights stay counted on the device); only `'nvme'` rules remain. An NVMe table with `scaleLayout 'pinned_host'`
   keeps its scales in that pool too: they are device bytes (§12 "Memory tiers"). `pinned_host` stays the default for
   `nvme` on unified memory: the rates are unchanged (the scale read is not costed), only the device bytes grow.
-- Draft layers (spec-dec) are lowered without a layer index and get no transfer op.
+- Draft layers (spec-dec) are lowered without a layer index and get no transfer op, except the drafter's own experts
+  (`includeDraft`, §13 "Spec-dec × offload") and the row fetches of its shared-embedding gathers ("Token embedding
+  off-device" below).
 
 ### Storage tiers
 
@@ -2489,7 +2497,8 @@ Each transfer op gets a prefetched share **q** (`TransferOp.prefetchedFraction`)
 ```
 q = 0                                           p = 0, every group  (no prefetching at all)
 q = max(p, M/(E_loc − C))                        routed experts, p > 0
-q = 1                                           table rows, p > 0
+q = 1                                           n-gram table rows, p > 0
+q = prefill ? 1 : 0                             token-embedding rows, p > 0  ("Token embedding off-device")
 ```
 
 The stage formula of §7 "Stage time and overlap" then gives
@@ -2515,7 +2524,9 @@ The stage formula of §7 "Stage time and overlap" then gives
   table rows follow from the token ids. An engine that prefetches at all prefetches these, so q = 1 for any p > 0.
   p = 0 means no prefetching at all, so q = 0 everywhere. Both former modes stay reachable bit for bit: **p = 1 ≡
   `'ideal'`** and **p = 0 ≡ `'none'`** (`pipeline.test.ts`, `e2e-offload.test.ts`). The price is a jump at p = 0:
-  p → 0⁺ still prefetches table rows.
+  p → 0⁺ still prefetches table rows. One exception: decode token-embedding rows keep q = 0 at any p (the row is
+  the token just sampled, and its gather is the step's first op; "Token embedding off-device"), so p = 1 equals the
+  former `'ideal'` for every config the former modes could express (none had an off-device embedding).
 - **Window.** The prefetch window is the whole stage's core time, not one layer's: the same relaxation as the
   former `'ideal'`. A per-layer form would be more pessimistic at p = 1 whenever layers differ, and would no longer
   reproduce `'ideal'`.
@@ -2605,6 +2616,9 @@ then (both cases, §7 "Stage time and overlap"):
 - **Staging.** With two streams in flight the stage keeps one buffer being read plus one being filled per source:
   `staging = max_all buffer + max_{ram, q>0} buffer + max_{nvme, q>0} buffer` per phase ("Memory tiers"). With one
   source this is the former 2·max.
+- **Token-embedding rows** ("Token embedding off-device") join by their source like any op: in prefill (q = 1) they
+  are part of their tier's stream, so e.g. the embedding in host RAM next to experts on the SSD overlaps; in decode
+  (q = 0) they are demand share only, in D_s, and never make a stage overlapped on their own.
 
 Worked example (`engine/e2e-mixed-offload.test.ts`): Qwen3.8-Flash-Next fp8 on one RTX 5090, DDR5-5600 ×2, 990 PRO,
 PLE table on the SSD, f = 0, b 1, p 0.8. 24 expert layers in RAM + 24 on the SSD: D = 35.99 ms, P = the SSD stream
@@ -2617,21 +2631,25 @@ Engram tables on the SSD (DeepSeek-V4.1-Flash, experts in RAM + Engram on the SS
 an Engram table split across the tiers at p > 0.
 ### Memory tiers
 
-`src/sim/engine/memory.ts: stageWeightBytes, stageStagingBytes, stageTierBytes, tierMemory, stageLookupTableBytes`;
-`lower/moe.ts: moeResidentWeightBytes, moeLocalExpertBytes`; `lower/ngram.ts: ngramResidentWeightBytes,
-ngramTableShardBytes`.
+`src/sim/engine/memory.ts: stageWeightBytes, stageStagingBytes, stageTierBytes, stageTierBreakdown, tierMemory,
+stageLookupTableBytes`; `lower/moe.ts: moeResidentWeightBytes, moeLocalExpertBytes`; `lower/ngram.ts:
+ngramResidentWeightBytes, ngramTableShardBytes`; `lower/embedding.ts: embeddingResidentWeightBytes,
+embeddingShardBytes`.
 
 ```
 W_s        = resident weights: offloaded MoE layer C·W_expert (+ router, latent projections, shared);
              off-device table: the non-table part  + [unified ∧ pinned_host] ceil(rows/tp)·scaleBytes
-             (lower/ngram.ts: ngramResidentWeightBytes, pinnedScaleBytes)
+             (lower/ngram.ts: ngramResidentWeightBytes, pinnedScaleBytes);
+             off-device token embedding: stage 0 drops W_emb (lower/embedding.ts: embeddingResidentWeightBytes)
 staging_s  = max_{phase, transfer op} (q > 0 ? 2 : 1)·buffer          (double buffer for a prefetched op),
              a phase prefetching from both tiers: also max_all buffer + max_{ram,q>0} buffer + max_{nvme,q>0} buffer
-             (one read + one fill per source, "Overlap across tiers"),
-             buffer = experts: Σ ceil(count)·bytes;  tables: usefulBytes
+             (one read + one fill per source, "Overlap across tiers"); a phase's token-embedding ops are taken from
+             the decode step and the LAST prefill chunk (buffer R·rowBytes per chunk, "Token embedding off-device"),
+             buffer = experts: Σ ceil(count)·bytes;  tables, token embedding: usefulBytes
 total_s    = W_s + B_r·state_s + act_s + staging_s ≤ capacity
 tier bytes = max over nodes of Σ_{devices of the node} (full groups: E_loc·W_expert per offloaded layer,
-             table shards; NVMe tables with scaleLayout 'pinned_host' put ceil(rows/tp)·scaleBytes on host RAM —
+             table shards, the stage-0 token-embedding shard ceil(vocab/tp)·h·bpe(emb) (`tokenEmbeddings`);
+             NVMe tables with scaleLayout 'pinned_host' put ceil(rows/tp)·scaleBytes on host RAM —
              dedicated memory only; unified memory has no host_ram tier, the scales are in W_s)
 fits       = ∀ s total_s ≤ capacity  ∧  ∀ tiers bytes ≤ capacityBytes
 ```
@@ -2653,6 +2671,72 @@ extraBits)/8`, `scaleBytes = d·blockScaleBits/8`, `rowBytes = d·bpe = valueByt
 RAM, counted in its capacity; their read is not costed; on unified memory they stay in the unified pool and count in
 the device's `W_s` instead). A table without scales reads `[{ R, rowBytes }]` in any
 layout. `usefulBytes = R·rowBytes` whatever the layout. The existing gather op stays (device-memory side).
+
+### Token embedding off-device
+
+`lower/embedding.ts: embeddingFetchOp, embeddingShardBytes, embeddingResidentWeightBytes`; `lower/ngram.ts:
+tableRowReads, tableRowBytes`; `lower/offload.ts: prefetchedFraction`; `engine/host.ts: resolveOffload`;
+`engine/memory.ts: stageWeightBytes, stageTierBreakdown, stageStagingBytes`; `engine/validate.ts:
+TIED_EMBEDDINGS_OFFLOAD_ERROR`. Deployment knob `OffloadConfig.embeddings = { tier }` (`'device'` default,
+`'host_ram'`, `'nvme'`). The token embedding is a pure gather, one row of h elements per token and no matmul, so it
+is a **1-gram lookup table** and reuses the n-gram table path: the same transfer rule ("Transfer path"), read
+granularity, queue depth and sharing. It is not layer-indexed: the table lives on PP stage 0 only, so it is one
+placement next to the rule lists, not a rule.
+
+```
+rowBytes    = h·bpe(emb)                          one row in quant.embeddings (bf16, h 5120: 10,240 B)
+R           = T/tp                                rows per device: the table is vocab-parallel, a rank serves
+                                                  the expected 1/tp of the rows; T = b_mb·P (prefill), b_mb·qLen (decode)
+reads       = [{ R, rowBytes }]                   no block scales
+            = [{ R, valueBytes }, { R, scaleBytes }]   block-scaled format (the 'separate' layout)
+usefulBytes = R·rowBytes
+q           = 0 (p = 0);  prefill ? 1 : 0 (p > 0)
+W_0         = W_0 − ceil(vocab/tp)·h·bpe(emb)     the shard leaves stage 0's device weights …
+tier       += ceil(vocab/tp)·h·bpe(emb)          … and counts on its tier (TierBytes.tokenEmbeddings)
+staging_0   ≥ (q > 0 ? 2 : 1)·R·rowBytes          over the decode step and the LAST prefill chunk
+```
+
+- **Ops** (stage 0): `embed.row_fetch` (`group 'token_embedding'`) → `embed`, the gather, unchanged (it reads the
+  staged rows) → `embed.tp_all_reduce`. The prefill rate pays every prompt row: 8192 rows × 10,240 B =
+  83,886,080 B at P 8k.
+- **No pinned scales, no scale-layout choice.** The read is always the `'separate'` layout and nothing is pinned:
+  embeddings are bf16/fp16 in every shortlist checkpoint, and MLX group scales are `extraBits` (part of the value
+  bytes), not block scales, so pinning would only add host-RAM and unified-memory branches that never apply.
+- **q.** In prefill every prompt id is known before the step, so the rows are a deterministic transfer: q = 1 for
+  any p > 0, as for n-gram rows. In decode (and the drafter's decode passes) the row is the token the previous
+  step just sampled, and the gather is the step's first op: no compute is left to hide it behind, so q = 0 at any p.
+  The cost is one row, about 1.25 µs from host RAM or 48 µs from an SSD per step. Under "Overlap across tiers"
+  the prefill rows join their tier's prefetched stream, and the decode row stays in the serial demand share D_s.
+- **Staging per prefill chunk.** The token-embedding buffer is sized from the memory fit's chunked prefill (the
+  last chunk, as for the activation peak, §8 "Activation peak"), not the whole prompt: a 128k prompt would otherwise
+  stage 2·128k·10,240 B ≈ 2.7 GB, more than the 2.54 GB the offload frees. Other groups keep their staging from the
+  costed phases (bit-identical).
+- **Tied embeddings are not offloadable.** With `tie_word_embeddings` the LM head reuses the matrix for a full GEMM
+  every step, so validation rejects an off-device tier (`TIED_EMBEDDINGS_OFFLOAD_ERROR`). A duplicate copy (one on
+  the tier for the gather, one on the device for the head) is not modelled. As a defense, `stageWeightBytes` shares
+  the tied head's matrix with the embedding only while the embedding is on the device.
+- **Unified memory.** A `'host_ram'` placement is dropped with the unified note, so the result equals the default
+  apart from that warning; `'nvme'` moves the shard to the SSD tier.
+- **Spec-dec.** The drafter's shared-embedding gathers (`draft.embed` of MTP, `draft.noise_embed` of a block
+  drafter) read the same off-device table, so each gets the same row fetch (`draft.embed.row_fetch`,
+  `draft.noise_embed.row_fetch`; `draft.ts: draftContext` keeps the embedding placement). Spec-dec forces pp = 1, so
+  they all land on stage 0. The MTP prefill pass fetches the prompt rows again (no reuse of the target's rows: an
+  upper bound on the transfer, hidden at q = 1).
+- **Worked example** (`engine/e2e-embedding-offload.test.ts`): Qwen3.8-27B (V 248,320, h 5120, bf16, untied) on
+  one RTX 5090 + DDR5-5600 ×2 + 990 PRO, b 1, P 8192: stage 0's device weights drop by 2,542,796,800 B; decode
+  goes from 34.377 to 34.376 tok/s @ 8k in host RAM (4.3e-5) and 34.321 tok/s @ 8k on the SSD (0.17 %); prefill
+  stays 3953 tok/s @ 8k (the 1.46 ms row copy hides behind the step).
+- **llama.cpp keeps the token embedding in host RAM by default.** The input layer, which holds `token_embd`, is
+  always placed on the CPU: "there is very little benefit to offloading the input layer, so always keep it on the
+  CPU" ([`src/llama-model.cpp` L1780–1782](https://github.com/ggml-org/llama.cpp/blob/a4d4f2fd4ec85ec6a0a9ece4870416c1b6cc24f5/src/llama-model.cpp#L1780-L1782);
+  `token_embd` is classed `LLM_TENSOR_LAYER_INPUT` in
+  [`src/llama-arch.cpp` L901](https://github.com/ggml-org/llama.cpp/blob/a4d4f2fd4ec85ec6a0a9ece4870416c1b6cc24f5/src/llama-arch.cpp#L901);
+  introduced in [PR #4766](https://github.com/ggml-org/llama.cpp/pull/4766)). For a tied model it loads
+  `token_embd` a second time as the output tensor (`TENSOR_DUPLICATED`), placed with the output layer, so a fully
+  offloaded tied model keeps two copies
+  ([`src/models/llama.cpp` L37–46](https://github.com/ggml-org/llama.cpp/blob/a4d4f2fd4ec85ec6a0a9ece4870416c1b6cc24f5/src/models/llama.cpp#L37-L46),
+  [`src/llama-model-loader.cpp` L1175–1181](https://github.com/ggml-org/llama.cpp/blob/a4d4f2fd4ec85ec6a0a9ece4870416c1b6cc24f5/src/llama-model-loader.cpp#L1175-L1181));
+  that duplicate is what this model does not cover, hence the rejection above.
 
 ## 13. Speculative decoding
 
@@ -2814,4 +2898,6 @@ The verify's `T = b·(k+1)` gives `U(b·(k+1))` needed experts per offloaded lay
 at k = 1, 1.94× W1's decode misses at f = .5). The drafter's own MoE layers follow the routed-expert placement only
 with `includeDraft: true`: they are lowered with the placement's range widened to every drafter layer (`draft.ts:
 draftContext`), get `draft.moe.expert_fetch` ops on the last stage, keep `C = f·E_loc` experts resident in
-`draft_s`, and add their full expert set to the tier (`memory.ts: stageTierBytes`).
+`draft_s`, and add their full expert set to the tier (`memory.ts: stageTierBytes`). With the token embedding
+off-device, the drafter's shared-embedding gathers fetch their rows from its tier (§12 "Token embedding
+off-device").

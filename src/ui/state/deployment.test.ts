@@ -17,6 +17,8 @@ import { buildSimInput, loadedFromHf, type LoadedModel } from './buildInput';
 import {
   normalizeDeployment,
   normalizeOffload,
+  offloadsAnything,
+  offloadsToSsd,
   splitTierRanges,
   type OffloadChoice,
 } from './deployment';
@@ -232,6 +234,35 @@ describe('buildSimInput: deployment', () => {
     const b2 = buildSimInput(noTables, BUNDLED_DEFAULT_MODEL);
     expect(b2.kind === 'ok' && 'deployment' in b2.input).toBe(false);
     expect(b2.issues.some((i) => i.field === 'offload' && i.level === 'warning')).toBe(true);
+  });
+
+  it('emits the token-embedding placement, and for a tied model nothing', () => {
+    const embed = reduce(DEFAULT_STATE, {
+      type: 'setOffload',
+      offload: { embeddings: { tier: 'nvme' } },
+    });
+    expect(BUNDLED_DEFAULT_MODEL.model.tieEmbeddings).toBe(false);
+    const built = buildSimInput(embed, BUNDLED_DEFAULT_MODEL);
+    if (built.kind !== 'ok') throw new Error('not ok');
+    expect(built.issues).toEqual([]);
+    expect(built.input.deployment).toEqual({ offload: { embeddings: { tier: 'nvme' } } });
+    const tied = {
+      ...BUNDLED_DEFAULT_MODEL,
+      model: { ...BUNDLED_DEFAULT_MODEL.model, tieEmbeddings: true },
+    };
+    const b2 = buildSimInput(embed, tied);
+    expect(b2.kind === 'ok' && 'deployment' in b2.input).toBe(false);
+    expect(b2.issues).toEqual([]);
+  });
+
+  it('counts the token-embedding table as an offload and keeps it through normalization', () => {
+    expect(offloadsAnything({ embeddings: { tier: 'host_ram' } })).toBe(true);
+    expect(offloadsToSsd({ embeddings: { tier: 'host_ram' } })).toBe(false);
+    expect(offloadsToSsd({ embeddings: { tier: 'nvme' } })).toBe(true);
+    expect(normalizeOffload({ embeddings: { tier: 'nvme' }, queueDepth: 8 })).toEqual({
+      embeddings: { tier: 'nvme' },
+      queueDepth: 8,
+    });
   });
 
   it('emits the offload config and the host when experts are offloaded', () => {

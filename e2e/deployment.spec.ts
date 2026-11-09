@@ -188,6 +188,31 @@ test('every deployment and host URL key loads, stays canonical and survives a re
   expect(errors).toEqual([]);
 });
 
+test('oet=ram places the token embeddings in host RAM: a tier bar segment, a chip, and the URL round-trips', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await mockHf(page);
+  await page.goto('/?m=Qwen/Qwen3.8-27B&oet=ram');
+  await expect(page.getByTestId('decode-tps')).toHaveText(/[1-9]/);
+  await expect(page.getByText('Ignored invalid URL values')).toHaveCount(0);
+  await expect(page.getByTestId('memory-tier').filter({ hasText: 'Host RAM' })).toContainText(
+    'Token embeddings',
+  );
+  await expect(page.getByText('Token embeddings: host RAM')).toBeVisible();
+  await page.waitForTimeout(400);
+  // Qwen3.8-27B is the default model, so `m` is not written.
+  expect(new URL(page.url()).search).toBe('?oet=ram');
+  await page.reload();
+  await expect(page.getByTestId('decode-tps')).toHaveText(/[1-9]/);
+  await page.locator('details.advanced > summary').click();
+  await expect(
+    page.getByTestId('offload-advanced').getByRole('combobox', { name: 'Token embeddings' }),
+  ).toHaveText('Host RAM');
+  expect(errors).toEqual([]);
+});
+
 test('a legacy offload-overlap URL is rewritten to the equivalent prefetch accuracy', async ({
   page,
 }) => {

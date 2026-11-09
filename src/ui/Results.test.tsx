@@ -337,14 +337,24 @@ it('annotates an offload result: chips, offload transfer bound, one memory bar p
         {
           tier: 'host_ram' as const,
           bytes: 16.3e9,
-          breakdown: { lookupTables: 0, routedExperts: 16.3e9, draftExperts: 0 },
+          breakdown: {
+            lookupTables: 0,
+            routedExperts: 16.3e9,
+            draftExperts: 0,
+            tokenEmbeddings: 0,
+          },
           capacityBytes: 96e9,
           fits: true,
         },
         {
           tier: 'nvme' as const,
           bytes: 2.2e12,
-          breakdown: { lookupTables: 0, routedExperts: 2.2e12, draftExperts: 0 },
+          breakdown: {
+            lookupTables: 0,
+            routedExperts: 2.2e12,
+            draftExperts: 0,
+            tokenEmbeddings: 0,
+          },
           capacityBytes: 2e12,
           fits: false,
         },
@@ -395,7 +405,12 @@ it('labels a host-RAM + SSD split in the tier bars with each tier’s layer span
   const tier = (t: 'host_ram' | 'nvme', experts: number, tables: number) => ({
     tier: t,
     bytes: experts + tables,
-    breakdown: { lookupTables: tables, routedExperts: experts, draftExperts: 0 },
+    breakdown: {
+      lookupTables: tables,
+      routedExperts: experts,
+      draftExperts: 0,
+      tokenEmbeddings: 0,
+    },
     capacityBytes: 2e12,
     fits: true,
   });
@@ -436,6 +451,34 @@ it('labels a host-RAM + SSD split in the tier bars with each tier’s layer span
   expect(screen.getByRole('tooltip').textContent).toBe(
     'SSD · MoE experts, layers 24–47 · 40.0GB @ 8k',
   );
+});
+
+it('shows a Token embeddings segment in the host-RAM tier bar', async () => {
+  const { summary } = await defaultResult();
+  const embedded = {
+    ...summary,
+    offload: [{ group: 'token_embeddings' as const, tier: 'host_ram' as const }],
+    memory: {
+      ...summary.memory,
+      tiers: [
+        {
+          tier: 'host_ram' as const,
+          bytes: 1.6e9,
+          breakdown: { lookupTables: 0, routedExperts: 0, draftExperts: 0, tokenEmbeddings: 1.6e9 },
+          capacityBytes: 96e9,
+          fits: true,
+        },
+      ],
+    },
+  };
+  const { container } = render(<MemoryFit result={embedded} />);
+  const legend = screen.getByTestId('memory-tier-legend');
+  expect(
+    [...legend.querySelectorAll('li:has(.memory-swatch)')].map(
+      (li) => li.firstChild?.nextSibling?.textContent,
+    ),
+  ).toEqual(['Token embeddings']);
+  expect(container.querySelector('.allocation-tier-embed')).toBeTruthy();
 });
 
 it('hatches an on-device n-gram table and offers to move it (to the SSD on unified memory)', async () => {

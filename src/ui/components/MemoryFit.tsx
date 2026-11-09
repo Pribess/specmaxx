@@ -57,6 +57,12 @@ function stageSegments(stage: StageMemory): Segment[] {
  */
 const TIER_CATEGORIES = [
   { field: 'lookupTables', key: 'tier-tables', label: 'Lookup tables', group: 'lookup_tables' },
+  {
+    field: 'tokenEmbeddings',
+    key: 'tier-embed',
+    label: 'Token embeddings',
+    group: 'token_embeddings',
+  },
   { field: 'routedExperts', key: 'tier-experts', label: 'MoE experts', group: 'routed_experts' },
   { field: 'draftExperts', key: 'tier-draft', label: 'Draft experts', group: undefined },
 ] as const;

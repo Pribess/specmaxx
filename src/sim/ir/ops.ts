@@ -407,18 +407,24 @@ export interface CollectiveOp {
  */
 export interface TransferOp {
   kind: 'transfer';
-  /** Stable dotted name, e.g. `'moe.expert_fetch'`, `'ngram.row_fetch'`. */
+  /** Stable dotted name, e.g. `'moe.expert_fetch'`, `'ngram.row_fetch'`, `'embed.row_fetch'`. */
   name: string;
-  /** What is streamed: missed routed experts, or gathered n-gram table rows. */
-  group: 'routed_experts' | 'lookup_table';
+  /**
+   * What is streamed: missed routed experts, gathered n-gram table rows, or gathered token-embedding rows (the
+   * 1-gram table of `OffloadConfig.embeddings`; its own group because its prefetch share and staging differ,
+   * docs/simulation-model.md §12 "Token embedding off-device").
+   */
+  group: 'routed_experts' | 'lookup_table' | 'token_embedding';
   /** Storage tier the bytes come from (`'host_ram'` on a unified-memory device is never emitted: it is device memory). */
   source: 'host_ram' | 'nvme';
   /**
    * Physical read classes issued this step: `count` reads of `bytesEach` bytes each (before rounding to the tier's
    * read granularity). Experts: `[{ count: M, bytesEach: W_expert }]`; table rows per the scale layout of design
    * doc §2.10, e.g. separate value and scale reads
-   * `[{ count: T·g, bytesEach: 256 }, { count: T·g, bytesEach: 8 }]`. `Σ count` pays the per-request (IOPS,
-   * Little's-law) terms; each class is rounded up to the tier granularity for the tier-bandwidth term.
+   * `[{ count: T·g, bytesEach: 256 }, { count: T·g, bytesEach: 8 }]`; token-embedding rows always as the separate
+   * layout (`[{ R, rowBytes }]`, or value and scale reads for a block-scaled format, R = T/tp). `Σ count` pays the
+   * per-request (IOPS, Little's-law) terms; each class is rounded up to the tier granularity for the tier-bandwidth
+   * term.
    * Unit: `count` requests (expected, real), `bytesEach` bytes.
    */
   reads: { count: number; bytesEach: number }[];
@@ -430,8 +436,10 @@ export interface TransferOp {
   /**
    * q: the share of this op's transfer time that is prefetched, i.e. issued before the consuming block's router (or
    * before the step, for table rows) and so eligible to hide behind the stage's compute
-   * (docs/simulation-model.md §12 "Expert prefetch"). Routed experts: `q = max(p, M/(E_loc − C))`; table rows:
-   * `q = 1` when prefetching is on (`p > 0`), `0` at `p = 0`. Set by `lower/offload.ts: prefetchedFraction`.
+   * (docs/simulation-model.md §12 "Expert prefetch"). Routed experts: `q = max(p, M/(E_loc − C))`; n-gram table rows:
+   * `q = 1` when prefetching is on (`p > 0`), `0` at `p = 0`; token-embedding rows: `q = 1` in prefill (`p > 0`),
+   * `q = 0` in decode (the row is the token the previous step just sampled, and its gather is the step's first op).
+   * Set by `lower/offload.ts: prefetchedFraction`.
    * Dimensionless, in [0, 1].
    */
   prefetchedFraction: number;

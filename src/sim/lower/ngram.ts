@@ -40,11 +40,38 @@ export function tableRowBytes(format: TensorFormat, d: number): { valueBytes: nu
 }
 
 /**
+ * The physical read classes of `R = rows` gathered rows of `d` elements in `format` (design doc §2.10), per the
+ * scale layout: `interleaved` `[{ R, rowBytes }]`; `separate` `[{ R, valueBytes }, { R, scaleBytes }]`;
+ * `pinned_host` `[{ R, valueBytes }]` (the scales sit in host RAM; their read is not costed). A format without block
+ * scales reads `[{ R, rowBytes }]` in every layout. Shared by the n-gram tables and the token embedding (1-gram,
+ * always `separate`). Unit: `count` requests (expected, real), `bytesEach` bytes.
+ */
+export function tableRowReads(
+  rows: number,
+  format: TensorFormat,
+  d: number,
+  scaleLayout: TablePlacement['scaleLayout'],
+): TransferOp['reads'] {
+  const { valueBytes, scaleBytes, rowBytes } = tableRowBytes(format, d);
+  if (scaleBytes === 0 || scaleLayout === 'interleaved') {
+    // Formula: reads = [{ R, rowBytes }]
+    return [{ count: rows, bytesEach: rowBytes }];
+  }
+  if (scaleLayout === 'separate') {
+    // Formula: reads = [{ R, valueBytes }, { R, scaleBytes }]
+    return [
+      { count: rows, bytesEach: valueBytes },
+      { count: rows, bytesEach: scaleBytes },
+    ];
+  }
+  // Formula: reads = [{ R, valueBytes }]   (pinned_host: scales from host RAM, not costed)
+  return [{ count: rows, bytesEach: valueBytes }];
+}
+
+/**
  * The row fetch of an off-device n-gram table (design doc §2.5, §2.10): `R = T·g/tp` rows per device (the table is
- * row-parallel, so a rank serves the expected 1/tp of the gathered rows), read per the scale layout:
- * `interleaved` `[{ R, rowBytes }]`; `separate` `[{ R, valueBytes }, { R, scaleBytes }]`; `pinned_host`
- * `[{ R, valueBytes }]` (the scales sit in host RAM; their read is not costed). `usefulBytes = R·rowBytes` whatever
- * the layout. A table without block scales (PLE) reads `[{ R, rowBytes }]` in every layout.
+ * row-parallel, so a rank serves the expected 1/tp of the gathered rows), read per the scale layout
+ * ({@link tableRowReads}). `usefulBytes = R·rowBytes` whatever the layout.
  */
 export function tableFetchOp(
   block: NgramEmbeddingBlock,
@@ -53,21 +80,8 @@ export function tableFetchOp(
 ): TransferOp | undefined {
   const rows = (stepTokens(ctx) * block.rowsPerToken) / ctx.parallel.tp;
   if (!(rows > 0)) return undefined;
-  const { valueBytes, scaleBytes, rowBytes } = tableRowBytes(lookupTableFormat(ctx), block.rowDim);
-  let reads: TransferOp['reads'];
-  if (scaleBytes === 0 || placement.scaleLayout === 'interleaved') {
-    // Formula: reads = [{ R, rowBytes }]
-    reads = [{ count: rows, bytesEach: rowBytes }];
-  } else if (placement.scaleLayout === 'separate') {
-    // Formula: reads = [{ R, valueBytes }, { R, scaleBytes }]
-    reads = [
-      { count: rows, bytesEach: valueBytes },
-      { count: rows, bytesEach: scaleBytes },
-    ];
-  } else {
-    // Formula: reads = [{ R, valueBytes }]   (pinned_host: scales from host RAM, not costed)
-    reads = [{ count: rows, bytesEach: valueBytes }];
-  }
+  const format = lookupTableFormat(ctx);
+  const { rowBytes } = tableRowBytes(format, block.rowDim);
   // Formula: usefulBytes = R·rowBytes
   // See docs/simulation-model.md §12 ("n-gram tables off-device")
   return {
@@ -75,7 +89,7 @@ export function tableFetchOp(
     name: `${block.name}.row_fetch`,
     group: 'lookup_table',
     source: placement.tier,
-    reads,
+    reads: tableRowReads(rows, format, block.rowDim, placement.scaleLayout),
     usefulBytes: rows * rowBytes,
     prefetchedFraction: prefetchedFraction(ctx.offload?.prefetchAccuracy ?? 0, { group: 'lookup_table' }),
   };

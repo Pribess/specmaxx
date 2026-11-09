@@ -11,7 +11,7 @@ import { opBytes } from '../ir/metrics';
 import type { DraftSpec, LayerSpec, ModelSpec } from '../ir/model';
 import type { TransferOp } from '../ir/ops';
 import { draftResidentWeightBytes, draftSequenceStateBytes } from '../lower/draft';
-import { embeddingFormat, embeddingResidentWeightBytes } from '../lower/embedding';
+import { embeddingFormat, embeddingResidentWeightBytes, embeddingShardBytes } from '../lower/embedding';
 import { lmHeadFormat, lmHeadResidentWeightBytes } from '../lower/head';
 import {
   blockResidentWeightBytes,
@@ -134,11 +134,13 @@ export function sameStoredFormat(a: TensorFormat, b: TensorFormat): boolean {
 
 /**
  * Resident weight bytes on one device of stage `s`: the blocks of its layers (all local experts), plus the
- * embedding shard on stage 0 and the LM-head shard (+ final norm) on the last stage. A tied head shares the
- * embedding table only when it is on the same device (pp = 1) AND stored in the same format (dtype and
- * overhead); a tied head quantized differently is a second copy and is counted in full. With weights offloaded
- * (`ctx.offload`), an offloaded MoE layer keeps `C = f·E_loc`
- * experts, an off-device table keeps its non-table part (design doc §2.7). Unit: bytes.
+ * embedding shard on stage 0 (when the table is on the device) and the LM-head shard (+ final norm) on the last
+ * stage. A tied head shares the embedding table only when it is on the same device (pp = 1, and the embedding is not
+ * off-device) AND stored in the same format (dtype and overhead); a tied head quantized differently is a second copy
+ * and is counted in full. (Validation rejects an off-device embedding on a tied model; the on-device condition is a
+ * defense.) With weights offloaded (`ctx.offload`), an offloaded MoE layer keeps `C = f·E_loc` experts, an
+ * off-device table keeps its non-table part (design doc §2.7), and an off-device token embedding leaves stage 0.
+ * Unit: bytes.
  */
 export function stageWeightBytes(model: ModelSpec, ctx: LoweringContext, s: number): number {
   const pp = ctx.parallel.pp;
@@ -153,6 +155,7 @@ export function stageWeightBytes(model: ModelSpec, ctx: LoweringContext, s: numb
   if (
     model.tieEmbeddings &&
     pp === 1 &&
+    ctx.offload?.embeddings === undefined &&
     sameStoredFormat(embeddingFormat(ctx), lmHeadFormat(ctx))
   ) {
     // The shared matrix is already counted by the embedding; keep only the final-norm part of the head.
@@ -163,8 +166,9 @@ export function stageWeightBytes(model: ModelSpec, ctx: LoweringContext, s: numb
     );
     headBytes -= headMatrixBytes;
   }
-  // Formula: W_s = Σ_{blocks of s} W_block + [s = 0] W_emb + [s = pp−1] W_head   (tied, pp = 1, same format: matrix once)
-  // See docs/simulation-model.md §8 ("Memory fit")
+  // Formula: W_s = Σ_{blocks of s} W_block + [s = 0 ∧ emb on device] W_emb + [s = pp−1] W_head
+  //          (tied, pp = 1, emb on device, same format: matrix once)
+  // See docs/simulation-model.md §8 ("Memory fit"), §12 ("Token embedding off-device")
   return layerBytes + embedBytes + headBytes;
 }
 
@@ -222,6 +226,15 @@ export function stageLookupTableBytes(model: ModelSpec, ctx: LoweringContext, s:
   return bytes;
 }
 
+/** The transfer ops of stage `s` of one lowered phase, in op order. */
+function stageTransferOps(model: LoweredModel, s: number): TransferOp[] {
+  const transfers: TransferOp[] = [];
+  for (const layer of model.stages[s].layers) {
+    for (const op of layer.ops) if (op.kind === 'transfer') transfers.push(op);
+  }
+  return transfers;
+}
+
 /**
  * Staging buffer of stage `s` for streamed weight groups (design doc §2.7): the largest single transfer of the stage
  * over the given phases, double-buffered when it is prefetched (`prefetchedFraction > 0`: one buffer fills while the
@@ -230,27 +243,38 @@ export function stageLookupTableBytes(model: ModelSpec, ctx: LoweringContext, s:
  * in flight (docs/simulation-model.md §12 "Overlap across tiers"): one buffer being read by the device plus one being
  * filled per source, `max_all + max_ram,q>0 + max_ssd,q>0`. With one source this is today's 2·max.
  * A transfer's buffer is `Σ ceil(count)·bytesEach` for experts (capacity is not an average, so
- * expected misses round up) and its `usefulBytes` for table rows (the gathered rows, not the tier's pages).
- * 0 when nothing streams. Unit: bytes.
+ * expected misses round up) and its `usefulBytes` for table and token-embedding rows (the gathered rows, not the
+ * tier's pages). Token-embedding transfers are taken from `embeddingLowered` (the decode step and the LAST prefill
+ * chunk, as for the activation peak: chunked prefill stages one chunk's rows, not the whole prompt's), every other
+ * transfer from `lowered`; phase i of one pairs with phase i of the other (same length), and `embeddingLowered`
+ * defaults to `lowered`. 0 when nothing streams. Unit: bytes.
  */
-export function stageStagingBytes(lowered: LoweredModel[], s: number): number {
-  // Formula: buffer = lookup table: usefulBytes; else Σ ceil(count_i)·bytes_i
+export function stageStagingBytes(
+  lowered: LoweredModel[],
+  s: number,
+  embeddingLowered: LoweredModel[] = lowered,
+): number {
+  if (embeddingLowered.length !== lowered.length) {
+    throw new Error('stageStagingBytes: embeddingLowered must list the same phases as lowered');
+  }
+  // Formula: buffer = table / embedding rows: usefulBytes; else Σ ceil(count_i)·bytes_i
   const bufferBytes = (op: TransferOp): number =>
-    op.group === 'lookup_table'
+    op.group === 'lookup_table' || op.group === 'token_embedding'
       ? op.usefulBytes
       : op.reads.reduce((sum, r) => sum + Math.ceil(r.count) * r.bytesEach, 0);
   let largest = 0;
-  for (const model of lowered) {
-    const transfers: TransferOp[] = [];
-    for (const layer of model.stages[s].layers) {
-      for (const op of layer.ops) {
-        if (op.kind !== 'transfer') continue;
-        transfers.push(op);
-        const buffer = bufferBytes(op);
-        // Formula: slots = q > 0 ? 2 : 1   (double buffer for a prefetched transfer)
-        const slots = op.prefetchedFraction > 0 ? 2 : 1;
-        largest = Math.max(largest, slots * buffer);
-      }
+  for (let phase = 0; phase < lowered.length; phase++) {
+    // The phase's transfers: every group but the token embedding from `lowered`, the token embedding from the
+    // matching phase of `embeddingLowered` (same source and q, only R per chunk), so the both-tiers test below
+    // agrees with the stage time's (`pipeline.ts: stageTransfer`).
+    const transfers = [
+      ...stageTransferOps(lowered[phase], s).filter((op) => op.group !== 'token_embedding'),
+      ...stageTransferOps(embeddingLowered[phase], s).filter((op) => op.group === 'token_embedding'),
+    ];
+    for (const op of transfers) {
+      // Formula: slots = q > 0 ? 2 : 1   (double buffer for a prefetched transfer)
+      const slots = op.prefetchedFraction > 0 ? 2 : 1;
+      largest = Math.max(largest, slots * bufferBytes(op));
     }
     if (prefetchesFromBothTiers(transfers)) {
       // Formula: staging = max_all buffer + max_{ram,q>0} buffer + max_{ssd,q>0} buffer   (1 read + 1 fill per source)
@@ -269,18 +293,19 @@ export function stageStagingBytes(lowered: LoweredModel[], s: number): number {
   }
   // Formula: staging_s = max_phase ( both tiers prefetched ? max_all + max_ram + max_ssd
   //                                                       : max_transfer (q > 0 ? 2 : 1)·buffer )
-  // See docs/simulation-model.md §12 ("Memory tiers", "Overlap across tiers")
+  //          token-embedding buffers from the decode step and the LAST prefill chunk (R·rowBytes per chunk)
+  // See docs/simulation-model.md §12 ("Memory tiers", "Overlap across tiers", "Token embedding off-device")
   return largest;
 }
 
 /** An all-zero {@link TierBytes}. */
 function emptyTierBytes(): TierBytes {
-  return { lookupTables: 0, routedExperts: 0, draftExperts: 0 };
+  return { lookupTables: 0, routedExperts: 0, draftExperts: 0, tokenEmbeddings: 0 };
 }
 
 /** Sum of the categories of a {@link TierBytes}. Unit: bytes. */
 export function tierBytesTotal(b: TierBytes): number {
-  return b.lookupTables + b.routedExperts + b.draftExperts;
+  return b.lookupTables + b.routedExperts + b.draftExperts + b.tokenEmbeddings;
 }
 
 /**
@@ -290,7 +315,8 @@ export function tierBytesTotal(b: TierBytes): number {
  * an NVMe table with `scaleLayout 'pinned_host'`, its scales (`ceil(rows/tp)·scaleBytes`) on host RAM
  * (`lookupTables`) — on dedicated memory only: on unified memory (`hostRamIsDevice`) the scales are device bytes counted
  * in {@link stageWeightBytes}, and a `host_ram` group is an error (invariant). The draft's own experts are
- * `draftExperts`. Unit: bytes per device.
+ * `draftExperts`. Stage 0 with the token embedding off-device adds its shard `ceil(vocab/tp)·h·bpe(emb)` to its tier
+ * (`tokenEmbeddings`). Unit: bytes per device.
  */
 export function stageTierBreakdown(
   model: ModelSpec,
@@ -325,6 +351,12 @@ export function stageTierBreakdown(
         }
       }
     }
+  }
+  const embeddings = ctx.offload?.embeddings;
+  if (s === 0 && embeddings !== undefined) {
+    // Formula: tier += ceil(vocab/tp)·h·bpe(emb)   (stage 0, token embedding off-device)
+    // See docs/simulation-model.md §12 ("Token embedding off-device")
+    bytes[embeddings.tier].tokenEmbeddings += embeddingShardBytes(model, ctx);
   }
   // Spec-dec with includeDraft: the drafter's own MoE experts (last stage) live on the tier of the one rule that sets
   // includeDraft (design §3.8).
@@ -463,7 +495,8 @@ export function memoryReport(input: MemoryInput): MemoryReport {
     const statePerSeqBytes = stageSequenceStateBytesPerSeq(model, ctx, s, input.contextTokens);
     const activationPeakBytes = stageActivationPeakBytes(activationLowered, s);
     // Deployment terms (design doc §2.7, §3.3): 0 with nothing offloaded / spec-dec off.
-    const stagingBytes = stageStagingBytes(input.lowered, s);
+    // Token-embedding rows are staged per prefill chunk (the activation phases), other groups per costed phase.
+    const stagingBytes = stageStagingBytes(input.lowered, s, activationLowered);
     // Spec-dec (last stage): draft weights (shared embedding / head excluded) + B_r · draft KV/state at the context;
     // every stage: the verify's (k + 1) per-position state snapshots × B_r.
     const spec = ctx.speculative;

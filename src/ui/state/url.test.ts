@@ -320,6 +320,23 @@ describe('URL codec', () => {
     expect(s.deployment.specDec).toEqual({ method: 'dflash2', drafter: 'hyp', k: 5, alpha: 0.8 });
   });
 
+  it('token embeddings oet: ram and ssd round-trip next to the other offload keys; split and orphans are rejected', () => {
+    expect(decodeState('oet=ram').state.deployment.offload).toEqual({ embeddings: { tier: 'host_ram' } });
+    expect(encodeState(decodeState('oet=ram').state)).toBe('oet=ram');
+    expect(encodeState(decodeState('oet=ssd').state)).toBe('oet=ssd');
+    // Written after the lookup-table keys and before the queue depth and prefetch keys.
+    expect(encodeState(decodeState('opf=0.5&oqd=4&oet=ssd&olt=ram&ox=ram').state)).toBe('ox=ram&olt=ram&oet=ssd&oqd=4&opf=0.5');
+    // A single block on stage 0: no split.
+    const split = decodeState('oet=split');
+    expect(split.dropped).toEqual(['oet=split']);
+    expect(split.state.deployment.offload ?? {}).toEqual({});
+    // oet alone turns the dependent keys on.
+    expect(decodeState('oet=ssd&oqd=8&osr=sustained&opf=0.9').dropped).toEqual([]);
+    expect(encodeState(decodeState('oet=ssd&oqd=8').state)).toBe('oet=ssd&oqd=8');
+    // Absent = on the device, and the key is never written for it.
+    expect(encodeState(decodeState('').state)).toBe('');
+  });
+
   it('prefetch accuracy opf: round trip, range, parent; legacy oo maps to the equivalent p', () => {
     expect(decodeState('ox=ram&opf=0.9').state.deployment.offload).toEqual({ experts: { tier: 'host_ram' }, prefetchAccuracy: 0.9 });
     expect(encodeState(decodeState('ox=ram&opf=0.9').state)).toBe('ox=ram&opf=0.9');

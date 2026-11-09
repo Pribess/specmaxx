@@ -55,6 +55,7 @@ export function Picker({
   searchThreshold = 8,
   help,
   renderValue,
+  disabled = false,
 }: {
   /** Visible label; also the accessible name of the trigger. */
   label: string;
@@ -72,6 +73,11 @@ export function Picker({
   help?: ReactNode;
   /** Trigger text for the selected option (default: its label). */
   renderValue?(option: PickerOption | undefined): ReactNode;
+  /**
+   * True: the trigger is disabled (dimmed, never opens by click or key) and shows the value as is. The "?" help
+   * stays focusable, so the reason for the lock can live there. Default false.
+   */
+  disabled?: boolean;
 }) {
   const id = useId();
   const labelId = `${id}-label`;
@@ -107,6 +113,7 @@ export function Picker({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLElement>, inSearch: boolean) => {
+    if (disabled) return;
     const step = NAV_KEYS[e.key];
     if (step) {
       if (inSearch && (e.key === 'Home' || e.key === 'End')) {
@@ -168,6 +175,7 @@ export function Picker({
             aria-expanded={open}
             aria-controls={open ? listEl?.id : undefined}
             aria-labelledby={labelId}
+            disabled={disabled}
             className="picker-trigger"
             onKeyDown={(e) => onKeyDown(e, false)}
           >

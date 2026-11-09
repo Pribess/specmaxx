@@ -50,11 +50,13 @@ export function tablePlacementAt(ctx: LoweringContext, i: number | undefined): T
 
 /**
  * What {@link prefetchedFraction} needs to know about one transfer op: its group and, for routed experts, the
- * expected misses `M` and the non-resident experts `E_loc − C` of the layer (both in experts, real).
+ * expected misses `M` and the non-resident experts `E_loc − C` of the layer (both in experts, real); for token
+ * embedding rows, the phase of the step.
  */
 export type PrefetchTarget =
   | { group: 'routed_experts'; misses: number; nonResidentExperts: number }
-  | { group: 'lookup_table' };
+  | { group: 'lookup_table' }
+  | { group: 'token_embedding'; phase: 'prefill' | 'decode' };
 
 /**
  * q: the share of one transfer op's time that is prefetched, i.e. may hide behind the stage's compute
@@ -65,15 +67,23 @@ export type PrefetchTarget =
  *   predictions, of which a share p are needed misses; or, when nearly every non-resident expert is needed (prefill,
  *   large batches), copy the non-resident experts unconditionally, of which a share M/(E_loc − C) are needed. So
  *   q = p at batch 1 (M ≪ E_loc − C) and q = 1 in prefill (M = E_loc − C);
- * - table rows, p > 0: q = 1. Their bytes are known before the step (rows come from token ids), and an engine that
- *   prefetches at all prefetches these deterministic transfers.
- * So p = 1 gives q = 1 everywhere (the former `'ideal'`). Dimensionless, in [0, 1].
+ * - n-gram table rows, p > 0: q = 1. Their bytes are known before the step (rows come from token ids), and an engine
+ *   that prefetches at all prefetches these deterministic transfers;
+ * - token-embedding rows, p > 0: q = 1 in prefill (every prompt id is known before the step); q = 0 in decode (and
+ *   in the drafter's decode passes): the row's id is the token the previous step just sampled, and the gather is
+ *   the step's first op, so no compute is left to hide it behind.
+ * So p = 1 gives q = 1 everywhere except decode token-embedding rows (the former `'ideal'`). Dimensionless, in [0, 1].
  */
 export function prefetchedFraction(p: number, target: PrefetchTarget): number {
   // Formula: q = 0   (p = 0, every group)
   if (!(p > 0)) return 0;
-  if (target.group !== 'routed_experts') {
-    // Formula: q = 1   (table rows; p > 0)
+  if (target.group === 'token_embedding') {
+    // Formula: q = prefill ? 1 : 0   (token embedding, p > 0)
+    // See docs/simulation-model.md §12 ("Token embedding off-device")
+    return target.phase === 'prefill' ? 1 : 0;
+  }
+  if (target.group === 'lookup_table') {
+    // Formula: q = 1   (n-gram table rows; p > 0)
     return 1;
   }
   const { misses: M, nonResidentExperts } = target;

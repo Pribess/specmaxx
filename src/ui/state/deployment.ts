@@ -98,6 +98,14 @@ export interface OffloadChoice {
      */
     scaleLayout?: ScaleLayoutChoice;
   };
+  /**
+   * Token-embedding table (a 1-gram lookup: one row of `hidden` elements per token) on a tier; absent = on the device.
+   * Ignored with a warning for a model with tied embeddings (its LM head reuses the matrix every step).
+   */
+  embeddings?: {
+    /** Tier holding the table: host RAM or the SSD (never a split: the table is one block on pipeline stage 0). */
+    tier: TierChoice;
+  };
   /** Outstanding read requests per device; absent = the tier's rated maximum. Integer ≥ 1. Count. */
   queueDepth?: number;
   /** SSD large-read rate: rated sequential speed (default) or the preset's measured low-queue-depth fraction. */
@@ -168,12 +176,17 @@ export interface HostChoice {
 
 /** True when the choice moves any weight group off the device. */
 export function offloadsAnything(offload: OffloadChoice | undefined): boolean {
-  return offload !== undefined && (offload.experts !== undefined || offload.tables !== undefined);
+  return (
+    offload !== undefined &&
+    (offload.experts !== undefined ||
+      offload.tables !== undefined ||
+      offload.embeddings !== undefined)
+  );
 }
 
 /** True when any offloaded weight group uses the SSD (a host-RAM + SSD split counts). */
 export function offloadsToSsd(offload: OffloadChoice | undefined): boolean {
-  return [offload?.experts, offload?.tables].some(
+  return [offload?.experts, offload?.tables, offload?.embeddings].some(
     (group) => group?.tier === 'nvme' || group?.tier === 'split',
   );
 }
@@ -230,7 +243,8 @@ export function normalizeOffload(o: OffloadChoice): OffloadChoice {
           ? undefined
           : o.tables.scaleLayout,
     });
-  const out = compact({ experts, tables });
+  const embeddings = o.embeddings && { tier: o.embeddings.tier };
+  const out = compact({ experts, tables, embeddings });
   const prefetchAccuracy =
     o.prefetchAccuracy === DEFAULT_PREFETCH_ACCURACY ? undefined : o.prefetchAccuracy;
   return offloadsAnything(out)

@@ -5,10 +5,11 @@ import type { QuantConfig } from '../ir/model';
 import { TINY_DENSE, TINY_HYBRID } from '../models/reference';
 import { singleDevice } from '../hw/presets';
 import { RTX_5090 } from '../hw/presets/nvidia';
-import { embeddingResidentWeightBytes } from '../lower/embedding';
+import { DDR5_5600_2CH, NVME_990_PRO_2TB } from '../hw/presets/storage';
+import { embeddingResidentWeightBytes, embeddingShardBytes } from '../lower/embedding';
 import { lmHeadResidentWeightBytes } from '../lower/head';
-import type { LoweringContext } from '../lower/lower';
-import { stageWeightBytes } from './memory';
+import type { LoweringContext, OffloadLowering } from '../lower/lower';
+import { stageTierBreakdown, stageWeightBytes, tierMemory } from './memory';
 import { simulate } from './simulate';
 import type { SimInput } from './types';
 import { validateInput } from './validate';
@@ -121,7 +122,7 @@ describe('U-6 memory with routed experts offloaded (TINY_HYBRID on one RTX 5090,
     const base = run(undefined).memory;
     const m = run(0.5).memory;
     expect(base.perStage[0].weightBytes - m.perStage[0].weightBytes).toBe(6_291_456 / 2);
-    expect(m.tiers).toEqual([{ tier: 'host_ram', bytes: 6_291_456, breakdown: { lookupTables: 0, routedExperts: 6_291_456, draftExperts: 0 }, capacityBytes: 96e9, fits: true }]);
+    expect(m.tiers).toEqual([{ tier: 'host_ram', bytes: 6_291_456, breakdown: { lookupTables: 0, routedExperts: 6_291_456, draftExperts: 0, tokenEmbeddings: 0 }, capacityBytes: 96e9, fits: true }]);
     // Prefill T = 128: U ≈ 8 = E, hits = C = 4, M_max = 4 (decode: U 2, M 1).
     expect(m.perStage[0].stagingBytes).toBe(2 * 4 * W_EXPERT);
     expect(run(0.5, 'none').memory.perStage[0].stagingBytes).toBe(4 * W_EXPERT);
@@ -148,7 +149,7 @@ describe('U-6 memory with routed experts offloaded (TINY_HYBRID on one RTX 5090,
       expect(r[phase].cycleSec).toBe(base[phase].cycleSec);
       expect(r[phase].tokensPerSec).toBe(base[phase].tokensPerSec);
     }
-    expect(r.memory.tiers).toEqual([{ tier: 'host_ram', bytes: 6_291_456, breakdown: { lookupTables: 0, routedExperts: 6_291_456, draftExperts: 0 }, capacityBytes: 96e9, fits: true }]);
+    expect(r.memory.tiers).toEqual([{ tier: 'host_ram', bytes: 6_291_456, breakdown: { lookupTables: 0, routedExperts: 6_291_456, draftExperts: 0, tokenEmbeddings: 0 }, capacityBytes: 96e9, fits: true }]);
     expect(r.warnings).not.toEqual(base.warnings);
   });
 });
@@ -185,5 +186,69 @@ describe('offloaded experts on unified memory', () => {
     expect(ssd.memory.tiers.map((t) => t.tier)).toEqual(['nvme']);
     expect(ssd.warnings.some((w) => w.includes('no SSD given'))).toBe(true);
     expect(ssd.warnings.some((w) => w.includes('no host link given'))).toBe(false);
+  });
+});
+
+describe('token embedding off-device: stage 0 drops exactly its shard, and the tier holds it', () => {
+  // 4 layers, h 256, V 1001 (not divisible by tp 2 or 3), bf16: shard = ceil(1001/tp)·256·2 B.
+  const model = decoderModel({
+    name: 'emb',
+    hidden: 256,
+    vocab: 1001,
+    tieEmbeddings: false,
+    layers: Array.from({ length: 4 }, () =>
+      decoderLayer({ hidden: 256, mixer: { kind: 'gqa', heads: 12, kvHeads: 6, headDim: 64 }, ffn: { kind: 'dense', intermediate: 768 } }),
+    ),
+  });
+  const at = (parallel: Partial<LoweringContext['parallel']>, offload?: OffloadLowering): LoweringContext => {
+    const c: LoweringContext = {
+      phase: 'decode',
+      seqs: 1,
+      qLen: 1,
+      kvLen: 2,
+      quant: BF16,
+      parallel: { tp: 1, pp: 1, dp: 1, ep: 1, ...parallel },
+    };
+    if (offload !== undefined) c.offload = offload;
+    return c;
+  };
+  const placed = (tier: 'host_ram' | 'nvme'): OffloadLowering => ({ prefetchAccuracy: 0.8, embeddings: { tier } });
+
+  it.each([
+    ['host_ram', 1],
+    ['nvme', 1],
+    ['host_ram', 3],
+    ['nvme', 2],
+  ] as const)('%s, tp %d: ΔW_0 = tierBytes_0 = ceil(V/tp)·h·bpe', (tier, tp) => {
+    const shard = Math.ceil(1001 / tp) * 256 * 2;
+    expect(embeddingShardBytes(model, at({ tp }))).toBe(shard);
+    expect(stageWeightBytes(model, at({ tp }), 0) - stageWeightBytes(model, at({ tp }, placed(tier)), 0)).toBe(shard);
+    const tiers = stageTierBreakdown(model, at({ tp }, placed(tier)), 0);
+    expect(tiers[tier]).toEqual({ lookupTables: 0, routedExperts: 0, draftExperts: 0, tokenEmbeddings: shard });
+    const other = tier === 'host_ram' ? 'nvme' : 'host_ram';
+    expect(tiers[other].tokenEmbeddings).toBe(0);
+  });
+
+  it('pp 2: stage 1 is unchanged and places nothing on a tier', () => {
+    const base = at({ pp: 2 });
+    const ram = at({ pp: 2 }, placed('host_ram'));
+    expect(stageWeightBytes(model, ram, 1)).toBe(stageWeightBytes(model, base, 1));
+    expect(stageTierBreakdown(model, ram, 1).host_ram.tokenEmbeddings).toBe(0);
+    expect(stageWeightBytes(model, base, 0) - stageWeightBytes(model, ram, 0)).toBe(1001 * 256 * 2);
+  });
+
+  it('one node of tp 2 × dp 2: host RAM holds tp·dp shards (each stage-0 device its own)', () => {
+    const host = { ram: DDR5_5600_2CH, ssd: NVME_990_PRO_2TB, warnings: [] };
+    const shard = Math.ceil(1001 / 2) * 256 * 2;
+    const [entry] = tierMemory(model, at({ tp: 2, dp: 2 }, placed('host_ram')), 8, host);
+    expect(entry).toMatchObject({ tier: 'host_ram', bytes: 4 * shard, fits: true });
+    expect(entry.breakdown.tokenEmbeddings).toBe(4 * shard);
+  });
+
+  it('a tied head with the embedding off-device keeps its own matrix (defense; validation rejects this input)', () => {
+    const tied = { ...model, tieEmbeddings: true };
+    // Off-device, nothing is shared: W_0 = layers + the full head, the same as the untied model's.
+    expect(stageWeightBytes(tied, at({}, placed('host_ram')), 0)).toBe(stageWeightBytes(model, at({}, placed('host_ram')), 0));
+    expect(lmHeadResidentWeightBytes(tied, at({}))).toBe(1001 * 256 * 2 + 256 * 2);
   });
 });

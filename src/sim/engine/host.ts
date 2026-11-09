@@ -37,7 +37,9 @@ export interface ResolvedOffload {
  * on host RAM and `'pinned_host'` on NVMe (also on unified memory, where the pinned scales sit in the device pool and
  * count in the device bytes: `hostRamIsDevice`). On unified memory host RAM IS the device pool, so each `'host_ram'`
  * rule is dropped (no transfer, its layers' weights stay counted on the device) and only `'nvme'` rules remain. Table
- * rules at `'device'` are no placement. Nothing left off-device → `offload: undefined` (identity).
+ * rules at `'device'` are no placement. The token-embedding rule (`config.embeddings`) becomes `offload.embeddings`
+ * when its tier is off the device and not dropped the same way (docs/simulation-model.md §12 "Token embedding
+ * off-device"). Nothing left off-device → `offload: undefined` (identity).
  */
 export function resolveOffload(
   model: ModelSpec,
@@ -107,7 +109,12 @@ export function resolveOffload(
   if (tablePlacements.length > 0) {
     offload.lookupTables = tablePlacements.sort((a, b) => a.layers.from - b.layers.from);
   }
-  const any = offload.routedExperts !== undefined || offload.lookupTables !== undefined;
+  const embeddingTier = config.embeddings?.tier;
+  if (embeddingTier !== undefined && embeddingTier !== 'device' && !onDevice(embeddingTier)) {
+    offload.embeddings = { tier: embeddingTier };
+  }
+  const any =
+    offload.routedExperts !== undefined || offload.lookupTables !== undefined || offload.embeddings !== undefined;
   if (any && memoryKind === 'unified') {
     offload.hostRamIsDevice = true;
     if (offload.lookupTables?.some((t) => t.scaleLayout === 'pinned_host') === true) {
@@ -122,6 +129,7 @@ export function offloadTiers(offload: OffloadLowering): Set<OffloadTier> {
   const tiers = new Set<OffloadTier>();
   for (const rule of offload.routedExperts ?? []) tiers.add(rule.tier);
   for (const rule of offload.lookupTables ?? []) tiers.add(rule.tier);
+  if (offload.embeddings !== undefined) tiers.add(offload.embeddings.tier);
   return tiers;
 }
 

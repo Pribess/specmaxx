@@ -21,7 +21,10 @@
  *   (`moeLayers`) lower their layers through {@link lowerBlock} with block rows (see {@link lowerMoeDrafterLayer}).
  *
  * The shared embedding and LM head are the target's: at pp = 1 they are on this device, so their gathers and reads
- * are costed per pass, but they add no resident bytes ({@link draftResidentWeightBytes}).
+ * are costed per pass, but they add no resident bytes ({@link draftResidentWeightBytes}). With the target's
+ * token embedding off-device (`offload.embeddings`), each shared-embedding gather first fetches its rows from the
+ * tier, like the target's (`draft.embed.row_fetch`, `draft.noise_embed.row_fetch`; docs/simulation-model.md §12
+ * "Token embedding off-device").
  */
 
 import { bytesPerElement, matrixStoredBytes } from '../ir/dtype';
@@ -40,7 +43,7 @@ import {
   shardKvHeads,
   tpAllReduce,
 } from './common';
-import { embeddingFormat } from './embedding';
+import { embeddingFetchOp, embeddingFormat } from './embedding';
 import { lmHeadFormat, samplingExchangeOps } from './head';
 import {
   blockResidentWeightBytes,
@@ -61,22 +64,25 @@ const TOKEN_ID_BYTES = 4;
 /**
  * The lowering context of the drafter's own layers: the given step shape, without the verify's speculative
  * settings (the drafter keeps one state snapshot: only its final state is kept) and without the target's offload
- * placement, except the routed-expert placement whose rule sets `includeDraft` (at most one), which puts the drafter's
- * own MoE experts off-device with that rule's tier, f and h (design doc §3.8). That rule's layer range is over the
+ * placement, except (1) the routed-expert placement whose rule sets `includeDraft` (at most one), which puts the
+ * drafter's own MoE experts off-device with that rule's tier, f and h (design doc §3.8), and (2) the token-embedding
+ * placement, since the drafter gathers from the target's shared table. The expert rule's layer range is over the
  * TARGET's layers, so it is widened to every drafter layer (`[0, ∞)`), as a one-rule list; drafter blocks are lowered
  * with their own drafter layer (module) index, which the offload lowering needs to place experts.
  */
 function draftContext(ctx: LoweringContext, qLen: number, kvLen: number): LoweringContext {
   const experts = draftExpertPlacement(ctx.offload);
+  const embeddings = ctx.offload?.embeddings;
   const draftCtx: LoweringContext = { ...ctx, qLen, kvLen };
   delete draftCtx.speculative;
   delete draftCtx.offload;
-  if (experts !== undefined) {
-    // Formula: draft expert range = [0, ∞) (every drafter MoE layer is offloaded with includeDraft)
-    draftCtx.offload = {
-      prefetchAccuracy: ctx.offload?.prefetchAccuracy ?? 0,
-      routedExperts: [{ ...experts, layers: { from: 0, to: Infinity } }],
-    };
+  if (experts !== undefined || embeddings !== undefined) {
+    draftCtx.offload = { prefetchAccuracy: ctx.offload?.prefetchAccuracy ?? 0 };
+    if (experts !== undefined) {
+      // Formula: draft expert range = [0, ∞) (every drafter MoE layer is offloaded with includeDraft)
+      draftCtx.offload.routedExperts = [{ ...experts, layers: { from: 0, to: Infinity } }];
+    }
+    if (embeddings !== undefined) draftCtx.offload.embeddings = embeddings;
   }
   return draftCtx;
 }
@@ -107,7 +113,8 @@ function gatherOp(
 
 /**
  * The shared token embedding gathered for `tokens` rows (vocab-parallel: `ceil(V/tp)` rows per rank), then its TP
- * all-reduce of `tokens·h`.
+ * all-reduce of `tokens·h`. With the target's table off-device, the gather's row fetch
+ * ({@link embeddingFetchOp}, `<name>.row_fetch`) goes first.
  */
 function sharedEmbedOps(
   name: string,
@@ -115,10 +122,12 @@ function sharedEmbedOps(
   tokens: number,
   ctx: LoweringContext,
 ): Op[] {
-  // Formula: gather T rows of h from ceil(V/tp) rows; all-reduce T·h·reduceBpe when tp > 1
-  // See docs/simulation-model.md §13 "Draft ops"
+  // Formula: [off-device: fetch T/tp rows] gather T rows of h from ceil(V/tp) rows; all-reduce T·h·reduceBpe when tp > 1
+  // See docs/simulation-model.md §13 "Draft ops", §12 ("Token embedding off-device")
   const vocabShard = Math.ceil(model.vocab / ctx.parallel.tp);
+  const fetch = embeddingFetchOp(name, tokens, model.hidden, ctx);
   return [
+    ...(fetch === undefined ? [] : [fetch]),
     gatherOp(name, tokens, model.hidden, vocabShard, ctx),
     ...tpAllReduce(`${name}.tp_all_reduce`, tokens, model.hidden, ctx),
   ];
