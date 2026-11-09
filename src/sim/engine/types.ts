@@ -27,6 +27,14 @@ export interface Workload {
    * sees `qLen = 1, kvLen = N + 1` (the new token attends to itself too). Unit: tokens.
    */
   decodeContextLen: number;
+  /**
+   * Prefill chunk C for the MEMORY FIT only: the most prompt tokens one prefill step processes per microbatch
+   * (chunked prefill, vLLM `max_num_batched_tokens`, SGLang `--chunked-prefill-size`). The fit's prefill activation
+   * peak is the one of the LAST chunk (`qLen = min(C, P)`, `kvLen = P`), not of the whole prompt in one pass. The
+   * prefill RATE is unaffected (it is always the whole prompt). Absent = `DEFAULT_PREFILL_CHUNK_TOKENS` (8192,
+   * `engine/memory.ts`, sourced there); an integer ≥ 1. Unit: tokens. See docs/simulation-model.md §8.
+   */
+  prefillChunkTokens?: number;
 }
 
 /**
@@ -327,7 +335,8 @@ export interface DeviceMemory {
   /** Per-replica sequence state on this device: KV + MLA latent + indexer keys + recurrent/conv state, × B_r. Unit: bytes. */
   sequenceStateBytes: number;
   /**
-   * Peak transient activations (max over both phases' ops of activation read + write). Unit: bytes.
+   * Peak transient activations: the max over the ops of the decode step and of the LAST prefill chunk (chunked
+   * prefill, `Workload.prefillChunkTokens`) of activation read + write. Unit: bytes.
    */
   activationPeakBytes: number;
   /**
@@ -343,27 +352,43 @@ export interface DeviceMemory {
    */
   speculativeTransientBytes: number;
   /**
-   * weightBytes + sequenceStateBytes + activationPeakBytes (+ stagingBytes + draftBytes + speculativeTransientBytes,
-   * all 0 with the deployment knobs off). Unit: bytes.
+   * Runtime reserve: bytes the framework and driver keep on the device besides the model (CUDA context, allocator
+   * pools, workspaces), `HardwareStack.runtimeReserveBytes`; 0 by default. Unit: bytes.
+   */
+  runtimeReserveBytes: number;
+  /**
+   * weightBytes + sequenceStateBytes + activationPeakBytes + runtimeReserveBytes (+ stagingBytes + draftBytes +
+   * speculativeTransientBytes, all 0 with the deployment knobs off). Unit: bytes.
    */
   totalBytes: number;
-  /** Device memory capacity used for the check. Unit: bytes. */
+  /**
+   * Capacity the check uses: the GPU-usable capacity `f · physicalCapacityBytes` (unified memory: f = the GPU-usable
+   * fraction, {@link MemoryReport.gpuUsableFraction}; dedicated memory: f = 1, the whole device). Unit: bytes.
+   */
   capacityBytes: number;
+  /** Installed memory of the device (the selected capacity option). Unit: bytes. */
+  physicalCapacityBytes: number;
   /** True if totalBytes ≤ capacityBytes. */
   fits: boolean;
 }
 
 /** The memory-fit report. */
 export interface MemoryReport {
-  /** Memory kind of the (modified) device; `'unified'` adds a warning that the OS share is not modeled. */
+  /** Memory kind of the (modified) device; `'unified'` = the pool is shared with the CPU and OS. */
   kind: 'dedicated' | 'unified';
+  /**
+   * GPU-usable fraction f of each device's memory used for the check: the `HardwareStack.gpuUsableFraction` override,
+   * else the device's `MemorySpec.gpuUsableFraction`, else 1; always 1 on dedicated memory. Dimensionless, (0, 1].
+   */
+  gpuUsableFraction: number;
   /** One entry per pipeline stage (all devices of a stage are symmetric). */
   perStage: DeviceMemory[];
   /** True if every stage fits. */
   fits: boolean;
   /**
-   * Most sequences one DP replica could hold at this context length: `floor(min_s (capacity − W_s − act_s) / state_s)`
-   * (docs §8). Infinity when no stage keeps per-sequence state; the activation peak is the evaluated batch's. Count.
+   * Most sequences one DP replica could hold at this context length:
+   * `floor(min_s (capacity − W_s − act_s − reserve) / state_s)` with the GPU-usable capacity (docs §8). Infinity
+   * when no stage keeps per-sequence state; the activation peak is the evaluated batch's. Count.
    */
   maxSequencesPerReplica: number;
   /**

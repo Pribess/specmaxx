@@ -153,7 +153,8 @@ function engineErrors(e: ComputeEngine, label: string): string[] {
  * input has an fp32-accumulate entry, tiles are multiples of the MMA shape; `capacityOptionsBytes` non-empty
  * and positive; memory bandwidth > 0; every rate used as a divisor (matmul and vector peaks, an engine's memory
  * cap) > 0, and a vector fp32 peak present (the end of the peak fallback chain); a `hostInterface`, when present,
- * names a PCIe generation 3/4/5 and 4/8/16 lanes; `gpuDirectRdma` only on dedicated memory.
+ * names a PCIe generation 3/4/5 and 4/8/16 lanes; `gpuDirectRdma` only on dedicated memory; `gpuUsableFraction` only on
+ * unified memory, in (0, 1].
  */
 export function validateDevice(d: DeviceSpec): string[] {
   const label = `device ${d.id}`;
@@ -171,6 +172,11 @@ export function validateDevice(d: DeviceSpec): string[] {
   if (d.hostInterface !== undefined) errors.push(...hostInterfaceErrors(d.hostInterface, `${label}.hostInterface`));
   if (d.memory.kind === 'unified' && d.gpuDirectRdma !== undefined) {
     errors.push(`${label}: gpuDirectRdma applies to dedicated memory only (unified memory never stages); leave it absent`);
+  }
+  const f = d.memory.gpuUsableFraction;
+  if (f !== undefined) {
+    if (d.memory.kind !== 'unified') errors.push(`${label}: memory.gpuUsableFraction applies to unified memory only; leave it absent`);
+    if (!(f > 0 && f <= 1)) errors.push(`${label}: memory.gpuUsableFraction must be in (0, 1]`);
   }
   return errors;
 }

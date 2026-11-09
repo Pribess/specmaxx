@@ -36,7 +36,7 @@ export interface FieldIssue {
 const DEGREE_LABEL: Record<keyof ParallelConfig, string> = { tp: 'TP', pp: 'PP', dp: 'DP', ep: 'EP' };
 
 /** Label of a workload field in messages. */
-const WORKLOAD_LABEL: Record<keyof Workload, string> = {
+const WORKLOAD_LABEL: Record<'batch' | 'promptLen' | 'decodeContextLen', string> = {
   batch: 'Batch',
   promptLen: 'Prefill length',
   decodeContextLen: 'Decode context',

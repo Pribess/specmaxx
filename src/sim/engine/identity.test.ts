@@ -1,6 +1,7 @@
 /**
  * Deployment identity pin (design/offload-specdec-latency.md §8.2 ID-1/ID-2).
- * Originally generated on 68ae0f4; deliberately regenerated for audit G1/G2/G3/G4/G7/G8.
+ * Originally generated on 68ae0f4; deliberately regenerated for audit G1/G2/G3/G4/G7/G8, and for the chunked-prefill
+ * activation peak of the memory fit (review F11: only W2/batch8's memory leaves changed, 8 × 8192 tokens > the 8192 chunk).
  * JSON round-trips finite IEEE-754 doubles exactly; every selected leaf uses Object.is, not a tolerance.
  * New result fields intentionally do not enter this projection. Never regenerate to hide a regression.
  * Regenerate deliberately: UPDATE_DEPLOYMENT_IDENTITY=1 bun run test src/sim/engine/identity.test.ts

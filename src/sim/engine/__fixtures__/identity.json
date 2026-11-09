@@ -1686,10 +1686,10 @@
     "decode.stage0.layer37.head.sec": 0.0006960354285714286,
     "memory.stage0.weightBytes": 16381470720,
     "memory.stage0.sequenceStateBytes": 9664856064,
-    "memory.stage0.activationPeakBytes": 4831838208,
-    "memory.stage0.totalBytes": 30878164992,
+    "memory.stage0.activationPeakBytes": 603979776,
+    "memory.stage0.totalBytes": 26650306560,
     "memory.stage0.fits": true,
-    "memory.maxSequencesPerReplica": 8,
+    "memory.maxSequencesPerReplica": 12,
     "memory.fits": true,
     "warnings": "[]"
   },

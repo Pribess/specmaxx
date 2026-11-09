@@ -55,9 +55,28 @@ const STATES: [string, AppState][] = [
   ['Strix Halo ×4 daisy chain', state({ hw: { deviceId: 'ryzen-ai-max-plus-395', nodes: 4, cabling: 'chain' } })],
   ['M5 Ultra ×4 mesh, 2 cables per pair', state({ hw: { deviceId: 'apple-m5-ultra-80c', capacityIndex: 2, nodes: 4, cabling: 'mesh2' } })],
   ['M3 Ultra ×4 ring (the default is a mesh)', state({ hw: { deviceId: 'apple-m3-ultra-80c', nodes: 4, cabling: 'ring' } })],
+  ['raised GPU limit and runtime reserve on a Mac', state({ hw: { deviceId: 'apple-m4-max-40c', gpuUsableFraction: 0.9, runtimeReserveBytes: 1.5e9 } })],
+  ['runtime reserve and prefill chunk on a GPU', state({ hw: { runtimeReserveBytes: 1e9 }, workload: { ...DEFAULT_STATE.workload, prefillChunkTokens: 2048 } })],
 ];
 
 describe('URL codec', () => {
+  it('memory-fit knobs: gpu (percent, unified only), rr (GB), pc (tokens)', () => {
+    expect(encodeState(state({ hw: { deviceId: 'apple-m4-max-40c', gpuUsableFraction: 0.9, runtimeReserveBytes: 1.5e9 } }))).toBe(
+      'd=apple-m4-max-40c&gpu=90&rr=1.5',
+    );
+    // The GPU limit means nothing on a dedicated GPU: dropped.
+    expect(decodeState('gpu=90').dropped).toEqual(['gpu=90']);
+    expect(decodeState('d=apple-m4-max-40c&gpu=0').dropped).toEqual(['gpu=0']);
+    expect(decodeState('pc=0').dropped).toEqual(['pc=0']);
+    expect(resolveHardware(decodeState('d=apple-m4-max-40c&gpu=90&rr=2').state.hw).stack).toMatchObject({
+      gpuUsableFraction: 0.9,
+      runtimeReserveBytes: 2e9,
+    });
+    const set = reduce(DEFAULT_STATE, { type: 'setMemoryFit', field: 'runtimeReserveBytes', value: 1e9 });
+    expect(encodeState(set)).toBe('rr=1');
+    expect(reduce(set, { type: 'setMemoryFit', field: 'runtimeReserveBytes', value: undefined })).toEqual(DEFAULT_STATE);
+  });
+
   it('encodes the default state to the empty string', () => {
     expect(encodeState(DEFAULT_STATE)).toBe('');
     expect(decodeState('')).toEqual({ state: DEFAULT_STATE, dropped: [] });

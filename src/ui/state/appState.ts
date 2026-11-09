@@ -88,6 +88,13 @@ export interface HardwareChoice {
    * defaults. Used only while the deployment offloads something (`DeploymentChoice.offload`).
    */
   host?: HostChoice;
+  /**
+   * Raised GPU-usable fraction of unified memory (`HardwareStack.gpuUsableFraction`); absent = the device's default.
+   * Dimensionless, (0, 1]. Cleared with the device.
+   */
+  gpuUsableFraction?: number;
+  /** Runtime reserve per device (`HardwareStack.runtimeReserveBytes`); absent = 0. Unit: bytes. Cleared with the device. */
+  runtimeReserveBytes?: number;
 }
 
 /** Everything the user chose; the URL encodes exactly this. */
@@ -206,7 +213,9 @@ export type AppAction =
   /** Turn speculative decoding on with these choices (normalized), or off (undefined). */
   | { type: 'setSpecDec'; specDec: SpecDecChoice | undefined }
   /** Replace the host choice (normalized; `{}` = defaults). */
-  | { type: 'setHost'; host: HostChoice };
+  | { type: 'setHost'; host: HostChoice }
+  /** Set (value) or clear (undefined: the default) one memory-fit knob of the hardware (Hardware → Advanced). */
+  | { type: 'setMemoryFit'; field: 'gpuUsableFraction' | 'runtimeReserveBytes'; value: number | undefined };
 
 /** The `HardwareChoice` field holding the edits of `target`. */
 export function editsKey(target: EditTarget): 'deviceEdits' | 'intraEdits' | 'interEdits' {
@@ -290,6 +299,11 @@ export function reduce(state: AppState, action: AppAction): AppState {
     }
     case 'setCapacity':
       return { ...state, hw: { ...hw, capacityIndex: action.index } };
+    case 'setMemoryFit':
+      return {
+        ...state,
+        hw: action.value === undefined ? without(hw, action.field) : { ...hw, [action.field]: action.value },
+      };
     case 'setCounts': {
       const devicesPerNode = action.devicesPerNode ?? hw.devicesPerNode;
       const nodes = action.nodes ?? hw.nodes;

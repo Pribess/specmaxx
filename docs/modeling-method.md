@@ -57,9 +57,13 @@ More: [parallelism](simulation-model.md#5-parallelism), [collectives](simulation
 
 ## Does it fit in memory?
 
-Per device, the estimate adds up the weights it holds, the cache and state for every sequence in the batch (KV cache, recurrent state), and the largest temporary activation buffer. If the total exceeds the device's capacity, the setup does not fit. It also reports how many sequences would fit.
+Per device, the estimate adds up the weights it holds, the cache and state for every sequence in the batch (KV cache, recurrent state), and the largest temporary activation buffer. If the total exceeds the memory the GPU may use, the setup does not fit. It also reports how many sequences would fit.
 
-More: [memory fit](simulation-model.md#memory-fit), [unified memory](simulation-model.md#unified-memory).
+Long prompts are prefilled in chunks (8192 tokens by default), so the activation buffer is the one of a single chunk, not of the whole prompt. The prefill speed is not affected.
+
+On unified memory the operating system lets the GPU use only part of it: about 75% on a Mac, about 50% by default on Linux with Strix Halo, nearly all of it on DGX Spark. The fit checks against that share; a raised limit can be entered under Advanced. An optional runtime reserve (framework and driver memory, 0 by default) can be added there too.
+
+More: [memory fit](simulation-model.md#memory-fit), [activation peak](simulation-model.md#activation-peak), [GPU-usable capacity](simulation-model.md#gpu-usable-capacity), [runtime reserve](simulation-model.md#runtime-reserve).
 
 ## Offloading
 
@@ -92,7 +96,7 @@ More: [dtypes](simulation-model.md#dtypes-math-and-accumulate), [EXL3](simulatio
 
 ## What is not modelled
 
-Anything that depends on a particular inference engine: paged attention, continuous batching, chunked prefill, scheduling and kernel-launch overhead, CUDA graphs. Also left out: dequantization arithmetic, softmax cost, cache reuse beyond reading each operand once, clock throttling, in-network reduction, link contention, and an operating-system memory reserve on unified-memory machines.
+Anything that depends on a particular inference engine: paged attention, continuous batching, chunked prefill (except its effect on the memory fit), scheduling and kernel-launch overhead, CUDA graphs. Also left out: dequantization arithmetic, softmax cost, cache reuse beyond reading each operand once, clock throttling, in-network reduction, link contention, and framework memory unless you set a runtime reserve.
 
 The reference lists every exclusion and each approximation that remains.
 

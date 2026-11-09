@@ -35,7 +35,7 @@ describe('T14 unified memory + engines (SYNTH_UNIFIED)', () => {
     const r = simulate(input({ memCapacityBytes: 64e9 }));
     expect(r.memory.kind).toBe('unified');
     expect(r.memory.perStage[0].capacityBytes).toBe(64e9);
-    expect(r.warnings.some((w) => w.includes('shared with the CPU/OS'))).toBe(true);
+    expect(r.warnings.some((w) => w.includes('unified memory — the GPU may use 100%'))).toBe(true);
   });
 
   it('default capacity is capacityOptionsBytes[0] = 32e9', () => {

@@ -17,10 +17,13 @@
  * | `x`, `xi`, `xe` | spec edits on device / intra link / inter link, `path:value` comma list, SI units | `x=memory.bandwidthBytesPerSec:2e12` |
  * | `tp`, `pp` | parallel degrees (old `dp` / `ep` are ignored: both fixed at 1) | `tp=2` |
  * | `b`, `p`, `c` | batch, prefill length (default 8192), decode context (default 8192) | `b=8` |
+ * | `pc` | prefill chunk of the memory fit, tokens (default 8192) | `pc=2048` |
  * | `ov`, `fu`, `ar` | overlap, elementwise fusion, all-reduce algorithm | `ov=none` |
  * | `hr`, `hrc` | host-RAM preset id (default `ddr5-6000-2ch`), its capacity in GB (1e9 B) | `hr=ddr5-6400-8ch&hrc=512` |
  * | `ssd` | SSD preset id (default: the device's own SSD on unified memory, else `nvme-990-pro-2tb`) | `ssd=nvme-t705-2tb` |
  * | `hl` | host-link override, `<PCIe gen>x<lanes>` (default: the device's host interface) | `hl=4x16` |
+ * | `gpu` | (unified memory) GPU-usable share of memory in percent, (0, 100] (default: the device's) | `gpu=90` |
+ * | `rr` | runtime reserve per device in GB (1e9 B), ≥ 0 (default 0) | `rr=1.5` |
  * | `ox` | routed experts tier: `ram`, `ssd` (absent: on the device) | `ox=ram` |
  * | `oxl`, `oxf`, `oxh` | (with `ox`) first offloaded layer (default 0), resident fraction 0–1 (default 0), hit-ratio model `classic`, `fine` or a custom h 0–1 (default uniform) | `oxf=0.25&oxh=fine` |
  * | `odl`, `odt` | dense layers kept on the device (the rest stream; absent: none stream), their tier `ram` (default) or `ssd` | `odl=40` |
@@ -74,7 +77,7 @@ const OPTION_KEYS: [string, keyof SimOptions, readonly string[]][] = [
 /** Every key the codec knows, in encoding order (`oo` is a legacy key: read, never written). */
 export const URL_KEYS = [
   'm', 'rev', 'w', 'bpw', 'hbpw', 'a', 'kv', 'lt', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'fab', 'x', 'xi', 'xe',
-  'hr', 'hrc', 'ssd', 'hl', 'tp', 'pp', 'dp', 'ep', 'b', 'p', 'c', 'ov', 'fu', 'ar', 'oo',
+  'hr', 'hrc', 'ssd', 'hl', 'gpu', 'rr', 'tp', 'pp', 'dp', 'ep', 'b', 'p', 'c', 'pc', 'ov', 'fu', 'ar', 'oo',
   'ox', 'oxl', 'oxf', 'oxh', 'odl', 'odt', 'olt', 'ols', 'oqd', 'opf', 'sd', 'sdr', 'sdk', 'sdu', 'sda',
 ] as const;
 
@@ -176,12 +179,16 @@ export function encodeState(s: AppState): string {
   if (host.ramCapacityBytes !== undefined) put('hrc', host.ramCapacityBytes / 1e9);
   put('ssd', host.ssdId);
   if (host.link !== undefined) put('hl', `${host.link.generation}x${host.link.lanes}`);
+  // Percent with at most 4 decimals, so 0.9 encodes as 90 (not 90.00000000000001).
+  if (hw.gpuUsableFraction !== undefined) put('gpu', Math.round(hw.gpuUsableFraction * 1e6) / 1e4);
+  if (hw.runtimeReserveBytes !== undefined) put('rr', hw.runtimeReserveBytes / 1e9);
   for (const key of ['tp', 'pp'] as const) if (s.parallel[key] !== 1) put(key, s.parallel[key]);
   const w = s.workload;
   const dw = DEFAULT_STATE.workload;
   if (w.batch !== dw.batch) put('b', w.batch);
   if (w.promptLen !== dw.promptLen) put('p', w.promptLen);
   if (w.decodeContextLen !== dw.decodeContextLen) put('c', w.decodeContextLen);
+  if (w.prefillChunkTokens !== undefined) put('pc', w.prefillChunkTokens);
   const options = normalizeOptions(s.options);
   for (const [key, field] of OPTION_KEYS) put(key, options[field]);
   const deployment = normalizeDeployment(s.deployment);
@@ -456,7 +463,7 @@ export function decodeState(search: string): DecodedState {
     else drop(key, v);
   }
   const workload = { ...DEFAULT_STATE.workload };
-  for (const [key, field] of [['b', 'batch'], ['p', 'promptLen'], ['c', 'decodeContextLen']] as const) {
+  for (const [key, field] of [['b', 'batch'], ['p', 'promptLen'], ['c', 'decodeContextLen'], ['pc', 'prefillChunkTokens']] as const) {
     const v = get(key);
     if (v === undefined) continue;
     const parsed = parseInteger(v, 1, MAX_VALUE);
@@ -475,6 +482,19 @@ export function decodeState(search: string): DecodedState {
 
   const host = normalizeHost(decodeHost(get, drop));
   if (Object.keys(host).length > 0) hw.host = host;
+  // Memory-fit knobs: the GPU limit only on unified memory (it means nothing on a dedicated device).
+  const gpu = get('gpu');
+  if (gpu !== undefined) {
+    const percent = parseNumberIn(gpu, Number.MIN_VALUE, 100);
+    if (percent !== undefined && unlocked.memory.kind === 'unified') hw.gpuUsableFraction = percent / 100;
+    else drop('gpu', gpu);
+  }
+  const rr = get('rr');
+  if (rr !== undefined) {
+    const gb = parseNumberIn(rr, 0, 1e6);
+    if (gb !== undefined) hw.runtimeReserveBytes = Math.round(gb * 1e9);
+    else drop('rr', rr);
+  }
   const deployment = decodeDeployment(get, drop);
 
   return { state: { model, quant, hw, parallel, workload, options: normalizeOptions(options), deployment }, dropped };

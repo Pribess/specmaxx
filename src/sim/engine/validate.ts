@@ -78,6 +78,17 @@ export function validateInput(input: SimInput): string[] {
   errors.push(...positiveIntegerErrors(workload.batch, 'workload.batch'));
   errors.push(...positiveIntegerErrors(workload.promptLen, 'workload.promptLen'));
   errors.push(...positiveIntegerErrors(workload.decodeContextLen, 'workload.decodeContextLen'));
+  if (workload.prefillChunkTokens !== undefined) {
+    errors.push(...positiveIntegerErrors(workload.prefillChunkTokens, 'workload.prefillChunkTokens'));
+  }
+  const usable = hardware.gpuUsableFraction;
+  if (usable !== undefined && !(usable > 0 && usable <= 1)) {
+    errors.push(`hardware.gpuUsableFraction (${usable}) must be in (0, 1]`);
+  }
+  const reserve = hardware.runtimeReserveBytes;
+  if (reserve !== undefined && !(Number.isFinite(reserve) && reserve >= 0)) {
+    errors.push(`hardware.runtimeReserveBytes (${reserve}) must be a finite number ≥ 0`);
+  }
   if (errors.length > 0) return errors;
   if (workload.batch % parallel.dp !== 0) {
     errors.push(`workload.batch (${workload.batch}) must be divisible by dp (${parallel.dp})`);

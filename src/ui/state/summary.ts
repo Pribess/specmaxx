@@ -71,10 +71,14 @@ export interface StageMemory {
   sequenceStateBytes: number;
   /** Peak transient activations. Unit: bytes. */
   activationPeakBytes: number;
-  /** Weights + state + activations (+ staging, draft and spec-dec transients). Unit: bytes. */
+  /** Weights + state + activations + runtime reserve (+ staging, draft and spec-dec transients). Unit: bytes. */
   totalBytes: number;
-  /** Device capacity. Unit: bytes. */
+  /** Capacity the check uses: the GPU-usable share of the device (all of it on dedicated memory). Unit: bytes. */
   capacityBytes: number;
+  /** Installed memory of the device; absent = `capacityBytes`. Unit: bytes. */
+  physicalCapacityBytes?: number;
+  /** Runtime reserve (framework, driver); absent = 0. Unit: bytes. */
+  runtimeReserveBytes?: number;
   /** totalBytes ≤ capacityBytes. */
   fits: boolean;
   /** n-gram lookup-table bytes resident on the device, part of `weightBytes`; absent = 0. Unit: bytes. */
@@ -89,7 +93,7 @@ export interface StageMemory {
 
 /** The memory-fit report. */
 export interface MemorySummary {
-  /** Dedicated or unified memory (unified: the OS share is not modeled). */
+  /** Dedicated or unified memory (unified: the GPU may use only part of it, `capacityBytes` of each stage). */
   kind: 'dedicated' | 'unified';
   /** True when every stage and every off-device tier fits ({@link memoryFits}). */
   fits: boolean;

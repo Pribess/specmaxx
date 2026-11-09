@@ -1,8 +1,9 @@
 /**
  * Memory fit: resident weights + per-sequence state (KV, MLA latent, indexer keys, recurrent and conv state)
- * + peak transient activations (+ offload staging) on one device of each pipeline stage, against its memory
- * capacity; and, with weights offloaded, the bytes each off-device tier of a node holds against its capacity.
- * See docs/simulation-model.md §8 ("Memory fit") and §12 ("Memory tiers").
+ * + peak transient activations (decode step and the last prefill chunk) + runtime reserve (+ offload staging) on one
+ * device of each pipeline stage, against its GPU-usable capacity (the whole device on dedicated memory, the OS's GPU
+ * limit on unified memory); and, with weights offloaded, the bytes each off-device tier of a node holds against its
+ * capacity. See docs/simulation-model.md §8 ("Memory fit") and §12 ("Memory tiers").
  */
 
 import { matrixStoredBytes, type TensorFormat } from '../ir/dtype';
@@ -38,16 +39,83 @@ export interface MemoryInput {
    * the decode step appended its new token). Unit: tokens.
    */
   contextTokens: number;
-  /** The lowered phases (prefill and decode), for the activation peak. */
+  /** The lowered phases (prefill and decode), for the offload staging buffers. */
   lowered: LoweredModel[];
-  /** Memory capacity per device (the selected option of the modified device). Unit: bytes. */
+  /**
+   * The lowered phases whose ops set the activation peak: the decode step and the LAST prefill chunk
+   * ({@link prefillChunkShape}); default `lowered`.
+   */
+  activationLowered?: LoweredModel[];
+  /** Installed memory capacity per device (the selected option of the modified device). Unit: bytes. */
   capacityBytes: number;
   /** Memory kind of the modified device. */
   kind: 'dedicated' | 'unified';
+  /**
+   * GPU-usable fraction f of `capacityBytes` (unified memory: {@link resolveGpuUsableFraction}); default 1.
+   * Dimensionless, (0, 1].
+   */
+  gpuUsableFraction?: number;
+  /** Runtime reserve per device (framework, driver, CUDA context); default 0. Unit: bytes. */
+  runtimeReserveBytes?: number;
   /** Devices per node (the host tiers are shared by a node's devices); default 1. Count. */
   devicesPerNode?: number;
   /** The resolved host side when something is offloaded (tier capacities); absent otherwise. */
   host?: ResolvedHost;
+}
+
+/**
+ * Default prefill chunk C of the memory fit (`Workload.prefillChunkTokens`): 8192 tokens per step. Sources: SGLang's
+ * `--chunked-prefill-size` default (8192; https://docs.sglang.ai/advanced_features/server_arguments.html) and vLLM's
+ * `max_num_batched_tokens` default for the offline `LLM` class and for the API server on H100-class GPUs (8192;
+ * https://github.com/vllm-project/vllm/blob/main/vllm/engine/arg_utils.py). Smaller budgets (vLLM 2048 on other
+ * GPUs, llama.cpp `n_ubatch` 512, mlx-lm `prefill_step_size` 2048) only shrink the peak, so 8192 is the
+ * conservative common choice. Unit: tokens.
+ */
+export const DEFAULT_PREFILL_CHUNK_TOKENS = 8192;
+
+/** The shape of one prefill step of the memory fit (see {@link prefillChunkShape}). */
+export interface PrefillChunkShape {
+  /** Sequences in the step. Count. */
+  seqs: number;
+  /** New prompt tokens per sequence in the step. Unit: tokens. */
+  qLen: number;
+  /** Keys visible to the step's last query (past chunks + this one). Unit: tokens. */
+  kvLen: number;
+}
+
+/**
+ * The prefill step whose activations the memory fit counts, under chunked prefill with a budget of C tokens per
+ * step: a microbatch of `seqs` prompts of P tokens.
+ * - `seqs·P ≤ C`: the whole microbatch in one step (`seqs, qLen = kvLen = P`), as the rate is costed.
+ * - `P ≤ C < seqs·P`: as many whole prompts as fit the budget (`floor(C/P)` sequences, `qLen = kvLen = P`).
+ * - `C < P`: one sequence's LAST chunk (`qLen = C`, `kvLen = P`): the chunk that sees the whole prompt.
+ * Activations of every op grow with the step's tokens `seqs·qLen`, so this step bounds the peak of all chunks.
+ */
+export function prefillChunkShape(
+  promptLen: number,
+  seqs: number,
+  chunkTokens: number,
+): PrefillChunkShape {
+  // Formula: seqs·P ≤ C → (seqs, P, P);  P ≤ C → (floor(C/P), P, P);  else (1, C, P)
+  // See docs/simulation-model.md §8 ("Activation peak")
+  if (seqs * promptLen <= chunkTokens) return { seqs, qLen: promptLen, kvLen: promptLen };
+  if (promptLen <= chunkTokens)
+    return { seqs: Math.floor(chunkTokens / promptLen), qLen: promptLen, kvLen: promptLen };
+  return { seqs: 1, qLen: chunkTokens, kvLen: promptLen };
+}
+
+/**
+ * The GPU-usable fraction f the fit uses: on unified memory the stack's override (`HardwareStack.gpuUsableFraction`,
+ * a raised OS limit), else the device's default (`MemorySpec.gpuUsableFraction`), else 1; on dedicated memory always
+ * 1 (the device is the GPU's own). Dimensionless, (0, 1].
+ */
+export function resolveGpuUsableFraction(
+  memory: { kind: 'dedicated' | 'unified'; gpuUsableFraction?: number },
+  override: number | undefined,
+): number {
+  if (memory.kind !== 'unified') return 1;
+  // Formula: f = override ?? f_device ?? 1   (unified memory)
+  return override ?? memory.gpuUsableFraction ?? 1;
 }
 
 /**
@@ -357,21 +425,29 @@ export function tierMemory(
 }
 
 /**
- * The memory-fit report: per stage weights + B_r · state + activation peak + staging vs capacity, and the most
- * sequences per replica that would fit at this context length:
- * `floor(min_s (capacity − W_s − act_s − staging_s) / state_s)` (Infinity when no stage keeps per-sequence state; 0
- * when the weights alone do not fit). The activation peak is taken at the evaluated batch, so this is an estimate.
- * With weights offloaded, the off-device tiers are checked too and enter `fits`.
+ * The memory-fit report: per stage weights + B_r · state + activation peak + runtime reserve + staging against the
+ * GPU-usable capacity `cap = f · capacity` ({@link resolveGpuUsableFraction}), and the most sequences per replica that
+ * would fit at this context length: `floor(min_s (cap − W_s − act_s − reserve − staging_s) / state_s)` (Infinity
+ * when no stage keeps per-sequence state; 0 when the weights alone do not fit). The activation peak is taken at the
+ * evaluated batch, so this is an estimate. With weights offloaded, the off-device tiers are checked too and enter
+ * `fits`.
  */
 export function memoryReport(input: MemoryInput): MemoryReport {
-  const { model, ctx, capacityBytes } = input;
+  const { model, ctx } = input;
+  const gpuUsableFraction = input.gpuUsableFraction ?? 1;
+  const physicalCapacityBytes = input.capacityBytes;
+  // Formula: cap = f · capacity   (f = GPU-usable fraction; 1 on dedicated memory)
+  // See docs/simulation-model.md §8 ("GPU-usable capacity")
+  const capacityBytes = gpuUsableFraction * physicalCapacityBytes;
+  const runtimeReserveBytes = input.runtimeReserveBytes ?? 0;
+  const activationLowered = input.activationLowered ?? input.lowered;
   const perStage: DeviceMemory[] = [];
   let maxSequencesPerReplica = Infinity;
   for (let s = 0; s < ctx.parallel.pp; s++) {
     const weightBytes = stageWeightBytes(model, ctx, s);
     const lookupTableBytes = stageLookupTableBytes(model, ctx, s);
     const statePerSeqBytes = stageSequenceStateBytesPerSeq(model, ctx, s, input.contextTokens);
-    const activationPeakBytes = stageActivationPeakBytes(input.lowered, s);
+    const activationPeakBytes = stageActivationPeakBytes(activationLowered, s);
     // Deployment terms (design doc §2.7, §3.3): 0 with nothing offloaded / spec-dec off.
     const stagingBytes = stageStagingBytes(input.lowered, s);
     // Spec-dec (last stage): draft weights (shared embedding / head excluded) + B_r · draft KV/state at the context;
@@ -393,13 +469,14 @@ export function memoryReport(input: MemoryInput): MemoryReport {
       snapshotPerSeqBytes = spec.stateSnapshots * stageSnapshotStateBytesPerSeq(model, ctx, s);
     }
     const speculativeTransientBytes = input.sequencesPerReplica * snapshotPerSeqBytes;
-    // Formula: total_s = W_s + B_r·state_s + act_s + staging_s + draft_s + specTransient_s;  fits = total_s ≤ capacity
+    // Formula: total_s = W_s + B_r·state_s + act_s + reserve + staging_s + draft_s + specTransient_s;  fits = total_s ≤ cap
     // See docs/simulation-model.md §8 ("Memory fit"), §12 ("Memory tiers"), §13 ("Draft memory")
     const sequenceStateBytes = input.sequencesPerReplica * statePerSeqBytes;
     const totalBytes =
       weightBytes +
       sequenceStateBytes +
       activationPeakBytes +
+      runtimeReserveBytes +
       stagingBytes +
       draftBytes +
       speculativeTransientBytes;
@@ -412,8 +489,10 @@ export function memoryReport(input: MemoryInput): MemoryReport {
       stagingBytes,
       draftBytes,
       speculativeTransientBytes,
+      runtimeReserveBytes,
       totalBytes,
       capacityBytes,
+      physicalCapacityBytes,
       fits: totalBytes <= capacityBytes,
     });
     // Per-sequence bytes that grow with B_r, and the fixed bytes besides them (spec-dec terms 0 when off).
@@ -423,17 +502,21 @@ export function memoryReport(input: MemoryInput): MemoryReport {
         : statePerSeqBytes + draftStatePerSeqBytes + snapshotPerSeqBytes;
     const fixedDraftBytes = draftBytes - input.sequencesPerReplica * draftStatePerSeqBytes;
     if (perSeqBytes > 0) {
-      // Formula: maxSeq = floor(min_s (capacity − W_s − act_s − staging_s − W_draft) / (state_s + S_draft + (k+1)·snap_s))
+      // Formula: maxSeq = floor(min_s (cap − W_s − act_s − reserve − staging_s − W_draft) / (state_s + S_draft + (k+1)·snap_s))
       // See docs/simulation-model.md §8 ("Memory fit"), §13 ("Draft memory")
+      const fixedBytes = weightBytes + activationPeakBytes + runtimeReserveBytes + stagingBytes;
       const freeBytes =
         spec === undefined
-          ? capacityBytes - weightBytes - activationPeakBytes - stagingBytes
-          : capacityBytes - weightBytes - activationPeakBytes - stagingBytes - fixedDraftBytes;
+          ? capacityBytes - fixedBytes
+          : capacityBytes - fixedBytes - fixedDraftBytes;
       maxSequencesPerReplica = Math.min(
         maxSequencesPerReplica,
         Math.max(0, Math.floor(freeBytes / perSeqBytes)),
       );
-    } else if (weightBytes + activationPeakBytes + stagingBytes + fixedDraftBytes > capacityBytes) {
+    } else if (
+      weightBytes + activationPeakBytes + runtimeReserveBytes + stagingBytes + fixedDraftBytes >
+      capacityBytes
+    ) {
       maxSequencesPerReplica = 0;
     }
   }
@@ -441,5 +524,40 @@ export function memoryReport(input: MemoryInput): MemoryReport {
     input.host === undefined ? [] : tierMemory(model, ctx, input.devicesPerNode ?? 1, input.host);
   // Formula: fits = ∀ s fits_s ∧ ∀ tiers (bytes ≤ capacity)
   const fits = perStage.every((d) => d.fits) && tiers.every((t) => t.fits);
-  return { kind: input.kind, perStage, fits, maxSequencesPerReplica, tiers };
+  return {
+    kind: input.kind,
+    gpuUsableFraction,
+    perStage,
+    fits,
+    maxSequencesPerReplica,
+    tiers,
+  };
+}
+
+/** Bytes as decimal GB with one decimal, for warnings (`96.0 GB`). */
+function gbText(bytes: number): string {
+  return `${(bytes / 1e9).toFixed(1)} GB`;
+}
+
+/**
+ * Warning lines of a unified-memory report: the GPU-usable share the fit used, and, for a stage that overflows that
+ * share but not the installed memory, that it fits only with a raised OS limit ("fits by default" vs "fits with
+ * override", docs §8 "GPU-usable capacity").
+ */
+export function unifiedMemoryWarnings(report: MemoryReport): string[] {
+  const first = report.perStage[0];
+  if (first === undefined) return [];
+  const percent = Math.round(report.gpuUsableFraction * 1000) / 10;
+  const lines = [
+    `memory: unified memory — the GPU may use ${percent}% of it (${gbText(first.capacityBytes)} of ` +
+      `${gbText(first.physicalCapacityBytes)}); the rest stays with the OS and CPU`,
+  ];
+  const overLimit = report.perStage.find((d) => !d.fits && d.totalBytes <= d.physicalCapacityBytes);
+  if (overLimit !== undefined) {
+    lines.push(
+      `memory: needs ${gbText(overLimit.totalBytes)}, above the GPU limit of ${gbText(overLimit.capacityBytes)}; ` +
+        'it fits only with a raised limit (macOS iogpu.wired_limit_mb, Linux ttm.pages_limit)',
+    );
+  }
+  return lines;
 }

@@ -544,6 +544,11 @@ export function resolveHardware(hw: HardwareChoice, offDevice = false): Resolved
     topology,
     memCapacityBytes,
     ...(hw.engineId !== undefined ? { engineId: hw.engineId } : {}),
+    // Memory-fit knobs (Hardware → Advanced); the GPU limit applies to unified memory only.
+    ...(hw.gpuUsableFraction !== undefined && device.device.memory.kind === 'unified'
+      ? { gpuUsableFraction: hw.gpuUsableFraction }
+      : {}),
+    ...(hw.runtimeReserveBytes !== undefined ? { runtimeReserveBytes: hw.runtimeReserveBytes } : {}),
     ...(offDevice ? { host: hostSpecOf(resolveHost(hw, device.device), device.device) } : {}),
   };
   return {
@@ -611,10 +616,11 @@ export interface EditableField {
 
 /**
  * True if a device leaf path may be edited (spec editor, URL `x`): every numeric leaf except `hostInterface.*`, whose
- * generation and lanes are enumerations set through the Host link picker, not free numbers.
+ * generation and lanes are enumerations set through the Host link picker, not free numbers, and
+ * `memory.gpuUsableFraction`, which has its own field (Advanced → Memory fit → GPU memory limit).
  */
 export function isEditableDevicePath(path: string): boolean {
-  return !path.startsWith('hostInterface.');
+  return !path.startsWith('hostInterface.') && path !== 'memory.gpuUsableFraction';
 }
 /**
  * The editable numbers of a device: every `numericLeafPaths` leaf, grouped into memory, matmul peaks, vector

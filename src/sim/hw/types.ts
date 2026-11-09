@@ -115,6 +115,14 @@ export interface MemorySpec {
   capacityOptionsBytes: number[];
   /** Peak memory bandwidth per device, read + write combined, as vendors quote it. Unit: B/s. */
   bandwidthBytesPerSec: number;
+  /**
+   * Unified memory only: the share of the pool the GPU may allocate BY DEFAULT, as GPU-usable bytes ÷ installed bytes
+   * (the OS keeps the rest): the macOS GPU wired limit (`recommendedMaxWorkingSetSize`, ≈ 75% on Macs with 36 GB or
+   * more), the Linux amdgpu GTT limit (≈ 50% of RAM) on Strix Halo, what CUDA reports as total on DGX Spark. The fit
+   * checks against `f · capacity` unless `HardwareStack.gpuUsableFraction` overrides it (a raised limit). Absent =
+   * 1 (the whole pool). Not allowed on dedicated memory. Dimensionless, (0, 1]. See docs/simulation-model.md §8.
+   */
+  gpuUsableFraction?: number;
 }
 
 /** One accelerator device (or one SoC). All numbers per device. */
@@ -452,6 +460,18 @@ export interface HardwareStack {
   engineId?: string;
   /** Memory capacity per device; must be one of the modified `memory.capacityOptionsBytes`; default `[0]`. Unit: bytes. */
   memCapacityBytes?: number;
+  /**
+   * Override of the device's GPU-usable fraction of unified memory (`MemorySpec.gpuUsableFraction`), e.g. after
+   * raising the macOS limit with `sysctl iogpu.wired_limit_mb` or the Linux GTT size with `ttm.pages_limit`.
+   * Ignored on dedicated memory. Absent = the device's default. Dimensionless, (0, 1].
+   */
+  gpuUsableFraction?: number;
+  /**
+   * Runtime reserve per device: memory the framework and driver keep besides the model (CUDA context, allocator
+   * pools, cuBLAS / attention workspaces), counted in the fit. No vendor publishes it (it depends on the engine and
+   * driver), so absent = 0, the hardware-only bound. Unit: bytes.
+   */
+  runtimeReserveBytes?: number;
   /**
    * The node's host: the per-device host link and the shared host RAM / SSD tiers that offloaded weights stream
    * from. Only read when the deployment offloads something; absent = defaults (see {@link HostSpec}).

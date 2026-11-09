@@ -392,6 +392,8 @@ const AMD_VGM_FAQ_URL =
 /** AMD technical article: one-trillion-parameter LLM on a Strix Halo cluster (120 GB GTT on Linux). */
 const AMD_TRILLION_URL =
   'https://www.amd.com/en/developer/resources/technical-articles/2026/how-to-run-a-one-trillion-parameter-llm-locally-an-amd.html';
+/** AMD ROCm documentation: Strix Halo system optimization (default GTT limit ≈ 50% of system RAM). */
+const ROCM_STRIX_HALO_URL = 'https://rocm.docs.amd.com/en/docs-7.2.0/how-to/system-optimization/strixhalo.html';
 /** HP Z2 Mini G1a configurator (memory options shipped with the Ryzen AI Max+ PRO 395). */
 const HP_Z2_MINI_G1A_CONFIG_URL = 'https://www.hp.com/us-en/workstations/z2-mini-a-configure.html';
 /** Chips and Cheese: AMD's chiplet APU, an overview of Strix Halo (32 MB Infinity Cache). */
@@ -456,6 +458,8 @@ const RADEON_8060S_ENGINE = radeon8060sEngine();
  * graphics memory size of 112GB" on 128 GB systems, AMD VGM FAQ); on Linux the TTM/GTT kernel parameters
  * (`ttm.pages_limit=30720000 amdgpu.gttsize=120000`) allow ~120 GB (AMD trillion-parameter article). The OS
  * and CPU use the rest. Measured GPU copy bandwidth 212 GB/s (≈83%, llm-tracker.info rocm_bandwidth_test).
+ * `gpuUsableFraction` 0.5 is the Linux (ROCm) DEFAULT: "By default, the GTT limit is set to approximately 50% of
+ * total system RAM" (AMD ROCm Strix Halo guide); the raised ~120 GB (0.94) or Windows VGM are the override.
  *
  * Traps: "Overall TOPS Up to 126" adds CPU, GPU and NPU, which never run one matmul together; "NPU TOPS Up to
  * 50" is the XDNA2 NPU, not modeled (see the file header). RDNA 3.5 has no sparse WMMA and no FP8: fp8 inputs
@@ -475,6 +479,8 @@ export const RYZEN_AI_MAX_PLUS_395: DeviceSpec = {
     capacityOptionsBytes: [gb(128), gb(64)],
     // 256-bit × 8000 MT/s / 8 = 256 GB/s ("doubles the bandwidth to 256 GB/s").
     bandwidthBytesPerSec: gbPerSec(256),
+    // Linux default GTT limit ≈ 50% of system RAM (ROCm guide); raised (ttm.pages_limit) ~120 GB is an override.
+    gpuUsableFraction: 0.5,
   },
   // Infinity Cache (MALL) 32 MB, the GPU's last-level cache; the L2 is ambiguous (2 or 4 MB) and omitted.
   l2Bytes: 32 * MIB,
@@ -487,6 +493,14 @@ export const RYZEN_AI_MAX_PLUS_395: DeviceSpec = {
         '"Graphics Model Radeon 8060S Graphics", "Graphics Core Count 40", "Graphics Frequency 2900 MHz"; "FP16 AI ' +
         'Compute Up to 60 TFLOPS" (= 40 × 512 × 2.9 GHz = 59.4); "System Memory Type 256-bit LPDDR5x", "Max. Memory ' +
         '128 GB", "Max Memory Speed LPDDR5x-8000" (256 × 8000 / 8 = 256 GB/s); "NPU TOPS Up to 50 TOPS".',
+    },
+    {
+      url: ROCM_STRIX_HALO_URL,
+      title: 'AMD ROCm documentation: AMD Strix Halo system optimization, "Memory settings"',
+      fields: ['memory.gpuUsableFraction'],
+      note:
+        'GTT "is the memory pool used by applications such as PyTorch and other AI/compute workloads"; "By default, ' +
+        'the GTT limit is set to approximately 50% of total system RAM." (Linux).',
     },
     {
       url: HP_Z2_MINI_G1A_CONFIG_URL,

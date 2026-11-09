@@ -198,6 +198,9 @@ export const DGX_SPARK: DeviceSpec = {
     capacityOptionsBytes: [gb(128), gb(64)],
     // 256-bit × 8533 MT/s / 8 = 273.06 GB/s; recorded as NVIDIA quotes it, 273 GB/s (CPU + GPU total).
     bandwidthBytesPerSec: gbPerSec(273),
+    // GPU-usable share: CUDA reports "Total global memory: 119.7 GiB" of the 128 GiB of LPDDR5X (the rest is the
+    // kernel and firmware). Formula: f = 119.7 GiB / 128 GiB = 0.935; the 64 GB SKU is assumed to keep the same share.
+    gpuUsableFraction: 119.7 / 128,
   },
   // "24 MiB" (binary) = 24 × 1024 × 1024 B. Recorded only; not used by the v1 model.
   l2Bytes: 24 * 1024 * 1024,
@@ -223,6 +226,15 @@ export const DGX_SPARK: DeviceSpec = {
         '"Tensor Performance¹ Up to 1 PFLOP FP4" with footnote "1 Theoretical FP4 TOPS using the sparsity feature."; ' +
         '"64 GB LPDDR5X* or 128 GB LPDDR5x, coherent unified system memory" ("*64 GB memory configuration is ' +
         'available exclusively through participating OEM partners"); "Memory Bandwidth 273 GB/s"; "GB10 TDP 140 W".',
+    },
+    {
+      url: GB10_MMAPEAK_FORUM_URL,
+      title: 'NVIDIA developer forum: "Detailed compute performance metrics for DGX Spark" (device query)',
+      fields: ['memory.gpuUsableFraction'],
+      kind: 'community',
+      note:
+        'Device query on DGX OS: "Device 0: NVIDIA GB10", "Total global memory: 119.7 GiB" of 128 GiB installed ' +
+        '(119.7 / 128 = 0.935). The whitepaper only says the GPU can allocate "more than 100 GiB".',
     },
     {
       url: GB10_MMAPEAK_FORUM_URL,

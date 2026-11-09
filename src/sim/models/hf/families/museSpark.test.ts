@@ -215,16 +215,23 @@ describe('muse_spark end to end: decode @ 8k on 4 × M3 Ultra 512 GB (TB5 RDMA m
   const r = mapOk();
   const workload = { batch: 1, promptLen: 8192, decodeContextLen: 8192 };
 
-  it('pp = 4 fits and decodes at ≥ 0.8× of the memory-bandwidth bound', () => {
-    const res = simulate({
-      model: r.model,
-      quant: r.quant.quant,
-      parallel: { tp: 1, pp: 4, dp: 1, ep: 1 },
-      workload,
-      hardware,
-    });
-    // ≈ 410 GB of bf16 weights per stage on 512 GB machines.
+  it('pp = 4 fits with a raised GPU limit and decodes at ≥ 0.8× of the memory-bandwidth bound', () => {
+    const run = (gpuUsableFraction?: number) =>
+      simulate({
+        model: r.model,
+        quant: r.quant.quant,
+        parallel: { tp: 1, pp: 4, dp: 1, ep: 1 },
+        workload,
+        hardware: gpuUsableFraction === undefined ? hardware : { ...hardware, gpuUsableFraction },
+      });
+    // ≈ 410 GB of bf16 weights per stage on 512 GB machines: above the default macOS GPU limit (75% = 384 GB), so it
+    // fits only with a raised iogpu.wired_limit_mb (90% here).
+    const byDefault = run();
+    expect(byDefault.memory.fits).toBe(false);
+    expect(byDefault.warnings.some((w) => w.includes('fits only with a raised limit'))).toBe(true);
+    const res = run(0.9);
     expect(res.memory.fits).toBe(true);
+    expect(res.decode.tokensPerSec).toBe(byDefault.decode.tokensPerSec);
     for (const p of [res.prefill, res.decode])
       expect(Number.isFinite(p.tokensPerSec) && p.tokensPerSec > 0).toBe(true);
     // Bandwidth bound: at batch 1 the 4 stages run one after the other, so each token reads every active byte once
@@ -239,7 +246,7 @@ describe('muse_spark end to end: decode @ 8k on 4 × M3 Ultra 512 GB (TB5 RDMA m
     expect(bound).toBeLessThan(9.2);
     expect(res.decode.tokensPerSec).toBeLessThanOrEqual(bound);
     expect(res.decode.tokensPerSec).toBeGreaterThanOrEqual(0.8 * bound);
-    // Unified memory is not reduced by an OS share; that is the only warning allowed.
+    // With the raised limit, the GPU-usable share note is the only warning.
     expect(res.warnings.filter((w) => !/unified/i.test(w))).toEqual([]);
   });
 });

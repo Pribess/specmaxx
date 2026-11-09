@@ -45,7 +45,9 @@ it('repro: fits at batch 1, no host_ram tier, scales counted in the device bytes
 });
 
 it('the sweep fits equals the main verdict at every batch, and is not all hollow', () => {
-  const input = inputOf(REPRO);
+  // A 256k decode context, so the KV cache (not the prefill activations, bounded by the 8192-token chunk) makes the
+  // large batches overflow.
+  const input = inputOf(`${REPRO}&c=262144`);
   const points = batchSweep(input);
   for (const p of points) {
     const withBatch = { ...input, workload: { ...input.workload, batch: p.batch } };

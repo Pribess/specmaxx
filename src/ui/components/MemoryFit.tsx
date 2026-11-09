@@ -25,7 +25,7 @@ const TIER_LABEL: Record<TierMemory['tier'], string> = { host_ram: 'Host RAM', n
 
 /**
  * The allocations of one stage's device: weights (the n-gram table split out, hatched, when it stays on the
- * device), KV + state, activations, then staging, draft and verify snapshots when present.
+ * device), KV + state, activations, then staging, draft, verify snapshots and the runtime reserve when present.
  */
 function stageSegments(stage: StageMemory): Segment[] {
   const table = stage.lookupTableBytes ?? 0;
@@ -34,6 +34,7 @@ function stageSegments(stage: StageMemory): Segment[] {
     { key: 'staging', label: 'Staging', bytes: stage.stagingBytes ?? 0 },
     { key: 'draft', label: 'Draft', bytes: stage.draftBytes ?? 0 },
     { key: 'snapshots', label: 'Verify state', bytes: stage.speculativeTransientBytes ?? 0 },
+    { key: 'reserve', label: 'Runtime reserve', bytes: stage.runtimeReserveBytes ?? 0 },
   ];
   return [
     { key: 'weights', label: 'Weights', bytes: stage.weightBytes - table },
@@ -164,6 +165,19 @@ export function MemoryFit({
               {result.memory.stages.length > 1 && `Stage ${stage.stage + 1}. `}
               {stage.fits ? 'Fits' : 'Does not fit'}: {formatBytes(stage.totalBytes)} of{' '}
               {formatBytes(stage.capacityBytes)}
+              {stage.physicalCapacityBytes !== undefined &&
+                stage.physicalCapacityBytes > stage.capacityBytes && (
+                  <>
+                    {' '}
+                    GPU limit ({formatBytes(stage.physicalCapacityBytes)} installed){' '}
+                    <HelpIcon term="GPU memory limit">
+                      {helpLines([
+                        'The OS lets the GPU use only part of unified memory.',
+                        'Raised the limit? Set it under Hardware → Advanced.',
+                      ])}
+                    </HelpIcon>
+                  </>
+                )}
               {state === 'warning' && (
                 <>
                   {' '}

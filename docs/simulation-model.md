@@ -1697,20 +1697,65 @@ Per device of stage s:
   owned indexer keys `ceil(ctx/p)·hd_I·bpe(key)` (0 for `reuse` and `ownsKeys: false`); linear attention
   `vL·dk·dv·bpe(state) + C·(K−1)·bpe(act)`; short conv `(K−1)·dim·bpe(act)`; n-gram conv
   `(K−1)·dilation·O·bpe(act)`; hyper-connections 0.
-- `act_s` = the largest activation read + write of any single op of the stage over both phases (the transient
-  inputs and outputs of the op running). It scales with `b_mb·promptLen` in prefill.
-- `total_s = W_s + B_r·state_s + act_s (+ staging_s)`; `fits = total_s ≤ capacity`, capacity =
+- `act_s` = the largest activation read + write of any single op of the stage over the decode step and the LAST
+  prefill chunk (see "Activation peak" below): the transient inputs and outputs of the op running.
+- `reserve` = the runtime reserve per device (`HardwareStack.runtimeReserveBytes`, default 0; see "Runtime
+  reserve").
+- `total_s = W_s + B_r·state_s + act_s + reserve (+ staging_s)`; `fits = total_s ≤ cap`, with the GPU-usable
+  capacity `cap = f·capacity` (see "GPU-usable capacity"; f = 1 on dedicated memory) and capacity =
   `memCapacityBytes ?? capacityOptionsBytes[0]` of the modified device. With weights offloaded, `W_s` keeps only the
   resident part, `staging_s` is the streaming buffer, and the off-device tiers are checked too (§12 "Memory tiers").
-- `maxSequencesPerReplica = floor(min_s (capacity − W_s − act_s − staging_s)/state_s)` (Infinity when no stage
-  keeps per-sequence state). The activation peak is the one at the evaluated batch, so this is an estimate.
+- `maxSequencesPerReplica = floor(min_s (cap − W_s − act_s − reserve − staging_s)/state_s)` (Infinity when no
+  stage keeps per-sequence state). The activation peak is the one at the evaluated batch, so this is an estimate.
 
-### Unified memory
+### Activation peak
 
-On `kind: 'unified'` devices the capacity is shared with the CPU and OS; the usable fraction is OS-dependent and
-not modeled, and `simulate` adds a warning saying so. Host RAM IS the device pool there, so it is never a tier: no
-`host_ram` entry appears in `MemoryReport.tiers` (`stageTierBreakdown` throws if a group would land there), and
-pinned-host table scales (§12) are device bytes in `W_s`. Only `nvme` is a tier.
+`memory.ts: prefillChunkShape, DEFAULT_PREFILL_CHUNK_TOKENS`; `simulate.ts` step 6.
+
+Engines prefill long prompts in chunks of C tokens per step (vLLM `max_num_batched_tokens`, SGLang
+`--chunked-prefill-size`), so the prompt's activations never exist all at once. The fit lowers one more prefill step,
+the one that holds the most tokens under a budget of C per microbatch of `b_mb` prompts of P tokens:
+
+- `b_mb·P ≤ C`: the whole microbatch (the step the rate is costed on; no extra lowering).
+- `P ≤ C < b_mb·P`: `floor(C/P)` whole prompts, `qLen = kvLen = P`.
+- `C < P`: the LAST chunk of one prompt, `qLen = C`, `kvLen = P` (it attends to the whole prompt).
+
+Every op's activations grow with the step's tokens `seqs·qLen`, so this step bounds all chunks. Its KV reads are
+cache state, already counted in `state_s`. C = `Workload.prefillChunkTokens`, default 8192 (SGLang's default and
+vLLM's for its `LLM` class and H100-class API servers; smaller budgets only lower the peak). Only the fit uses it:
+prefill tok/s @ P is still the whole prompt in one pass (§7). With `prefillChunkTokens ≥ b_mb·P` the fit is the
+one-pass peak of before.
+
+### GPU-usable capacity
+
+`memory.ts: resolveGpuUsableFraction, unifiedMemoryWarnings`; `MemorySpec.gpuUsableFraction`,
+`HardwareStack.gpuUsableFraction`.
+
+On `kind: 'unified'` devices the OS lets the GPU allocate only part of the pool. The fit checks against
+`cap = f·capacity`, with `f = HardwareStack.gpuUsableFraction ?? MemorySpec.gpuUsableFraction ?? 1` (the override is
+a raised OS limit; dedicated memory always has f = 1). The preset defaults, each cited in its preset:
+
+| device | f | what it is |
+| --- | --- | --- |
+| Apple M3/M4/M5 Max and Ultra (all ≥ 36 GB) | 0.75 | macOS `recommendedMaxWorkingSetSize` (Apple: 48 GB of 64 GB); raised with `sudo sysctl iogpu.wired_limit_mb` |
+| DGX Spark | 119.7 / 128 = 0.935 | what CUDA reports as total global memory on DGX OS |
+| Ryzen AI Max+ 395 (Strix Halo) | 0.5 | Linux default GTT limit (ROCm guide); `ttm.pages_limit` raises it to ~120 GB of 128 GB |
+
+`f` is a ratio of usable to installed bytes, so it holds whatever unit the capacity is recorded in. `DeviceMemory`
+reports both `capacityBytes` (= cap, what the check uses) and `physicalCapacityBytes`; `simulate` warns with the
+share used and, for a stage above cap but within the installed memory, that it fits only with a raised limit. Rates
+do not depend on f.
+
+Host RAM IS the device pool on unified memory, so it is never a tier: no `host_ram` entry appears in
+`MemoryReport.tiers` (`stageTierBreakdown` throws if a group would land there), and pinned-host table scales (§12)
+are device bytes in `W_s`. Only `nvme` is a tier.
+
+### Runtime reserve
+
+`HardwareStack.runtimeReserveBytes`, per device, default 0. Framework and driver memory besides the model (CUDA
+context, allocator pools, GEMM and attention workspaces; commonly 0.5–1.5 GB on a CUDA GPU) is added to every
+stage's total. No vendor publishes it, and it depends on the engine and driver, not the hardware, so the bound keeps
+0 unless the user sets it (Hardware → Advanced → Memory fit).
 
 ---
 
@@ -1718,7 +1763,8 @@ pinned-host table scales (§12) are device bytes in `W_s`. Only `nvme` is a tier
 
 Excluded on purpose (only hardware and math limits are modeled):
 
-- **Inference-engine knobs**: paged attention, continuous batching, chunked prefill, scheduler overhead,
+- **Inference-engine knobs**: paged attention, continuous batching, chunked prefill (the rate; the memory fit's
+  activation peak assumes a chunk, §8 "Activation peak"), scheduler overhead,
   kernel launch overhead of a specific engine, CUDA graphs. The exception: speculative decoding and weight / expert /
   lookup-table offloading are **opt-in deployment-scenario knobs, off by default** ([§12](#12-offloading),
   [§13](#13-speculative-decoding); design `docs/design/offload-specdec-latency.md`). Off, results are bit-identical;
@@ -1733,7 +1779,7 @@ Excluded on purpose (only hardware and math limits are modeled):
   and comm/compute contention for memory.
 - Sequence parallelism; full-logits gather (small sampling exchange is included); attention sinks; expected-value MoE routing for the grouped expert GEMMs
   (`E·(1−(1−k/E)^T)` distinct experts is used only for the offload transfers, §12 "Expert hit ratio"; the GEMMs
-  keep balanced routing); the OS memory reservation.
+  keep balanced routing); the framework / driver memory reserve (0 unless set, §8 "Runtime reserve").
 
 Documented approximations (each isolated in one constant or rule):
 

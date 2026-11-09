@@ -24,6 +24,48 @@ const DVFS_URL = 'https://github.com/maderix/apple-gpu-dvfs';
 const ARCH_URL = 'https://tzakharko.github.io/apple-neural-accelerators-benchmark/';
 const SIMD_URL = 'https://stonesjtu.github.io/2026/09/09/apple-gpu-evolution/';
 const M5_MATMUL_URL = 'https://gist.github.com/wanderingmeow/6562adbbecf6426ebfce8ab05a83b05f';
+const METAL_TECH_TALK_URL = 'https://developer.apple.com/videos/play/tech-talks/10580/';
+const MLX_WIRED_LIMIT_URL =
+  'https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_wired_limit.html';
+const LLAMACPP_WIRED_LIMIT_URL = 'https://github.com/ggml-org/llama.cpp/discussions/2182';
+
+/**
+ * Default GPU-usable fraction of a Mac's unified memory (`MemorySpec.gpuUsableFraction`): macOS lets the GPU wire
+ * about 3/4 of RAM on Macs with 36 GB or more (`recommendedMaxWorkingSetSize`; Apple: 48 GB of 64 GB) and about
+ * 2/3 on smaller ones. Every Apple preset here has ≥ 36 GB, so 0.75 applies to all of them. Raisable with
+ * `sudo sysctl iogpu.wired_limit_mb=<MB>` (the override, `HardwareStack.gpuUsableFraction`). Dimensionless.
+ */
+export const MACOS_GPU_USABLE_FRACTION = 0.75;
+
+/** Citations of {@link MACOS_GPU_USABLE_FRACTION}, shared by every Apple preset. */
+const MACOS_WIRED_LIMIT_SOURCES: SourceRef[] = [
+  {
+    url: METAL_TECH_TALK_URL,
+    title: 'Apple tech talk: Metal Compute on MacBook Pro (recommendedMaxWorkingSetSize)',
+    fields: ['memory.gpuUsableFraction'],
+    note:
+      'The GPU working set is limited to recommendedMaxWorkingSetSize: 21 GB of a 32 GB Mac and 48 GB of a 64 GB ' +
+      'Mac (3/4).',
+  },
+  {
+    url: MLX_WIRED_LIMIT_URL,
+    title: 'MLX documentation: mlx.core.set_wired_limit',
+    fields: ['memory.gpuUsableFraction'],
+    note:
+      '"Setting a wired limit larger than system wired limit is an error. You can increase the system wired limit ' +
+      'with: sudo sysctl iogpu.wired_limit_mb=<size_in_megabytes>"; the system limit is reported as ' +
+      '"max_recommended_working_set_size".',
+  },
+  {
+    url: LLAMACPP_WIRED_LIMIT_URL,
+    title: 'llama.cpp discussion #2182: Adjust VRAM/RAM split on Apple Silicon',
+    fields: ['memory.gpuUsableFraction'],
+    kind: 'community',
+    note:
+      'Reported defaults: about 2/3 of RAM up to 32 GB and 3/4 above; iogpu.wired_limit_mb raises it until reboot. ' +
+      'Some recent macOS releases report a larger share on large pools; set it under Advanced if yours does.',
+  },
+];
 
 // Community DVFS tables: M2 Max 1398 MHz, used as an ESTIMATE for the unmeasured M3 Max and M3 Ultra (same GPU generation).
 const M3_GPU_CLOCK_HZ = 1.398e9;
@@ -350,8 +392,10 @@ function appleDevice(params: AppleDeviceParams): DeviceSpec {
       technology: chip.startsWith('M3') ? 'LPDDR5' : 'LPDDR5X',
       capacityOptionsBytes: capacityOptionsGb.map(gb),
       bandwidthBytesPerSec: memBandwidthBytesPerSec,
+      // macOS GPU wired limit (≈ 3/4 of RAM at ≥ 36 GB); the 2/3 rule of smaller Macs is not needed here.
+      gpuUsableFraction: MACOS_GPU_USABLE_FRACTION,
     },
-    sources: [memorySource, ...simdSources, ...neuralSources, ...additionalSources],
+    sources: [memorySource, ...simdSources, ...neuralSources, ...MACOS_WIRED_LIMIT_SOURCES, ...additionalSources],
     estimated: [...simdEstimated, ...neuralEstimated],
   };
 }

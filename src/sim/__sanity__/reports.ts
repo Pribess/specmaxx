@@ -28,6 +28,9 @@
  *   batched reports. Decode: per stream at batch 1, aggregate when the report gives an aggregate.
  * - Unknown details resolve in the simulator's favour (the PCIe P2P driver when a report does not say, the faster of
  *   the stated link widths, the lower end of a bits-per-weight range, the largest memory option).
+ * - Memory fit: not asserted, at the simulator defaults (GPU-usable share of unified memory, 8192-token prefill chunk,
+ *   no runtime reserve; docs/simulation-model.md §8). They change no rate, so no exception depends on them; lm-27 and
+ *   F-LM49 exceed the default GPU share (their runs raised the limit), see docs/sanity-check.md "Settings".
  */
 
 import { ACCEPTANCE_PRESETS, expectedTokens, mtpTailAcceptance } from '../engine/specdec';

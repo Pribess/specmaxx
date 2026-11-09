@@ -31,7 +31,13 @@ import {
 } from '../lower/lower';
 import type { AllReduceAlgorithm, CollectivePath } from './collectives';
 import { offloadTiers, resolveHost, resolveOffload, transferPath, type ResolvedHost } from './host';
-import { memoryReport } from './memory';
+import {
+  DEFAULT_PREFILL_CHUNK_TOKENS,
+  memoryReport,
+  prefillChunkShape,
+  resolveGpuUsableFraction,
+  unifiedMemoryWarnings,
+} from './memory';
 import { engineMemBandwidthBytesPerSec, opTime, type OpTimeContext } from './opTime';
 import { layerResult, microbatching, phaseResult, stageResult, type PhaseShape } from './pipeline';
 import {
@@ -457,8 +463,22 @@ export function simulate(input: SimInput): SimResult {
     decode.speculative = speculativeSummary(decode, spec.expectedTokensPerStep, off.tokensPerSec);
   }
 
-  // 6. Memory fit.
+  // 6. Memory fit. The activation peak counts the decode step and the LAST prefill chunk (chunked prefill, docs §8
+  // "Activation peak"); the prefill rate above is unaffected. A microbatch within the budget reuses the prefill lowering.
+  const chunk = prefillChunkShape(
+    workload.promptLen,
+    prefillCtx.seqs,
+    workload.prefillChunkTokens ?? DEFAULT_PREFILL_CHUNK_TOKENS,
+  );
+  let chunkLowered = prefillLowered;
+  if (chunk.seqs !== prefillCtx.seqs || chunk.qLen !== prefillCtx.qLen) {
+    const chunkCtx: LoweringContext = { ...prefillCtx, ...chunk };
+    chunkLowered = lowerModel(model, chunkCtx);
+    if (spec !== undefined)
+      chunkLowered = withDraftLayers(chunkLowered, lowerDraftPrefill(model, spec.lowering.draft, chunkCtx));
+  }
   const capacityBytes = input.hardware.memCapacityBytes ?? device.memory.capacityOptionsBytes[0];
+  const gpuUsableFraction = resolveGpuUsableFraction(device.memory, input.hardware.gpuUsableFraction);
   const memory = memoryReport({
     model,
     ctx: decodeCtx,
@@ -467,16 +487,15 @@ export function simulate(input: SimInput): SimResult {
     // speculative decoding the verify appends k + 1 rows, so N + k + 1 (docs §13 "Draft memory").
     contextTokens: Math.max(workload.promptLen, decodeCtx.kvLen),
     lowered: [prefillLowered, decodeLowered],
+    activationLowered: [chunkLowered, decodeLowered],
     capacityBytes,
     kind: device.memory.kind,
+    gpuUsableFraction,
+    runtimeReserveBytes: input.hardware.runtimeReserveBytes ?? 0,
     devicesPerNode: hw.topology.devicesPerNode,
     ...(phaseOffload === undefined ? {} : { host: phaseOffload.host }),
   });
-  if (device.memory.kind === 'unified') {
-    warnings.push(
-      'memory: unified memory — capacity is shared with the CPU/OS; the usable fraction is OS-dependent and not modeled',
-    );
-  }
+  if (device.memory.kind === 'unified') warnings.push(...unifiedMemoryWarnings(memory));
 
   return {
     prefill,

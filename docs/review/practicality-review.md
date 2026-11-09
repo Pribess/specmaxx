@@ -886,6 +886,13 @@ The sim is unmodified. Decode is batch 1. tg128 runs use the harness midpoint (@
 - **Fix.** Add a per-device default GPU-usable fraction with a "raised limit" override, and report "fits by default / fits
   with override". Size S–M.
 - **Confidence.** High for macOS, medium for Spark (119.7 GiB visible to CUDA) and Strix Halo (GTT configurable).
+- **Status. Fixed** (rank 8). `MemorySpec.gpuUsableFraction` per preset (Apple 0.75, DGX Spark 119.7/128 = 0.935, Strix
+  Halo 0.5 = the Linux GTT default, each cited), `HardwareStack.gpuUsableFraction` override (Hardware → Advanced →
+  Memory fit → GPU memory limit, URL `gpu`); the fit checks `f · capacity` and warns when a stage fits only with a raised
+  limit (docs/simulation-model.md §8 "GPU-usable capacity"). Probes re-run, before → after (rates unchanged):
+  - Llama-3-70B MLX 8-bit, M4 Max 128 GB @ 64k: 96.5 GB fits of 128 GB (max 2 sequences) → does not fit 96.0 GB (max 0);
+    fits at a raised 85% (108.8 GB, max 1).
+  - Qwen3-235B 3.9 bpw @ 8k: 116.3 GB fits (max 8) → does not fit 96.0 GB; fits at 95% (121.6 GB, max 4).
 
 ### F10. Spec-dec: iid acceptance extrapolated across k
 
@@ -914,6 +921,13 @@ The sim is unmodified. Decode is batch 1. tg128 runs use the harness midpoint (@
 - **Classification.** A modelling artefact (fit only; the rate is unaffected), plus an engine reserve.
 - **Fix.** Compute the fit's activation peak on a bounded prefill chunk, and add an optional `runtimeReserveBytes`. Size S.
 - **Confidence.** High.
+- **Status. Fixed** (rank 12). The fit's activation peak is the decode step's or the LAST prefill chunk's
+  (`Workload.prefillChunkTokens`, default 8192, sourced from SGLang / vLLM defaults; `memory.ts: prefillChunkShape`); an
+  optional `HardwareStack.runtimeReserveBytes` (default 0: no vendor source; Hardware → Advanced → Memory fit, URL `rr`)
+  enters every stage's total (docs/simulation-model.md §8 "Activation peak", "Runtime reserve"). Probe re-run, before →
+  after (rates unchanged, 3348 tok/s @ pp131072 and 215.6 tok/s @ 1): Llama-3-8B Q4_K_M on a 4090 with a 128k prompt,
+  activations 11.27 → 0.70 GB, 33.41 GB does not fit → 22.84 GB fits; with a 1 GB reserve 23.84 GB fits, with 1.5 GB
+  24.34 GB does not.
 
 ### F12. EP: the busiest device gets the mean load
 
