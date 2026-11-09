@@ -369,8 +369,12 @@ export interface CollectiveOp {
   name: string;
   /** Collective pattern. */
   collective: 'all_reduce' | 'all_gather' | 'reduce_scatter' | 'all_to_all' | 'send_recv';
-  /** Parallel group it runs over: tensor (`tp`), expert (`ep`) or pipeline (`pp`, send/recv between stages). */
-  group: 'tp' | 'ep' | 'pp';
+  /**
+   * Parallel group it runs over: tensor (`tp`), expert (`ep`), pipeline (`pp`, send/recv between stages), or
+   * expert-TP (`etp`: the `tp/ep` ranks of a TP group that hold the same MoE experts, strided by ep; mode A only;
+   * its links come from `engine/placement.ts: expertTpGroupSpan`).
+   */
+  group: 'tp' | 'ep' | 'pp' | 'etp';
   /** Devices in the group (send_recv: 2). Count. */
   groupSize: number;
   /** Per-device message size, by the convention above. Unit: bytes. */

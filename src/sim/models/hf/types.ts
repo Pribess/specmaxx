@@ -47,8 +47,13 @@ export interface HfRepoFiles {
   revision: string;
   /** Parsed config.json (or the base model's when the repo has none; see `configFrom`). */
   config: unknown;
-  /** Repo the config came from when it is not `id` (e.g. a Mistral NVFP4 repo → its `cardData.base_model`). */
+  /**
+   * Repo the config came from when it is not `id`: a Mistral NVFP4 repo's `cardData.base_model`, or the ungated
+   * mirror of a gated repo (`src/hf/mirrors.ts`). Data only: never shown in the UI.
+   */
   configFrom?: string;
+  /** Repo the `api` metadata came from when it is not `id` (the ungated mirror of a gated repo). Data only. */
+  metadataFrom?: string;
   /** Parsed `/api/models/<id>` response, if fetched. */
   api?: HfApiModelInfo;
   /** Parsed `hf_quant_config.json` (NVIDIA ModelOpt), if the repo has one. */
@@ -212,6 +217,10 @@ export type HfMapResult =
       quant: QuantDefaults;
       /** IR vs checkpoint parameter count. */
       paramCheck: ParamCheck;
+      /** {@link HfRepoFiles.configFrom}, when the config came from another repo. Data only: never shown in the UI. */
+      configFrom?: string;
+      /** {@link HfRepoFiles.metadataFrom}, when the metadata came from another repo. Data only: never shown in the UI. */
+      metadataFrom?: string;
     }
   | {
       kind: 'unsupported';

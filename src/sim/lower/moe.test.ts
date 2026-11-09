@@ -309,3 +309,86 @@ describe('Nemotron-H MoE (Super: h 4096, E 512, k 22, fe 2688, l 1024, S 1, fs 5
     expect(() => lowerMoe({ ...SUPER, gated: true }, ctx(1, {}))).toThrow(/relu2/);
   });
 });
+
+// Muse Spark post_expert_norm: an RMSNorm on each expert's l-wide output before the combine.
+const NRM: MoeBlock = { ...LAT, expertOutputNorm: true };
+
+describe('expert-output norm (expertOutputNorm)', () => {
+  it('false is the same as absent', () => {
+    for (const p of PARALLELS) {
+      const c = ctx(4, p);
+      expect(lowerMoe({ ...LAT, expertOutputNorm: false }, c)).toEqual(lowerMoe(LAT, c));
+      expect(moeResidentWeightBytes({ ...LAT, expertOutputNorm: false }, c)).toBe(moeResidentWeightBytes(LAT, c));
+    }
+  });
+
+  it('mode A tp 4 (etp 4): reduce-scatter of the down partial sums + sum-of-squares all-reduce, then l/4 shards', () => {
+    const ops = lowerMoe(NRM, ctx(1, { tp: 4 }));
+    expect(ops.map((o) => o.name).slice(5, 11)).toEqual([
+      'moe.down',
+      'moe.expert_out_reduce_scatter',
+      'moe.expert_norm_sumsq_all_reduce',
+      'moe.expert_norm',
+      'moe.combine',
+      'moe.latent_out',
+    ]);
+    // R = a·mE = 2 rows; reduce-scatter input R·l·reduceBpe = 2·32·2; sum of squares R·4 B (fp32)
+    expect(collectives(ops).map((c) => [c.name, c.collective, c.group, c.groupSize, c.messageBytes, c.dtype])).toEqual([
+      ['moe.expert_out_reduce_scatter', 'reduce_scatter', 'etp', 4, 128, 'bf16'],
+      ['moe.expert_norm_sumsq_all_reduce', 'all_reduce', 'etp', 4, 8, 'fp32'],
+      ['moe.tp_all_reduce', 'all_reduce', 'tp', 4, 128, 'bf16'], // the single closing all-reduce, still T·h
+    ]);
+    const norm = elementwiseNamed(ops, 'moe.expert_norm');
+    // elems R·l/4 = 16; read = write = 16·2 B; γ slice 8·2 B
+    expect([norm.fn, norm.elems, norm.activationReadBytes, norm.activationWriteBytes, norm.weightBytes]).toEqual(['rmsnorm', 16, 32, 32, 16]);
+    const combine = elementwiseNamed(ops, 'moe.combine');
+    expect([combine.elems, combine.activationWriteBytes]).toEqual([16, 16]); // a·mE·l/4; T·l/4·2 B
+    expect(shape(gemmNamed(ops, 'moe.latent_out'))).toEqual([1, 1, 64, 8]); // k-split: k = l/4, partial sums of h
+    expect(shape(gemmNamed(ops, 'moe.latent_in'))).toEqual([1, 1, 32, 64]); // still replicated
+  });
+
+  it('mode A tp 4 ep 2 (etp 2): the expert-TP group has 2 ranks', () => {
+    const ops = lowerMoe(NRM, ctx(1, { tp: 4, ep: 2 }));
+    // A = ceil(2/2) = 1 → R = 1; reduce-scatter 1·32·2; sum of squares 4 B; closing all-reduce over tp 4
+    expect(collectives(ops).map((c) => [c.collective, c.groupSize, c.messageBytes])).toEqual([
+      ['reduce_scatter', 2, 64],
+      ['all_reduce', 2, 4],
+      ['all_reduce', 4, 128],
+    ]);
+    expect(gemmNamed(ops, 'moe.latent_out').k).toBe(16);
+  });
+
+  it('etp 1 (mode A ep = tp, mode B): the norm only, over a·mE·l, no extra communication', () => {
+    const a = lowerMoe(NRM, ctx(1, { tp: 8, ep: 8 }));
+    expect(collectives(a).map((c) => c.name)).toEqual(['moe.tp_all_reduce']);
+    expect(elementwiseNamed(a, 'moe.expert_norm').elems).toBe(32); // a 1 · mE 1 · l 32
+    expect(gemmNamed(a, 'moe.latent_out').k).toBe(32);
+    const b = lowerMoe(NRM, ctx(1, { dp: 8, ep: 8 }));
+    expect(b.map((o) => o.name).slice(6, 9)).toEqual(['moe.down', 'moe.expert_norm', 'moe.combine_a2a']);
+    expect(collectives(b).map((c) => c.messageBytes)).toEqual([128, 128]); // the a2a only
+    expect(elementwiseNamed(b, 'moe.expert_norm').elems).toBe(64); // a 1 · mE 2 · l 32
+  });
+
+  it('without latentDim: shards of h, closed by the same all-reduce', () => {
+    const ops = lowerMoe({ ...MOE, expertOutputNorm: true }, ctx(1, { tp: 4 }));
+    expect(collectives(ops).map((c) => [c.collective, c.messageBytes])).toEqual([
+      ['reduce_scatter', 256], // 2·64·2
+      ['all_reduce', 8],
+      ['all_reduce', 128],
+    ]);
+    expect(elementwiseNamed(ops, 'moe.combine').activationWriteBytes).toBe(32); // T·h/4·2 B
+    expect(ops.some((o) => o.name.startsWith('moe.latent_'))).toBe(false);
+  });
+
+  it('resident: latent_out row-split by etp with the split, plus the γ slice', () => {
+    // tp 4: experts 12,288 + router 1024 + latent_in 64·32·2 = 4096 + latent_out 64·8·2 = 1024 + γ 8·2 = 16 + shared 6144
+    expect(moeLatentWeightBytes(NRM, ctx(1, { tp: 4 }))).toBe(5120);
+    expect(moeResidentWeightBytes(NRM, ctx(1, { tp: 4 }))).toBe(24_592);
+    // tp 1 (no split): 82,944 + γ 32·2
+    expect(moeResidentWeightBytes(NRM, ctx(1, {}))).toBe(83_008);
+    // resident latent bytes = the latent GEMMs' weight bytes (bf16: n·k·2)
+    const ops = lowerMoe(NRM, ctx(1, { tp: 4 }));
+    const latentStreamed = ['moe.latent_in', 'moe.latent_out'].map((n) => gemmNamed(ops, n)).reduce((s, g) => s + g.n * g.k * 2, 0);
+    expect(latentStreamed).toBe(5120);
+  });
+});

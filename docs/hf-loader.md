@@ -29,8 +29,16 @@ loadHfModel(id, { revision?, token? })                       src/hf/load.ts
   `quantization_config.json` (some AutoRound / Quark exports) and `params.json` (Mistral consolidated format)
   are fetched only when `siblings` lists them, so there is no 404 probing.
 - **Repos without config.json.** Mistral NVFP4 repos ship only `params.json`. When `config.json` is 404 and the
-  repo has a `params.json` and a `cardData.base_model`, the base model's `config.json` is used (`configFrom`, noted
-  in the result). The quant defaults still come from the repo's own `params.json`.
+  repo has a `params.json` and a `cardData.base_model`, the base model's `config.json` is used. The result records
+  that repo in `configFrom`, as data only: no note, and nothing in the UI shows it. The quant defaults still come
+  from the repo's own `params.json`.
+- **Gated repos with a mirror.** Gated repos with a known ungated mirror (`src/hf/mirrors.ts`, e.g.
+  `meta-models/Muse-Spark-Open-816B-A42B` → `unsloth/Muse-Spark-Open-816B-A42B`) fall back to that mirror for
+  `config.json`, the sidecars and the `/api/models` metadata. This happens only when an official request answers
+  401, no token is set and the revision is the default branch. The result keeps the official ID, so the model is
+  named after it, and records the mirror in `configFrom` / `metadataFrom`. Those are data only: no note, and
+  nothing in the UI mentions the mirror. If any mirror request fails, the original 401 (the token prompt) is
+  returned. With a token, the official repo is read as before, and a gated repo without a mirror still answers 401.
 - **Revision.** Optional, default `main`; it goes into both URLs and the cache key.
 - **Token and 401.** Gated and private repos answer 401. The error (`unauthorized`) says so and asks for a token.
   An optional user token is kept in `localStorage` under `specmaxx:hfToken` (`token.ts`) and sent as
@@ -69,6 +77,7 @@ name the model class; model types second because text-only extractions often dro
 | `inkling` (`inkling.ts`) | `inkling_mm_model`, `inkling_text` | `InklingForConditionalGeneration` | Inkling-Small |
 | `minimax` (`minimax.ts`) | `minimax_m3_vl`, `minimax_m3_vl_text` | `MiniMaxM3SparseForConditionalGeneration`, `MiniMaxM3SparseForCausalLM` | MiniMax-M3 (and M3.1-Flash) |
 | `nemotron_h` (`nemotronH.ts`) | `nemotron_h`, `nemotron_h_omni` | `NemotronHForCausalLM`, `NemotronH_Omni_Reasoning_V3` | Nemotron 3.5 Lightning, Nemotron 3.5 Super VL |
+| `muse_spark` (`museSpark.ts`) | `muse_spark`, `muse_spark_text` | `MuseSparkForConditionalGeneration` | Muse Spark (`meta-models/Muse-Spark-Open-816B-A42B`, read through `unsloth/…`) |
 
 The MLA/DSA families share their readers in `families/mlaCommon.ts` (MLA dims from `qk_nope_head_dim` /
 `qk_rope_head_dim` / `v_head_dim` — never `head_dim` or `num_key_value_heads`, which are traps in GLM and Mistral
@@ -171,9 +180,11 @@ vision/audio towers). Actual = `countParams(model) + mtpParamsEstimate + visionP
 
 ## 6. The shortlist
 
-All 10 base repos are public (not gated). Parameters are the IR's (`countParams`, text model incl. n-gram tables,
-MTP and vision excluded) and active per token incl. embedding and head (`activeParamsPerToken`); the param check
-compares against `safetensors.total` with the excluded estimates added.
+All 11 base repos are public except Muse Spark: `meta-models/Muse-Spark-Open-816B-A42B` is gated and is read through
+its ungated mirror `unsloth/Muse-Spark-Open-816B-A42B` without a token (§1), so its fixture has the mirror's ID.
+Parameters are the IR's (`countParams`, text model incl. n-gram tables, MTP and vision excluded) and active per token
+incl. embedding and head (`activeParamsPerToken`); the param check compares against `safetensors.total` with the
+excluded estimates added.
 
 | Shortlist name | HF ID | Family | IR total / active | Param check | Native format |
 |---|---|---|---|---|---|
@@ -188,6 +199,7 @@ compares against `safetensors.total` with the excluded estimates added.
 | MiniMax M3 | `MiniMaxAI/MiniMax-M3` (`M3.1-Flash` same text dims) | `minimax` | 426.17B / 25.96B | ok | BF16 |
 | Nemotron 3.5 Lightning | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16` | `nemotron_h` | 31.58B / 3.58B | ok (against the per-dtype sum, §5; −9e-8) | BF16 |
 | Nemotron 3.5 Super VL | `nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4` | `nemotron_h` | 120.67B / 12.77B | packed (U8 words) | FP8 Mamba/attention/head, NVFP4 experts, BF16 latent |
+| Muse Spark | `meta-models/Muse-Spark-Open-816B-A42B` (fixture: the `unsloth/` mirror) | `muse_spark` | 819.99B / 46.09B | ok | BF16 (router F32) |
 
 **Inkling 2 Small.** No repo of that name exists. Thinking Machines publishes only `thinkingmachines/Inkling` and
 `thinkingmachines/Inkling-Small`; `NarsAI/Inkling-2` is a byte-identical re-upload of the big Inkling. The loader is
@@ -196,23 +208,23 @@ way.
 
 **Feature matrix** (from the fetched configs, reference code and safetensors headers):
 
-| Feature | Q-Flash-Next | Q-27B | DSV4.1-Flash | GLM-5.3-Flash | GLM-5.3 | Mistral L4 | Inkling-Small | MiniMax-M3 | Nemotron-Lightning | Nemotron-Super |
-|---|---|---|---|---|---|---|---|---| --- | --- |
-| GQA full attention | 1 of 4 layers, gated | 1 of 4 layers, gated | – | – | – | – | ✓ | ✓ | 6 of 52 layers, no RoPE | 8 of 88 layers, no RoPE |
-| Linear attention | GatedDeltaNet, 3 of 4 | GatedDeltaNet, 3 of 4 | – | KDA, 3 of 4 | – | – | – | – | Mamba-2 (SSM), 23 of 52 | Mamba-2 (SSM), 40 of 88 |
-| MLA | – | – | CSA (one K=V vector, q-LoRA, grouped low-rank out) | NoPE | ✓ | no q-LoRA, NoPE every 4th | – | – | – | – |
-| Sparse top-k (indexer) | QSA, keys pooled 4:1 | – | compressed + hierarchical | DSA, k-pool 4 | DSA | DSA | – | block top-k | – | – |
-| Top-k reused across layers | – | – | 30 of 40 | – | 57 of 78 | 28 of 72 | – | – | – | – |
-| Cross-layer KV sharing | – | – | 4 source layers | – | – | 9 layers | – | – | – | – |
-| Sliding window | – | – | 128 + global top-k | – | – | – | 35 of 42 (512) | – | – | – |
-| KV compression | – | – | r = 1 or 2 | – | – | – | – | – | – | – |
-| Hyper-connections | 4 streams, low-rank | – | mHC, 4 streams | mHC, 4 streams | – | – | – | – | – | – |
-| n-gram / Engram tables | 51B, 1 layer | – | 196B, 2 layers | – | – | – | – | – | – | – |
-| Relative-position bias, short convs | – | – | – | – | – | – | ✓ | – | – | – |
-| MoE experts / top-k / shared | 512 / 10 / 1 | dense | 384 / 6 / 1 | 288 / 8 / 1 | 256 / 8 / 1 | 128 / 4 / 1 | 256 / 6 / 2 | 128 / 4 / 1 | 128 / 6 / 1 (relu², ungated) | 512 / 22 / 1 (relu², latent width 1024) |
-| Dense first layers | – | all | – | 3 | 3 | 1 | 2 | 3 | – | – |
-| MTP / draft (`model.draft`, §7) | 1, multi-step | 1, multi-step | DSpark block drafter, 3 MoE layers | 1, single-step | 1, single-step | none (3-layer DSpark in `params.json`, deferred) | 8, single-step | none (config only, no weights) | 1, single-step (attention + MoE) | 1, single-step (attention + MoE) |
-| Vision / audio (excluded) | ✓ | ✓ | ✓ | ✓ | – | ✓ | vision + audio | ✓ | – | vision (RADIO ViT + mlp1) |
+| Feature | Q-Flash-Next | Q-27B | DSV4.1-Flash | GLM-5.3-Flash | GLM-5.3 | Mistral L4 | Inkling-Small | MiniMax-M3 | Nemotron-Lightning | Nemotron-Super | Muse Spark |
+|---|---|---|---|---|---|---|---|---| --- | --- | --- |
+| GQA full attention | 1 of 4 layers, gated | 1 of 4 layers, gated | – | – | – | – | ✓ | ✓ | 6 of 52 layers, no RoPE | 8 of 88 layers, no RoPE | 16 of 62, NoPE, gated |
+| Linear attention | GatedDeltaNet, 3 of 4 | GatedDeltaNet, 3 of 4 | – | KDA, 3 of 4 | – | – | – | – | Mamba-2 (SSM), 23 of 52 | Mamba-2 (SSM), 40 of 88 | – |
+| MLA | – | – | CSA (one K=V vector, q-LoRA, grouped low-rank out) | NoPE | ✓ | no q-LoRA, NoPE every 4th | – | – | – | – | – |
+| Sparse top-k (indexer) | QSA, keys pooled 4:1 | – | compressed + hierarchical | DSA, k-pool 4 | DSA | DSA | – | block top-k | – | – | – |
+| Top-k reused across layers | – | – | 30 of 40 | – | 57 of 78 | 28 of 72 | – | – | – | – | – |
+| Cross-layer KV sharing | – | – | 4 source layers | – | – | 9 layers | – | – | – | – | – |
+| Sliding window | – | – | 128 + global top-k | – | – | – | 35 of 42 (512) | – | – | – | 46 of 62 (2048), gated |
+| KV compression | – | – | r = 1 or 2 | – | – | – | – | – | – | – | – |
+| Hyper-connections | 4 streams, low-rank | – | mHC, 4 streams | mHC, 4 streams | – | – | – | – | – | – | – (learned residual gates) |
+| n-gram / Engram tables | 51B, 1 layer | – | 196B, 2 layers | – | – | – | – | – | – | – | – |
+| Relative-position bias, short convs | – | – | – | – | – | – | ✓ | – | – | – | – |
+| MoE experts / top-k / shared | 512 / 10 / 1 | dense | 384 / 6 / 1 | 288 / 8 / 1 | 256 / 8 / 1 | 128 / 4 / 1 | 256 / 6 / 2 | 128 / 4 / 1 | 128 / 6 / 1 (relu², ungated) | 512 / 22 / 1 (relu², latent width 1024) | 256 / 8 / 0, latent 4096 |
+| Dense first layers | – | all | – | 3 | 3 | 1 | 2 | 3 | – | – | – |
+| MTP / draft (`model.draft`, §7) | 1, multi-step | 1, multi-step | DSpark block drafter, 3 MoE layers | 1, single-step | 1, single-step | none (3-layer DSpark in `params.json`, deferred) | 8, single-step | none (config only, no weights) | 1, single-step (attention + MoE) | 1, single-step (attention + MoE) | none |
+| Vision / audio (excluded) | ✓ | ✓ | ✓ | ✓ | – | ✓ | vision + audio | ✓ | – | vision (RADIO ViT + mlp1) | vision + audio |
 
 **DeepSeek-V4.1 prefill.** The reference `inference/model.py` runs all 40 layers on all N prompt tokens, and so does
 the simulator. The tech report's "Decoder SWA Bounded Replay" (the decoder half re-runs only the last window of the
@@ -234,7 +246,9 @@ caches (model.py QAT): window and compressed KV fp8 with bf16 RoPE dims and a ue
 active parameters, per-layer counts, layer roles, sibling checkpoints); `quant/*.test.ts` the derived defaults of
 every fixture repo; `shortlist.e2e.test.ts` runs every shortlist fixture through `mapHfModel` and `simulate`
 (prefill and decode, 1 and 8 RTX 5090s) and checks the per-token KV growth against hand derivations (Qwen3.8-27B
-65,536 B, DeepSeek-V4.1-Flash 890 B as its README states, GLM-5.3 78 latents + 21 indexer keys).
+65,536 B, DeepSeek-V4.1-Flash 890 B as its README states, GLM-5.3 78 latents + 21 indexer keys). `museSpark.test.ts`
+also decodes Muse Spark @ 8k on 4 × M3 Ultra 512 GB (TB5 mesh, pp = 4) and checks it fits and reaches ≥ 0.8× of the
+memory-bandwidth bound (≈ 9.1 tok/s @ 8k).
 
 ## 7. Drafters
 
@@ -256,6 +270,7 @@ position each) and absent for heads trained for several positions (Qwen3.5+/3.8 
 | `deepseek_v4` | max(`num_nextn_predict_layers`, `len(compress_ratios)` − `num_hidden_layers`) + `dspark_*` (V4-Flash-0731: 1 vs 3 → 3) | DSpark block drafter, as V4.1 (main MoE 256 / top-6 in the stages) | — |
 | `mistral_large4` | `params.json` `mtp` | none: deferred (`params.json` lacks the drafter's head counts and dims; its head type is `rnn`) | — |
 | `minimax` | MTP config fields | none: the released checkpoint has no MTP tensors | — |
+| `muse_spark` | – | none: no MTP fields or tensors | — |
 
 **Block drafters** (DFlash 2, DSpark; `drafter.ts: parseDrafterConfig`; fetched by `src/hf/loadDrafter.ts`). A
 separate repo's `config.json` → `BlockDraftSpec`:

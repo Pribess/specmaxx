@@ -51,11 +51,16 @@ describe('mapHfModel', () => {
     expect(r.notes).toEqual(['language model only; vision/audio towers excluded', 'family note']);
   });
 
-  it('notes a config read from another repo and a non-ok param check', () => {
-    const r = mapHfModel({ ...files({ model_type: 'fake_text' }), configFrom: 'org/base' }, [fakeFamily({})]);
+  it('keeps a config / metadata read from another repo as data, not a note, and notes a non-ok param check', () => {
+    const r = mapHfModel(
+      { ...files({ model_type: 'fake_text' }), configFrom: 'org/base', metadataFrom: 'org/mirror' },
+      [fakeFamily({})],
+    );
     if (r.kind !== 'ok') throw new Error(JSON.stringify(r));
     expect(r.paramCheck.status).toBe('unavailable');
-    expect(r.notes).toContain('config.json read from org/base');
+    expect(r.configFrom).toBe('org/base');
+    expect(r.metadataFrom).toBe('org/mirror');
+    expect(r.notes.some((n) => /read from|org\/base|org\/mirror/.test(n))).toBe(false);
     expect(r.notes.some((n) => n.startsWith('param check (unavailable)'))).toBe(true);
   });
 

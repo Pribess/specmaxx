@@ -3,9 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App, type ModelLoader } from './App';
 import { inlineRunner } from './sim/runner';
-import { mapHfModel } from '../sim/models/hf';
-import { fixtureRepoFiles } from '../sim/models/__fixtures__/fixtures.testutil';
+import { FAMILIES, mapHfModel, type FamilyEntry } from '../sim/models/hf';
+import { REF_DENSE_8B } from '../sim/models/reference';
+import { fixtureRepoFiles, fixtureStem, readFixtureJson } from '../sim/models/__fixtures__/fixtures.testutil';
+import { createCache } from '../hf/cache';
+import { isHfError } from '../hf/errors';
+import { fetchHfRepoFiles } from '../hf/fetch';
+import { memoryStorage } from '../hf/storage';
 import { HF_TOKEN_KEY } from '../hf/token';
+import { apiUrl, resolveUrl } from '../hf/urls';
 import { decodeState, encodeState } from './state';
 
 const fixtureLoader: ModelLoader = async (id) => mapHfModel(fixtureRepoFiles(id));
@@ -407,5 +413,71 @@ describe('estimator inputs', () => {
     fireEvent.change(input, { target: { value: 'zai-org/GLM-5.3-Flash' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(loader.mock.calls.some((c) => c[0] === 'zai-org/GLM-5.3-Flash')).toBe(true));
+  });
+});
+
+describe('config read from another repo', () => {
+  /**
+   * Mentions of where a config was read from; the user wants none of them shown. `unsloth/` is the mirror's org as
+   * a repo path (a hardware note names "Unsloth" the trainer, which is unrelated).
+   */
+  const FROM_TEXT = /read from|unsloth\//i;
+  const official = 'meta-models/Muse-Spark-Open-816B-A42B';
+  const mirror = 'unsloth/Muse-Spark-Open-816B-A42B';
+
+  /** The Hub without a token: the official repo answers 401, the mirror serves its checked-in fixtures. */
+  const gatedHub = (async (url: string) => {
+    if (url.includes(official)) return new Response('', { status: 401 });
+    const kind = url === apiUrl(mirror) ? 'api' : url === resolveUrl(mirror, 'config.json') ? 'config' : null;
+    const body = kind && readFixtureJson(`${fixtureStem(mirror)}.${kind}.json`);
+    return body ? new Response(JSON.stringify(body)) : new Response('', { status: 404 });
+  }) as unknown as typeof fetch;
+  /** A stand-in muse_spark family (a dense 8B shape) used only until the real family is registered. */
+  const stub: FamilyEntry = {
+    family: 'muse_spark',
+    modelTypes: ['muse_spark', 'muse_spark_text'],
+    architectures: ['MuseSparkForConditionalGeneration'],
+    build: (_text, _top, files) => ({
+      kind: 'ok',
+      model: { ...REF_DENSE_8B, name: files.id, source: files.id },
+      notes: [],
+      mtpParamsEstimate: 0,
+      visionParamsEstimate: 0,
+      excludedParts: [],
+    }),
+  };
+  const families = FAMILIES.some((f) => f.family === 'muse_spark') ? FAMILIES : [...FAMILIES, stub];
+  /** `loadHfModel` with the fake Hub (and the stand-in family while the real one is missing). */
+  const gatedLoader: ModelLoader = async (id, options) => {
+    const files = await fetchHfRepoFiles(id, {
+      ...options,
+      fetchImpl: gatedHub,
+      cache: createCache(memoryStorage(), new Map()),
+      tokenStorage: memoryStorage(),
+    });
+    return isHfError(files) ? files : mapHfModel(files, families);
+  };
+
+  it('loads a gated model from its mirror without a token prompt or any mention of the mirror', async () => {
+    history.replaceState(null, '', `/?m=${official}`);
+    mount(gatedLoader);
+    await waitFor(() => expect(screen.getByTestId('model-facts').textContent).toMatch(/muse_spark/));
+    expect((await screen.findByTestId('decode-tps')).textContent).toMatch(/[1-9]/);
+    expect(screen.queryByLabelText('Hugging Face token')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(document.body.textContent).not.toMatch(FROM_TEXT);
+  });
+
+  it('does not show the base repo a Mistral NVFP4 config was read from', async () => {
+    const id = 'mistralai/Mistral-Large-4-1T-A52B-NVFP4';
+    history.replaceState(null, '', `/?m=${id}`);
+    mount(async (requested) =>
+      requested === id
+        ? mapHfModel(fixtureRepoFiles(id, { dir: 'quant', configFrom: 'mistralai/Mistral-Large-4-1T-A52B' }))
+        : fixtureLoader(requested),
+    );
+    await waitFor(() => expect(screen.getByTestId('model-facts').textContent).toMatch(/mistral/i));
+    await screen.findByTestId('decode-tps');
+    expect(document.body.textContent).not.toMatch(/read from/i);
   });
 });

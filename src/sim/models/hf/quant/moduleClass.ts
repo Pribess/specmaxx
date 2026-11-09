@@ -344,6 +344,23 @@ const FAMILY_NAMING: Record<string, NamingVariant[]> = {
       },
     ],
   })),
+  // transformers `MuseSparkForConditionalGeneration`: fused experts, latent projections around them, and an
+  // attention output gate (`self_attn.gate_proj`); every attention layer is softmax ('full' in the layout).
+  muse_spark: ['model.language_model.', 'model.'].map((prefix) => ({
+    prefix,
+    top: hfTop(prefix),
+    groups: [
+      {
+        leaves: [
+          ...GQA,
+          { leaf: 'self_attn.gate_proj', cls: 'attention', where: 'full' },
+          ...leaves('mlp.experts', ['gate_up_proj', 'down_proj'], 'routed_experts', { where: 'moe' }),
+          ...leaves('mlp', ['pre_expert_proj', 'post_expert_proj'], 'moe_latent', { where: 'moe' }),
+          ...HF_DENSE,
+        ],
+      },
+    ],
+  })),
   generic: ['model.', 'model.language_model.', 'language_model.model.', ''].map((prefix) => ({
     prefix,
     top: hfTop(prefix),
@@ -368,6 +385,7 @@ export function familyKey(top: JsonObject, text: JsonObject): string {
     if (t.startsWith('mistral_large4')) return 'mistral_large4';
     if (t.startsWith('inkling')) return 'inkling';
     if (t.startsWith('nemotron_h')) return 'nemotron_h';
+    if (t.startsWith('muse_spark')) return 'muse_spark';
   }
   return 'generic';
 }

@@ -1,0 +1,41 @@
+{
+  "id": "unsloth/Muse-Spark-Open-816B-A42B",
+  "sha": "49cade7b0c6ed297f0434229ac67eea5f9ae1220",
+  "gated": false,
+  "private": false,
+  "tags": [
+    "transformers",
+    "safetensors",
+    "muse_spark",
+    "image-text-to-text",
+    "facebook",
+    "meta",
+    "pytorch",
+    "muse",
+    "muse-spark",
+    "conversational",
+    "en",
+    "base_model:meta-models/Muse-Spark-Open-816B-A42B",
+    "base_model:finetune:meta-models/Muse-Spark-Open-816B-A42B",
+    "license:other",
+    "endpoints_compatible",
+    "region:us"
+  ],
+  "cardData": {
+    "base_model": [
+      "meta-models/Muse-Spark-Open-816B-A42B"
+    ]
+  },
+  "safetensors": {
+    "parameters": {
+      "BF16": 821906490368,
+      "F32": 130039296
+    },
+    "total": 822036529664
+  },
+  "siblings": [
+    {
+      "rfilename": "config.json"
+    }
+  ]
+}

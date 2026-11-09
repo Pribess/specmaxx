@@ -140,6 +140,8 @@ export type FfnParams =
       expertIntermediate: number;
       /** Latent width l of the routed experts (see {@link MoeBlock.latentDim}); default none (experts at hidden). Unit: elements. */
       latentDim?: number;
+      /** RMSNorm on each routed expert's output before the combine (see {@link MoeBlock.expertOutputNorm}); default false. */
+      expertOutputNorm?: boolean;
       /** Shared experts (default 0). Count. */
       sharedExperts?: number;
       /** Intermediate width of EACH shared expert (default 0). Unit: elements. */
@@ -301,6 +303,7 @@ function ffnBlock(hidden: number, f: FfnParams): BlockSpec {
         sharedIntermediate: f.sharedIntermediate ?? 0,
         // Only when given, so a block without it is deep-equal to one built before the field existed.
         ...(f.latentDim === undefined ? {} : { latentDim: f.latentDim }),
+        ...(f.expertOutputNorm === true ? { expertOutputNorm: true } : {}),
       };
       return block;
     }

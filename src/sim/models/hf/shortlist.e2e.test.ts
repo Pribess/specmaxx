@@ -141,6 +141,16 @@ const SHORTLIST: ShortlistCase[] = [
     weights: 'nvfp4',
     kvCache: 'fp8_e4m3',
   },
+  {
+    // The gated meta-models/Muse-Spark-Open-816B-A42B, read through its ungated mirror (fixture ID).
+    id: 'unsloth/Muse-Spark-Open-816B-A42B',
+    family: 'muse_spark',
+    paramCheck: 'ok',
+    layers: 62,
+    mix: { 'gqa:swa': 46, 'gqa:full': 16, moe: 62 },
+    weights: 'bf16',
+    kvCache: 'bf16',
+  },
 ];
 
 /** Batch 1, a 4096-token prompt, decode at a 4096-token context. */

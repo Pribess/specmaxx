@@ -37,6 +37,7 @@ import { layerResult, microbatching, phaseResult, stageResult, type PhaseShape }
 import {
   checkPlacement,
   collectivePath,
+  expertTpCollectivePath,
   groupSpan,
   hasInterNodeTraffic,
   ppSendPath,
@@ -169,6 +170,14 @@ function simulatePhase(
   tokensPerStep?: number,
 ): PhaseResult {
   let loopBack: ReturnType<typeof opTime> | undefined;
+  // Expert-TP collectives (MoE expertOutputNorm with etp > 1) get their own strided-group path (placement.ts:
+  // expertTpCollectivePath); a model without them builds none, so its contexts are exactly as before.
+  const usesExpertTp = lowered.stages.some((st) =>
+    st.layers.some((l) => l.ops.some((op) => op.kind === 'collective' && op.group === 'etp')),
+  );
+  const etpPath = usesExpertTp
+    ? { etp: expertTpCollectivePath(input.parallel, topology, base.interStaging) }
+    : {};
   const stages = lowered.stages.map((stage) => {
     const ppPath: CollectivePath =
       stage.sendToNext === undefined
@@ -177,7 +186,7 @@ function simulatePhase(
     const ctx: OpTimeContext = {
       engine: base.engine,
       memBandwidthBytesPerSec: base.memBandwidthBytesPerSec,
-      collectivePaths: { tp: base.tpPath, ep: base.epPath, pp: ppPath },
+      collectivePaths: { tp: base.tpPath, ep: base.epPath, pp: ppPath, ...etpPath },
       collectiveAlgorithm: base.collectiveAlgorithm,
       elementwiseFusion: base.elementwiseFusion,
       warnings: base.warnings,

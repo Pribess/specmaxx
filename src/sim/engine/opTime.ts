@@ -37,8 +37,12 @@ export interface OpTimeContext {
    * Unit: B/s (read + write combined, as vendors quote it).
    */
   memBandwidthBytesPerSec: number;
-  /** Where each parallel group's collectives run (from placement): TP group, EP group, and this stage's PP send. */
-  collectivePaths: { tp: CollectivePath; ep: CollectivePath; pp: CollectivePath };
+  /**
+   * Where each parallel group's collectives run (from placement): TP group, EP group, this stage's PP send, and the
+   * expert-TP group (`placement.ts: expertTpCollectivePath`). `etp` is set only when the model lowers expert-TP
+   * collectives (a MoE `expertOutputNorm` with etp > 1); an `etp` op without it is an error.
+   */
+  collectivePaths: { tp: CollectivePath; ep: CollectivePath; pp: CollectivePath; etp?: CollectivePath };
   /** All-reduce algorithm (SimOptions.collectiveAlgorithm). */
   collectiveAlgorithm: AllReduceAlgorithm;
   /** Elementwise fusion assumption (SimOptions.elementwiseFusion). */
@@ -270,6 +274,7 @@ function linkLevelOf(path: CollectivePath): OpResult['linkLevel'] {
 /** A collective: alpha-beta time on the path of its group (docs §6); no FLOP, no HBM traffic in this model. */
 function collectiveOpTime(op: CollectiveOp, ctx: OpTimeContext): OpResult {
   const path = ctx.collectivePaths[op.group];
+  if (path === undefined) throw new Error(`collective '${op.name}': no path for group '${op.group}'`);
   const t = collectiveTime(op.collective, op.messageBytes, op.groupSize, path, ctx.collectiveAlgorithm);
   const result: OpResult = {
     op,

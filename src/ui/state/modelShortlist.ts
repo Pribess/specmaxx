@@ -26,6 +26,9 @@ export const MODEL_SHORTLIST: ShortlistModel[] = [
   { id: 'zai-org/GLM-5.3-Flash', name: 'GLM-5.3 Flash' },
   { id: 'zai-org/GLM-5.3', name: 'GLM-5.3' },
   { id: 'mistralai/Mistral-Large-4-1T-A52B', name: 'Mistral Large 4' },
+  // Gated: without a token, its config and metadata come from the ungated mirror in `src/hf/mirrors.ts` (the
+  // fixture is stored under the mirror's id).
+  { id: 'meta-models/Muse-Spark-Open-816B-A42B', name: 'Muse Spark' },
   // "Inkling 2 Small" is left out until its weights are on HF: its model card gives 594B total / 17B active
   // (48 layers, 8 of 384 experts), while `thinkingmachines/Inkling-Small` is a different, 276B / 12B model.
   // Add it here once the matching repo is published.

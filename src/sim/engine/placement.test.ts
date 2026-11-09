@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { SYNTH_CLUSTER, SYNTH_IB, SYNTH_NVLINK } from '../__fixtures__/synthetic';
-import { checkPlacement, collectivePath, groupSpan, ppBoundaryIsInterNode, ppSendHops, ppSendPath } from './placement';
+import {
+  checkPlacement,
+  collectivePath,
+  expertTpCollectivePath,
+  expertTpGroupSpan,
+  groupSpan,
+  ppBoundaryIsInterNode,
+  ppSendHops,
+  ppSendPath,
+} from './placement';
 import type { TopologySpec } from '../hw/types';
 
 // SYNTH_CLUSTER: 8 devices per node × 2 nodes, NVLink intra, InfiniBand inter.
@@ -101,5 +110,84 @@ describe('placement with an inter-node fabric', () => {
     expect(collectivePath(groupSpan(8, over), over)).toEqual({ kind: 'flat', level: 'intra', link: SYNTH_NVLINK });
     const send = ppSendPath({ tp: 8, pp: 2, dp: 1, ep: 1 }, over, 0);
     expect(send).toEqual({ kind: 'flat', level: 'inter', link: SYNTH_IB, fabric: { kind: 'switched', oversubscription: 2 } });
+  });
+});
+
+// The expert-TP group of mode A: the etp = tp/ep ranks j + i·ep of a TP group (EP groups are ep consecutive ranks).
+describe('expert-TP group span', () => {
+  it('SYNTH_CLUSTER (8 × 2): strided members per node', () => {
+    expect(expertTpGroupSpan({ tp: 16, ep: 2 }, SYNTH_CLUSTER)).toEqual({
+      n: 8,
+      devicesPerNodeInGroup: 4,
+      nodesSpanned: 2,
+      nodeStride: 1,
+    });
+    expect(expertTpGroupSpan({ tp: 16, ep: 4 }, SYNTH_CLUSTER)).toEqual({
+      n: 4,
+      devicesPerNodeInGroup: 2,
+      nodesSpanned: 2,
+      nodeStride: 1,
+    });
+    expect(expertTpGroupSpan({ tp: 16, ep: 8 }, SYNTH_CLUSTER)).toEqual({
+      n: 2,
+      devicesPerNodeInGroup: 1,
+      nodesSpanned: 2,
+      nodeStride: 1,
+    });
+    expect(expertTpGroupSpan({ tp: 8, ep: 2 }, SYNTH_CLUSTER)).toEqual({
+      n: 4,
+      devicesPerNodeInGroup: 4,
+      nodesSpanned: 1,
+      nodeStride: 1,
+    });
+    // etp 1 (ep = tp, or mode B)
+    expect(expertTpGroupSpan({ tp: 16, ep: 16 }, SYNTH_CLUSTER).n).toBe(1);
+    expect(expertTpGroupSpan({ tp: 2, ep: 8 }, SYNTH_CLUSTER).n).toBe(1);
+    const p = expertTpCollectivePath({ tp: 16, ep: 2 }, SYNTH_CLUSTER);
+    expect(p).toMatchObject({ kind: 'hierarchical', devicesPerNode: 4, nodes: 2 });
+    expect(expertTpCollectivePath({ tp: 16, ep: 8 }, SYNTH_CLUSTER)).toEqual({
+      kind: 'flat',
+      level: 'inter',
+      link: SYNTH_IB,
+    });
+    expect(expertTpCollectivePath({ tp: 8, ep: 2 }, SYNTH_CLUSTER)).toEqual({
+      kind: 'flat',
+      level: 'intra',
+      link: SYNTH_NVLINK,
+    });
+  });
+
+  it('ep > devices per node: one member per node, nodes ep/dpn apart', () => {
+    const four: TopologySpec = { ...SYNTH_CLUSTER, nodes: 4 };
+    // tp 32, ep 16 on 4 × 8: ranks j and j + 16 sit on nodes 0 and 2
+    expect(expertTpGroupSpan({ tp: 32, ep: 16 }, four)).toEqual({
+      n: 2,
+      devicesPerNodeInGroup: 1,
+      nodesSpanned: 2,
+      nodeStride: 2,
+    });
+    expect(expertTpCollectivePath({ tp: 32, ep: 16 }, four)).toEqual({
+      kind: 'flat',
+      level: 'inter',
+      link: SYNTH_IB,
+    });
+  });
+
+  it('non-adjacent member nodes on a ring are rejected; adjacent ones (ep 1 = the TP group) are not', () => {
+    const ring4: TopologySpec = {
+      id: 'r',
+      name: 'r',
+      devicesPerNode: 1,
+      nodes: 4,
+      interNode: SYNTH_IB,
+      interNodeFabric: { kind: 'ring' },
+      sources: [],
+    };
+    expect(() => expertTpCollectivePath({ tp: 4, ep: 2 }, ring4)).toThrow(
+      /2 nodes 2 apart on a ring/,
+    );
+    expect(expertTpCollectivePath({ tp: 4, ep: 1 }, ring4)).toEqual(
+      collectivePath(groupSpan(4, ring4), ring4),
+    );
   });
 });

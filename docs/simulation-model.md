@@ -280,6 +280,7 @@ totals (unsharded), used to sanity-check mappers against published sizes.
 | Gated attention output                                                           | `sigmoid_mul` + a wider q projection                                                                                                  | no                 |
 | MoE shared experts, dense first layers                                           | `MoeBlock.sharedExperts`; heterogeneous `layers[]`                                                                                    | no                 |
 | Latent MoE (experts at l < h; Muse Spark, Nemotron)                              | `MoeBlock.latentDim` → replicated `moe.latent_in` / `moe.latent_out` GEMMs (module `moe_latent`), experts and a2a at l (§5)           | no                 |
+| Per-expert output norm (Muse Spark `post_expert_norm`)                           | `MoeBlock.expertOutputNorm` → `rmsnorm`; with etp > 1 a reduce-scatter + sum-of-squares all-reduce (§5)                               | no                 |
 | Attention sinks (gpt-oss)                                                        | ignored (negligible cost)                                                                                                             | no                 |
 | DeepSeek-V4.1 CSA (K = V, window + compressed top-k, grouped low-rank output)    | block `csa_attention`; one `AttentionOp` with `secondaryKv` (§5 "CSA")                                                                | no                 |
 | Hyper-connections (Qwen Gated Residual, mHC)                                     | blocks `hc_pre` / `hc_post` → GEMMs + `hc_collapse`, `hc_expand`, `sinkhorn`; `ModelSpec.residualStreams`                             | no                 |
@@ -1035,7 +1036,7 @@ gated_rmsnorm (or rmsnorm) over `T·vL·dv` → `out_proj k = vL·dv` → all_re
 ### MoE modes A/B
 
 `lower/moe.ts: lowerMoe, moeLayout, moeRouting, moeParallelErrors, moeResidentWeightBytes, moeExpertWidth,
-moeLatentWeightBytes`. Balanced ("uniform") routing. Valid iff `E % ep == 0` and (`tp % ep == 0` → **mode A**, or
+moeLatentWeightBytes, expertOutputShards`. Balanced ("uniform") routing. Valid iff `E % ep == 0` and (`tp % ep == 0` → **mode A**, or
 `ep % tp == 0` and `(tp·dp) % ep == 0` → **mode B**). `Eloc = E/ep`, `etp = max(1, tp/ep)`, `p = max(1, ep/tp)`.
 `l = latentDim ?? h` is the routed experts' width ("Latent MoE" below).
 
@@ -1050,14 +1051,37 @@ moeLatentWeightBytes`. Balanced ("uniform") routing. Valid iff `E % ep == 0` and
   (unsharded) on Ts → `all_gather(tp)` of `T·h·bpe(act)` when tp > 1 (replaces the all-reduce).
 - **Latent MoE** (`MoeBlock.latentDim` = l, Muse Spark `moe_hidden_size`, Nemotron `moe_latent_size`):
   `latent_in (m Ts, n l, k h)` after the top-k and `latent_out (m Ts, n h, k l)` after the combine (Ts = T in
-  mode A), module `moe_latent`. Both are **replicated**: every TP rank computes them whole and stores both
+  mode A), module `moe_latent`. Both are **replicated** (except a split expert-output norm, below): every TP rank computes them whole and stores both
   matrices, `2·h·l·bpe(w_latent)` per device per layer at any tp (vLLM `ReplicatedLinear`; Muse Spark bf16: 8.3 GB
   over its 62 layers). In mode A `latent_out` maps each rank's `T·l` partial sum to a `T·h` partial sum, valid by linearity
   (`Σ_r W·p_r = W·Σ_r p_r`), so the one all-reduce stays at h; TP-sharding them would need an extra collective
   at width l. The router reads h; shared experts stay at h. Without `latentDim`, `l = h` and both GEMMs are absent:
   every op is the same as before.
-- Resident: `Eloc·(gated?3:2)·l·fe/etp·bpe(w)` + router `E·h·bpe(hp)` + [latent] `2·h·l·bpe(w_latent)`
-  (`moeLatentWeightBytes`, summed per GEMM like the ops) + shared (`/tp` in mode A).
+- **Expert-output norm** (`MoeBlock.expertOutputNorm`, Muse Spark `post_expert_norm`): an RMSNorm on each
+  expert's l-wide down output before the weighted combine, over the `R = a·mE` token-expert rows of a device.
+  With etp = 1 (mode B, mode A with ep = tp) it is one `moe.expert_norm` (rmsnorm over `R·l`) after `down` and no
+  extra communication. With TP-sharded experts (mode A, etp > 1) each rank's down output is a partial sum over
+  its `fe/etp` slice, and the RMS needs the reduced row, so with `s = etp` (`expertOutputShards`, else s = 1):
+
+  ```
+  reduce_scatter(etp, s ranks) S = R·l·reduceBpe          moe.expert_out_reduce_scatter  (each rank keeps l/s)
+  all_reduce(etp, s ranks)     S = R·4  (fp32 Σx² per row) moe.expert_norm_sumsq_all_reduce
+  rmsnorm                      elems = R·l/s
+  combine                      elems = R·l/s, writes T·l/s·reduceBpe
+  latent_out (k-split)         m T, n h, k l/s  → a T·h partial sum (W_out row-split by s)
+  all_reduce(tp)               S = T·h·reduceBpe  (the existing one, unchanged)
+  ```
+
+  `Σ_r W_out[slice_r]·c_r` over all tp ranks is the full `W_out·c`, so the single closing all-reduce still
+  finishes the block (without `latentDim`, each rank's `h/s` column slice of the zero-filled `T·h` buffer is
+  summed the same way). Both collectives run on the expert-TP group (`group 'etp'`: the s ranks of a TP group
+  holding the same experts, strided by ep; its links are in "Rank layout" below). This is the minimal communication: the reduce-scatter moves half the bytes of an all-reduce of `R·l` (ring:
+  `(s−1)/s·S` vs `2·(s−1)/s·S`), and the sum-of-squares exchange is one scalar per row. Absent or false: no norm
+  op and every op as before.
+
+- Resident: `Eloc·(gated?3:2)·l·fe/etp·bpe(w)` + router `E·h·bpe(hp)` + [latent] `W_latent = (1 + 1/s)·h·l·bpe(w_latent)`
+  (`moeLatentWeightBytes`, summed per GEMM like the ops) + [expertOutputNorm] `(l/s)·bpe(hp)` (the γ slice the norm
+  reads) + shared (`/tp` in mode A).
 
 ### PP split
 
@@ -1094,6 +1118,22 @@ dpn > 1). `ppSendHops`: an inter-node PP send crosses `h = max_r nodeHops(node(r
 switch or mesh; with dpn = 1 on a ring or chain, h = 1 for pure PP (stages on neighbours) and h = tp·dp otherwise
 (tp 2 × pp 2 on a ring of 4: h = 2). A path carries `fabric` / `sendHops` only when they differ from the
 non-blocking switch / 1, so pre-fabric topologies get exactly their old paths.
+
+**Expert-TP group** (`placement.ts: expertTpGroupSpan, expertTpCollectivePath`; group `'etp'`, used only by the MoE
+expert-output norm with etp > 1). EP groups are `ep` consecutive ranks, so in mode A the rank with EP index j holds
+the same experts as `j + i·ep`, i < etp = tp/ep: a group strided by ep inside the contiguous TP group. Its span:
+
+```
+tp ≤ dpn                 n1 = etp,     n2 = 1                    intra-node
+tp > dpn, ep ≤ dpn       n1 = dpn/ep,  n2 = tp/dpn (adjacent)    hierarchical (flat inter-node when ep = dpn)
+tp > dpn, ep > dpn       n1 = 1,       n2 = etp, ep/dpn apart    flat inter-node
+```
+
+2 × 8 H100 at tp 16: ep 2 → 4 × 2 hierarchical, ep 4 → 2 × 2, ep 8 → one per node. The path is built by
+`collectivePath` from this span (inter-node staging included). Members on non-adjacent nodes are modeled on a
+switched or full-mesh fabric (one hop between any two nodes); on a ring or chain they are a validation error
+(`etp: …`), since the hop counts there assume adjacent nodes. A model without expert-TP collectives builds no `etp`
+path, so its results are unchanged.
 
 ---
 

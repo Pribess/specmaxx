@@ -1,5 +1,6 @@
 import { createCache, cacheKey, type HfCache } from './cache';
-import { errorFromStatus, type HfError } from './errors';
+import { errorFromStatus, isHfError, type HfError } from './errors';
+import { gatedMirrorOf } from './mirrors';
 import { getHfToken } from './token';
 import type { HfApiModelInfo, HfFetchOptions, HfRepoFiles } from './types';
 import { apiUrl, DEFAULT_REVISION, isValidModelId, resolveUrl } from './urls';
@@ -117,6 +118,14 @@ function baseModelOf(api: HfApiModelInfo): string | undefined {
  * 3. Sidecars (`hf_quant_config.json`, `quantization_config.json`, `params.json`)
  *    only when `api.siblings` lists them.
  *
+ * Gated-mirror fallback ({@link gatedMirrorOf}): when an official request (metadata or config.json; the Hub
+ * may serve a gated repo's metadata but not its files) answers 401, no token is set, the revision is the
+ * default branch and the repo has a known ungated mirror, steps 1–3 run against the mirror at `main` instead.
+ * The result keeps the official `id` (so the model is named after it) and records the mirror in `configFrom`
+ * and `metadataFrom`. If any mirror request fails, the official 401 is returned (the UI then asks for a
+ * token). With a token, or for a gated repo without a known mirror, nothing changes: the official repo is
+ * read, and a 401 stays a 401.
+ *
  * @param id repo id `owner/name`.
  * @param options revision, token, injectable fetch/storage (see {@link HfFetchOptions}).
  * @returns the parsed files, or an {@link HfError} (use `isHfError`).
@@ -142,7 +151,24 @@ export async function fetchHfRepoFiles(
     revision,
   };
 
-  const apiRes = await getJson(ctx, id, 'api', apiUrl(id, options.revision), false);
+  const official = await fetchRepo(ctx, id);
+  const mirror = gatedMirrorOf(id);
+  const useMirror =
+    isHfError(official) &&
+    official.kind === 'unauthorized' &&
+    ctx.token === null &&
+    revision === DEFAULT_REVISION &&
+    mirror !== undefined;
+  if (!useMirror) return official;
+  const mirrored = await fetchRepo(ctx, mirror);
+  if (isHfError(mirrored)) return official;
+  return { ...mirrored, id, configFrom: mirrored.configFrom ?? mirror, metadataFrom: mirror };
+}
+
+/** Steps 1–3 of {@link fetchHfRepoFiles} for one repo, at `ctx.revision`, without the mirror fallback. */
+async function fetchRepo(ctx: Ctx, id: string): Promise<HfRepoFiles | HfError> {
+  const revision = ctx.revision;
+  const apiRes = await getJson(ctx, id, 'api', apiUrl(id, revision), false);
   if (apiRes.tag === 'error') return apiRes.error;
   const apiJson = apiRes.tag === 'ok' ? apiRes.value : null;
   if (typeof apiJson !== 'object' || apiJson === null) {

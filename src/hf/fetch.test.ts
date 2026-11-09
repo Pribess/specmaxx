@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createCache } from './cache';
 import { isHfError } from './errors';
 import { fetchHfRepoFiles } from './fetch';
+import { GATED_MIRRORS, gatedMirrorOf } from './mirrors';
 import { memoryStorage } from './storage';
 import { getHfToken, HF_TOKEN_KEY, setHfToken } from './token';
 import { apiUrl, isValidModelId, resolveUrl } from './urls';
@@ -197,5 +198,100 @@ describe('fetchHfRepoFiles', () => {
     expect(r.paramsJson).toEqual({ dim: 1 });
     expect(r.config).toEqual({ model_type: 'mistral_large4' });
     expect(r.configFrom).toBe('m/base');
+  });
+});
+
+describe('fetchHfRepoFiles gated-mirror fallback', () => {
+  const official = 'meta-models/Muse-Spark-Open-816B-A42B';
+  const mirror = 'unsloth/Muse-Spark-Open-816B-A42B';
+  const mirrorApi = { id: mirror, siblings: [{ rfilename: 'config.json' }], safetensors: { total: 7 } };
+  const mirrorConfig = { model_type: 'muse_spark' };
+  /** The official repo is gated (401 without a token), the mirror is public. */
+  const gatedRoutes = {
+    [apiUrl(official)]: 401,
+    [resolveUrl(official, 'config.json')]: 401,
+    [apiUrl(mirror)]: mirrorApi,
+    [resolveUrl(mirror, 'config.json')]: mirrorConfig,
+  };
+
+  it('maps the mirror to its official repo', () => {
+    expect(gatedMirrorOf(official)).toBe(mirror);
+    expect(GATED_MIRRORS[official]).toBe(mirror);
+    expect(gatedMirrorOf('a/b')).toBeUndefined();
+    expect(gatedMirrorOf('toString')).toBeUndefined();
+  });
+
+  it('(a) without a token, reads config and metadata from the mirror under the official id', async () => {
+    const { impl, seen } = fakeFetch(gatedRoutes);
+    const r = await fetchHfRepoFiles(official, opts(impl));
+    if (isHfError(r)) throw new Error(r.message);
+    expect(seen.map((s) => s.url)).toEqual([apiUrl(official), apiUrl(mirror), resolveUrl(mirror, 'config.json')]);
+    expect(seen.every((s) => s.auth === undefined)).toBe(true);
+    expect(r.id).toBe(official);
+    expect(r.revision).toBe('main');
+    expect(r.config).toEqual(mirrorConfig);
+    expect(r.api).toEqual(mirrorApi);
+    expect(r.configFrom).toBe(mirror);
+    expect(r.metadataFrom).toBe(mirror);
+  });
+
+  it('also falls back when only the official config.json is gated', async () => {
+    const { impl, seen } = fakeFetch({ ...gatedRoutes, [apiUrl(official)]: { siblings: [{ rfilename: 'config.json' }] } });
+    const r = await fetchHfRepoFiles(official, opts(impl));
+    if (isHfError(r)) throw new Error(r.message);
+    expect(seen.map((s) => s.url)).toEqual([
+      apiUrl(official),
+      resolveUrl(official, 'config.json'),
+      apiUrl(mirror),
+      resolveUrl(mirror, 'config.json'),
+    ]);
+    expect(r.configFrom).toBe(mirror);
+  });
+
+  it('(b) with a token, reads the official repo only and sends the token', async () => {
+    const { impl, seen } = fakeFetch({
+      ...gatedRoutes,
+      [apiUrl(official)]: { siblings: [{ rfilename: 'config.json' }] },
+      [resolveUrl(official, 'config.json')]: { model_type: 'official' },
+    });
+    const r = await fetchHfRepoFiles(official, { ...opts(impl), token: 'hf_abc' });
+    if (isHfError(r)) throw new Error(r.message);
+    expect(seen.map((s) => s.url)).toEqual([apiUrl(official), resolveUrl(official, 'config.json')]);
+    expect(seen.every((s) => s.auth === 'Bearer hf_abc')).toBe(true);
+    expect(r.config).toEqual({ model_type: 'official' });
+    expect(r.configFrom).toBeUndefined();
+    expect(r.metadataFrom).toBeUndefined();
+  });
+
+  it('(c) with a rejected token, returns 401 without asking the mirror', async () => {
+    const { impl, seen } = fakeFetch(gatedRoutes);
+    const r = await fetchHfRepoFiles(official, { ...opts(impl), token: 'hf_bad' });
+    expect(isHfError(r) && r.kind).toBe('unauthorized');
+    expect(isHfError(r) && r.message).toMatch(/rejected the token/);
+    expect(seen.some((s) => s.url.includes(mirror))).toBe(false);
+  });
+
+  it('(d) a gated repo without a known mirror stays a 401 with the token prompt', async () => {
+    const { impl, seen } = fakeFetch({ [apiUrl('other/gated')]: 401 });
+    const r = await fetchHfRepoFiles('other/gated', opts(impl));
+    expect(isHfError(r) && r.kind).toBe('unauthorized');
+    expect(isHfError(r) && r.message).toMatch(/Add a Hugging Face access token/);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('(e) a non-default revision stays a 401, no mirror', async () => {
+    const { impl, seen } = fakeFetch({ ...gatedRoutes, [apiUrl(official, 'v2')]: 401 });
+    const r = await fetchHfRepoFiles(official, { ...opts(impl), revision: 'v2' });
+    expect(isHfError(r) && r.kind).toBe('unauthorized');
+    expect(seen.map((s) => s.url)).toEqual([apiUrl(official, 'v2')]);
+  });
+
+  it('(f) a failing mirror returns the original 401', async () => {
+    for (const broken of [{ [apiUrl(mirror)]: 404 }, { [resolveUrl(mirror, 'config.json')]: 500 }]) {
+      const { impl } = fakeFetch({ ...gatedRoutes, ...broken });
+      const r = await fetchHfRepoFiles(official, opts(impl));
+      expect(isHfError(r) && r.kind).toBe('unauthorized');
+      expect(isHfError(r) && r.message).toMatch(new RegExp(`${official} \\(api\\) is gated`));
+    }
   });
 });

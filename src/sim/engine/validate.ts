@@ -19,7 +19,7 @@ import {
 import { applyDeviceModifiers } from '../hw/modifiers';
 import { modelSpecErrors } from '../ir/validateModel';
 import { lowerBlock, type LoweringContext } from '../lower/lower';
-import { checkPlacement } from './placement';
+import { checkPlacement, expertTpCollectivePath } from './placement';
 import type { LayerRange, SimInput } from './types';
 
 /** The exact error for speculative decoding with pipeline parallelism (design doc §3.6). */
@@ -123,7 +123,20 @@ export function validateInput(input: SimInput): string[] {
 
   errors.push(...deploymentErrors(input));
   // Placement on the topology (world size, group spans, required links).
-  errors.push(...checkPlacement(parallel, topology).errors);
+  const placementErrors = checkPlacement(parallel, topology).errors;
+  errors.push(...placementErrors);
+  // The expert-TP group (MoE expertOutputNorm with etp = tp/ep > 1) must have a modeled path on the topology.
+  const usesExpertTp =
+    parallel.tp % parallel.ep === 0 &&
+    parallel.tp / parallel.ep > 1 &&
+    model.layers.some((l) => l.blocks.some((b) => b.kind === 'moe' && b.expertOutputNorm === true));
+  if (usesExpertTp && placementErrors.length === 0) {
+    try {
+      expertTpCollectivePath(parallel, topology);
+    } catch (e) {
+      errors.push(`etp: ${(e as Error).message}`);
+    }
+  }
   return errors;
 }
 

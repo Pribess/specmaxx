@@ -28,6 +28,7 @@ const EXPECTED: Record<string, string> = {
   'MiniMaxAI/MiniMax-M3.1-Flash': 'minimax',
   'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16': 'nemotron_h',
   'nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4': 'nemotron_h',
+  'unsloth/Muse-Spark-Open-816B-A42B': 'muse_spark',
 };
 
 describe('dispatchFamily', () => {

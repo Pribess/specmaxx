@@ -488,11 +488,20 @@ export interface MoeBlock {
   /**
    * Width l the routed experts run at (latent MoE: Muse Spark `moe_hidden_size`, Nemotron `moe_latent_size`);
    * absent = `hidden` with no projections. When set, a projection `h → l` runs before the expert dispatch and
-   * `l → h` after the combine (both module `'moe_latent'`, replicated across TP, never sharded); the routed experts'
+   * `l → h` after the combine (both module `'moe_latent'`, replicated across TP; `l → h` is row-split instead when
+   * `expertOutputNorm` splits the expert outputs); the routed experts'
    * input/output width, the EP dispatch/combine messages and the combine are at l. The router reads h and the
    * shared experts stay at h. Must be a positive integer. Unit: elements.
    */
   latentDim?: number;
+  /**
+   * True if each routed expert's output (its down projection, width l) passes an RMSNorm before the weighted
+   * combine (Muse Spark `post_expert_norm`, one l-wide γ shared by all experts). The norm needs the full l-wide
+   * row, so with TP-sharded experts (`etp > 1`) the down partial sums are first reduce-scattered over the
+   * expert-TP group, and the per-row sum of squares (one fp32 scalar per token-expert row) is all-reduced; each
+   * rank then works on an `l/etp` shard. Absent = false (no norm, no extra communication).
+   */
+  expertOutputNorm?: boolean;
 }
 
 /**

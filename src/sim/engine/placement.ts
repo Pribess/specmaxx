@@ -57,6 +57,61 @@ export function groupSpan(size: number, topo: TopologySpec): GroupSpan {
   return { n: size, devicesPerNodeInGroup: dpn, nodesSpanned: size / dpn };
 }
 
+/** How the expert-TP group of a mode-A MoE layer lies on the topology (see {@link expertTpGroupSpan}). */
+export interface ExpertTpSpan extends GroupSpan {
+  /** Node-index distance between consecutive member nodes: 1 = adjacent nodes, `ep/dpn` when ep > dpn. Count. */
+  nodeStride: number;
+}
+
+/**
+ * Span of the expert-TP group: in MoE mode A (`tp % ep == 0`) the `etp = tp/ep` ranks of a TP group that hold the
+ * same experts, each a `fe/etp` slice. EP groups are `ep` consecutive ranks (rank layout above), so the rank with
+ * EP index j shares its experts with `j + i·ep`, i < etp: a group strided by ep inside the contiguous, node-aligned
+ * TP group. Hence (dpn = devicesPerNode, spans of tp and ep valid):
+ * - tp ≤ dpn: one node, `n1 = etp`, `n2 = 1`;
+ * - tp > dpn, ep ≤ dpn (ep | dpn): `n1 = dpn/ep` per node over `n2 = tp/dpn` adjacent nodes;
+ * - tp > dpn, ep > dpn (dpn | ep): one member per node, `n2 = etp` nodes `ep/dpn` apart.
+ * etp = 1 (mode B, or ep = tp) is the one-device span. Throws if the tp or ep span is invalid.
+ */
+export function expertTpGroupSpan(
+  par: Pick<ParallelConfig, 'tp' | 'ep'>,
+  topo: TopologySpec,
+): ExpertTpSpan {
+  const { tp, ep } = par;
+  groupSpan(tp, topo);
+  groupSpan(ep, topo);
+  const dpn = topo.devicesPerNode;
+  // Formula: etp = tp/ep (mode A), else 1
+  const etp = tp % ep === 0 ? tp / ep : 1;
+  if (etp === 1) return { n: 1, devicesPerNodeInGroup: 1, nodesSpanned: 1, nodeStride: 1 };
+  if (tp <= dpn) return { n: etp, devicesPerNodeInGroup: etp, nodesSpanned: 1, nodeStride: 1 };
+  // Formula: ep ≤ dpn: n1 = dpn/ep, n2 = tp/dpn, stride 1;  ep > dpn: n1 = 1, n2 = etp, stride ep/dpn
+  if (ep <= dpn)
+    return { n: etp, devicesPerNodeInGroup: dpn / ep, nodesSpanned: tp / dpn, nodeStride: 1 };
+  return { n: etp, devicesPerNodeInGroup: 1, nodesSpanned: etp, nodeStride: ep / dpn };
+}
+
+/**
+ * The {@link CollectivePath} of the expert-TP group ({@link expertTpGroupSpan}), built like a contiguous group's by
+ * {@link collectivePath}: within a node the intra-node link, across nodes the inter-node link (hierarchical when
+ * both). Members on non-adjacent nodes (`nodeStride > 1`) are modeled on a switched or full-mesh fabric (one hop
+ * between any two nodes) and rejected on a ring or chain, whose hop counts assume adjacent nodes.
+ */
+export function expertTpCollectivePath(
+  par: Pick<ParallelConfig, 'tp' | 'ep'>,
+  topo: TopologySpec,
+  staging?: HostStaging,
+): CollectivePath {
+  const span = expertTpGroupSpan(par, topo);
+  const shape = topo.interNodeFabric;
+  if (span.nodeStride > 1 && (shape?.kind === 'ring' || shape?.kind === 'chain')) {
+    throw new Error(
+      `expert-TP group of ${span.n} nodes ${span.nodeStride} apart on a ${shape.kind} fabric is not modeled (needs ep ≤ devices per node, or a switched or full-mesh fabric)`,
+    );
+  }
+  return collectivePath(span, topo, staging);
+}
+
 /**
  * True if the boundary between pipeline stage `stage` and `stage + 1` crosses nodes: some rank r of the stage
  * sends to r + tp·dp in another node (`floor(r / dpn)` differs).

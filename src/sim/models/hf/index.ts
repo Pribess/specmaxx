@@ -69,7 +69,6 @@ export function mapHfModel(files: HfRepoFiles, families: readonly FamilyEntry[] 
   const paramCheck = checkParams(built.model, excluded, files.api, quantMethod);
 
   const notes = [...view.notes, ...built.notes, ...quant.notes, ...merged.notes];
-  if (files.configFrom && files.configFrom !== files.id) notes.push(`config.json read from ${files.configFrom}`);
   if (paramCheck.status !== 'ok') notes.push(`param check (${paramCheck.status}): ${paramCheck.note}`);
 
   return {
@@ -82,6 +81,10 @@ export function mapHfModel(files: HfRepoFiles, families: readonly FamilyEntry[] 
     excluded,
     quant,
     paramCheck,
+    // Where config / metadata came from when not the repo itself (a base model, a gated repo's mirror): data only,
+    // deliberately not a note, so it never reaches the UI.
+    ...(files.configFrom && files.configFrom !== files.id ? { configFrom: files.configFrom } : {}),
+    ...(files.metadataFrom && files.metadataFrom !== files.id ? { metadataFrom: files.metadataFrom } : {}),
   };
 }
 
