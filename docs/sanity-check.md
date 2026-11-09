@@ -18,7 +18,7 @@ Code: [`src/sim/__sanity__/`](../src/sim/__sanity__/)
 |---|---|
 | `harness.ts` | `simulateReport(input)`: model + weight quant + hardware (+ unlocks, + host link / RAM / SSD) + workload (+ deployment knobs: offload, speculative decoding) → `simulate()`; quant presets (GGUF, MLX, FP8, NVFP4, …); `simpleDecoder` for hand-written specs |
 | `models.ts` | hand-written specs of sibling models the HF loader does not map (gpt-oss, GLM-4.5-Air, Qwen3-30B-A3B, Llama-3.x-70B, QwQ-32B, Qwen3-Next-80B-A3B), dims from each repo's config.json |
-| `reports.ts` | the 45 reports as typed data, each with its harness input and its check mode |
+| `reports.ts` | the 105 reports as typed data (the 45 described here plus 60 added by the [practicality review](review/practicality-review.md)), each with its harness input and its check mode |
 | `reports.test.ts` | the assertion, the known-exception check, a weight-file-size cross-check, and the printed ratio table |
 | `configs.testutil.ts` | loads HF configs from `__sanity__/configs/` or the shared fixtures |
 
@@ -86,6 +86,11 @@ out right, but it is a workaround (follow-up 5).
   H100, plus two expert-offload reports (web-52, web-53). **45 reports** (26 LocalMaxxing + 19 web), 38 prefill and
   45 decode numbers, **37 distinct (model, device) pairs** over 14 models and 16 device presets. Three LocalMaxxing
   rows ran with speculative decoding (lm-09, lm-36, lm-39) and two web rows with experts in host RAM.
+- **Later additions.** The [practicality review](review/practicality-review.md) (§2) added 60 fresh reports in nine
+  setup classes (single GPU, multi-GPU PCIe, single Mac, Mac TB5 clusters, DGX Spark ×1/2/4, Strix Halo, DDR and SSD
+  expert offload, speculative decoding). `reports.ts` now holds **105 reports** and 181 metrics: 156 asserted, 8 known
+  exceptions and 17 excluded. The tables and distributions below cover the original 45; the per-class distributions,
+  the chart and the exceptions for all 105 are in that review's §2.
 - Siblings (not shortlist models) are hand-written specs (`models.ts`) whose dims come from the real HF config.json;
   approximations (gpt-oss attention sinks and expert biases, GLM partial RoPE, the Qwen3-Next shared-expert gate) are
   listed on each spec. No 2-node DGX Spark report exists; the 4-node ones are used.
@@ -145,6 +150,9 @@ generated / depth.
 | [web-53](https://huggingface.co/ubergarm/Qwen3-235B-A22B-GGUF) | — | Qwen3-235B-A22B | mix-IQ3_K (3.9 bpw) | 1× RTX 3090 Ti (3090 preset), experts of layers 10–93 in DDR5-6400 | ik_llama.cpp sweep-bench | 1/4096/1024/0 | 140 | 1342 | 0.10 | 10.0 | 5.2 | **1.94 (exception)** | t/t |
 
 ## Ratio distribution
+
+This section covers the original 45 reports. For all 105, per setup class, see
+[the practicality review §2](review/practicality-review.md).
 
 Every metric is included: the three known exceptions (web-04, lm-35, web-53 decode) too. The spec-dec decodes
 (lm-09, lm-36, lm-39) and the offload rows are compared with the spec-dec / offload bound.
