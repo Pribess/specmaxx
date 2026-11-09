@@ -2,6 +2,9 @@ import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // Relative asset URLs, so the same build works at a site root (specmaxx.pages.dev/) and under a path prefix
+  // (cro.sh/specmaxx/); see docs/deploy.md.
+  base: './',
   plugins: [react()],
   // Module workers (`new Worker(new URL(...), { type: 'module' })`) are bundled as ES modules.
   worker: { format: 'es' },

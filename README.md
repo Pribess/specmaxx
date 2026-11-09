@@ -31,6 +31,11 @@ address to share an estimate. The app follows your system's light/dark preferenc
 **How it works** opens `about.html`, which renders the simulation-model documentation (and the sanity
 check document when present). Its back-link restores your estimate.
 
+## Deployment
+
+Pushing the tag `release-pages` deploys the build to Cloudflare Pages, served at https://cro.sh/specmaxx/; see
+[docs/deploy.md](docs/deploy.md).
+
 Layout:
 
 - `src/sim/`: the simulation core, pure TypeScript (no React, no DOM; enforced by `tsconfig.sim.json` and ESLint).
