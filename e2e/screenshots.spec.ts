@@ -209,6 +209,40 @@ for (const size of ['desktop', 'phone'] as const) {
       await expect(page.getByRole('tooltip').filter({ hasText: 'must divide TP' })).toBeVisible();
       await page.screenshot({ path: name('ep-help') });
     });
+    test(`parallelism dp ${size} ${colorScheme}`, async ({ page }) => {
+      await open(page, size, colorScheme);
+      const name = (s: string) => `${DIR}/parallelism-dp-${s}-${size}-${colorScheme}.png`;
+      const panel = page.locator('details.panel', {
+        has: page.locator('> summary', { hasText: 'Parallelism' }),
+      });
+      const shoot = async (query: string, valid: string, file: string) => {
+        await page.goto(query);
+        await expect(page.getByTestId('decode-tps')).toHaveText(/[1-9]/);
+        if ((await panel.getAttribute('open')) === null) await panel.locator('> summary').click();
+        await expect(panel.getByText(valid)).toBeVisible();
+        await page.addStyleTag({ content: '.compact-results { visibility: hidden !important }' });
+        await page.evaluate(() => document.fonts.ready);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+          true,
+        );
+        await panel.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+        await page.waitForTimeout(50);
+        await panel.screenshot({ path: name(file) });
+      };
+      // A dense model on 4 GPUs as TP 2 × DP 2: TP, PP and DP in one row; the rig line names DP.
+      await shoot('/?m=Qwen/Qwen3.8-27B&n=4&tp=2&dp=2&b=2', 'Valid DP: 1, 2, 3, 4', 'dense-panel');
+      await expect(page.locator('h1.rig')).toContainText('with TP 2, DP 2');
+      // A MoE model as TP 2 × DP 2 with EP 4 spanning both copies (mode B).
+      await shoot(
+        '/?m=Qwen/Qwen3.8-Flash-Next&w=fp8_e4m3&n=4&tp=2&dp=2&ep=4&b=2',
+        'Valid EP: 1, 2, 4',
+        'moe-panel',
+      );
+      // The DP help, on keyboard focus.
+      await panel.getByRole('button', { name: 'About DP' }).focus();
+      await expect(page.getByRole('tooltip').filter({ hasText: 'full copies' })).toBeVisible();
+      await page.screenshot({ path: name('help') });
+    });
     test(`hardware setups ${size} ${colorScheme}`, async ({ page }) => {
       await open(page, size, colorScheme);
       const name = (s: string) => `${DIR}/hardware-${s}-${size}-${colorScheme}.png`;

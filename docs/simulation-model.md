@@ -1013,9 +1013,11 @@ offloaded no result depends on them.
 The divisibility rules (heads, KV heads, widths over tp; experts and MoE modes over ep) are checked by lowering
 each block once for a one-token step: `src/sim/engine/validate.ts: blockShardingErrors` (called by
 `validateInput`; exported so the UI can attribute TP / EP errors to their fields).
-The UI fixes dp = 1 (`src/ui/state/parallelism.ts: effectiveParallel`), so only MoE mode A is reachable there: valid
-ep = the divisors of tp that divide E (and pass placement), the device count is `tp·pp`, and a dense model runs with
-ep = 1. Under mode A EP adds no all-to-all ([MoE modes A/B](#moe-modes-ab); `src/sim/engine/ep.test.ts`).
+The UI offers tp, pp, dp and (MoE models only) ep (`src/ui/state/parallelism.ts: fieldIssues, effectiveParallel`):
+the device count must equal `tp·pp·dp`, the batch must divide by dp, a dense model runs with ep = 1, and valid ep
+= the divisors of tp (mode A) plus, with dp > 1, the multiples of tp that divide `tp·dp` (mode B), each dividing E
+and passing placement. Under mode A EP adds no all-to-all ([MoE modes A/B](#moe-modes-ab);
+`src/sim/engine/ep.test.ts`); DP against TP is `src/sim/engine/dp.test.ts`.
 
 ### TP sharding
 
@@ -1260,7 +1262,7 @@ distinct experts" and "EP load imbalance" below). Valid iff `E % ep == 0` and (`
   `down (n l)` → combine (`a·mE·l`, writes `T·l·reduceBpe`) → [`latent_all_reduce` → `latent_norm`] →
   [`latent_out`] → shared experts as one dense MLP of `S·fs` sharded by tp → **one** all_reduce(tp) of `T·h`.
   No token moves: the expert outputs are partial sums of the layer output and ride that same all-reduce, so at
-  dp = 1 (the UI) ep = tp has the same collectives as ep = 1 (except the expert-TP pair of a split expert-output
+  dp = 1 ep = tp has the same collectives as ep = 1 (except the expert-TP pair of a split expert-output
   norm, below, which etp = 1 removes). What EP changes is per device: `A_max` instead of an even fe/tp slice of
   every row (FLOP ×≈ρ in prefill), activations of its own `a·mE` rows only, and whole experts in decode
   (`src/sim/engine/ep.test.ts`).

@@ -16,21 +16,28 @@ const HELP = {
     'Only small activations cross between stages, so slow links are fine.',
     'A single sequence does not get faster.',
   ],
+  dp: [
+    'Runs full copies of the model side by side.',
+    'Each copy serves its own share of the batch.',
+    'More total throughput; a single sequence is not faster.',
+  ],
   ep: [
     'Spreads the MoE experts across GPUs.',
     'Each GPU holds a share of the experts, not a slice of each.',
-    'Uses the TP GPUs, so EP must divide TP.',
+    'EP must divide TP, or with DP be a multiple of TP that divides TP × DP.',
   ],
 } as const;
 
 export function ParallelPanel({ state, dispatch, loaded, built }: Props) {
   // EP is offered only for a loaded MoE model; a dense model always runs with EP 1.
   const moe = loaded !== null && hasMoe(loaded.model);
-  const fields = moe ? (['tp', 'pp', 'ep'] as const) : (['tp', 'pp'] as const);
-  const value = `TP ${state.parallel.tp}, PP ${state.parallel.pp}${moe ? `, EP ${state.parallel.ep}` : ''}`;
+  const fields = moe ? (['tp', 'pp', 'dp', 'ep'] as const) : (['tp', 'pp', 'dp'] as const);
+  const { tp, pp, dp, ep } = state.parallel;
+  const value = `TP ${tp}, PP ${pp}, DP ${dp}${moe ? `, EP ${ep}` : ''}`;
   return (
     <Panel title="Parallelism" value={value} open>
-      <div className={`fields ${moe ? 'three' : 'two'}`}>
+      {/* Three fields in a row; four (with EP) as two rows of two, so the hints keep room. */}
+      <div className={`fields ${moe ? 'two' : 'three'}`}>
         {fields.map((field) => (
           <NumberField
             key={field}

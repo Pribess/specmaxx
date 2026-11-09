@@ -1,5 +1,5 @@
 /**
- * Expert parallelism (EP) next to tensor parallelism (TP) at DP = 1, the only DP the UI offers: what EP changes in
+ * Expert parallelism (EP) next to tensor parallelism (TP) at DP = 1: what EP changes in
  * the results, end to end through `simulate`, on 2 and 4 GPUs.
  *
  * Why EP looks like TP here. At DP = 1 a valid ep divides tp (lower/moe.ts `moeParallelErrors`; the other branch,
@@ -8,7 +8,7 @@
  * tokens, so no token moves: each rank runs the experts it holds (E/ep whole experts, each sliced etp = tp/ep ways)
  * on the tokens routed to them, and the expert outputs are partial sums of the layer output, summed by the one
  * `moe.tp_all_reduce` of T·h that TP alone needs as well. The all-to-all dispatch and combine exist only in mode B
- * (EP across DP replicas, i.e. DP attention), which the UI cannot reach. Hence, EP = TP against EP = 1:
+ * (EP across DP replicas, i.e. DP attention; dp.test.ts). Hence, EP = TP against EP = 1:
  * - communication is identical (same collectives, same sizes, no all_to_all);
  * - expert FLOP in prefill rises by the EP load imbalance ρ (DEFAULT_EP_IMBALANCE 1.2): the busiest device holds
  *   ⌈ρ·T·k/ep⌉ token-expert rows instead of the mean T·k/ep, while TP splits every expert evenly;

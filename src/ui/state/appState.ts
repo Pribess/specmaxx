@@ -343,8 +343,8 @@ export function reduce(state: AppState, action: AppAction): AppState {
         ? { ...state, hw: { ...hw, deviceEdits: {}, intraEdits: {}, interEdits: {} } }
         : { ...state, hw: { ...hw, [editsKey(action.target)]: {} } };
     case 'setParallel':
-      // DP is fixed at 1 (not exposed in the UI). EP is kept; dense models simulate with EP 1 (effectiveParallel).
-      return { ...state, parallel: { ...state.parallel, ...action.parallel, dp: 1 } };
+      // Every degree is kept as given; dense models simulate with EP 1 (effectiveParallel).
+      return { ...state, parallel: { ...state.parallel, ...action.parallel } };
     case 'setWorkload':
       return { ...state, workload: { ...state.workload, ...action.workload } };
     case 'setEngineDispatchOverlay':

@@ -84,11 +84,34 @@ describe('estimator inputs', () => {
     expect(screen.getByLabelText(/^TP/).getAttribute('aria-invalid')).toBe('true');
     expect(screen.getByText(/Valid TP:/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText(/^TP/), { target: { value: '1' } });
-    expect(screen.queryByLabelText(/^DP/)).toBeNull();
+    expect(screen.getByLabelText(/^DP/)).toBeTruthy();
     expect(screen.queryByLabelText(/^EP/)).toBeNull();
     fireEvent.change(screen.getByLabelText(/^TP/), { target: { value: '2' } });
     expect(screen.getByRole('radiogroup', { name: 'Machines' }).getAttribute('aria-invalid')).toBe('true');
-    expect(screen.getAllByText(/TP × PP = 2, but the rig has 1 device/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/TP × PP × DP = 2, but the rig has 1 device/).length).toBeGreaterThan(0);
+  });
+  it('DP counts devices, validates the batch, enables mode-B EP values, and shows in the rig line', async () => {
+    history.replaceState(null, '', '/?m=Qwen/Qwen3.8-Flash-Next&n=4&tp=4');
+    mount();
+    await screen.findByTestId('prefill-tps');
+    expect(screen.getByRole('button', { name: 'About DP' })).toBeTruthy();
+    expect(screen.getByText('Valid DP: 1, 2, 3, 4')).toBeTruthy();
+    expect(screen.getByText('Valid EP: 1, 2, 4')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1 }).textContent).not.toMatch(/DP/);
+    // DP 2 on top of TP 4: 8 devices for a rig of 4.
+    fireEvent.change(screen.getByLabelText(/^DP/), { target: { value: '2' } });
+    await waitFor(() => expect(screen.queryByTestId('prefill-tps')).toBeNull());
+    expect(screen.getAllByText(/TP × PP × DP = 8, but the rig has 4 devices/).length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByLabelText(/^TP/), { target: { value: '2' } });
+    // TP 2 × DP 2: batch 1 cannot split over 2 replicas.
+    await waitFor(() => expect(screen.getByLabelText(/^Batch/).getAttribute('aria-invalid')).toBe('true'));
+    expect(screen.getAllByText('Batch 1 does not split evenly over DP 2. Use a multiple of 2.').length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByLabelText(/^Batch/), { target: { value: '2' } });
+    await screen.findByTestId('prefill-tps');
+    // EP 4 spans both replicas (a multiple of TP 2 that divides TP × DP = 4).
+    expect(screen.getByText('Valid EP: 1, 2, 4')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toMatch(/with TP 2, DP 2$/);
+    await waitFor(() => expect(new URLSearchParams(location.search).get('dp')).toBe('2'));
   });
   it('shows EP only for MoE models, with its hint, and blocks the result on an invalid EP', async () => {
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-Flash-Next&n=2&tp=2&ep=2');
@@ -255,7 +278,7 @@ describe('estimator inputs', () => {
     const { container } = mount();
     await screen.findByText(/qwen:/);
     const output = container.querySelector('.output')!;
-    expect(output.textContent).toMatch(/TP × PP = 3, but the rig has 2 devices/);
+    expect(output.textContent).toMatch(/TP × PP × DP = 3, but the rig has 2 devices/);
     expect(output.textContent).not.toMatch(/inputs below/);
   });
   it('opens on the default state: Qwen3.8-27B, 8k / 8k, numbers without any loader call', async () => {
@@ -355,7 +378,7 @@ describe('estimator inputs', () => {
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B&n=4&tp=2');
     mount();
     await screen.findByText(/qwen:/);
-    expect(await screen.findAllByText(/TP × PP = 2, but the rig has 4 devices/)).not.toHaveLength(0);
+    expect(await screen.findAllByText(/TP × PP × DP = 2, but the rig has 4 devices/)).not.toHaveLength(0);
     expect(screen.queryByTestId('prefill-tps')).toBeNull();
   });
   it('filters the device list by search and selects with the keyboard', async () => {

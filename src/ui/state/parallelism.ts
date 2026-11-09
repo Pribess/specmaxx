@@ -3,13 +3,14 @@
  * "Valid TP: 1, 2, 4, 8". The engine's `validateInput` stays the authority (buildInput.ts runs it once these
  * are clean); this module only attributes problems to the field that causes them.
  *
- * The UI offers TP, PP and (MoE models only) EP; DP is fixed at 1. With DP = 1 the engine's EP is its mode A
- * (`lower/moe.ts`): the EP group lies inside the TP group, so EP adds no devices (devices = TP × PP) and a valid
- * EP divides both TP and the expert count. See {@link effectiveParallel}.
+ * The UI offers TP, PP, DP and (MoE models only) EP. The device count is TP × PP × DP (`placement.ts` rank layout:
+ * DP replicas inside each pipeline stage). EP adds no devices: in the engine's mode A (`lower/moe.ts`, `tp % ep == 0`)
+ * the EP group lies inside the TP group; in mode B (`ep % tp == 0` and `(tp·dp) % ep == 0`, so only with DP > 1) it
+ * spans `ep/tp` replicas. A valid EP also divides the expert count. See {@link effectiveParallel}.
  *
  * Attribution of engine messages relies on their wording (pinned by parallelism.test.ts):
  * - `blockShardingErrors` lines are `'<layer>: <message>'`; a message naming `ep (` goes to EP, else TP. The two
- *   MoE EP rules are reworded without DP ({@link uiShardingMessage}).
+ *   MoE EP rules are reworded in UI words ({@link uiShardingMessage}).
  * - `checkPlacement` errors are prefixed `tp:`, `ep:` or `pp:`; the world-size error starts `tp·pp·dp =`.
  */
 
@@ -66,14 +67,20 @@ export function shardingField(message: string): 'tp' | 'ep' {
 
 /**
  * A sharding message in UI words. The engine's two MoE EP rules (`moeParallelErrors`) become
- * "EP 3 must divide the 512 experts." and "EP 3 must divide TP 2." (the engine's "or a multiple of tp that divides
- * tp·dp" alternative needs DP > 1, which the UI does not offer); any other message is kept as is.
+ * "EP 3 must divide the 512 experts." and "EP 3 must divide TP 2."; with DP > 1 the second names the engine's mode-B
+ * alternative too: "EP 3 must divide TP 2, or be a multiple of TP 2 that divides TP × DP = 4.". Any other message is
+ * kept as is.
  */
 export function uiShardingMessage(message: string): string {
   const experts = message.match(/experts \((\d+)\) must be divisible by ep \((\d+)\)/);
   if (experts) return `EP ${experts[2]} must divide the ${experts[1]} experts.`;
-  const divide = message.match(/ep \((\d+)\) must divide tp \((\d+)\)/);
-  if (divide) return `EP ${divide[1]} must divide TP ${divide[2]}.`;
+  const divide = message.match(/ep \((\d+)\) must divide tp \((\d+)\)(?:, or be a multiple of tp that divides tp·dp \((\d+)\))?/);
+  if (divide) {
+    const [, ep, tp, tpDp] = divide;
+    // tp·dp = tp means DP 1: the multiple-of-TP alternative cannot hold, so it is not offered.
+    if (tpDp === undefined || tpDp === tp) return `EP ${ep} must divide TP ${tp}.`;
+    return `EP ${ep} must divide TP ${tp}, or be a multiple of TP ${tp} that divides TP × DP = ${tpDp}.`;
+  }
   return message;
 }
 
@@ -84,19 +91,20 @@ export function placementField(message: string): IssueField {
 }
 
 /**
- * The parallel config the UI simulates from the user's degrees: DP is always 1, and EP is the user's only on a
- * MoE model (a dense model runs with EP 1, whatever the state or URL holds). Every other field is kept.
+ * The parallel config the UI simulates from the user's degrees: EP is the user's only on a MoE model (a dense model
+ * runs with EP 1, whatever the state or URL holds). Every other field, DP included, is kept.
  */
 export function effectiveParallel(parallel: ParallelConfig, model: ModelSpec): ParallelConfig {
-  return { ...parallel, dp: 1, ep: hasMoe(model) ? parallel.ep : 1 };
+  return { ...parallel, ep: hasMoe(model) ? parallel.ep : 1 };
 }
 
 /**
  * The problems of a parallelism + workload on a model and topology, by field. `parallel` is the user's; it is
- * checked as {@link effectiveParallel} makes it (DP 1, EP 1 on dense models):
+ * checked as {@link effectiveParallel} makes it (EP 1 on dense models):
  * - every degree (EP only on MoE models) and workload value is an integer ≥ 1 (if not, nothing else is checked);
- * - `tp·pp` ≠ devices is an error on `devices` (the device count must equal TP × PP: EP uses the TP devices);
- * - `pp ≤ layers` (on `pp`);
+ * - `tp·pp·dp` ≠ devices is an error on `devices` (the device count must equal TP × PP × DP: EP uses the TP and DP
+ *   devices);
+ * - `batch % dp == 0` (on `batch`: each replica serves `batch / dp` sequences), `pp ≤ layers` (on `pp`);
  * - the engine's sharding rules (`blockShardingErrors`; one message per distinct rule, layer prefix dropped;
  *   EP rules such as "EP must divide TP" on `ep`);
  * - the engine's placement rules (`checkPlacement`) by their prefix;
@@ -112,7 +120,7 @@ export function fieldIssues(
   const issues: FieldIssue[] = [];
   const error = (field: IssueField, message: string) => issues.push({ field, level: 'error', message });
   const effective = effectiveParallel(parallel, model);
-  const degrees = hasMoe(model) ? (['tp', 'pp', 'ep'] as const) : (['tp', 'pp'] as const);
+  const degrees = hasMoe(model) ? (['tp', 'pp', 'dp', 'ep'] as const) : (['tp', 'pp', 'dp'] as const);
   for (const key of degrees) {
     if (!isPositiveInteger(effective[key])) error(key, `${DEGREE_LABEL[key]} must be a whole number ≥ 1.`);
   }
@@ -121,12 +129,16 @@ export function fieldIssues(
   }
   if (issues.length > 0) return issues;
 
-  // DP is fixed at 1 and EP lies inside the TP group: the device count must equal TP × PP.
-  const { tp, pp, ep } = effective;
-  const world = tp * pp;
+  // EP lies inside the TP group (mode A) or spans DP replicas (mode B): the device count must equal TP × PP × DP.
+  const { tp, pp, dp, ep } = effective;
+  const world = tp * pp * dp;
   const devices = topology.devicesPerNode * topology.nodes;
   if (world !== devices) {
-    error('devices', `TP × PP = ${world}, but the rig has ${devices} ${devices === 1 ? 'device' : 'devices'}. They must be equal.`);
+    error('devices', `TP × PP × DP = ${world}, but the rig has ${devices} ${devices === 1 ? 'device' : 'devices'}. They must be equal.`);
+  }
+  // Each DP replica serves B_r = batch / dp sequences, so the batch must split evenly. The batch is what to change.
+  if (workload.batch % dp !== 0) {
+    error('batch', `Batch ${workload.batch} does not split evenly over DP ${dp}. Use a multiple of ${dp}.`);
   }
   const layers = model.layers.length;
   if (pp > layers) error('pp', `PP ${pp} exceeds the ${layers} layers of the model.`);
@@ -172,12 +184,14 @@ export const MAX_DEGREE_CANDIDATES = 256;
 /**
  * The degrees in 1..devices that give no error for `field`, with the other degrees as in `parallel`, except that
  * TP is checked with EP = 1 (EP is chosen after TP: a TP that the current EP does not divide shows the error on EP).
- * The device-count equality (TP × PP = devices) is not part of this check: it is a property of the pair, shown on
- * the device count field, so a hint lists every degree that is individually valid. EP on a dense model is `[1]`.
+ * The device-count equality (TP × PP × DP = devices) is not part of this check: it is a property of the degrees
+ * together, shown on the device count field, so a hint lists every degree that is individually valid. Neither is the
+ * batch split over DP, which is shown on the batch field. EP is checked at the current TP and DP, so with DP > 1 the
+ * hint includes the mode-B values (multiples of TP that divide TP × DP). EP on a dense model is `[1]`.
  * Used for hints like "Valid TP: 1, 2, 4, 8".
  */
 export function validDegrees(
-  field: 'tp' | 'pp' | 'ep',
+  field: 'tp' | 'pp' | 'dp' | 'ep',
   model: ModelSpec,
   quant: QuantConfig,
   parallel: ParallelConfig,
@@ -199,48 +213,62 @@ export function validDegrees(
 }
 
 /**
- * TP, PP and EP for this model and topology, used when a hardware choice changes the device count:
- * - TP and PP use every device (TP × PP = devices) and pass {@link fieldIssues} with EP = 1: the largest valid TP
- *   (at most {@link MAX_DEGREE_CANDIDATES}), with PP = devices / TP. Falls back to TP = 1, PP = 1 when no split is
- *   valid (the device-count error is then shown).
- * - EP is never raised on its own: the user's `currentEp` is kept when it is > 1, the model is MoE, and the chosen
- *   TP and PP give no error with it; otherwise EP is 1.
+ * TP, PP, DP and EP for this model and topology, used when a hardware choice changes the device count:
+ * - DP is never raised on its own: the user's `current.dp` is kept when it is > 1, divides the device count, and a
+ *   TP × PP split of the remaining `devices / dp` passes {@link fieldIssues} (batch split included); otherwise DP is 1.
+ * - TP and PP use every remaining device (TP × PP × DP = devices) and pass {@link fieldIssues} with EP = 1: the
+ *   largest valid TP (at most {@link MAX_DEGREE_CANDIDATES}), with PP = devices / (TP · DP). Falls back to TP = 1,
+ *   PP = 1, DP = 1 when no split is valid (the device-count error is then shown).
+ * - EP is never raised on its own either: the user's `current.ep` is kept when it is > 1, the model is MoE, and the
+ *   chosen TP, PP and DP give no error with it; otherwise EP is 1.
  */
 export function chooseDegrees(
   model: ModelSpec,
   quant: QuantConfig,
   workload: Workload,
   topology: TopologySpec,
-  currentEp = 1,
-): { tp: number; pp: number; ep: number } {
-  const { tp, pp } = chooseTpPp(model, quant, workload, topology);
+  current: { dp?: number; ep?: number } = {},
+): { tp: number; pp: number; dp: number; ep: number } {
+  const currentDp = current.dp ?? 1;
+  const currentEp = current.ep ?? 1;
+  const keptDp = currentDp > 1 ? chooseTpPp(model, quant, workload, topology, currentDp) : undefined;
+  const { tp, pp, dp } = keptDp
+    ? { ...keptDp, dp: currentDp }
+    : { ...(chooseTpPp(model, quant, workload, topology, 1) ?? { tp: 1, pp: 1 }), dp: 1 };
   if (currentEp > 1 && hasMoe(model)) {
-    const kept: ParallelConfig = { tp, pp, dp: 1, ep: currentEp };
-    if (!hasErrors(fieldIssues(model, quant, kept, workload, topology))) return { tp, pp, ep: currentEp };
+    const kept: ParallelConfig = { tp, pp, dp, ep: currentEp };
+    if (!hasErrors(fieldIssues(model, quant, kept, workload, topology))) return { tp, pp, dp, ep: currentEp };
   }
-  return { tp, pp, ep: 1 };
+  return { tp, pp, dp, ep: 1 };
 }
 
-/** The TP × PP split of {@link chooseDegrees}, searched with EP = 1. */
+/**
+ * The TP × PP split of {@link chooseDegrees} at a given DP, searched with EP = 1: TP × PP = devices / dp, the
+ * largest TP that gives no error. Undefined when dp does not divide the devices or no split is valid.
+ */
 function chooseTpPp(
   model: ModelSpec,
   quant: QuantConfig,
   workload: Workload,
   topology: TopologySpec,
-): { tp: number; pp: number } {
+  dp: number,
+): { tp: number; pp: number } | undefined {
   const devices = topology.devicesPerNode * topology.nodes;
   // Bounded like validDegrees, whatever the requested device count (a huge or unsafe count cannot stall the UI):
   // TP never exceeds MAX_DEGREE_CANDIDATES, and counts that are not safe positive integers get no search.
-  if (Number.isSafeInteger(devices) && devices >= 1) {
-    for (let tp = Math.min(devices, MAX_DEGREE_CANDIDATES); tp >= 1; tp--) {
-      if (devices % tp !== 0) continue;
-      const pp = devices / tp;
-      // Pipeline stages cannot outnumber layers: no smaller TP can fit either.
-      if (pp > model.layers.length) break;
-      const parallel: ParallelConfig = { tp, pp, dp: 1, ep: 1 };
-      if (!hasErrors(fieldIssues(model, quant, parallel, workload, topology))) return { tp, pp };
-    }
+  if (!Number.isSafeInteger(devices) || devices < 1 || !Number.isSafeInteger(dp) || dp < 1 || devices % dp !== 0) {
+    return undefined;
+  }
+  // Formula: tp · pp = devices / dp
+  const perReplica = devices / dp;
+  for (let tp = Math.min(perReplica, MAX_DEGREE_CANDIDATES); tp >= 1; tp--) {
+    if (perReplica % tp !== 0) continue;
+    const pp = perReplica / tp;
+    // Pipeline stages cannot outnumber layers: no smaller TP can fit either.
+    if (pp > model.layers.length) break;
+    const parallel: ParallelConfig = { tp, pp, dp, ep: 1 };
+    if (!hasErrors(fieldIssues(model, quant, parallel, workload, topology))) return { tp, pp };
   }
   // Not pp = devices: an absurd pipeline depth would only make the checks slow. The device-count error is shown.
-  return { tp: 1, pp: 1 };
+  return undefined;
 }

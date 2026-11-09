@@ -36,7 +36,7 @@ export function HardwarePanel(props: Props) {
   const { state, built, loaded } = props;
   /**
    * Dispatches hardware actions, then picks TP and PP that use all devices of the resulting rig
-   * (TP × PP must equal the device count).
+   * (TP × PP × DP must equal the device count), keeping the user's DP and EP while they stay valid.
    */
   const dispatch = (...actions: AppAction[]) => {
     for (const a of actions) props.dispatch(a);
@@ -51,7 +51,10 @@ export function HardwarePanel(props: Props) {
       const quant = applyQuantOverride(loaded.quant.quant, next.quant, loaded.quant.exl3);
       props.dispatch({
         type: 'setParallel',
-        parallel: chooseDegrees(loaded.model, quant, next.workload, topology, next.parallel.ep),
+        parallel: chooseDegrees(loaded.model, quant, next.workload, topology, {
+          dp: next.parallel.dp,
+          ep: next.parallel.ep,
+        }),
       });
     } catch {
       // Unresolvable hardware: the build step reports it.

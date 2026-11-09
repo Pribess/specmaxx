@@ -32,6 +32,8 @@ const STATES: [string, AppState][] = [
   ],
   ['parallel + workload', state({ parallel: { tp: 2, pp: 2, dp: 1, ep: 1 }, workload: { batch: 8, promptLen: 4096, decodeContextLen: 32768 } })],
   ['MoE with expert parallelism', state({ model: { kind: 'hf', id: 'Qwen/Qwen3.8-Flash-Next' }, parallel: { tp: 4, pp: 1, dp: 1, ep: 2 } })],
+  ['data parallelism', state({ hw: { devicesPerNode: 4 }, parallel: { tp: 2, pp: 1, dp: 2, ep: 1 }, workload: { batch: 4, promptLen: 8192, decodeContextLen: 8192 } })],
+  ['MoE with mode-B expert parallelism', state({ model: { kind: 'hf', id: 'Qwen/Qwen3.8-Flash-Next' }, parallel: { tp: 1, pp: 1, dp: 4, ep: 4 }, workload: { batch: 8, promptLen: 8192, decodeContextLen: 8192 } })],
   ['every option', state({ options: { overlap: 'none', elementwiseFusion: 'ideal', collectiveAlgorithm: 'ring' } })],
   [
     'every offload knob and host field',
@@ -129,24 +131,28 @@ describe('URL codec', () => {
     'x=memory.bandwidthBytesPerSec:2e12&b=16&p=4096&c=4096',
     'n=4&nodes=2&xl=10gbe-tcp&xe=bandwidthPerDirectionBytesPerSec:2.5e9&tp=4&ov=none&fu=ideal&ar=tree',
     'm=Qwen/Qwen3.8-Flash-Next&n=4&tp=4&ep=4',
+    'n=4&tp=2&dp=2&b=2',
+    'm=Qwen/Qwen3.8-Flash-Next&n=4&tp=2&dp=2&ep=4&b=4',
   ])('keeps a canonical query unchanged: %s', (q) => {
     const { state: s, dropped } = decodeState(q);
     expect(dropped).toEqual([]);
     expect(encodeState(s)).toBe(q);
   });
 
-  it('loads an old URL with dp and ep: dp is forced to 1, ep is honoured again', () => {
+  it('loads an old URL with dp and ep as written (dp was forced to 1 while DP was hidden)', () => {
     const { state: s, dropped } = decodeState('tp=2&dp=2&ep=2');
-    expect(s.parallel).toEqual({ tp: 2, pp: 1, dp: 1, ep: 2 });
+    expect(s.parallel).toEqual({ tp: 2, pp: 1, dp: 2, ep: 2 });
     expect(dropped).toEqual([]);
-    expect(encodeState(s)).toBe('tp=2&ep=2');
+    expect(encodeState(s)).toBe('tp=2&dp=2&ep=2');
   });
 
-  it('drops an ep that is not a whole number ≥ 1', () => {
-    for (const v of ['0', '1.5', '-2', 'x']) {
-      const { state: s, dropped } = decodeState(`tp=2&ep=${v}`);
-      expect(s.parallel.ep).toBe(1);
-      expect(dropped).toEqual([`ep=${v}`]);
+  it('drops a dp or ep that is not a whole number ≥ 1', () => {
+    for (const key of ['dp', 'ep'] as const) {
+      for (const v of ['0', '1.5', '-2', 'x']) {
+        const { state: s, dropped } = decodeState(`tp=2&${key}=${v}`);
+        expect(s.parallel[key]).toBe(1);
+        expect(dropped).toEqual([`${key}=${v}`]);
+      }
     }
   });
 

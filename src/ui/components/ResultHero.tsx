@@ -129,6 +129,11 @@ export function ResultHero({
         {built.hardware?.edited && !built.hardware.device.edited ? ' (edited)' : ''}
         {linkName ? ` over ${linkName}` : ''}, with{' '}
         <span className="keep-together">TP {state.parallel.tp}</span>
+        {state.parallel.dp > 1 && (
+          <>
+            , <span className="keep-together">DP {state.parallel.dp}</span>
+          </>
+        )}
       </h1>
       {result ? (
         <>

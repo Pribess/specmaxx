@@ -106,8 +106,8 @@ export function buildSimInput(state: AppState, loaded: LoadedModel | null, draft
   const input: SimInput = {
     model: loaded.model,
     quant,
-    // DP is not user-facing (always 1); EP is the user's on a MoE model, else 1.
-    parallel: { tp: parallel.tp, pp: parallel.pp, dp: 1, ep: parallel.ep },
+    // The user's degrees; EP is the user's on a MoE model, else 1.
+    parallel: { tp: parallel.tp, pp: parallel.pp, dp: parallel.dp, ep: parallel.ep },
     workload: state.workload,
     hardware: hardware.stack,
     ...(Object.keys(state.options).length > 0 ? { options: state.options } : {}),
