@@ -40,6 +40,21 @@ const EPYC_9654_URL =
 const EPYC_9575F_URL =
   'https://www.amd.com/en/products/processors/server/epyc/9005-series/amd-epyc-9575f.html';
 
+/** JEDEC DDR5 SDRAM standard JESD79-5: 64-bit data bus per channel (2 × 32-bit subchannels), 4800 MT/s is the baseline bin. */
+const JEDEC_DDR5_URL = 'https://www.jedec.org/standards-documents/docs/jesd79-5b';
+/** Intel ark, Core i9-12900K (Alder Lake): "Up to DDR5 4800 MT/s", 2 memory channels. */
+const ARK_12900K_URL =
+  'https://www.intel.com/content/www/us/en/products/sku/134599/intel-core-i912900k-processor-30m-cache-up-to-5-20-ghz/specifications.html';
+/** Intel ark, Xeon w5-2465X (Sapphire Rapids, W-2400 class): DDR5-4800, 4 memory channels. */
+const ARK_W5_2465X_URL =
+  'https://www.intel.com/content/www/us/en/products/sku/233415/intel-xeon-w52465x-processor-33-75m-cache-3-10-ghz/specifications.html';
+/** AMD launch release for Threadripper 7000 / PRO 7000 WX: 4-channel (TRX50) and 8-channel (WRX90) DDR5-5200 platforms. */
+const AMD_TR7000_URL =
+  'https://www.globenewswire.com/news-release/2023/10/19/2763278/0/en/AMD-Introduces-New-AMD-Ryzen-Threadripper-7000-Series-Processors-and-Ryzen-Threadripper-PRO-7000-WX-Series-Processors-for-the-Ultimate-Workstation.html';
+/** Tom's Hardware, Threadripper 7000 / PRO 7000 WX launch: eight-channel DDR5-4800 on Intel's Xeon w9-3475X. */
+const TOMS_TR7000_URL =
+  'https://www.tomshardware.com/news/amd-announces-threadripper-hedt-and-pro-7000-wx-series-processors-96-cores-and-192-threads-for-desktops-and-workstations';
+
 /** JEDEC DDR4 SDRAM standard JESD79-4: 64-bit data bus per channel, transfer rates 1600 to 3200 MT/s (higher bins are vendor XMP/DOCP overclocks). */
 const JEDEC_DDR4_URL = 'https://www.jedec.org/standards-documents/docs/jesd79-4a';
 /** AMD Ryzen 9 5950X spec page (AM4, Zen 3): 2 memory channels, max memory speed DDR4-3200. */
@@ -256,6 +271,14 @@ export const DDR5_6400_2CH: HostMemorySpec = ddr5({
   ],
 });
 
+/** JEDEC baseline DDR5 data-rate source every 4800 MT/s preset shares. */
+const JEDEC_DDR5_SOURCE: SourceRef = {
+  url: JEDEC_DDR5_URL,
+  title: 'JEDEC JESD79-5 DDR5 SDRAM standard',
+  fields: ['bandwidthBytesPerSec'],
+  note: 'Per-device standard: 64-bit data bus per channel ⇒ 8 B per transfer; bandwidth = MT/s × 1e6 × 8 B × channels. 4800 MT/s is the baseline bin.',
+};
+
 /** Workstation 8-channel DDR5-6400 (Threadripper PRO 9000 WX): 6400e6 × 8 × 8 = 409.6e9 B/s. */
 export const DDR5_6400_8CH: HostMemorySpec = ddr5({
   megaTransfersPerSec: 6400,
@@ -334,6 +357,105 @@ export const DDR5_6000_12CH: HostMemorySpec = ddr5({
       field: 'latencySec',
       reason:
         'No vendor latency; server DDR5 with RDIMMs and a large IO die is assumed 110 ns unloaded.',
+    },
+  ],
+});
+
+/**
+ * Workstation 8-channel DDR5-4800 (Threadripper PRO 7000 WX on WRX90, Xeon W-3400, Sapphire Rapids 1S): 4800e6 × 8 × 8 = 307.2e9 B/s.
+ * Threadripper PRO 7000 WX is rated up to DDR5-5200; Xeon W-3400 rates DDR5-4800.
+ */
+export const DDR5_4800_8CH: HostMemorySpec = ddr5({
+  megaTransfersPerSec: 4800,
+  channels: 8,
+  capacityBytes: gb(256),
+  latencySec: 100e-9,
+  platform: 'workstation',
+  sources: [
+    JEDEC_DDR5_SOURCE,
+    {
+      url: AMD_TR7000_URL,
+      title: 'AMD Threadripper PRO 7000 WX launch release',
+      fields: ['channels'],
+      note: 'Eight-channel DDR5-5200 RDIMM (WRX90); this preset assumes DIMMs run at 4800 MT/s.',
+    },
+    {
+      url: TOMS_TR7000_URL,
+      title: "Tom's Hardware: Threadripper 7000 launch",
+      fields: ['channels'],
+      note: 'Eight-channel DDR5-4800 on Intel Xeon w9-3475X (W-3400).',
+    },
+  ],
+  estimated: [
+    capacityEstimate('8 × 32 GB RDIMMs'),
+    {
+      field: 'latencySec',
+      reason:
+        'No measurement of this platform found; RDIMMs and the larger memory fabric add latency over desktop DDR5 (70 ns), so 100 ns is assumed (as DDR5-6400 8-channel).',
+    },
+  ],
+});
+
+/**
+ * HEDT quad-channel DDR5-4800 (Threadripper 7000 on TRX50, Xeon W-2400): 4800e6 × 8 × 4 = 153.6e9 B/s.
+ * Threadripper 7000 is rated up to DDR5-5200; Xeon W-2400 rates DDR5-4800.
+ */
+export const DDR5_4800_4CH: HostMemorySpec = ddr5({
+  megaTransfersPerSec: 4800,
+  channels: 4,
+  capacityBytes: gb(128),
+  latencySec: 100e-9,
+  platform: 'HEDT',
+  sources: [
+    JEDEC_DDR5_SOURCE,
+    {
+      url: ARK_W5_2465X_URL,
+      title: 'Intel ark: Intel Xeon w5-2465X specifications',
+      fields: ['channels'],
+      note: '"Max # of Memory Channels 4"; DDR5-4800.',
+    },
+    {
+      url: AMD_TR7000_URL,
+      title: 'AMD Threadripper 7000 launch release',
+      fields: ['channels'],
+      note: 'Four-channel DDR5-5200 RDIMM (TRX50); this preset assumes DIMMs run at 4800 MT/s.',
+    },
+  ],
+  estimated: [
+    capacityEstimate('4 × 32 GB RDIMMs'),
+    {
+      field: 'latencySec',
+      reason:
+        'No measurement of this platform found; RDIMMs and the larger memory fabric add latency over desktop DDR5 (70 ns), so 100 ns is assumed (as DDR5-6400 8-channel).',
+    },
+  ],
+});
+
+/**
+ * Desktop dual-channel DDR5-4800 (JEDEC baseline; Intel 12th gen and early AM5 stock speed): 4800e6 × 8 × 2 = 76.8e9 B/s.
+ * 4-DIMM AM5 / LGA1700 setups often run at or below this speed, because two DIMMs per channel force a lower rate.
+ */
+export const DDR5_4800_2CH: HostMemorySpec = ddr5({
+  megaTransfersPerSec: 4800,
+  channels: 2,
+  capacityBytes: gb(64),
+  latencySec: 70e-9,
+  platform: 'desktop',
+  sources: [
+    JEDEC_DDR5_SOURCE,
+    {
+      url: ARK_12900K_URL,
+      title: 'Intel ark: Intel Core i9-12900K specifications',
+      fields: ['channels'],
+      note: '"Up to DDR5 4800 MT/s"; "Max # of Memory Channels 2".',
+    },
+  ],
+  estimated: [
+    capacityEstimate('2 × 32 GB DIMMs'),
+    {
+      field: 'latencySec',
+      reason:
+        'No measurement of this platform found; assumed the same as DDR5-6000 desktop (70 ns), since controller and fabric dominate, not the data rate.',
     },
   ],
 });
@@ -567,6 +689,9 @@ export const HOST_RAM_PRESETS: HostMemorySpec[] = [
   DDR5_6400_8CH,
   DDR5_4800_12CH,
   DDR5_6000_12CH,
+  DDR5_4800_8CH,
+  DDR5_4800_4CH,
+  DDR5_4800_2CH,
   DDR4_2666_2CH,
   DDR4_3200_2CH,
   DDR4_3600_2CH,
@@ -970,7 +1095,8 @@ export const NVME_GEN4_X4_GENERIC: NvmeSpec = {
       url: FRAMEWORK_DESKTOP_URL,
       title: 'Framework Desktop (Ryzen AI Max) specifications',
       fields: ['linkBandwidthBytesPerSec'],
-      note: 'Storage: two "NVMe PCIe 4.0 x4" M.2 2280 sockets. Slot ceiling = 16 GT/s × 4 × 128/130 ÷ 8 × 256/280 ' +
+      note:
+        'Storage: two "NVMe PCIe 4.0 x4" M.2 2280 sockets. Slot ceiling = 16 GT/s × 4 × 128/130 ÷ 8 × 256/280 ' +
         '(TLP payload efficiency, Intel AN 855: https://cdrdv2-public.intel.com/666287/an855-683504-666287.pdf) = 7.20e9 B/s.',
     },
   ],

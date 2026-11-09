@@ -88,7 +88,7 @@ proposed as **labelled additional figures**, not as a replacement bound.
 
 ## §1 Preset and knob audit
 
-Coverage: 29 devices, 23 links, 9 generated host-PCIe links, 13 host-RAM presets, 8 SSD presets, 48 topology instances, all
+Coverage: 29 devices, 23 links, 9 generated host-PCIe links, 16 host-RAM presets, 8 SSD presets, 48 topology instances, all
 29 setup-catalog entries, all published GeForce unlock modifiers, all 20 spec-dec acceptance entries, and the engine
 defaults. Result: **303 ok / 293 suspicious / 3 wrong** (599 rows). The full table, with every row's evidence and
 suggested value, is in [presets-audit.md](presets-audit.md).

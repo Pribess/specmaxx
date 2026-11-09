@@ -31,6 +31,9 @@ import {
   DDR4_3200_8CH,
   DDR4_3600_2CH,
   DDR5_4800_12CH,
+  DDR5_4800_2CH,
+  DDR5_4800_4CH,
+  DDR5_4800_8CH,
   DDR5_5600_2CH,
   DDR5_6000_12CH,
   DDR5_6000_2CH,
@@ -58,7 +61,7 @@ function covers(t: { sources: { fields: string[] }[]; estimated: { field: string
 }
 
 describe('storage-tier presets', () => {
-  it('lists the 13 host-RAM and 8 SSD rows of design §2.2, with unique ids', () => {
+  it('lists the 16 host-RAM and 8 SSD rows of design §2.2, with unique ids', () => {
     expect(HOST_RAM_PRESETS.map((t) => t.id)).toEqual([
       'ddr5-5600-2ch',
       'ddr5-6000-2ch',
@@ -66,6 +69,9 @@ describe('storage-tier presets', () => {
       'ddr5-6400-8ch',
       'ddr5-4800-12ch',
       'ddr5-6000-12ch',
+      'ddr5-4800-8ch',
+      'ddr5-4800-4ch',
+      'ddr5-4800-2ch',
       'ddr4-2666-2ch',
       'ddr4-3200-2ch',
       'ddr4-3600-2ch',
@@ -85,6 +91,12 @@ describe('storage-tier presets', () => {
       'dgx-spark-ssd-4tb',
     ]);
     expect(new Set(TIERS.map((t) => t.id)).size).toBe(TIERS.length);
+  });
+
+  it('DDR5-4800 desktop / HEDT / workstation bandwidths', () => {
+    expect(DDR5_4800_2CH.bandwidthBytesPerSec).toBe(76.8e9);
+    expect(DDR5_4800_4CH.bandwidthBytesPerSec).toBe(153.6e9);
+    expect(DDR5_4800_8CH.bandwidthBytesPerSec).toBe(307.2e9);
   });
 
   it.each(TIERS.map((t) => [t.id, t] as const))('%s passes validateStorageTier', (_id, t) => {
@@ -204,11 +216,20 @@ describe('hostPcieLink', () => {
     // R_line = 32e9 × 16 × 128/130 / 8 and 16e9 × 16 × 128/130 / 8, then × η_PCIe.
     expect(PCIE_PAYLOAD_EFFICIENCY).toBe(256 / 280);
     expect(pcieLineRateBytesPerSec(5, 16)).toBe((32e9 * 16 * (128 / 130)) / 8);
-    expect(PCIE_5_X16.bandwidthPerDirectionBytesPerSec).toBe(pcieLineRateBytesPerSec(5, 16) * PCIE_PAYLOAD_EFFICIENCY);
-    expect(PCIE_5_X16_DIRECT.bandwidthPerDirectionBytesPerSec).toBe(PCIE_5_X16.bandwidthPerDirectionBytesPerSec);
-    expect(PCIE_4_X16.bandwidthPerDirectionBytesPerSec).toBe(pcieLineRateBytesPerSec(4, 16) * PCIE_PAYLOAD_EFFICIENCY);
+    expect(PCIE_5_X16.bandwidthPerDirectionBytesPerSec).toBe(
+      pcieLineRateBytesPerSec(5, 16) * PCIE_PAYLOAD_EFFICIENCY,
+    );
+    expect(PCIE_5_X16_DIRECT.bandwidthPerDirectionBytesPerSec).toBe(
+      PCIE_5_X16.bandwidthPerDirectionBytesPerSec,
+    );
+    expect(PCIE_4_X16.bandwidthPerDirectionBytesPerSec).toBe(
+      pcieLineRateBytesPerSec(4, 16) * PCIE_PAYLOAD_EFFICIENCY,
+    );
     for (const l of [...HOST_PCIE_LINKS, ...LINK_PRESETS.filter((x) => x.kind === 'pcie')]) {
-      expect(l.sources.some((s) => s.url.includes('an855')), `${l.name} cites the payload efficiency`).toBe(true);
+      expect(
+        l.sources.some((s) => s.url.includes('an855')),
+        `${l.name} cites the payload efficiency`,
+      ).toBe(true);
     }
   });
 
