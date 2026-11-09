@@ -558,6 +558,26 @@ tbody td:last-child { text-align: left; }
 .sweep-line { fill: none; stroke: var(--ink); stroke-width: 2; }
 .sweep-point { fill: var(--paper); stroke: var(--ink); stroke-width: 2; }
 .sweep-point.fits { fill: var(--ink); }
+.sweep-line-stream {
+  fill: none;
+  stroke: var(--link);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+.sweep-point-stream { fill: var(--paper); stroke: var(--link); stroke-width: 2; pointer-events: none; }
+.sweep-point-stream.fits { fill: var(--link); }
+.sweep-point-stream.is-active { stroke: var(--primary); stroke-width: 3; }
+.sweep-right-tick, .sweep-right-title { fill: var(--link); }
+.sweep-legend {
+  display: flex;
+  gap: var(--space-4);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--type-meta);
+}
+.sweep-legend li { display: flex; align-items: center; gap: var(--space-2); }
+.sweep-legend svg { width: 28px; height: 12px; }
 .notes {
   max-width: 72ch;
   margin-top: var(--space-6);
@@ -585,7 +605,7 @@ tbody td:last-child { text-align: left; }
   td { padding-left: 0; }
   .bound-cell { font-size: var(--type-meta); }
   .bound-track { width: 96px; }
-  .sweep svg { min-height: 145px; }
-  .sweep svg text { font-size: 20px; }
+  .sweep .interactive-chart > svg { min-height: 145px; }
+  .sweep .interactive-chart > svg text { font-size: 20px; }
   .chart-tooltip { font-size: var(--type-micro); }
 }

@@ -98,6 +98,13 @@ test('phone: headline, figures and memory first, then inputs, then the analysis'
   // It slides in from 6px above (no motion when reduced motion is asked for); it settles at the window's top.
   await expect.poll(async () => (await mini.boundingBox())!.y).toBe(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  // The legend swatches keep their own height (the chart's min-height must not reach them).
+  const swatches = page.locator('.sweep-legend svg');
+  await expect(swatches).toHaveCount(2);
+  for (const box of await swatches.evaluateAll((els) =>
+    els.map((el) => el.getBoundingClientRect().height),
+  ))
+    expect(box).toBe(12);
 });
 
 for (const width of [360, 390]) {
@@ -110,7 +117,9 @@ for (const width of [360, 390]) {
       await page.goto(`/?sd=dspark&sdr=hyp&sdu=${use}`);
       await expect(page.getByTestId('decode-tps')).toHaveText(/[1-9]/);
       await expect(page.locator('.result-chip').first()).toContainText(`· ${use}`);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
     });
   }
 }

@@ -156,16 +156,26 @@ it('shows sweep x/y/context and memory-fit status on hover, keyboard navigation 
   fireEvent.pointerLeave(svg);
   expect(screen.queryByRole('tooltip')).toBeNull();
   fireEvent.pointerEnter(points[0]);
-  expect(screen.getByRole('tooltip').textContent).toBe('batch 1 · 33.9 tok/s @ 8k');
+  expect(screen.getByRole('tooltip').textContent).toBe(
+    'batch 1 · 33.9 tok/s aggregate · 33.9 per stream @ 8k',
+  );
   fireEvent.focus(points[0]);
   fireEvent.keyDown(points[0], { key: 'ArrowRight' });
   expect(document.activeElement).toBe(points[1]);
   fireEvent.pointerLeave(svg);
   expect(screen.getByRole('tooltip').textContent).toContain('batch 8');
   expect(screen.getByRole('tooltip').textContent).toBe(
-    'batch 8 · 412.3 tok/s @ 8k · does not fit in memory',
+    'batch 8 · 412.3 tok/s aggregate · 51.5 per stream @ 8k · does not fit in memory',
   );
   expect(container.querySelector('.chart-crosshair')).toBeTruthy();
+  expect(container.querySelector('.sweep-line')).toBeTruthy();
+  expect(container.querySelector('.sweep-line-stream')).toBeTruthy();
+  expect(container.querySelectorAll('svg > g > .sweep-point-stream').length).toBe(2);
+  expect(container.textContent).toContain('aggregate tok/s @ 8k');
+  expect(container.textContent).toContain('per-stream tok/s @ 8k');
+  expect(container.querySelector('.sweep-legend')?.textContent).toBe('AggregatePer stream');
+  const ticks = [...container.querySelectorAll('.sweep-right-tick')].map((t) => t.textContent);
+  expect(ticks).toEqual(['0.0', '25.8', '51.5']);
   fireEvent.keyDown(points[1], { key: 'Home' });
   expect(document.activeElement).toBe(points[0]);
   fireEvent.keyDown(points[0], { key: 'End' });
@@ -235,7 +245,9 @@ it("keeps today's result unannotated, with the comm split in the bound legend", 
     />,
   );
   expect(screen.queryByTestId('spec-dec')).toBeNull();
-  expect([...container.querySelectorAll('.result-chip')].map((c) => c.textContent)).toEqual(['spec-dec: off']);
+  expect([...container.querySelectorAll('.result-chip')].map((c) => c.textContent)).toEqual([
+    'spec-dec: off',
+  ]);
   expect(screen.queryAllByTestId('memory-tier')).toHaveLength(0);
   expect(container.querySelector('.allocation-table')).toBeNull();
 });
@@ -602,19 +614,31 @@ it('shows prefill without overlap and decode with engine dispatch as labelled se
 
 it('writes the spec-dec chip: off, MTP, DSpark with a use case, hypothetical drafter', () => {
   expect(specDecChipText(undefined)).toBe('spec-dec: off');
-  expect(specDecChipText({ method: 'mtp', draftLength: 3, hypothetical: false })).toBe('spec-dec: MTP, k=3');
-  expect(specDecChipText({ method: 'dspark', draftLength: 7, hypothetical: false }, { useCase: 'code' })).toBe(
-    'spec-dec: DSpark, k=7 · code',
+  expect(specDecChipText({ method: 'mtp', draftLength: 3, hypothetical: false })).toBe(
+    'spec-dec: MTP, k=3',
   );
-  expect(specDecChipText({ method: 'dspark', draftLength: 7, hypothetical: false }, { useCase: 'prose' })).toBe(
-    'spec-dec: DSpark, k=7 · prose',
+  expect(
+    specDecChipText({ method: 'dspark', draftLength: 7, hypothetical: false }, { useCase: 'code' }),
+  ).toBe('spec-dec: DSpark, k=7 · code');
+  expect(
+    specDecChipText(
+      { method: 'dspark', draftLength: 7, hypothetical: false },
+      { useCase: 'prose' },
+    ),
+  ).toBe('spec-dec: DSpark, k=7 · prose');
+  expect(specDecChipText({ method: 'dflash2', draftLength: 3, hypothetical: false }, {})).toBe(
+    'spec-dec: DFlash 2, k=3 · prose',
   );
-  expect(specDecChipText({ method: 'dflash2', draftLength: 3, hypothetical: false }, {})).toBe('spec-dec: DFlash 2, k=3 · prose');
-  expect(specDecChipText({ method: 'mtp', draftLength: 3, hypothetical: false }, {})).toBe('spec-dec: MTP, k=3');
-  expect(specDecChipText({ method: 'dspark', draftLength: 7, hypothetical: false }, { useCase: 'code', alpha: 0.8 })).toBe(
-    'spec-dec: DSpark, k=7',
+  expect(specDecChipText({ method: 'mtp', draftLength: 3, hypothetical: false }, {})).toBe(
+    'spec-dec: MTP, k=3',
   );
-  expect(specDecChipText({ method: 'dspark', draftLength: 7, hypothetical: true }, { useCase: 'code' })).toBe(
-    'spec-dec: DSpark, k=7 · code · hypothetical drafter',
-  );
+  expect(
+    specDecChipText(
+      { method: 'dspark', draftLength: 7, hypothetical: false },
+      { useCase: 'code', alpha: 0.8 },
+    ),
+  ).toBe('spec-dec: DSpark, k=7');
+  expect(
+    specDecChipText({ method: 'dspark', draftLength: 7, hypothetical: true }, { useCase: 'code' }),
+  ).toBe('spec-dec: DSpark, k=7 · code · hypothetical drafter');
 });
