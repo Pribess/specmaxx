@@ -1466,7 +1466,7 @@ export const REPORTS: BenchmarkReport[] = [
     decode: { tokensPerSec: 67.8, kind: 'perSequence' },
     caveats:
       'Every routed expert lives in host RAM (-cmoe); a 19000 MiB GPU cache holds f = 19000 MiB / 65.4 GiB = 0.284 of ' +
-      'them, at a measured 89% hit rate (custom h 0.89). Misses cross PCIe 4.0 x16 (31.5 GB/s, the platform link, ' +
+      'them, at a measured 89% hit rate (custom h 0.89). Misses cross PCIe 4.0 x16 (28.8 GB/s payload, the platform link, ' +
       'not the card\'s Gen5). The EPYC 7742 host RAM (8× DDR4-3200) has no preset; DDR5-6000 2ch (96 GB/s) stands in, ' +
       'which gives the same result since the link binds, and its 96 GB capacity makes the host tier not fit (not ' +
       'checked here). The n-gram (PLE) table sits in host RAM as llama.cpp keeps it. SPEED-Bench qualitative prompts ' +
@@ -1507,7 +1507,7 @@ export const REPORTS: BenchmarkReport[] = [
         mode: 'exception',
         reason:
           'CPU-compute offload: ik_llama.cpp runs the experts of layers 10–93 on the CPU, reading them from DDR5 at ' +
-          '102.4 GB/s; the simulator\'s transfer mode streams the missed experts over the PCIe 4.0 x16 link (31.5 GB/s) ' +
+          '102.4 GB/s; the simulator\'s transfer mode streams the missed experts over the PCIe 4.0 x16 link (28.8 GB/s payload) ' +
           'instead (cpu_compute is a hook validation rejects, design doc §2.8), so this decode is not bounded by it',
       },
     },

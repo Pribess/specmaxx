@@ -14,6 +14,7 @@ const KINDS: Record<string, string> = {
   '5gbe-tcp': 'Ethernet between machines, talking over TCP.',
   'strix-halo-usb4-tcp-20-gb-s-negotiated': 'A USB4 cable between machines, talking over TCP.',
   'thunderbolt-4-bridge-tcp': 'A Thunderbolt cable between machines, talking over TCP.',
+  'thunderbolt-4-bridge-tcp-20-gb-s-negotiated': 'A Thunderbolt cable that linked at 20 Gb/s instead of 40, talking over TCP.',
   'thunderbolt-5-bridge-tcp': 'A Thunderbolt cable between machines, talking over TCP.',
 };
 

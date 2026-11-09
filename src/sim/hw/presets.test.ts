@@ -286,6 +286,7 @@ describe('preset library: links and topologies', () => {
       'rtx-3090-nvlink-bridge', 'nvlink4-nvswitch', 'nvlink5-nvswitch', 'infiniband-ndr400-one-nic-per-gpu',
       'infiniband-xdr800-one-nic-per-gpu', 'dgx-spark-connectx-7-200gbe-roce', 'mi300x-xgmi-one-peer',
       'mi300x-xgmi-8-gpu-aggregate-injection', 'thunderbolt-5-rdma-macos-26-2', 'thunderbolt-5-bridge-tcp', 'thunderbolt-4-bridge-tcp',
+      'thunderbolt-4-bridge-tcp-20-gb-s-negotiated',
       'strix-halo-usb4-native-rdma-20-gb-s-negotiated', 'strix-halo-usb4-tcp-20-gb-s-negotiated', '5gbe-tcp', '10gbe-tcp',
     ]));
   });

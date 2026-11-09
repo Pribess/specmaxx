@@ -896,7 +896,8 @@ export const DGX_SPARK_SSD_4TB: NvmeSpec = {
 
 /**
  * A generic PCIe 4.0 x4 M.2 SSD, for Strix Halo boxes (Framework Desktop: two PCIe 4.0 x4 M.2 sockets). The slot
- * ceiling 16e9 × 4 × 128/130 / 8 = 7.88e9 B/s; the drive itself is assumed at 7.0e9 B/s.
+ * ceiling 16e9 × 4 × 128/130 / 8 × 256/280 = 7.20e9 B/s (line rate × TLP payload efficiency, links.ts
+ * `PCIE_PAYLOAD_EFFICIENCY`); the drive itself is assumed at 7.0e9 B/s, so the drive binds.
  */
 export const NVME_GEN4_X4_GENERIC: NvmeSpec = {
   kind: 'nvme',
@@ -914,7 +915,8 @@ export const NVME_GEN4_X4_GENERIC: NvmeSpec = {
       url: FRAMEWORK_DESKTOP_URL,
       title: 'Framework Desktop (Ryzen AI Max) specifications',
       fields: ['linkBandwidthBytesPerSec'],
-      note: 'Storage: two "NVMe PCIe 4.0 x4" M.2 2280 sockets. Slot ceiling = 16 GT/s × 4 × 128/130 ÷ 8 = 7.88e9 B/s.',
+      note: 'Storage: two "NVMe PCIe 4.0 x4" M.2 2280 sockets. Slot ceiling = 16 GT/s × 4 × 128/130 ÷ 8 × 256/280 ' +
+        '(TLP payload efficiency, Intel AN 855: https://cdrdv2-public.intel.com/666287/an855-683504-666287.pdf) = 7.20e9 B/s.',
     },
   ],
   estimated: [

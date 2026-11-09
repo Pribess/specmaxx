@@ -844,6 +844,12 @@ The sim is unmodified. Decode is batch 1. tg128 runs use the harness midpoint (@
   - (a) A sourced hardware-only PCIe P2P α (≈ 2–3 µs if confirmed). Size S. Effect on decode: a few percent.
   - (b) Show prefill with `'none'` beside `'ideal'` when exposed β ÷ compute > 0.2. Size S.
 - **Confidence.** Medium.
+- **Status (α part, fix 9a).** Not changed, by decision: no citable measurement isolates the hardware-only share of a
+  small PCIe all-reduce. The one-shot 6.1 µs and NCCL 13.5 µs include the kernel launch and a system-scope barrier, and
+  the ≈ 2–3 µs above is an estimate. The only hardware-only figure found is the patched P2P write latency
+  (0.49–0.59 µs), which the 1 µs α already rounds up. Recorded by the α in `src/sim/hw/presets/links.ts`
+  (`PCIE_ALPHA_NOT_RAISED`) and in `docs/simulation-model.md` §4. Fix 9b (show `overlap: 'none'` beside `'ideal'`)
+  is out of scope of this change and still open.
 
 ### F8. PCIe ceiling excludes protocol overhead
 
@@ -857,6 +863,11 @@ The sim is unmodified. Decode is batch 1. tg128 runs use the harness midpoint (@
   - [vLLM offload bench](https://github.com/Pinned-Memory/vLLM-offload-bench/blob/main/RESULTS.md) (26.2 GB/s)
 - **Fix.** × 256/(256 + 24) ≈ 0.91 payload efficiency, or a measured achievable figure. Size S.
 - **Confidence.** High.
+- **Status (fix 4): done.** `PCIE_PAYLOAD_EFFICIENCY` = 256 / (256 + 24) = 0.914 in `src/sim/hw/presets/links.ts`,
+  applied once in `pcieBandwidthPerDirectionBytesPerSec` to every PCIe link: host bounce, direct P2P, the host link for
+  offload, inter-node PCIe staging and the NVMe slot ceiling. The source is [Intel AN 855](https://cdrdv2-public.intel.com/666287/an855-683504-666287.pdf):
+  6 dwords of TLP overhead without ECRC; the 256 B maximum payload size is assumed. DLLPs are left out, so it stays an
+  upper bound above the measured 26.0–26.2 GB/s on Gen4 x16. The probe above moved 16.35 → 14.96 tok/s @ 64 (−8.5%).
 
 ### F9. Unified memory: no GPU-usable capacity limit
 
@@ -944,10 +955,20 @@ The sim is unmodified. Decode is batch 1. tg128 runs use the harness midpoint (@
   The device preset is right (`src/sim/hw/presets/intel.ts:450`). Nothing clamps a catalog link to `hostInterface`. The
   automatic offload host link is unaffected.
 
-- **Arc Pro B60 catalog** (`catalog.ts:423`) offers PCIe 5.0 x16 direct for a Gen5 x8 card (2×). The default is correct.
+  **Status: fixed (fix 1).** The catalog offers the B580 PCIe 4.0 x8 host bounce (default) and PCIe 4.0 x8 direct.
+  `catalog.test.ts` now checks that no offered PCIe link is wider or newer than the device's `hostInterface`, for
+  every device; it found only the B580 and B60 rows. The probe now gives 6.97 ms (host bounce) and 6.95 ms (direct),
+  including the payload efficiency (6.37 / 6.35 ms without it).
+
+- **Arc Pro B60 catalog** (`catalog.ts:423`) offers PCIe 5.0 x16 direct for a Gen5 x8 card (2×). The default is correct. **Fixed:** x8 only now.
 - **DFlash2 agentic acceptance** (`src/sim/engine/specdec.ts:139`): DFlash v1 data, marked as measured.
 - **Thunderbolt 4 TCP** (`src/sim/hw/presets/links.ts:645`, suspicious, not proven): the cable rate rather than a
   negotiated host-to-host path. Up to 2×.
+  **Status (fix 11): done, as a variant.** The sources do not support lowering the default. Two M1 Macs report a
+  bonded 40 Gb/s link ("Mac to Mac: 40 Gb/s x1, link width 0x2", [Bergeron](https://chrisbergeron.github.io/2021/07/25/Ultra-fast-Thunderbolt-NAS-with-Apple-M1-and-Linux/)),
+  so `TB4_TCP` stays at 5 GB/s, the hardware ceiling. Both 20 Gb/s tests are Mac ↔ Linux: sysfs 20.0 Gb/s (Bergeron)
+  and "a 20 Gigabit/s link" (Alexis). `TB4_TCP_20G` (2.5 GB/s) is that case, offered as the M3 Max's second network.
+  A 2-node 100 MB all-reduce takes 20.09 ms on `TB4_TCP` and 40.09 ms on `TB4_TCP_20G`.
 
 ### Items checked and found sound
 
@@ -991,6 +1012,15 @@ real run come first. Sustained scenarios and sensitivity settings are additions 
 | 15   | EP imbalance factor (F12)                                                                                                                       | `src/sim/lower/moe.ts`                                                                                                                              | EP prefill −5% to −11% at max/mean 1.2–1.5                                                                                                                                                                                                  | low                                                                                 | S            |
 | 16   | Apple GEMV path without MMA padding (F14)                                                                                                       | `src/sim/hw/presets/apple.ts`, `src/sim/hw/efficiency.ts`                                                                                           | Apple MoE decode +≈ 3%                                                                                                                                                                                                                      | low                                                                                 | S            |
 | 17   | Dispatch-floor overlay (F1b): engine overhead, out of scope unless the user wants it                                                            | `simulate.ts` / result, UI                                                                                                                          | informational only: −13% to −52% on small and fine-grained MoE at batch 1; headline unchanged                                                                                                                                               | medium: outside the project's stated exceptions                                     | M            |
+
+### Fix status
+
+| rank | status |
+| ---- | ------ |
+| 1    | done: catalog links clamped to `hostInterface` by a test (B580, B60 fixed) |
+| 4    | done: PCIe payload efficiency 256/280 (F8 status) |
+| 9    | α: unchanged, no hardware-only measurement (F7 status); the overlap display is still open |
+| 11   | done: `TB4_TCP_20G` variant; default kept at 5 GB/s (Thunderbolt 4 status above) |
 
 ---
 

@@ -23,7 +23,8 @@ function expectClose(actual: number, expected: number, rel = 1e-9): void {
 
 const BF16: QuantConfig = { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } };
 const GPU = { device: RTX_5090, topology: singleDevice(RTX_5090) };
-const B_LINK = (32e9 * 16 * 128) / 130 / 8;
+/** PCIe 5.0 x16 per direction: line rate × TLP payload efficiency 256/280 (links.ts). Unit: B/s. */
+const B_LINK = ((32e9 * 16 * 128) / 130 / 8) * (256 / 280);
 
 function run(
   model: ModelSpec,

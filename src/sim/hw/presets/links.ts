@@ -113,20 +113,88 @@ export const LEGACY_LINK_IDS: Record<string, string> = {};
 const PCIE_GT_PER_LANE: Record<3 | 4 | 5, number> = { 3: 8, 4: 16, 5: 32 };
 
 /**
- * PCIe line-rate ceiling per direction after 128b/130b encoding (Gen3, Gen4 and Gen5 all use it), before TLP/DLLP
- * packet overhead. Unit: B/s per direction.
+ * PCIe line rate per direction after 128b/130b encoding (Gen3, Gen4 and Gen5 all use it), BEFORE TLP/DLLP packet
+ * overhead: the bits the wire carries, not the payload bytes a transfer moves. Unit: B/s per direction. Not a link
+ * bandwidth by itself: every PCIe link preset uses {@link pcieBandwidthPerDirectionBytesPerSec}, this × the payload
+ * efficiency {@link PCIE_PAYLOAD_EFFICIENCY}.
  *
- * Formula: B = GT/s per lane × 1e9 × lanes × 128/130 / 8 bits per byte.
+ * Formula: R_line = GT/s per lane × 1e9 × lanes × 128/130 / 8 bits per byte.
  * E.g. Gen5 x16 = 32e9 × 16 × 128/130 / 8 = 63.015e9 B/s; Gen4 x16 = 31.508e9; Gen3 x16 = 15.754e9.
  */
-export function pcieBandwidthPerDirectionBytesPerSec(generation: 3 | 4 | 5, lanes: 4 | 8 | 16): number {
+export function pcieLineRateBytesPerSec(generation: 3 | 4 | 5, lanes: 4 | 8 | 16): number {
   const transfersPerSec = PCIE_GT_PER_LANE[generation] * 1e9;
   return transfersPerSec * lanes * (128 / 130) / 8;
 }
 
-/** PCIe line-rate ceiling after 128b/130b encoding, before packet overhead. Gen4/5 rate is GT/s per lane. */
+/**
+ * Intel AN 855 (PCI Express high-performance reference design), "Protocol Overhead" and "Throughput for Posted
+ * Writes": per-TLP overhead and the payload / (payload + overhead) throughput formula.
+ */
+const PCIE_TLP_OVERHEAD_URL = 'https://cdrdv2-public.intel.com/666287/an855-683504-666287.pdf';
+/** NVIDIA forum: measured pinned host→device copy on an RTX 4090 (PCIe 4.0 x16), 26.0 GB/s. */
+const PCIE_4090_PINNED_COPY_URL = 'https://forums.developer.nvidia.com/t/blackwell-integer/320578?page=3';
+/** vLLM offload bench: measured pinned host↔device copy on PCIe 4.0 x16, 26.2 GB/s. */
+const PCIE_VLLM_OFFLOAD_BENCH_URL = 'https://github.com/Pinned-Memory/vLLM-offload-bench/blob/main/RESULTS.md';
+
+/**
+ * η_PCIe: the share of the PCIe line rate that is payload, for a stream of maximum-size memory-write TLPs.
+ * Dimensionless, in (0, 1]. Applied to EVERY PCIe link preset (device-to-device host bounce and direct P2P, the
+ * device's host link for offload streaming, the NVMe slot ceiling) in {@link pcieBandwidthPerDirectionBytesPerSec},
+ * and to no other link kind (NVLink, InfiniBand, Ethernet, Thunderbolt and USB4 rates are the vendors' data rates).
+ *
+ * Formula: η = MPS / (MPS + overhead) = 256 / (256 + 24) = 0.9143, where
+ * - MPS = 256 B, the maximum payload size per TLP. ASSUMED: the common root-port setting on desktop and server
+ *   platforms (128 B gives 0.842, 512 B 0.955); the platform sets it, not the card.
+ * - overhead = 24 B = 6 dwords per TLP without the optional ECRC (Intel AN 855): framing and sequence number
+ *   (Gen3+: the 4-byte STP token carries the sequence number), a 4-dword header (64-bit addresses, as GPU and
+ *   host buffers above 4 GB need) and the 4-byte LCRC. With a 3-dword header AN 855 gets 256 / (256 + 20) = 92%.
+ *
+ * Still an upper bound: ACK/NAK and flow-control DLLPs and SKP ordered sets are excluded (AN 855: "ignores any
+ * DLLPs and PLPs"). Measured pinned copies sit below it: Gen4 x16 R_line 31.51 × η = 28.81 GB/s against a measured
+ * 26.0 GB/s (RTX 4090), 26.2 GB/s (vLLM offload bench) and ≈ 24.8 GB/s (nvbandwidth memcpy_ce). Those are achieved
+ * driver copies (DMA engine, read-request round trips), not hardware ceilings, so they are not fitted.
+ * See docs/simulation-model.md §4 ("PCIe payload efficiency") and docs/review/practicality-review.md (F8).
+ */
+export const PCIE_PAYLOAD_EFFICIENCY = 256 / (256 + 24);
+
+/**
+ * PCIe link bandwidth per direction: the payload ceiling of {@link pcieLineRateBytesPerSec} after TLP framing.
+ * Unit: B/s per direction. The ONE place every PCIe link preset gets its bandwidth from.
+ *
+ * Formula: B = R_line × η_PCIe = GT/s × 1e9 × lanes × 128/130 / 8 × 256/280.
+ * E.g. Gen5 x16 = 63.015e9 × 0.9143 = 57.614e9 B/s; Gen4 x16 = Gen5 x8 = 28.807e9; Gen4 x8 = Gen3 x16 = 14.403e9;
+ * Gen4 x4 = 7.202e9.
+ */
+export function pcieBandwidthPerDirectionBytesPerSec(generation: 3 | 4 | 5, lanes: 4 | 8 | 16): number {
+  return pcieLineRateBytesPerSec(generation, lanes) * PCIE_PAYLOAD_EFFICIENCY;
+}
+
+/** The source of {@link PCIE_PAYLOAD_EFFICIENCY}, on every PCIe link's bandwidth. */
+const PCIE_PAYLOAD_SOURCE: SourceRef = {
+  url: PCIE_TLP_OVERHEAD_URL,
+  title: 'Intel AN 855: PCI Express protocol overhead and posted-write throughput',
+  fields: [BANDWIDTH_FIELD],
+  note: 'TLP overhead "is six dwords if the optional ECRC is not included" (framing, sequence ID, 3- or 4-dword ' +
+    'header, LCRC); throughput = payload / (payload + overhead), DLLPs and PLPs ignored. Payload efficiency ' +
+    '256 / (256 + 24) = 0.914 at a 256 B maximum payload size (assumed platform setting) and 4-dword headers. ' +
+    `Measured pinned copies on Gen4 x16 sit below 31.51 × 0.914 = 28.8 GB/s: 26.0 GB/s (RTX 4090, ${PCIE_4090_PINNED_COPY_URL}), ` +
+    `26.2 GB/s (${PCIE_VLLM_OFFLOAD_BENCH_URL}).`,
+};
+
+/**
+ * Why the PCIe α stays 1 µs (docs/review/practicality-review.md F7): the measured small-message PCIe all-reduce
+ * floors (one-shot 6.1 µs and NCCL 13.5 µs at 1 KB, 4× RTX PRO 6000) include the collective's kernel launch and a
+ * system-scope barrier, and no source found splits off the hardware share (the review's ≈ 2–3 µs is an estimate,
+ * not a measurement). The only hardware-only figure is the patched P2P write latency, 0.49–0.59 µs (Gen5 x16),
+ * which the 1 µs per message already rounds up; a 2-GPU ring all-reduce pays 2α ≈ 2 µs.
+ */
+const PCIE_ALPHA_NOT_RAISED =
+  'Not raised to the measured 6.1–13.5 µs small all-reduce (local-inference-lab rtx6kpro pcie-oneshot-allreduce.md): ' +
+  'those include kernel launch and a system-scope barrier, and no measurement isolates the hardware share.';
+
+/** PCIe link (device to device): payload bandwidth {@link pcieBandwidthPerDirectionBytesPerSec}, α 1 µs. */
 function pcieLink(generation: 4 | 5, lanes: 8 | 16, direct: boolean): LinkSpec {
-  // B = transfers/s × lanes × coding efficiency / bits per byte.
+  // B = R_line × η_PCIe = transfers/s × lanes × 128/130 / 8 × 256/280.
   const bandwidthPerDirectionBytesPerSec = pcieBandwidthPerDirectionBytesPerSec(generation, lanes);
   const sources: SourceRef[] = [
     {
@@ -134,8 +202,9 @@ function pcieLink(generation: 4 | 5, lanes: 8 | 16, direct: boolean): LinkSpec {
       title: 'PCI-SIG PCI Express 5.0 FAQ',
       fields: [BANDWIDTH_FIELD],
       note: 'Gen5 32 GT/s; x32 raw 128 GB/s each direction. Gen4 is half Gen5. ' +
-        'Derived ceiling = GT/s × lanes × 128/130 ÷ 8, excluding TLP/DLLP overhead.',
+        'Line rate = GT/s × lanes × 128/130 ÷ 8; × 256/280 TLP payload efficiency (AN 855 below).',
     },
+    PCIE_PAYLOAD_SOURCE,
     {
       url: GEFORCE_P2P_URL,
       title: 'RTX 5090 P2P bandwidth and latency matrices',
@@ -143,7 +212,7 @@ function pcieLink(generation: 4 | 5, lanes: 8 | 16, direct: boolean): LinkSpec {
       fields: direct ? ['p2p'] : ['p2p', 'hostBounce.extraLatencySec'],
       note: 'Patched Gen5 x16 P2P write 0.49–0.59 µs; disabled 12.56–12.74 µs. ' +
         'Host-bounce extra latency rounded from 12.6 − 0.5 ≈ 12 µs. Measured host-bounce one-way ' +
-        '31.6–32.4 GB/s is below the single-transfer formula prediction (min(63,96/2)=48 GB/s); ' +
+        '31.6–32.4 GB/s is below the single-transfer formula prediction (min(57.6, 96/2) = 48 GB/s); ' +
         'for a two-device collective this engine additionally divides host bandwidth by both active devices. ' +
         'Driver staging throughput is not a hardware ceiling and is not fitted here.',
     }
@@ -165,7 +234,7 @@ function pcieLink(generation: 4 | 5, lanes: 8 | 16, direct: boolean): LinkSpec {
       {
         field: 'latencySec',
         reason: 'Rounded 1 µs PCIe DMA proxy from 0.5 µs Gen5 P2P writes; extrapolated to Gen4 and x8. ' +
-          'Not a measured latency for every host/switch topology.',
+          'Not a measured latency for every host/switch topology. ' + PCIE_ALPHA_NOT_RAISED,
       },
       ...(!direct ? [
         {
@@ -178,13 +247,13 @@ function pcieLink(generation: 4 | 5, lanes: 8 | 16, direct: boolean): LinkSpec {
   };
 }
 
-/** Stock GeForce PCIe Gen4 x16, host-staged; approximately 31.51 GB/s per PCIe hop per direction. */
+/** Stock GeForce PCIe Gen4 x16, host-staged; approximately 28.81 GB/s payload per PCIe hop per direction. */
 export const PCIE_4_X16 = pcieLink(4, 16, false);
-/** Stock GeForce PCIe Gen4 x8, host-staged; approximately 15.75 GB/s per PCIe hop per direction. */
+/** Stock GeForce PCIe Gen4 x8, host-staged; approximately 14.40 GB/s payload per PCIe hop per direction. */
 export const PCIE_4_X8 = pcieLink(4, 8, false);
-/** Stock GeForce PCIe Gen5 x16, host-staged; approximately 63.02 GB/s per PCIe hop per direction. */
+/** Stock GeForce PCIe Gen5 x16, host-staged; approximately 57.61 GB/s payload per PCIe hop per direction. */
 export const PCIE_5_X16 = pcieLink(5, 16, false);
-/** Stock GeForce PCIe Gen5 x8, host-staged; approximately 31.51 GB/s per PCIe hop per direction. */
+/** Stock GeForce PCIe Gen5 x8, host-staged; approximately 28.81 GB/s payload per PCIe hop per direction. */
 export const PCIE_5_X8 = pcieLink(5, 8, false);
 /** PCIe Gen4 x16 direct P2P, only for compatible devices/drivers and host routing. Unit: B/s per direction. */
 export const PCIE_4_X16_DIRECT = pcieLink(4, 16, true);
@@ -215,9 +284,10 @@ const NVBANDWIDTH_ACHIEVED_URL = 'https://github.com/NVIDIA/nvbandwidth/issues/5
  * device DMAs to and from host memory itself (no staging hop of its own). Used by the engine when
  * `HardwareStack.host.link` is absent and the device has a cited `DeviceSpec.hostInterface`.
  *
- * Bandwidth: {@link pcieBandwidthPerDirectionBytesPerSec} (theoretical line rate; Gen5 x16 = 63.015e9 B/s, the same
- * number as `PCIE_5_X16`). Latency α = 1 µs, estimated (the same DMA proxy as the device-to-device PCIe links). The
- * inter-node host staging (`engine/staging.ts`) charges this α once per end of a staged message (α_stage = 2·α).
+ * Bandwidth: {@link pcieBandwidthPerDirectionBytesPerSec} (line rate × TLP payload efficiency 256/280; Gen5 x16 =
+ * 57.614e9 B/s, the same number as `PCIE_5_X16`). Latency α = 1 µs, estimated (the same DMA proxy as the
+ * device-to-device PCIe links). The inter-node host staging (`engine/staging.ts`) charges this α once per end of a
+ * staged message (α_stage = 2·α).
  * See docs/simulation-model.md §4 ("Host and storage tiers") and §6 ("Inter-node host staging").
  */
 export function hostPcieLink(generation: 3 | 4 | 5, lanes: 4 | 8 | 16): LinkSpec {
@@ -235,10 +305,11 @@ export function hostPcieLink(generation: 3 | 4 | 5, lanes: 4 | 8 | 16): LinkSpec
         fields: [BANDWIDTH_FIELD],
         note:
           'Gen5 32 GT/s per lane (x32 raw 128 GB/s each direction); Gen4 16 GT/s and Gen3 8 GT/s are each half the next ' +
-          'generation, all three with 128b/130b encoding. Derived ceiling = GT/s × lanes × 128/130 ÷ 8, excluding ' +
-          `TLP/DLLP overhead. Achieved host copies are lower (nvbandwidth memcpy_ce ≈ 24.8 GB/s H2D on Gen4 x16, ${NVBANDWIDTH_ACHIEVED_URL}); ` +
-          'they are not hardware ceilings and are not fitted here.',
+          'generation, all three with 128b/130b encoding. Line rate = GT/s × lanes × 128/130 ÷ 8; × 256/280 TLP ' +
+          'payload efficiency (AN 855 below). Achieved host copies are lower still (nvbandwidth memcpy_ce ≈ 24.8 GB/s ' +
+          `H2D on Gen4 x16, ${NVBANDWIDTH_ACHIEVED_URL}); they are not hardware ceilings and are not fitted here.`,
       },
+      PCIE_PAYLOAD_SOURCE,
       {
         url: GDRCOPY_URL,
         title: 'NVIDIA GDRCopy README: gdrcopy_pplat and the cudaMemcpy overhead',
@@ -264,7 +335,7 @@ export function hostPcieLink(generation: 3 | 4 | 5, lanes: 4 | 8 | 16): LinkSpec
           'extrapolated to every generation and width. Not a measured host-memory read latency. Consistent with a ' +
           'mapped-memory crossing (GDRCopy round trip 1.09 µs, pcie-bench 64 B DMA read 547 ns median); used as the ' +
           'per-end floor of inter-node host staging (no cudaMemcpy, no stream sync: NCCL\'s network transport without ' +
-          'GPUDirect has the GPU write and poll pinned host buffers, net.cc:936, :1121).',
+          'GPUDirect has the GPU write and poll pinned host buffers, net.cc:936, :1121). ' + PCIE_ALPHA_NOT_RAISED,
       },
     ],
   };
@@ -637,10 +708,18 @@ const TB_TCP_FORWARDING_REASON =
   'itself almost all software; no direct measurement of a Thunderbolt bridge relay exists. A 2-hop relay is ' +
   '2 × 45 + 20 = 110 µs, a 3-hop one 3 × 45 + 2 × 20 = 175 µs.';
 
+/** Bergeron: iperf3 and the negotiated Thunderbolt link (sysfs / System Information), Mac ↔ Mac and Mac ↔ Linux. */
+const TB_NEGOTIATED_LINK_URL = 'https://chrisbergeron.github.io/2021/07/25/Ultra-fast-Thunderbolt-NAS-with-Apple-M1-and-Linux/';
+/** Sebastian Alexis: Thunderbolt 4 bridge MacBook Air ↔ Linux laptop, "a 20 Gigabit/s link", iperf3 and ping. */
+const TB_NETWORKING_UNDERUSED_URL = 'https://sebastianalexis.com/blog/thunderbolt-networking-is-underused/';
+
 /**
- * Mac Thunderbolt bridge over TCP (IP over Thunderbolt) on Thunderbolt 4 cables and ports: nominal 40 Gb/s per
- * direction; real bridge traffic is substantially lower. The Thunderbolt link of Macs without Thunderbolt 5 (the M3
- * Max MacBook Pro); TB5 Macs use `TB5_TCP`. Older URLs naming this link on a TB5 Mac still resolve to it.
+ * Mac Thunderbolt bridge over TCP (IP over Thunderbolt) on Thunderbolt 4 cables and ports, Mac to Mac: the 40 Gb/s
+ * per-direction link (two bonded 20 Gb/s lanes) = 5 GB/s, the hardware ceiling. Two M1 Macs report exactly that link
+ * ("Mac to Mac: 40 Gb/s x1, link width 0x2"); their iperf3 goodput is 20.1 Gb/s, a software / controller figure,
+ * not a ceiling. The Thunderbolt link of Macs without Thunderbolt 5 (the M3 Max MacBook Pro); TB5 Macs use
+ * `TB5_TCP`. Older URLs naming this link on a TB5 Mac still resolve to it. A host pair that negotiates one unbonded
+ * 20 Gb/s lane (a Mac ↔ Linux bridge in both cited tests) is {@link TB4_TCP_20G}.
  */
 export const TB4_TCP: LinkSpec = {
   kind: 'thunderbolt',
@@ -660,12 +739,22 @@ export const TB4_TCP: LinkSpec = {
       note: 'Thunderbolt 4 nominal 40 Gb/s = 5 GB/s; theoretical single-port ceiling, not achieved TCP goodput.',
     },
     {
-      url: 'https://sebastianalexis.com/blog/thunderbolt-networking-is-underused/',
+      url: TB_NEGOTIATED_LINK_URL,
+      title: 'Ultra fast Thunderbolt NAS with Apple M1 and Linux (negotiated link and iperf3)',
+      kind: 'community',
+      fields: [BANDWIDTH_FIELD],
+      note: 'Two M1 Macs over a Thunderbolt 4 cable: "Mac to Mac: 40 Gb/s x1, link width 0x2" (lanes bonded), so ' +
+        'the Mac ↔ Mac bridge has the full 40 Gb/s = 5 GB/s link; iperf3 TCP 20.1 Gb/s on it (goodput, not fitted). ' +
+        'Mac ↔ Linux (Titan Ridge): "20 Gb/s x2, link width 0x1", tx_speed / rx_speed 20.0 Gb/s, iperf3 17.1 Gb/s.',
+    },
+    {
+      url: TB_NETWORKING_UNDERUSED_URL,
       title: 'Thunderbolt networking is underused',
       kind: 'community',
       fields: [BANDWIDTH_FIELD],
-      note: 'Measured TCP one-way 15.9–18.8 Gb/s, below the nominal rate. Context for the latency: TB bridge ping ' +
-        'minimum RTT 0.142 ms (MacBook Air ↔ Linux PC, untuned ICMP), not used as the floor.',
+      note: 'MacBook Air ↔ Linux laptop (Maple Ridge) over "a 20 Gigabit/s link": TCP one-way 15.9–18.8 Gb/s. A ' +
+        'Mac ↔ Linux path, the negotiated-lane case (TB4_TCP_20G), not Mac ↔ Mac. Context for the latency: TB bridge ' +
+        'ping minimum RTT 0.142 ms (untuned ICMP), not used as the floor.',
     },
     TB_TCP_LATENCY_SOURCE,
     TB_BRIDGE_FORWARDING_SOURCE,
@@ -679,6 +768,40 @@ export const TB4_TCP: LinkSpec = {
       field: 'forwardingLatencySec',
       reason: TB_TCP_FORWARDING_REASON,
     },
+  ],
+};
+
+/**
+ * The Thunderbolt 4 bridge (TCP) when the two hosts negotiate ONE unbonded 20 Gb/s lane per direction instead of the
+ * bonded 40 Gb/s: 20e9 / 8 = 2.5 GB/s per direction. Both cited Thunderbolt-bridge tests between a Mac and a Linux PC
+ * report this link (sysfs tx_speed / rx_speed 20.0 Gb/s, link width 0x1; "a 20 Gigabit/s link") and measure TCP
+ * goodput of 15.9–18.8 Gb/s on it, under the 20 Gb/s ceiling; Mac ↔ Mac bonds to 40 Gb/s ({@link TB4_TCP}). Latency
+ * and relay handling: the same macOS bridge software path as `TB4_TCP`.
+ */
+export const TB4_TCP_20G: LinkSpec = {
+  ...TB4_TCP,
+  name: 'Thunderbolt 4 bridge (TCP, 20 Gb/s negotiated)',
+  bandwidthPerDirectionBytesPerSec: 20e9 / 8,
+  sources: [
+    TCP_HOST_POINTERS_SOURCE,
+    {
+      url: TB_NEGOTIATED_LINK_URL,
+      title: 'Ultra fast Thunderbolt NAS with Apple M1 and Linux (negotiated link and iperf3)',
+      kind: 'community',
+      fields: [BANDWIDTH_FIELD],
+      note: 'Mac ↔ Linux (Titan Ridge): "20 Gb/s x2, link width 0x1"; sysfs tx_speed and rx_speed "20.0 Gb/s" ' +
+        '("It\'s 20Gb/s per direction"): one lane, 20e9 / 8 = 2.5 GB/s. iperf3 TCP 17.1 Gb/s on it (goodput, not fitted).',
+    },
+    {
+      url: TB_NETWORKING_UNDERUSED_URL,
+      title: 'Thunderbolt networking is underused',
+      kind: 'community',
+      fields: [BANDWIDTH_FIELD],
+      note: 'MacBook Air M5 ↔ Linux laptop (Maple Ridge, Thunderbolt 4) "with a 20 Gigabit/s link": iperf3 single ' +
+        'stream 15.9 Gb/s Linux → Mac and 18.8 Gb/s Mac → Linux, both under the 20 Gb/s = 2.5 GB/s ceiling.',
+    },
+    TB_TCP_LATENCY_SOURCE,
+    TB_BRIDGE_FORWARDING_SOURCE,
   ],
 };
 
@@ -882,7 +1005,7 @@ export const HOST_BOUNCE_PCIE_LINKS: LinkSpec[] = [PCIE_4_X16, PCIE_4_X8, PCIE_5
 export const LINK_PRESETS: LinkSpec[] = [
   ...HOST_BOUNCE_PCIE_LINKS, PCIE_4_X16_DIRECT, PCIE_4_X8_DIRECT, PCIE_5_X16_DIRECT, PCIE_5_X8_DIRECT,
   RTX_3090_NVLINK, NVLINK_4, NVLINK_5, IB_NDR_400, IB_XDR_800, SPARK_CONNECTX_7,
-  XGMI_MI300X_PER_PEER, XGMI_MI300X_8_GPU, TB5_RDMA, TB5_TCP, TB4_TCP,
+  XGMI_MI300X_PER_PEER, XGMI_MI300X_8_GPU, TB5_RDMA, TB5_TCP, TB4_TCP, TB4_TCP_20G,
   USB4_HALO_RDMA, USB4_HALO_TCP, ETHERNET_5G_TCP, ETHERNET_10G_TCP,
 ];
 
@@ -906,7 +1029,7 @@ export interface LinkMedium {
 /** Every inter-node preset by physical medium (see {@link LinkMedium}): the RDMA ≤ TCP latency invariant's pairs. */
 export const LINK_MEDIA: LinkMedium[] = [
   { medium: 'thunderbolt-5', rdma: [TB5_RDMA], tcp: [TB5_TCP] },
-  { medium: 'thunderbolt-4', rdma: [], tcp: [TB4_TCP] },
+  { medium: 'thunderbolt-4', rdma: [], tcp: [TB4_TCP, TB4_TCP_20G] },
   { medium: 'strix-halo-usb4', rdma: [USB4_HALO_RDMA], tcp: [USB4_HALO_TCP] },
   { medium: 'connectx-7-dgx-spark', rdma: [SPARK_CONNECTX_7], tcp: [] },
   { medium: 'infiniband-ndr', rdma: [IB_NDR_400], tcp: [] },

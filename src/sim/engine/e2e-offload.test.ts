@@ -30,8 +30,8 @@ function expectClose(actual: number, expected: number, rel = 1e-9): void {
   expect(Math.abs(actual - expected)).toBeLessThanOrEqual(rel * Math.abs(expected));
 }
 
-/** PCIe 5.0 x16 per direction, 32e9·16·128/130/8. Unit: B/s. */
-const B_LINK = (32e9 * 16 * 128) / 130 / 8;
+/** PCIe 5.0 x16 per direction, 32e9·16·128/130/8 × 256/280 (TLP payload efficiency, links.ts). Unit: B/s. */
+const B_LINK = ((32e9 * 16 * 128) / 130 / 8) * (256 / 280);
 const GPU = { device: RTX_5090, topology: singleDevice(RTX_5090) };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -77,10 +77,12 @@ describe('W1 experts in DDR5 over PCIe 5.0 x16 (REF_MOE_30B_A3B, int4+0.5 routed
 
   // [phase, f, M per layer, 'ideal' tok/s, 'none' tok/s]
   const rows = [
-    ['decode', 0, 8, 61.63, 53.5],
-    ['decode', 0.5, 4, 122.87, 94.29],
-    ['prefill', 0, 128, 21_696, 12_872],
-    ['prefill', 0.5, 64, 21_696, 16_157],
+    // Since the PCIe payload efficiency 256/280 (B_link 63.0 → 57.6 GB/s): every transfer-bound rate moves; the ideal
+    // prefill rows stay compute bound. Before: 61.63 / 53.5, 122.87 / 94.29, 21,696 / 12,872, 21,696 / 16,157.
+    ['decode', 0, 8, 56.364, 49.484],
+    ['decode', 0.5, 4, 112.40, 88.003],
+    ['prefill', 0, 128, 21_696, 12_399],
+    ['prefill', 0.5, 64, 21_696, 15_780],
   ] as const;
   for (const [phase, f, M, idealRate, noneRate] of rows) {
     for (const [overlap, rate] of [['ideal', idealRate], ['none', noneRate]] as const) {
@@ -208,13 +210,13 @@ describe('W3/W4 n-gram tables off-device (fixtures, repo quant, RTX 5090, b 1, @
   // [repo, tier, phase, transfer sec (all tables), tok/s @ 8k]
   const rows = [
     // PLE: one table, R = 16 (decode) / 131,072 (prefill) reads of 320 B.
-    [PLE, 'host_ram', 'decode', 1.07e-6 + 5_120 / B_LINK, 119.651], // 1.1513 µs
-    [PLE, 'host_ram', 'prefill', 1.07e-6 + 41_943_040 / B_LINK, 13_429.0], // 0.66667 ms
+    [PLE, 'host_ram', 'decode', 1.07e-6 + 5_120 / B_LINK, 119.651], // 1.1589 µs
+    [PLE, 'host_ram', 'prefill', 1.07e-6 + 41_943_040 / B_LINK, 13_429.0], // 0.72907 ms
     [PLE, 'nvme', 'decode', 46e-6 + 16 / 1.4e6, 118.851], // 57.429 µs
     [PLE, 'nvme', 'prefill', 46e-6 + 131_072 / 1.4e6, 11_652.5], // 93.669 ms
     // Engram: two tables, 24 rows per table per decode step, 196,608 per prefill; 264 B useful per row.
-    [ENGRAM, 'host_ram', 'decode', 2 * (1.07e-6 + 6_336 / B_LINK), 111.336], // 2.3411 µs
-    [ENGRAM, 'host_ram', 'prefill', 2 * (1.07e-6 + 51_904_512 / B_LINK), 9_313.8], // 1.6495 ms
+    [ENGRAM, 'host_ram', 'decode', 2 * (1.07e-6 + 6_336 / B_LINK), 111.336], // 2.3599 µs
+    [ENGRAM, 'host_ram', 'prefill', 2 * (1.07e-6 + 51_904_512 / B_LINK), 9_313.8], // 1.8039 ms
     [ENGRAM, 'nvme', 'decode', 2 * (46e-6 + 24 / 1.4e6), 109.82], // 126.286 µs
     [ENGRAM, 'nvme', 'prefill', 2 * (46e-6 + 196_608 / 1.4e6), 7_069.0], // 280.96 ms
   ] as const;

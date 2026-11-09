@@ -19,6 +19,7 @@
   "thunderbolt-5-rdma-macos-26-2",
   "thunderbolt-5-bridge-tcp",
   "thunderbolt-4-bridge-tcp",
+  "thunderbolt-4-bridge-tcp-20-gb-s-negotiated",
   "strix-halo-usb4-native-rdma-20-gb-s-negotiated",
   "strix-halo-usb4-tcp-20-gb-s-negotiated",
   "5gbe-tcp",
@@ -459,110 +460,110 @@
   },
   "flat|pcie-4-0-x16-host-bounce|send_recv|n2|S1000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00001303173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.000013034713745117189,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-host-bounce|send_recv|n2|S1000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00004473828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000047713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-host-bounce|send_recv|n2|S100000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031868281249999996,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034843745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-host-bounce|send_recv|n3|S1000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00001303173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.000013034713745117189,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-host-bounce|send_recv|n3|S1000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00004473828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000047713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-host-bounce|send_recv|n3|S100000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031868281249999996,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034843745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-host-bounce|send_recv|n4|S1000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00001303173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.000013034713745117189,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-host-bounce|send_recv|n4|S1000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00004473828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000047713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-host-bounce|send_recv|n4|S100000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031868281249999996,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034843745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-host-bounce|send_recv|n8|S1000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00001303173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.000013034713745117189,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-host-bounce|send_recv|n8|S1000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00004473828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000047713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-host-bounce|send_recv|n8|S100000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031868281249999996,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034843745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:best|n2|S1000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000260634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000026069427490234378,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:best|n2|S1000000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00008947656249999998,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.00009542749023437499,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:best|n2|S100000000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006373656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006968749023437499,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:best|n3|S1000": {
    "latencySec": 0.000052000000000000004,
-   "bandwidthSec": 8.463541666666665e-8,
-   "totalSec": 0.00005208463541666667,
+   "bandwidthSec": 9.256998697916665e-8,
+   "totalSec": 0.000052092569986979174,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:best|n3|S1000000": {
    "latencySec": 0.000052000000000000004,
-   "bandwidthSec": 0.00008463541666666664,
-   "totalSec": 0.00013663541666666663,
+   "bandwidthSec": 0.00009256998697916666,
+   "totalSec": 0.00014456998697916668,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:best|n3|S100000000": {
    "latencySec": 0.000052000000000000004,
-   "bandwidthSec": 0.008463541666666664,
-   "totalSec": 0.008515541666666664,
+   "bandwidthSec": 0.009256998697916664,
+   "totalSec": 0.009308998697916664,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:best|n4|S1000": {
@@ -603,38 +604,38 @@
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:ring|n2|S1000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000260634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000026069427490234378,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:ring|n2|S1000000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00008947656249999998,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.00009542749023437499,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:ring|n2|S100000000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006373656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006968749023437499,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:ring|n3|S1000": {
    "latencySec": 0.000052000000000000004,
-   "bandwidthSec": 8.463541666666665e-8,
-   "totalSec": 0.00005208463541666667,
+   "bandwidthSec": 9.256998697916665e-8,
+   "totalSec": 0.000052092569986979174,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:ring|n3|S1000000": {
    "latencySec": 0.000052000000000000004,
-   "bandwidthSec": 0.00008463541666666664,
-   "totalSec": 0.00013663541666666663,
+   "bandwidthSec": 0.00009256998697916666,
+   "totalSec": 0.00014456998697916668,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:ring|n3|S100000000": {
    "latencySec": 0.000052000000000000004,
-   "bandwidthSec": 0.008463541666666664,
-   "totalSec": 0.008515541666666664,
+   "bandwidthSec": 0.009256998697916664,
+   "totalSec": 0.009308998697916664,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:ring|n4|S1000": {
@@ -675,38 +676,38 @@
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:tree|n2|S1000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 1.26953125e-7,
-   "totalSec": 0.000026126953125000003,
+   "bandwidthSec": 1.3885498046874998e-7,
+   "totalSec": 0.000026138854980468753,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:tree|n2|S1000000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 0.00012695312499999998,
-   "totalSec": 0.00015295312499999999,
+   "bandwidthSec": 0.00013885498046875,
+   "totalSec": 0.00016485498046875,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:tree|n2|S100000000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 0.012695312499999998,
-   "totalSec": 0.012721312499999998,
+   "bandwidthSec": 0.013885498046874998,
+   "totalSec": 0.013911498046874998,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:tree|n3|S1000": {
    "latencySec": 0.000052000000000000004,
-   "bandwidthSec": 1.26953125e-7,
-   "totalSec": 0.000052126953125,
+   "bandwidthSec": 1.3885498046874998e-7,
+   "totalSec": 0.000052138854980468755,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:tree|n3|S1000000": {
    "latencySec": 0.000052000000000000004,
-   "bandwidthSec": 0.00012695312499999998,
-   "totalSec": 0.00017895312499999997,
+   "bandwidthSec": 0.00013885498046875,
+   "totalSec": 0.00019085498046874998,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:tree|n3|S100000000": {
    "latencySec": 0.000052000000000000004,
-   "bandwidthSec": 0.012695312499999998,
-   "totalSec": 0.012747312499999998,
+   "bandwidthSec": 0.013885498046874998,
+   "totalSec": 0.013937498046874998,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-host-bounce|all_reduce:tree|n4|S1000": {
@@ -747,38 +748,38 @@
   },
   "flat|pcie-4-0-x8-host-bounce|all_gather|n2|S1000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00001303173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.000013034713745117189,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_gather|n2|S1000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00004473828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000047713745117187496,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_gather|n2|S100000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031868281249999996,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034843745117187496,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_gather|n3|S1000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 4.231770833333333e-8,
-   "totalSec": 0.000026042317708333335,
+   "bandwidthSec": 4.6284993489583325e-8,
+   "totalSec": 0.000026046284993489587,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_gather|n3|S1000000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 0.00004231770833333332,
-   "totalSec": 0.00006831770833333332,
+   "bandwidthSec": 0.00004628499348958333,
+   "totalSec": 0.00007228499348958334,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_gather|n3|S100000000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 0.004231770833333332,
-   "totalSec": 0.004257770833333332,
+   "bandwidthSec": 0.004628499348958332,
+   "totalSec": 0.004654499348958332,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|all_gather|n4|S1000": {
@@ -819,38 +820,38 @@
   },
   "flat|pcie-4-0-x8-host-bounce|reduce_scatter|n2|S1000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00001303173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.000013034713745117189,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|reduce_scatter|n2|S1000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00004473828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000047713745117187496,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|reduce_scatter|n2|S100000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031868281249999996,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034843745117187496,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|reduce_scatter|n3|S1000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 4.231770833333333e-8,
-   "totalSec": 0.000026042317708333335,
+   "bandwidthSec": 4.6284993489583325e-8,
+   "totalSec": 0.000026046284993489587,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|reduce_scatter|n3|S1000000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 0.00004231770833333332,
-   "totalSec": 0.00006831770833333332,
+   "bandwidthSec": 0.00004628499348958333,
+   "totalSec": 0.00007228499348958334,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|reduce_scatter|n3|S100000000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 0.004231770833333332,
-   "totalSec": 0.004257770833333332,
+   "bandwidthSec": 0.004628499348958332,
+   "totalSec": 0.004654499348958332,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-host-bounce|reduce_scatter|n4|S1000": {
@@ -891,38 +892,38 @@
   },
   "flat|pcie-4-0-x8-host-bounce|all_to_all|n2|S1000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00001303173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.000013034713745117189,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|all_to_all|n2|S1000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00004473828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000047713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|all_to_all|n2|S100000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031868281249999996,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034843745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|all_to_all|n3|S1000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 4.231770833333333e-8,
-   "totalSec": 0.000026042317708333335,
+   "bandwidthSec": 4.6284993489583325e-8,
+   "totalSec": 0.000026046284993489587,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|all_to_all|n3|S1000000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 0.00004231770833333332,
-   "totalSec": 0.00006831770833333332,
+   "bandwidthSec": 0.00004628499348958333,
+   "totalSec": 0.00007228499348958334,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|all_to_all|n3|S100000000": {
    "latencySec": 0.000026000000000000002,
-   "bandwidthSec": 0.004231770833333332,
-   "totalSec": 0.004257770833333332,
+   "bandwidthSec": 0.004628499348958332,
+   "totalSec": 0.004654499348958332,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|all_to_all|n4|S1000": {
@@ -963,74 +964,74 @@
   },
   "flat|pcie-4-0-x8-host-bounce|send_recv|n2|S1000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.000013063476562500002,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000013069427490234377,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|send_recv|n2|S1000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00007647656249999999,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.000082427490234375,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|send_recv|n2|S100000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006360656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006955749023437499,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|send_recv|n3|S1000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.000013063476562500002,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000013069427490234377,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|send_recv|n3|S1000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00007647656249999999,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.000082427490234375,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|send_recv|n3|S100000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006360656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006955749023437499,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|send_recv|n4|S1000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.000013063476562500002,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000013069427490234377,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|send_recv|n4|S1000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00007647656249999999,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.000082427490234375,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|send_recv|n4|S100000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006360656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006955749023437499,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|send_recv|n8|S1000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.000013063476562500002,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000013069427490234377,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|send_recv|n8|S1000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00007647656249999999,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.000082427490234375,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-host-bounce|send_recv|n8|S100000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006360656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006955749023437499,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-host-bounce|all_reduce:best|n2|S1000": {
@@ -1971,2090 +1972,2090 @@
   },
   "flat|pcie-5-0-x8-host-bounce|send_recv|n2|S1000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00001303173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.000013034713745117189,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-host-bounce|send_recv|n2|S1000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00004473828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000047713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-host-bounce|send_recv|n2|S100000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031868281249999996,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034843745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-host-bounce|send_recv|n3|S1000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00001303173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.000013034713745117189,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-host-bounce|send_recv|n3|S1000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00004473828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000047713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-host-bounce|send_recv|n3|S100000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031868281249999996,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034843745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-host-bounce|send_recv|n4|S1000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00001303173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.000013034713745117189,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-host-bounce|send_recv|n4|S1000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00004473828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000047713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-host-bounce|send_recv|n4|S100000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031868281249999996,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034843745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-host-bounce|send_recv|n8|S1000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00001303173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.000013034713745117189,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-host-bounce|send_recv|n8|S1000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00004473828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000047713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-host-bounce|send_recv|n8|S100000000": {
    "latencySec": 0.000013000000000000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031868281249999996,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034843745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:best|n2|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000203173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.0000020347137451171874,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:best|n2|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.000033738281249999995,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.0000367137451171875,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:best|n2|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031758281249999994,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034733745117187494,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:best|n3|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 4.231770833333333e-8,
-   "totalSec": 0.000004042317708333333,
+   "bandwidthSec": 4.6284993489583325e-8,
+   "totalSec": 0.000004046284993489583,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:best|n3|S1000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.00004231770833333332,
-   "totalSec": 0.000046317708333333324,
+   "bandwidthSec": 0.00004628499348958333,
+   "totalSec": 0.000050284993489583334,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:best|n3|S100000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.004231770833333332,
-   "totalSec": 0.004235770833333332,
+   "bandwidthSec": 0.004628499348958332,
+   "totalSec": 0.004632499348958332,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:best|n4|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000040634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000004069427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:best|n4|S1000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.00004760742187499999,
-   "totalSec": 0.000053607421874999985,
+   "bandwidthSec": 0.000052070617675781245,
+   "totalSec": 0.00005807061767578124,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:best|n4|S100000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.004760742187499999,
-   "totalSec": 0.004766742187499999,
+   "bandwidthSec": 0.005207061767578124,
+   "totalSec": 0.005213061767578124,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:best|n8|S1000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000060634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000006069427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:best|n8|S1000000": {
-   "latencySec": 0.000006,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00006947656249999999,
-   "algorithm": "tree"
+   "latencySec": 0.000014,
+   "bandwidthSec": 0.00006074905395507812,
+   "totalSec": 0.00007474905395507812,
+   "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:best|n8|S100000000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 0.005554199218749999,
-   "totalSec": 0.005568199218749999,
+   "bandwidthSec": 0.006074905395507812,
+   "totalSec": 0.006088905395507812,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:ring|n2|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000203173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.0000020347137451171874,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:ring|n2|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.000033738281249999995,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.0000367137451171875,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:ring|n2|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031758281249999994,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034733745117187494,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:ring|n3|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 4.231770833333333e-8,
-   "totalSec": 0.000004042317708333333,
+   "bandwidthSec": 4.6284993489583325e-8,
+   "totalSec": 0.000004046284993489583,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:ring|n3|S1000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.00004231770833333332,
-   "totalSec": 0.000046317708333333324,
+   "bandwidthSec": 0.00004628499348958333,
+   "totalSec": 0.000050284993489583334,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:ring|n3|S100000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.004231770833333332,
-   "totalSec": 0.004235770833333332,
+   "bandwidthSec": 0.004628499348958332,
+   "totalSec": 0.004632499348958332,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:ring|n4|S1000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 4.760742187499999e-8,
-   "totalSec": 0.000006047607421875,
+   "bandwidthSec": 5.2070617675781246e-8,
+   "totalSec": 0.000006052070617675781,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:ring|n4|S1000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.00004760742187499999,
-   "totalSec": 0.000053607421874999985,
+   "bandwidthSec": 0.000052070617675781245,
+   "totalSec": 0.00005807061767578124,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:ring|n4|S100000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.004760742187499999,
-   "totalSec": 0.004766742187499999,
+   "bandwidthSec": 0.005207061767578124,
+   "totalSec": 0.005213061767578124,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:ring|n8|S1000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 5.5541992187499993e-8,
-   "totalSec": 0.0000140555419921875,
+   "bandwidthSec": 6.074905395507812e-8,
+   "totalSec": 0.000014060749053955079,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:ring|n8|S1000000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 0.00005554199218749999,
-   "totalSec": 0.00006954199218749998,
+   "bandwidthSec": 0.00006074905395507812,
+   "totalSec": 0.00007474905395507812,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:ring|n8|S100000000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 0.005554199218749999,
-   "totalSec": 0.005568199218749999,
+   "bandwidthSec": 0.006074905395507812,
+   "totalSec": 0.006088905395507812,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:tree|n2|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000020634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000002069427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:tree|n2|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00006547656249999998,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.00007142749023437499,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:tree|n2|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006349656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006944749023437499,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:tree|n3|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000040634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000004069427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:tree|n3|S1000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00006747656249999999,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.000073427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:tree|n3|S100000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006351656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006946749023437499,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:tree|n4|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000040634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000004069427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:tree|n4|S1000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00006747656249999999,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.000073427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:tree|n4|S100000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006351656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006946749023437499,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:tree|n8|S1000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000060634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000006069427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:tree|n8|S1000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00006947656249999999,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.000075427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_reduce:tree|n8|S100000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006353656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006948749023437499,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_gather|n2|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 1.5869140625e-8,
-   "totalSec": 0.000001015869140625,
+   "bandwidthSec": 1.7356872558593748e-8,
+   "totalSec": 0.0000010173568725585937,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_gather|n2|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000015869140624999997,
-   "totalSec": 0.000016869140624999998,
+   "bandwidthSec": 0.00001735687255859375,
+   "totalSec": 0.00001835687255859375,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_gather|n2|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0015869140624999998,
-   "totalSec": 0.0015879140624999997,
+   "bandwidthSec": 0.0017356872558593748,
+   "totalSec": 0.0017366872558593747,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_gather|n3|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 2.1158854166666664e-8,
-   "totalSec": 0.0000020211588541666667,
+   "bandwidthSec": 2.3142496744791662e-8,
+   "totalSec": 0.0000020231424967447916,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_gather|n3|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.00002115885416666666,
-   "totalSec": 0.000023158854166666662,
+   "bandwidthSec": 0.000023142496744791666,
+   "totalSec": 0.000025142496744791667,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_gather|n3|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.002115885416666666,
-   "totalSec": 0.002117885416666666,
+   "bandwidthSec": 0.002314249674479166,
+   "totalSec": 0.002316249674479166,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_gather|n4|S1000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 2.3803710937499996e-8,
-   "totalSec": 0.0000030238037109375,
+   "bandwidthSec": 2.6035308837890623e-8,
+   "totalSec": 0.0000030260353088378906,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_gather|n4|S1000000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 0.000023803710937499994,
-   "totalSec": 0.000026803710937499992,
+   "bandwidthSec": 0.000026035308837890622,
+   "totalSec": 0.00002903530883789062,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_gather|n4|S100000000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 0.0023803710937499996,
-   "totalSec": 0.0023833710937499995,
+   "bandwidthSec": 0.002603530883789062,
+   "totalSec": 0.002606530883789062,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_gather|n8|S1000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 2.7770996093749997e-8,
-   "totalSec": 0.00000702777099609375,
+   "bandwidthSec": 3.037452697753906e-8,
+   "totalSec": 0.000007030374526977539,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_gather|n8|S1000000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 0.000027770996093749994,
-   "totalSec": 0.00003477099609374999,
+   "bandwidthSec": 0.00003037452697753906,
+   "totalSec": 0.00003737452697753906,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_gather|n8|S100000000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 0.0027770996093749996,
-   "totalSec": 0.0027840996093749996,
+   "bandwidthSec": 0.003037452697753906,
+   "totalSec": 0.003044452697753906,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|reduce_scatter|n2|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 1.5869140625e-8,
-   "totalSec": 0.000001015869140625,
+   "bandwidthSec": 1.7356872558593748e-8,
+   "totalSec": 0.0000010173568725585937,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|reduce_scatter|n2|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000015869140624999997,
-   "totalSec": 0.000016869140624999998,
+   "bandwidthSec": 0.00001735687255859375,
+   "totalSec": 0.00001835687255859375,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|reduce_scatter|n2|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0015869140624999998,
-   "totalSec": 0.0015879140624999997,
+   "bandwidthSec": 0.0017356872558593748,
+   "totalSec": 0.0017366872558593747,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|reduce_scatter|n3|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 2.1158854166666664e-8,
-   "totalSec": 0.0000020211588541666667,
+   "bandwidthSec": 2.3142496744791662e-8,
+   "totalSec": 0.0000020231424967447916,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|reduce_scatter|n3|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.00002115885416666666,
-   "totalSec": 0.000023158854166666662,
+   "bandwidthSec": 0.000023142496744791666,
+   "totalSec": 0.000025142496744791667,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|reduce_scatter|n3|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.002115885416666666,
-   "totalSec": 0.002117885416666666,
+   "bandwidthSec": 0.002314249674479166,
+   "totalSec": 0.002316249674479166,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|reduce_scatter|n4|S1000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 2.3803710937499996e-8,
-   "totalSec": 0.0000030238037109375,
+   "bandwidthSec": 2.6035308837890623e-8,
+   "totalSec": 0.0000030260353088378906,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|reduce_scatter|n4|S1000000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 0.000023803710937499994,
-   "totalSec": 0.000026803710937499992,
+   "bandwidthSec": 0.000026035308837890622,
+   "totalSec": 0.00002903530883789062,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|reduce_scatter|n4|S100000000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 0.0023803710937499996,
-   "totalSec": 0.0023833710937499995,
+   "bandwidthSec": 0.002603530883789062,
+   "totalSec": 0.002606530883789062,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|reduce_scatter|n8|S1000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 2.7770996093749997e-8,
-   "totalSec": 0.00000702777099609375,
+   "bandwidthSec": 3.037452697753906e-8,
+   "totalSec": 0.000007030374526977539,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|reduce_scatter|n8|S1000000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 0.000027770996093749994,
-   "totalSec": 0.00003477099609374999,
+   "bandwidthSec": 0.00003037452697753906,
+   "totalSec": 0.00003737452697753906,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|reduce_scatter|n8|S100000000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 0.0027770996093749996,
-   "totalSec": 0.0027840996093749996,
+   "bandwidthSec": 0.003037452697753906,
+   "totalSec": 0.003044452697753906,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_to_all|n2|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 1.5869140625e-8,
-   "totalSec": 0.000001015869140625,
+   "bandwidthSec": 1.7356872558593748e-8,
+   "totalSec": 0.0000010173568725585937,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_to_all|n2|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000015869140624999997,
-   "totalSec": 0.000016869140624999998,
+   "bandwidthSec": 0.00001735687255859375,
+   "totalSec": 0.00001835687255859375,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_to_all|n2|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0015869140624999998,
-   "totalSec": 0.0015879140624999997,
+   "bandwidthSec": 0.0017356872558593748,
+   "totalSec": 0.0017366872558593747,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_to_all|n3|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 2.1158854166666664e-8,
-   "totalSec": 0.0000010211588541666665,
+   "bandwidthSec": 2.3142496744791662e-8,
+   "totalSec": 0.0000010231424967447916,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_to_all|n3|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.00002115885416666666,
-   "totalSec": 0.00002215885416666666,
+   "bandwidthSec": 0.000023142496744791666,
+   "totalSec": 0.000024142496744791666,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_to_all|n3|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.002115885416666666,
-   "totalSec": 0.0021168854166666662,
+   "bandwidthSec": 0.002314249674479166,
+   "totalSec": 0.0023152496744791662,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_to_all|n4|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 2.3803710937499996e-8,
-   "totalSec": 0.0000010238037109375,
+   "bandwidthSec": 2.6035308837890623e-8,
+   "totalSec": 0.0000010260353088378907,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_to_all|n4|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000023803710937499994,
-   "totalSec": 0.000024803710937499995,
+   "bandwidthSec": 0.000026035308837890622,
+   "totalSec": 0.000027035308837890623,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_to_all|n4|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0023803710937499996,
-   "totalSec": 0.0023813710937499997,
+   "bandwidthSec": 0.002603530883789062,
+   "totalSec": 0.002604530883789062,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_to_all|n8|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 2.7770996093749997e-8,
-   "totalSec": 0.00000102777099609375,
+   "bandwidthSec": 3.037452697753906e-8,
+   "totalSec": 0.000001030374526977539,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_to_all|n8|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000027770996093749994,
-   "totalSec": 0.000028770996093749995,
+   "bandwidthSec": 0.00003037452697753906,
+   "totalSec": 0.00003137452697753906,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|all_to_all|n8|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0027770996093749996,
-   "totalSec": 0.0027780996093749997,
+   "bandwidthSec": 0.003037452697753906,
+   "totalSec": 0.003038452697753906,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|send_recv|n2|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000103173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.0000010347137451171874,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|send_recv|n2|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00003273828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000035713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|send_recv|n2|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031748281249999997,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034723745117187497,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|send_recv|n3|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000103173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.0000010347137451171874,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|send_recv|n3|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00003273828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000035713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|send_recv|n3|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031748281249999997,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034723745117187497,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|send_recv|n4|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000103173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.0000010347137451171874,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|send_recv|n4|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00003273828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000035713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|send_recv|n4|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031748281249999997,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034723745117187497,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|send_recv|n8|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000103173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.0000010347137451171874,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|send_recv|n8|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00003273828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000035713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x16-direct-p2p|send_recv|n8|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031748281249999997,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034723745117187497,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:best|n2|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000020634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000002069427490234375,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:best|n2|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00006547656249999998,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.00007142749023437499,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:best|n2|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006349656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006944749023437499,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:best|n3|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 8.463541666666665e-8,
-   "totalSec": 0.000004084635416666666,
+   "bandwidthSec": 9.256998697916665e-8,
+   "totalSec": 0.0000040925699869791665,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:best|n3|S1000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.00008463541666666664,
-   "totalSec": 0.00008863541666666664,
+   "bandwidthSec": 0.00009256998697916666,
+   "totalSec": 0.00009656998697916667,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:best|n3|S100000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.008463541666666664,
-   "totalSec": 0.008467541666666665,
+   "bandwidthSec": 0.009256998697916664,
+   "totalSec": 0.009260998697916665,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:best|n4|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 1.26953125e-7,
-   "totalSec": 0.000004126953125,
+   "bandwidthSec": 1.3885498046874998e-7,
+   "totalSec": 0.00000413885498046875,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:best|n4|S1000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.00009521484374999998,
-   "totalSec": 0.00010121484374999997,
+   "bandwidthSec": 0.00010414123535156249,
+   "totalSec": 0.00011014123535156249,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:best|n4|S100000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.009521484374999998,
-   "totalSec": 0.009527484374999999,
+   "bandwidthSec": 0.010414123535156248,
+   "totalSec": 0.010420123535156249,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:best|n8|S1000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 1.26953125e-7,
-   "totalSec": 0.000006126953125,
+   "bandwidthSec": 1.3885498046874998e-7,
+   "totalSec": 0.00000613885498046875,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:best|n8|S1000000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 0.00011108398437499998,
-   "totalSec": 0.00012508398437499998,
+   "bandwidthSec": 0.00012149810791015624,
+   "totalSec": 0.00013549810791015624,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:best|n8|S100000000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 0.011108398437499998,
-   "totalSec": 0.011122398437499998,
+   "bandwidthSec": 0.012149810791015623,
+   "totalSec": 0.012163810791015623,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:ring|n2|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000020634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000002069427490234375,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:ring|n2|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00006547656249999998,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.00007142749023437499,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:ring|n2|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006349656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006944749023437499,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:ring|n3|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 8.463541666666665e-8,
-   "totalSec": 0.000004084635416666666,
+   "bandwidthSec": 9.256998697916665e-8,
+   "totalSec": 0.0000040925699869791665,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:ring|n3|S1000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.00008463541666666664,
-   "totalSec": 0.00008863541666666664,
+   "bandwidthSec": 0.00009256998697916666,
+   "totalSec": 0.00009656998697916667,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:ring|n3|S100000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.008463541666666664,
-   "totalSec": 0.008467541666666665,
+   "bandwidthSec": 0.009256998697916664,
+   "totalSec": 0.009260998697916665,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:ring|n4|S1000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 9.521484374999999e-8,
-   "totalSec": 0.0000060952148437500005,
+   "bandwidthSec": 1.0414123535156249e-7,
+   "totalSec": 0.000006104141235351563,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:ring|n4|S1000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.00009521484374999998,
-   "totalSec": 0.00010121484374999997,
+   "bandwidthSec": 0.00010414123535156249,
+   "totalSec": 0.00011014123535156249,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:ring|n4|S100000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.009521484374999998,
-   "totalSec": 0.009527484374999999,
+   "bandwidthSec": 0.010414123535156248,
+   "totalSec": 0.010420123535156249,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:ring|n8|S1000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 1.1108398437499999e-7,
-   "totalSec": 0.000014111083984374999,
+   "bandwidthSec": 1.2149810791015624e-7,
+   "totalSec": 0.000014121498107910156,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:ring|n8|S1000000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 0.00011108398437499998,
-   "totalSec": 0.00012508398437499998,
+   "bandwidthSec": 0.00012149810791015624,
+   "totalSec": 0.00013549810791015624,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:ring|n8|S100000000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 0.011108398437499998,
-   "totalSec": 0.011122398437499998,
+   "bandwidthSec": 0.012149810791015623,
+   "totalSec": 0.012163810791015623,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:tree|n2|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 1.26953125e-7,
-   "totalSec": 0.000002126953125,
+   "bandwidthSec": 1.3885498046874998e-7,
+   "totalSec": 0.00000213885498046875,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:tree|n2|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.00012695312499999998,
-   "totalSec": 0.00012895312499999997,
+   "bandwidthSec": 0.00013885498046875,
+   "totalSec": 0.00014085498046875,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:tree|n2|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.012695312499999998,
-   "totalSec": 0.012697312499999999,
+   "bandwidthSec": 0.013885498046874998,
+   "totalSec": 0.013887498046874999,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:tree|n3|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 1.26953125e-7,
-   "totalSec": 0.000004126953125,
+   "bandwidthSec": 1.3885498046874998e-7,
+   "totalSec": 0.00000413885498046875,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:tree|n3|S1000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.00012695312499999998,
-   "totalSec": 0.00013095312499999997,
+   "bandwidthSec": 0.00013885498046875,
+   "totalSec": 0.00014285498046874998,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:tree|n3|S100000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.012695312499999998,
-   "totalSec": 0.012699312499999999,
+   "bandwidthSec": 0.013885498046874998,
+   "totalSec": 0.013889498046874999,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:tree|n4|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 1.26953125e-7,
-   "totalSec": 0.000004126953125,
+   "bandwidthSec": 1.3885498046874998e-7,
+   "totalSec": 0.00000413885498046875,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:tree|n4|S1000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.00012695312499999998,
-   "totalSec": 0.00013095312499999997,
+   "bandwidthSec": 0.00013885498046875,
+   "totalSec": 0.00014285498046874998,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:tree|n4|S100000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.012695312499999998,
-   "totalSec": 0.012699312499999999,
+   "bandwidthSec": 0.013885498046874998,
+   "totalSec": 0.013889498046874999,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:tree|n8|S1000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 1.26953125e-7,
-   "totalSec": 0.000006126953125,
+   "bandwidthSec": 1.3885498046874998e-7,
+   "totalSec": 0.00000613885498046875,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:tree|n8|S1000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.00012695312499999998,
-   "totalSec": 0.000132953125,
+   "bandwidthSec": 0.00013885498046875,
+   "totalSec": 0.00014485498046875,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_reduce:tree|n8|S100000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.012695312499999998,
-   "totalSec": 0.012701312499999999,
+   "bandwidthSec": 0.013885498046874998,
+   "totalSec": 0.013891498046874999,
    "algorithm": "tree"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_gather|n2|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000103173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.0000010347137451171874,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_gather|n2|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00003273828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000035713745117187496,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_gather|n2|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031748281249999997,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034723745117187497,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_gather|n3|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 4.231770833333333e-8,
-   "totalSec": 0.000002042317708333333,
+   "bandwidthSec": 4.6284993489583325e-8,
+   "totalSec": 0.0000020462849934895832,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_gather|n3|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.00004231770833333332,
-   "totalSec": 0.00004431770833333332,
+   "bandwidthSec": 0.00004628499348958333,
+   "totalSec": 0.00004828499348958333,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_gather|n3|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.004231770833333332,
-   "totalSec": 0.0042337708333333324,
+   "bandwidthSec": 0.004628499348958332,
+   "totalSec": 0.0046304993489583324,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_gather|n4|S1000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 4.760742187499999e-8,
-   "totalSec": 0.0000030476074218750003,
+   "bandwidthSec": 5.2070617675781246e-8,
+   "totalSec": 0.0000030520706176757815,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_gather|n4|S1000000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 0.00004760742187499999,
-   "totalSec": 0.000050607421874999986,
+   "bandwidthSec": 0.000052070617675781245,
+   "totalSec": 0.00005507061767578124,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_gather|n4|S100000000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 0.004760742187499999,
-   "totalSec": 0.0047637421874999995,
+   "bandwidthSec": 0.005207061767578124,
+   "totalSec": 0.0052100617675781245,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_gather|n8|S1000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 5.5541992187499993e-8,
-   "totalSec": 0.0000070555419921874995,
+   "bandwidthSec": 6.074905395507812e-8,
+   "totalSec": 0.000007060749053955078,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_gather|n8|S1000000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 0.00005554199218749999,
-   "totalSec": 0.00006254199218749999,
+   "bandwidthSec": 0.00006074905395507812,
+   "totalSec": 0.00006774905395507812,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_gather|n8|S100000000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 0.005554199218749999,
-   "totalSec": 0.005561199218749999,
+   "bandwidthSec": 0.006074905395507812,
+   "totalSec": 0.006081905395507812,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|reduce_scatter|n2|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000103173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.0000010347137451171874,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|reduce_scatter|n2|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00003273828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000035713745117187496,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|reduce_scatter|n2|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031748281249999997,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034723745117187497,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|reduce_scatter|n3|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 4.231770833333333e-8,
-   "totalSec": 0.000002042317708333333,
+   "bandwidthSec": 4.6284993489583325e-8,
+   "totalSec": 0.0000020462849934895832,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|reduce_scatter|n3|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.00004231770833333332,
-   "totalSec": 0.00004431770833333332,
+   "bandwidthSec": 0.00004628499348958333,
+   "totalSec": 0.00004828499348958333,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|reduce_scatter|n3|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.004231770833333332,
-   "totalSec": 0.0042337708333333324,
+   "bandwidthSec": 0.004628499348958332,
+   "totalSec": 0.0046304993489583324,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|reduce_scatter|n4|S1000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 4.760742187499999e-8,
-   "totalSec": 0.0000030476074218750003,
+   "bandwidthSec": 5.2070617675781246e-8,
+   "totalSec": 0.0000030520706176757815,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|reduce_scatter|n4|S1000000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 0.00004760742187499999,
-   "totalSec": 0.000050607421874999986,
+   "bandwidthSec": 0.000052070617675781245,
+   "totalSec": 0.00005507061767578124,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|reduce_scatter|n4|S100000000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 0.004760742187499999,
-   "totalSec": 0.0047637421874999995,
+   "bandwidthSec": 0.005207061767578124,
+   "totalSec": 0.0052100617675781245,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|reduce_scatter|n8|S1000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 5.5541992187499993e-8,
-   "totalSec": 0.0000070555419921874995,
+   "bandwidthSec": 6.074905395507812e-8,
+   "totalSec": 0.000007060749053955078,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|reduce_scatter|n8|S1000000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 0.00005554199218749999,
-   "totalSec": 0.00006254199218749999,
+   "bandwidthSec": 0.00006074905395507812,
+   "totalSec": 0.00006774905395507812,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|reduce_scatter|n8|S100000000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 0.005554199218749999,
-   "totalSec": 0.005561199218749999,
+   "bandwidthSec": 0.006074905395507812,
+   "totalSec": 0.006081905395507812,
    "algorithm": "ring"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_to_all|n2|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000103173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.0000010347137451171874,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_to_all|n2|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00003273828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000035713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_to_all|n2|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031748281249999997,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034723745117187497,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_to_all|n3|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 4.231770833333333e-8,
-   "totalSec": 0.0000010423177083333333,
+   "bandwidthSec": 4.6284993489583325e-8,
+   "totalSec": 0.0000010462849934895833,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_to_all|n3|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.00004231770833333332,
-   "totalSec": 0.00004331770833333332,
+   "bandwidthSec": 0.00004628499348958333,
+   "totalSec": 0.00004728499348958333,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_to_all|n3|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.004231770833333332,
-   "totalSec": 0.004232770833333332,
+   "bandwidthSec": 0.004628499348958332,
+   "totalSec": 0.004629499348958332,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_to_all|n4|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 4.760742187499999e-8,
-   "totalSec": 0.000001047607421875,
+   "bandwidthSec": 5.2070617675781246e-8,
+   "totalSec": 0.0000010520706176757812,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_to_all|n4|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.00004760742187499999,
-   "totalSec": 0.000048607421874999985,
+   "bandwidthSec": 0.000052070617675781245,
+   "totalSec": 0.00005307061767578124,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_to_all|n4|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.004760742187499999,
-   "totalSec": 0.004761742187499999,
+   "bandwidthSec": 0.005207061767578124,
+   "totalSec": 0.005208061767578124,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_to_all|n8|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 5.5541992187499993e-8,
-   "totalSec": 0.0000010555419921875,
+   "bandwidthSec": 6.074905395507812e-8,
+   "totalSec": 0.0000010607490539550782,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_to_all|n8|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.00005554199218749999,
-   "totalSec": 0.000056541992187499986,
+   "bandwidthSec": 0.00006074905395507812,
+   "totalSec": 0.00006174905395507812,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|all_to_all|n8|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.005554199218749999,
-   "totalSec": 0.005555199218749999,
+   "bandwidthSec": 0.006074905395507812,
+   "totalSec": 0.006075905395507812,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|send_recv|n2|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000010634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000001069427490234375,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|send_recv|n2|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00006447656249999999,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.000070427490234375,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|send_recv|n2|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006348656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006943749023437499,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|send_recv|n3|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000010634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000001069427490234375,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|send_recv|n3|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00006447656249999999,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.000070427490234375,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|send_recv|n3|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006348656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006943749023437499,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|send_recv|n4|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000010634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000001069427490234375,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|send_recv|n4|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00006447656249999999,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.000070427490234375,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|send_recv|n4|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006348656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006943749023437499,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|send_recv|n8|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000010634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000001069427490234375,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|send_recv|n8|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00006447656249999999,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.000070427490234375,
    "algorithm": "direct"
   },
   "flat|pcie-4-0-x8-direct-p2p|send_recv|n8|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006348656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006943749023437499,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:best|n2|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 1.5869140625e-8,
-   "totalSec": 0.000002015869140625,
+   "bandwidthSec": 1.7356872558593748e-8,
+   "totalSec": 0.000002017356872558594,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:best|n2|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.000015869140624999997,
-   "totalSec": 0.000017869140625,
+   "bandwidthSec": 0.00001735687255859375,
+   "totalSec": 0.00001935687255859375,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:best|n2|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.0015869140624999998,
-   "totalSec": 0.0015889140624999998,
+   "bandwidthSec": 0.0017356872558593748,
+   "totalSec": 0.0017376872558593748,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:best|n3|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 2.1158854166666664e-8,
-   "totalSec": 0.000004021158854166666,
+   "bandwidthSec": 2.3142496744791662e-8,
+   "totalSec": 0.0000040231424967447915,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:best|n3|S1000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.00002115885416666666,
-   "totalSec": 0.00002515885416666666,
+   "bandwidthSec": 0.000023142496744791666,
+   "totalSec": 0.000027142496744791665,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:best|n3|S100000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.002115885416666666,
-   "totalSec": 0.002119885416666666,
+   "bandwidthSec": 0.002314249674479166,
+   "totalSec": 0.002318249674479166,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:best|n4|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000403173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.000004034713745117188,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:best|n4|S1000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.000023803710937499994,
-   "totalSec": 0.000029803710937499994,
+   "bandwidthSec": 0.000026035308837890622,
+   "totalSec": 0.00003203530883789062,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:best|n4|S100000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.0023803710937499996,
-   "totalSec": 0.0023863710937499995,
+   "bandwidthSec": 0.002603530883789062,
+   "totalSec": 0.002609530883789062,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:best|n8|S1000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.0000060317382812500006,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.000006034713745117188,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:best|n8|S1000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00003773828125,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.0000407137451171875,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:best|n8|S100000000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 0.0027770996093749996,
-   "totalSec": 0.0027910996093749997,
+   "bandwidthSec": 0.003037452697753906,
+   "totalSec": 0.003051452697753906,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:ring|n2|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 1.5869140625e-8,
-   "totalSec": 0.000002015869140625,
+   "bandwidthSec": 1.7356872558593748e-8,
+   "totalSec": 0.000002017356872558594,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:ring|n2|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.000015869140624999997,
-   "totalSec": 0.000017869140625,
+   "bandwidthSec": 0.00001735687255859375,
+   "totalSec": 0.00001935687255859375,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:ring|n2|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.0015869140624999998,
-   "totalSec": 0.0015889140624999998,
+   "bandwidthSec": 0.0017356872558593748,
+   "totalSec": 0.0017376872558593748,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:ring|n3|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 2.1158854166666664e-8,
-   "totalSec": 0.000004021158854166666,
+   "bandwidthSec": 2.3142496744791662e-8,
+   "totalSec": 0.0000040231424967447915,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:ring|n3|S1000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.00002115885416666666,
-   "totalSec": 0.00002515885416666666,
+   "bandwidthSec": 0.000023142496744791666,
+   "totalSec": 0.000027142496744791665,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:ring|n3|S100000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.002115885416666666,
-   "totalSec": 0.002119885416666666,
+   "bandwidthSec": 0.002314249674479166,
+   "totalSec": 0.002318249674479166,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:ring|n4|S1000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 2.3803710937499996e-8,
-   "totalSec": 0.0000060238037109375,
+   "bandwidthSec": 2.6035308837890623e-8,
+   "totalSec": 0.000006026035308837891,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:ring|n4|S1000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.000023803710937499994,
-   "totalSec": 0.000029803710937499994,
+   "bandwidthSec": 0.000026035308837890622,
+   "totalSec": 0.00003203530883789062,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:ring|n4|S100000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.0023803710937499996,
-   "totalSec": 0.0023863710937499995,
+   "bandwidthSec": 0.002603530883789062,
+   "totalSec": 0.002609530883789062,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:ring|n8|S1000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 2.7770996093749997e-8,
-   "totalSec": 0.00001402777099609375,
+   "bandwidthSec": 3.037452697753906e-8,
+   "totalSec": 0.00001403037452697754,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:ring|n8|S1000000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 0.000027770996093749994,
-   "totalSec": 0.00004177099609374999,
+   "bandwidthSec": 0.00003037452697753906,
+   "totalSec": 0.00004437452697753906,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:ring|n8|S100000000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 0.0027770996093749996,
-   "totalSec": 0.0027910996093749997,
+   "bandwidthSec": 0.003037452697753906,
+   "totalSec": 0.003051452697753906,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:tree|n2|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000203173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.0000020347137451171874,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:tree|n2|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.000033738281249999995,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.0000367137451171875,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:tree|n2|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031758281249999994,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034733745117187494,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:tree|n3|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000403173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.000004034713745117188,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:tree|n3|S1000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00003573828125,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.0000387137451171875,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:tree|n3|S100000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031778281249999997,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034753745117187497,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:tree|n4|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000403173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.000004034713745117188,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:tree|n4|S1000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00003573828125,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.0000387137451171875,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:tree|n4|S100000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031778281249999997,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034753745117187497,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:tree|n8|S1000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.0000060317382812500006,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.000006034713745117188,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:tree|n8|S1000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00003773828125,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.0000407137451171875,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_reduce:tree|n8|S100000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031798281249999995,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034773745117187495,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_gather|n2|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 7.9345703125e-9,
-   "totalSec": 0.0000010079345703125,
+   "bandwidthSec": 8.678436279296874e-9,
+   "totalSec": 0.000001008678436279297,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_gather|n2|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000007934570312499999,
-   "totalSec": 0.0000089345703125,
+   "bandwidthSec": 0.000008678436279296875,
+   "totalSec": 0.000009678436279296875,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_gather|n2|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0007934570312499999,
-   "totalSec": 0.0007944570312499999,
+   "bandwidthSec": 0.0008678436279296874,
+   "totalSec": 0.0008688436279296874,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_gather|n3|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 1.0579427083333332e-8,
-   "totalSec": 0.000002010579427083333,
+   "bandwidthSec": 1.1571248372395831e-8,
+   "totalSec": 0.0000020115712483723957,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_gather|n3|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.00001057942708333333,
-   "totalSec": 0.00001257942708333333,
+   "bandwidthSec": 0.000011571248372395833,
+   "totalSec": 0.000013571248372395832,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_gather|n3|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.001057942708333333,
-   "totalSec": 0.001059942708333333,
+   "bandwidthSec": 0.001157124837239583,
+   "totalSec": 0.001159124837239583,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_gather|n4|S1000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 1.1901855468749998e-8,
-   "totalSec": 0.00000301190185546875,
+   "bandwidthSec": 1.3017654418945311e-8,
+   "totalSec": 0.0000030130176544189455,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_gather|n4|S1000000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 0.000011901855468749997,
-   "totalSec": 0.000014901855468749997,
+   "bandwidthSec": 0.000013017654418945311,
+   "totalSec": 0.00001601765441894531,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_gather|n4|S100000000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 0.0011901855468749998,
-   "totalSec": 0.0011931855468749997,
+   "bandwidthSec": 0.001301765441894531,
+   "totalSec": 0.001304765441894531,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_gather|n8|S1000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 1.3885498046874998e-8,
-   "totalSec": 0.000007013885498046875,
+   "bandwidthSec": 1.518726348876953e-8,
+   "totalSec": 0.00000701518726348877,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_gather|n8|S1000000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 0.000013885498046874997,
-   "totalSec": 0.000020885498046874996,
+   "bandwidthSec": 0.00001518726348876953,
+   "totalSec": 0.00002218726348876953,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_gather|n8|S100000000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 0.0013885498046874998,
-   "totalSec": 0.0013955498046874998,
+   "bandwidthSec": 0.001518726348876953,
+   "totalSec": 0.001525726348876953,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|reduce_scatter|n2|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 7.9345703125e-9,
-   "totalSec": 0.0000010079345703125,
+   "bandwidthSec": 8.678436279296874e-9,
+   "totalSec": 0.000001008678436279297,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|reduce_scatter|n2|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000007934570312499999,
-   "totalSec": 0.0000089345703125,
+   "bandwidthSec": 0.000008678436279296875,
+   "totalSec": 0.000009678436279296875,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|reduce_scatter|n2|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0007934570312499999,
-   "totalSec": 0.0007944570312499999,
+   "bandwidthSec": 0.0008678436279296874,
+   "totalSec": 0.0008688436279296874,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|reduce_scatter|n3|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 1.0579427083333332e-8,
-   "totalSec": 0.000002010579427083333,
+   "bandwidthSec": 1.1571248372395831e-8,
+   "totalSec": 0.0000020115712483723957,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|reduce_scatter|n3|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.00001057942708333333,
-   "totalSec": 0.00001257942708333333,
+   "bandwidthSec": 0.000011571248372395833,
+   "totalSec": 0.000013571248372395832,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|reduce_scatter|n3|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.001057942708333333,
-   "totalSec": 0.001059942708333333,
+   "bandwidthSec": 0.001157124837239583,
+   "totalSec": 0.001159124837239583,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|reduce_scatter|n4|S1000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 1.1901855468749998e-8,
-   "totalSec": 0.00000301190185546875,
+   "bandwidthSec": 1.3017654418945311e-8,
+   "totalSec": 0.0000030130176544189455,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|reduce_scatter|n4|S1000000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 0.000011901855468749997,
-   "totalSec": 0.000014901855468749997,
+   "bandwidthSec": 0.000013017654418945311,
+   "totalSec": 0.00001601765441894531,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|reduce_scatter|n4|S100000000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 0.0011901855468749998,
-   "totalSec": 0.0011931855468749997,
+   "bandwidthSec": 0.001301765441894531,
+   "totalSec": 0.001304765441894531,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|reduce_scatter|n8|S1000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 1.3885498046874998e-8,
-   "totalSec": 0.000007013885498046875,
+   "bandwidthSec": 1.518726348876953e-8,
+   "totalSec": 0.00000701518726348877,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|reduce_scatter|n8|S1000000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 0.000013885498046874997,
-   "totalSec": 0.000020885498046874996,
+   "bandwidthSec": 0.00001518726348876953,
+   "totalSec": 0.00002218726348876953,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|reduce_scatter|n8|S100000000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 0.0013885498046874998,
-   "totalSec": 0.0013955498046874998,
+   "bandwidthSec": 0.001518726348876953,
+   "totalSec": 0.001525726348876953,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_to_all|n2|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 7.9345703125e-9,
-   "totalSec": 0.0000010079345703125,
+   "bandwidthSec": 8.678436279296874e-9,
+   "totalSec": 0.000001008678436279297,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_to_all|n2|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000007934570312499999,
-   "totalSec": 0.0000089345703125,
+   "bandwidthSec": 0.000008678436279296875,
+   "totalSec": 0.000009678436279296875,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_to_all|n2|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0007934570312499999,
-   "totalSec": 0.0007944570312499999,
+   "bandwidthSec": 0.0008678436279296874,
+   "totalSec": 0.0008688436279296874,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_to_all|n3|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 1.0579427083333332e-8,
-   "totalSec": 0.0000010105794270833334,
+   "bandwidthSec": 1.1571248372395831e-8,
+   "totalSec": 0.0000010115712483723958,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_to_all|n3|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.00001057942708333333,
-   "totalSec": 0.000011579427083333331,
+   "bandwidthSec": 0.000011571248372395833,
+   "totalSec": 0.000012571248372395833,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_to_all|n3|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.001057942708333333,
-   "totalSec": 0.001058942708333333,
+   "bandwidthSec": 0.001157124837239583,
+   "totalSec": 0.001158124837239583,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_to_all|n4|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 1.1901855468749998e-8,
-   "totalSec": 0.00000101190185546875,
+   "bandwidthSec": 1.3017654418945311e-8,
+   "totalSec": 0.0000010130176544189452,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_to_all|n4|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000011901855468749997,
-   "totalSec": 0.000012901855468749998,
+   "bandwidthSec": 0.000013017654418945311,
+   "totalSec": 0.000014017654418945312,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_to_all|n4|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0011901855468749998,
-   "totalSec": 0.0011911855468749997,
+   "bandwidthSec": 0.001301765441894531,
+   "totalSec": 0.001302765441894531,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_to_all|n8|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 1.3885498046874998e-8,
-   "totalSec": 0.0000010138854980468749,
+   "bandwidthSec": 1.518726348876953e-8,
+   "totalSec": 0.0000010151872634887695,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_to_all|n8|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000013885498046874997,
-   "totalSec": 0.000014885498046874998,
+   "bandwidthSec": 0.00001518726348876953,
+   "totalSec": 0.00001618726348876953,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|all_to_all|n8|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0013885498046874998,
-   "totalSec": 0.0013895498046874997,
+   "bandwidthSec": 0.001518726348876953,
+   "totalSec": 0.0015197263488769528,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|send_recv|n2|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 1.5869140625e-8,
-   "totalSec": 0.000001015869140625,
+   "bandwidthSec": 1.7356872558593748e-8,
+   "totalSec": 0.0000010173568725585937,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|send_recv|n2|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000015869140624999997,
-   "totalSec": 0.000016869140624999998,
+   "bandwidthSec": 0.00001735687255859375,
+   "totalSec": 0.00001835687255859375,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|send_recv|n2|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0015869140624999998,
-   "totalSec": 0.0015879140624999997,
+   "bandwidthSec": 0.0017356872558593748,
+   "totalSec": 0.0017366872558593747,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|send_recv|n3|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 1.5869140625e-8,
-   "totalSec": 0.000001015869140625,
+   "bandwidthSec": 1.7356872558593748e-8,
+   "totalSec": 0.0000010173568725585937,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|send_recv|n3|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000015869140624999997,
-   "totalSec": 0.000016869140624999998,
+   "bandwidthSec": 0.00001735687255859375,
+   "totalSec": 0.00001835687255859375,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|send_recv|n3|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0015869140624999998,
-   "totalSec": 0.0015879140624999997,
+   "bandwidthSec": 0.0017356872558593748,
+   "totalSec": 0.0017366872558593747,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|send_recv|n4|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 1.5869140625e-8,
-   "totalSec": 0.000001015869140625,
+   "bandwidthSec": 1.7356872558593748e-8,
+   "totalSec": 0.0000010173568725585937,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|send_recv|n4|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000015869140624999997,
-   "totalSec": 0.000016869140624999998,
+   "bandwidthSec": 0.00001735687255859375,
+   "totalSec": 0.00001835687255859375,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|send_recv|n4|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0015869140624999998,
-   "totalSec": 0.0015879140624999997,
+   "bandwidthSec": 0.0017356872558593748,
+   "totalSec": 0.0017366872558593747,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|send_recv|n8|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 1.5869140625e-8,
-   "totalSec": 0.000001015869140625,
+   "bandwidthSec": 1.7356872558593748e-8,
+   "totalSec": 0.0000010173568725585937,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|send_recv|n8|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000015869140624999997,
-   "totalSec": 0.000016869140624999998,
+   "bandwidthSec": 0.00001735687255859375,
+   "totalSec": 0.00001835687255859375,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x16-direct-p2p|send_recv|n8|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0015869140624999998,
-   "totalSec": 0.0015879140624999997,
+   "bandwidthSec": 0.0017356872558593748,
+   "totalSec": 0.0017366872558593747,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:best|n2|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000203173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.0000020347137451171874,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:best|n2|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.000033738281249999995,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.0000367137451171875,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:best|n2|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031758281249999994,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034733745117187494,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:best|n3|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 4.231770833333333e-8,
-   "totalSec": 0.000004042317708333333,
+   "bandwidthSec": 4.6284993489583325e-8,
+   "totalSec": 0.000004046284993489583,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:best|n3|S1000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.00004231770833333332,
-   "totalSec": 0.000046317708333333324,
+   "bandwidthSec": 0.00004628499348958333,
+   "totalSec": 0.000050284993489583334,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:best|n3|S100000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.004231770833333332,
-   "totalSec": 0.004235770833333332,
+   "bandwidthSec": 0.004628499348958332,
+   "totalSec": 0.004632499348958332,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:best|n4|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000040634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000004069427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:best|n4|S1000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.00004760742187499999,
-   "totalSec": 0.000053607421874999985,
+   "bandwidthSec": 0.000052070617675781245,
+   "totalSec": 0.00005807061767578124,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:best|n4|S100000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.004760742187499999,
-   "totalSec": 0.004766742187499999,
+   "bandwidthSec": 0.005207061767578124,
+   "totalSec": 0.005213061767578124,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:best|n8|S1000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000060634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000006069427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:best|n8|S1000000": {
-   "latencySec": 0.000006,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00006947656249999999,
-   "algorithm": "tree"
+   "latencySec": 0.000014,
+   "bandwidthSec": 0.00006074905395507812,
+   "totalSec": 0.00007474905395507812,
+   "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:best|n8|S100000000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 0.005554199218749999,
-   "totalSec": 0.005568199218749999,
+   "bandwidthSec": 0.006074905395507812,
+   "totalSec": 0.006088905395507812,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:ring|n2|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000203173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.0000020347137451171874,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:ring|n2|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.000033738281249999995,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.0000367137451171875,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:ring|n2|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031758281249999994,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034733745117187494,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:ring|n3|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 4.231770833333333e-8,
-   "totalSec": 0.000004042317708333333,
+   "bandwidthSec": 4.6284993489583325e-8,
+   "totalSec": 0.000004046284993489583,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:ring|n3|S1000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.00004231770833333332,
-   "totalSec": 0.000046317708333333324,
+   "bandwidthSec": 0.00004628499348958333,
+   "totalSec": 0.000050284993489583334,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:ring|n3|S100000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.004231770833333332,
-   "totalSec": 0.004235770833333332,
+   "bandwidthSec": 0.004628499348958332,
+   "totalSec": 0.004632499348958332,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:ring|n4|S1000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 4.760742187499999e-8,
-   "totalSec": 0.000006047607421875,
+   "bandwidthSec": 5.2070617675781246e-8,
+   "totalSec": 0.000006052070617675781,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:ring|n4|S1000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.00004760742187499999,
-   "totalSec": 0.000053607421874999985,
+   "bandwidthSec": 0.000052070617675781245,
+   "totalSec": 0.00005807061767578124,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:ring|n4|S100000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.004760742187499999,
-   "totalSec": 0.004766742187499999,
+   "bandwidthSec": 0.005207061767578124,
+   "totalSec": 0.005213061767578124,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:ring|n8|S1000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 5.5541992187499993e-8,
-   "totalSec": 0.0000140555419921875,
+   "bandwidthSec": 6.074905395507812e-8,
+   "totalSec": 0.000014060749053955079,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:ring|n8|S1000000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 0.00005554199218749999,
-   "totalSec": 0.00006954199218749998,
+   "bandwidthSec": 0.00006074905395507812,
+   "totalSec": 0.00007474905395507812,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:ring|n8|S100000000": {
    "latencySec": 0.000014,
-   "bandwidthSec": 0.005554199218749999,
-   "totalSec": 0.005568199218749999,
+   "bandwidthSec": 0.006074905395507812,
+   "totalSec": 0.006088905395507812,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:tree|n2|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000020634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000002069427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:tree|n2|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00006547656249999998,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.00007142749023437499,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:tree|n2|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006349656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006944749023437499,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:tree|n3|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000040634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000004069427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:tree|n3|S1000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00006747656249999999,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.000073427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:tree|n3|S100000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006351656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006946749023437499,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:tree|n4|S1000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000040634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000004069427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:tree|n4|S1000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00006747656249999999,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.000073427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:tree|n4|S100000000": {
    "latencySec": 0.000004,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006351656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006946749023437499,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:tree|n8|S1000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 6.34765625e-8,
-   "totalSec": 0.0000060634765625,
+   "bandwidthSec": 6.942749023437499e-8,
+   "totalSec": 0.000006069427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:tree|n8|S1000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.00006347656249999999,
-   "totalSec": 0.00006947656249999999,
+   "bandwidthSec": 0.000069427490234375,
+   "totalSec": 0.000075427490234375,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_reduce:tree|n8|S100000000": {
    "latencySec": 0.000006,
-   "bandwidthSec": 0.006347656249999999,
-   "totalSec": 0.006353656249999999,
+   "bandwidthSec": 0.006942749023437499,
+   "totalSec": 0.006948749023437499,
    "algorithm": "tree"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_gather|n2|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 1.5869140625e-8,
-   "totalSec": 0.000001015869140625,
+   "bandwidthSec": 1.7356872558593748e-8,
+   "totalSec": 0.0000010173568725585937,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_gather|n2|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000015869140624999997,
-   "totalSec": 0.000016869140624999998,
+   "bandwidthSec": 0.00001735687255859375,
+   "totalSec": 0.00001835687255859375,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_gather|n2|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0015869140624999998,
-   "totalSec": 0.0015879140624999997,
+   "bandwidthSec": 0.0017356872558593748,
+   "totalSec": 0.0017366872558593747,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_gather|n3|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 2.1158854166666664e-8,
-   "totalSec": 0.0000020211588541666667,
+   "bandwidthSec": 2.3142496744791662e-8,
+   "totalSec": 0.0000020231424967447916,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_gather|n3|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.00002115885416666666,
-   "totalSec": 0.000023158854166666662,
+   "bandwidthSec": 0.000023142496744791666,
+   "totalSec": 0.000025142496744791667,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_gather|n3|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.002115885416666666,
-   "totalSec": 0.002117885416666666,
+   "bandwidthSec": 0.002314249674479166,
+   "totalSec": 0.002316249674479166,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_gather|n4|S1000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 2.3803710937499996e-8,
-   "totalSec": 0.0000030238037109375,
+   "bandwidthSec": 2.6035308837890623e-8,
+   "totalSec": 0.0000030260353088378906,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_gather|n4|S1000000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 0.000023803710937499994,
-   "totalSec": 0.000026803710937499992,
+   "bandwidthSec": 0.000026035308837890622,
+   "totalSec": 0.00002903530883789062,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_gather|n4|S100000000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 0.0023803710937499996,
-   "totalSec": 0.0023833710937499995,
+   "bandwidthSec": 0.002603530883789062,
+   "totalSec": 0.002606530883789062,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_gather|n8|S1000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 2.7770996093749997e-8,
-   "totalSec": 0.00000702777099609375,
+   "bandwidthSec": 3.037452697753906e-8,
+   "totalSec": 0.000007030374526977539,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_gather|n8|S1000000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 0.000027770996093749994,
-   "totalSec": 0.00003477099609374999,
+   "bandwidthSec": 0.00003037452697753906,
+   "totalSec": 0.00003737452697753906,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_gather|n8|S100000000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 0.0027770996093749996,
-   "totalSec": 0.0027840996093749996,
+   "bandwidthSec": 0.003037452697753906,
+   "totalSec": 0.003044452697753906,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|reduce_scatter|n2|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 1.5869140625e-8,
-   "totalSec": 0.000001015869140625,
+   "bandwidthSec": 1.7356872558593748e-8,
+   "totalSec": 0.0000010173568725585937,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|reduce_scatter|n2|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000015869140624999997,
-   "totalSec": 0.000016869140624999998,
+   "bandwidthSec": 0.00001735687255859375,
+   "totalSec": 0.00001835687255859375,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|reduce_scatter|n2|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0015869140624999998,
-   "totalSec": 0.0015879140624999997,
+   "bandwidthSec": 0.0017356872558593748,
+   "totalSec": 0.0017366872558593747,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|reduce_scatter|n3|S1000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 2.1158854166666664e-8,
-   "totalSec": 0.0000020211588541666667,
+   "bandwidthSec": 2.3142496744791662e-8,
+   "totalSec": 0.0000020231424967447916,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|reduce_scatter|n3|S1000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.00002115885416666666,
-   "totalSec": 0.000023158854166666662,
+   "bandwidthSec": 0.000023142496744791666,
+   "totalSec": 0.000025142496744791667,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|reduce_scatter|n3|S100000000": {
    "latencySec": 0.000002,
-   "bandwidthSec": 0.002115885416666666,
-   "totalSec": 0.002117885416666666,
+   "bandwidthSec": 0.002314249674479166,
+   "totalSec": 0.002316249674479166,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|reduce_scatter|n4|S1000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 2.3803710937499996e-8,
-   "totalSec": 0.0000030238037109375,
+   "bandwidthSec": 2.6035308837890623e-8,
+   "totalSec": 0.0000030260353088378906,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|reduce_scatter|n4|S1000000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 0.000023803710937499994,
-   "totalSec": 0.000026803710937499992,
+   "bandwidthSec": 0.000026035308837890622,
+   "totalSec": 0.00002903530883789062,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|reduce_scatter|n4|S100000000": {
    "latencySec": 0.000003,
-   "bandwidthSec": 0.0023803710937499996,
-   "totalSec": 0.0023833710937499995,
+   "bandwidthSec": 0.002603530883789062,
+   "totalSec": 0.002606530883789062,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|reduce_scatter|n8|S1000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 2.7770996093749997e-8,
-   "totalSec": 0.00000702777099609375,
+   "bandwidthSec": 3.037452697753906e-8,
+   "totalSec": 0.000007030374526977539,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|reduce_scatter|n8|S1000000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 0.000027770996093749994,
-   "totalSec": 0.00003477099609374999,
+   "bandwidthSec": 0.00003037452697753906,
+   "totalSec": 0.00003737452697753906,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|reduce_scatter|n8|S100000000": {
    "latencySec": 0.000007,
-   "bandwidthSec": 0.0027770996093749996,
-   "totalSec": 0.0027840996093749996,
+   "bandwidthSec": 0.003037452697753906,
+   "totalSec": 0.003044452697753906,
    "algorithm": "ring"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_to_all|n2|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 1.5869140625e-8,
-   "totalSec": 0.000001015869140625,
+   "bandwidthSec": 1.7356872558593748e-8,
+   "totalSec": 0.0000010173568725585937,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_to_all|n2|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000015869140624999997,
-   "totalSec": 0.000016869140624999998,
+   "bandwidthSec": 0.00001735687255859375,
+   "totalSec": 0.00001835687255859375,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_to_all|n2|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0015869140624999998,
-   "totalSec": 0.0015879140624999997,
+   "bandwidthSec": 0.0017356872558593748,
+   "totalSec": 0.0017366872558593747,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_to_all|n3|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 2.1158854166666664e-8,
-   "totalSec": 0.0000010211588541666665,
+   "bandwidthSec": 2.3142496744791662e-8,
+   "totalSec": 0.0000010231424967447916,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_to_all|n3|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.00002115885416666666,
-   "totalSec": 0.00002215885416666666,
+   "bandwidthSec": 0.000023142496744791666,
+   "totalSec": 0.000024142496744791666,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_to_all|n3|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.002115885416666666,
-   "totalSec": 0.0021168854166666662,
+   "bandwidthSec": 0.002314249674479166,
+   "totalSec": 0.0023152496744791662,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_to_all|n4|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 2.3803710937499996e-8,
-   "totalSec": 0.0000010238037109375,
+   "bandwidthSec": 2.6035308837890623e-8,
+   "totalSec": 0.0000010260353088378907,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_to_all|n4|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000023803710937499994,
-   "totalSec": 0.000024803710937499995,
+   "bandwidthSec": 0.000026035308837890622,
+   "totalSec": 0.000027035308837890623,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_to_all|n4|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0023803710937499996,
-   "totalSec": 0.0023813710937499997,
+   "bandwidthSec": 0.002603530883789062,
+   "totalSec": 0.002604530883789062,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_to_all|n8|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 2.7770996093749997e-8,
-   "totalSec": 0.00000102777099609375,
+   "bandwidthSec": 3.037452697753906e-8,
+   "totalSec": 0.000001030374526977539,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_to_all|n8|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000027770996093749994,
-   "totalSec": 0.000028770996093749995,
+   "bandwidthSec": 0.00003037452697753906,
+   "totalSec": 0.00003137452697753906,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|all_to_all|n8|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0027770996093749996,
-   "totalSec": 0.0027780996093749997,
+   "bandwidthSec": 0.003037452697753906,
+   "totalSec": 0.003038452697753906,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|send_recv|n2|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000103173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.0000010347137451171874,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|send_recv|n2|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00003273828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000035713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|send_recv|n2|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031748281249999997,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034723745117187497,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|send_recv|n3|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000103173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.0000010347137451171874,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|send_recv|n3|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00003273828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000035713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|send_recv|n3|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031748281249999997,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034723745117187497,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|send_recv|n4|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000103173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.0000010347137451171874,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|send_recv|n4|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00003273828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000035713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|send_recv|n4|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031748281249999997,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034723745117187497,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|send_recv|n8|S1000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 3.173828125e-8,
-   "totalSec": 0.00000103173828125,
+   "bandwidthSec": 3.4713745117187495e-8,
+   "totalSec": 0.0000010347137451171874,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|send_recv|n8|S1000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.000031738281249999994,
-   "totalSec": 0.00003273828124999999,
+   "bandwidthSec": 0.0000347137451171875,
+   "totalSec": 0.000035713745117187496,
    "algorithm": "direct"
   },
   "flat|pcie-5-0-x8-direct-p2p|send_recv|n8|S100000000": {
    "latencySec": 0.000001,
-   "bandwidthSec": 0.0031738281249999996,
-   "totalSec": 0.0031748281249999997,
+   "bandwidthSec": 0.0034713745117187496,
+   "totalSec": 0.0034723745117187497,
    "algorithm": "direct"
   },
   "flat|rtx-3090-nvlink-bridge|all_reduce:best|n2|S1000": {
@@ -9601,6 +9602,510 @@
    "totalSec": 0.020045,
    "algorithm": "direct"
   },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:best|n2|S1000": {
+   "latencySec": 0.00009,
+   "bandwidthSec": 4e-7,
+   "totalSec": 0.0000904,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:best|n2|S1000000": {
+   "latencySec": 0.00009,
+   "bandwidthSec": 0.0004,
+   "totalSec": 0.00049,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:best|n2|S100000000": {
+   "latencySec": 0.00009,
+   "bandwidthSec": 0.04,
+   "totalSec": 0.04009,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:best|n3|S1000": {
+   "latencySec": 0.00018,
+   "bandwidthSec": 5.333333333333332e-7,
+   "totalSec": 0.00018053333333333335,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:best|n3|S1000000": {
+   "latencySec": 0.00018,
+   "bandwidthSec": 0.0005333333333333334,
+   "totalSec": 0.0007133333333333334,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:best|n3|S100000000": {
+   "latencySec": 0.00018,
+   "bandwidthSec": 0.05333333333333333,
+   "totalSec": 0.05351333333333333,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:best|n4|S1000": {
+   "latencySec": 0.00018,
+   "bandwidthSec": 8e-7,
+   "totalSec": 0.0001808,
+   "algorithm": "tree"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:best|n4|S1000000": {
+   "latencySec": 0.00027,
+   "bandwidthSec": 0.0006000000000000001,
+   "totalSec": 0.0008700000000000001,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:best|n4|S100000000": {
+   "latencySec": 0.00027,
+   "bandwidthSec": 0.06,
+   "totalSec": 0.06027,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:best|n8|S1000": {
+   "latencySec": 0.00027,
+   "bandwidthSec": 8e-7,
+   "totalSec": 0.0002708,
+   "algorithm": "tree"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:best|n8|S1000000": {
+   "latencySec": 0.00027,
+   "bandwidthSec": 0.0008,
+   "totalSec": 0.00107,
+   "algorithm": "tree"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:best|n8|S100000000": {
+   "latencySec": 0.00063,
+   "bandwidthSec": 0.07,
+   "totalSec": 0.07063000000000001,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:ring|n2|S1000": {
+   "latencySec": 0.00009,
+   "bandwidthSec": 4e-7,
+   "totalSec": 0.0000904,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:ring|n2|S1000000": {
+   "latencySec": 0.00009,
+   "bandwidthSec": 0.0004,
+   "totalSec": 0.00049,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:ring|n2|S100000000": {
+   "latencySec": 0.00009,
+   "bandwidthSec": 0.04,
+   "totalSec": 0.04009,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:ring|n3|S1000": {
+   "latencySec": 0.00018,
+   "bandwidthSec": 5.333333333333332e-7,
+   "totalSec": 0.00018053333333333335,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:ring|n3|S1000000": {
+   "latencySec": 0.00018,
+   "bandwidthSec": 0.0005333333333333334,
+   "totalSec": 0.0007133333333333334,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:ring|n3|S100000000": {
+   "latencySec": 0.00018,
+   "bandwidthSec": 0.05333333333333333,
+   "totalSec": 0.05351333333333333,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:ring|n4|S1000": {
+   "latencySec": 0.00027,
+   "bandwidthSec": 6e-7,
+   "totalSec": 0.0002706,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:ring|n4|S1000000": {
+   "latencySec": 0.00027,
+   "bandwidthSec": 0.0006000000000000001,
+   "totalSec": 0.0008700000000000001,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:ring|n4|S100000000": {
+   "latencySec": 0.00027,
+   "bandwidthSec": 0.06,
+   "totalSec": 0.06027,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:ring|n8|S1000": {
+   "latencySec": 0.00063,
+   "bandwidthSec": 7e-7,
+   "totalSec": 0.0006307,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:ring|n8|S1000000": {
+   "latencySec": 0.00063,
+   "bandwidthSec": 0.0007,
+   "totalSec": 0.00133,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:ring|n8|S100000000": {
+   "latencySec": 0.00063,
+   "bandwidthSec": 0.07,
+   "totalSec": 0.07063000000000001,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:tree|n2|S1000": {
+   "latencySec": 0.00009,
+   "bandwidthSec": 8e-7,
+   "totalSec": 0.00009080000000000001,
+   "algorithm": "tree"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:tree|n2|S1000000": {
+   "latencySec": 0.00009,
+   "bandwidthSec": 0.0008,
+   "totalSec": 0.0008900000000000001,
+   "algorithm": "tree"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:tree|n2|S100000000": {
+   "latencySec": 0.00009,
+   "bandwidthSec": 0.08,
+   "totalSec": 0.08009000000000001,
+   "algorithm": "tree"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:tree|n3|S1000": {
+   "latencySec": 0.00018,
+   "bandwidthSec": 8e-7,
+   "totalSec": 0.0001808,
+   "algorithm": "tree"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:tree|n3|S1000000": {
+   "latencySec": 0.00018,
+   "bandwidthSec": 0.0008,
+   "totalSec": 0.00098,
+   "algorithm": "tree"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:tree|n3|S100000000": {
+   "latencySec": 0.00018,
+   "bandwidthSec": 0.08,
+   "totalSec": 0.08018,
+   "algorithm": "tree"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:tree|n4|S1000": {
+   "latencySec": 0.00018,
+   "bandwidthSec": 8e-7,
+   "totalSec": 0.0001808,
+   "algorithm": "tree"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:tree|n4|S1000000": {
+   "latencySec": 0.00018,
+   "bandwidthSec": 0.0008,
+   "totalSec": 0.00098,
+   "algorithm": "tree"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:tree|n4|S100000000": {
+   "latencySec": 0.00018,
+   "bandwidthSec": 0.08,
+   "totalSec": 0.08018,
+   "algorithm": "tree"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:tree|n8|S1000": {
+   "latencySec": 0.00027,
+   "bandwidthSec": 8e-7,
+   "totalSec": 0.0002708,
+   "algorithm": "tree"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:tree|n8|S1000000": {
+   "latencySec": 0.00027,
+   "bandwidthSec": 0.0008,
+   "totalSec": 0.00107,
+   "algorithm": "tree"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_reduce:tree|n8|S100000000": {
+   "latencySec": 0.00027,
+   "bandwidthSec": 0.08,
+   "totalSec": 0.08027000000000001,
+   "algorithm": "tree"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_gather|n2|S1000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 2e-7,
+   "totalSec": 0.0000452,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_gather|n2|S1000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.0002,
+   "totalSec": 0.000245,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_gather|n2|S100000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.02,
+   "totalSec": 0.020045,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_gather|n3|S1000": {
+   "latencySec": 0.00009,
+   "bandwidthSec": 2.666666666666666e-7,
+   "totalSec": 0.00009026666666666667,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_gather|n3|S1000000": {
+   "latencySec": 0.00009,
+   "bandwidthSec": 0.0002666666666666667,
+   "totalSec": 0.0003566666666666667,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_gather|n3|S100000000": {
+   "latencySec": 0.00009,
+   "bandwidthSec": 0.026666666666666665,
+   "totalSec": 0.026756666666666665,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_gather|n4|S1000": {
+   "latencySec": 0.000135,
+   "bandwidthSec": 3e-7,
+   "totalSec": 0.0001353,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_gather|n4|S1000000": {
+   "latencySec": 0.000135,
+   "bandwidthSec": 0.00030000000000000003,
+   "totalSec": 0.00043500000000000006,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_gather|n4|S100000000": {
+   "latencySec": 0.000135,
+   "bandwidthSec": 0.03,
+   "totalSec": 0.030135,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_gather|n8|S1000": {
+   "latencySec": 0.000315,
+   "bandwidthSec": 3.5e-7,
+   "totalSec": 0.00031535,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_gather|n8|S1000000": {
+   "latencySec": 0.000315,
+   "bandwidthSec": 0.00035,
+   "totalSec": 0.000665,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_gather|n8|S100000000": {
+   "latencySec": 0.000315,
+   "bandwidthSec": 0.035,
+   "totalSec": 0.035315000000000006,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|reduce_scatter|n2|S1000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 2e-7,
+   "totalSec": 0.0000452,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|reduce_scatter|n2|S1000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.0002,
+   "totalSec": 0.000245,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|reduce_scatter|n2|S100000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.02,
+   "totalSec": 0.020045,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|reduce_scatter|n3|S1000": {
+   "latencySec": 0.00009,
+   "bandwidthSec": 2.666666666666666e-7,
+   "totalSec": 0.00009026666666666667,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|reduce_scatter|n3|S1000000": {
+   "latencySec": 0.00009,
+   "bandwidthSec": 0.0002666666666666667,
+   "totalSec": 0.0003566666666666667,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|reduce_scatter|n3|S100000000": {
+   "latencySec": 0.00009,
+   "bandwidthSec": 0.026666666666666665,
+   "totalSec": 0.026756666666666665,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|reduce_scatter|n4|S1000": {
+   "latencySec": 0.000135,
+   "bandwidthSec": 3e-7,
+   "totalSec": 0.0001353,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|reduce_scatter|n4|S1000000": {
+   "latencySec": 0.000135,
+   "bandwidthSec": 0.00030000000000000003,
+   "totalSec": 0.00043500000000000006,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|reduce_scatter|n4|S100000000": {
+   "latencySec": 0.000135,
+   "bandwidthSec": 0.03,
+   "totalSec": 0.030135,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|reduce_scatter|n8|S1000": {
+   "latencySec": 0.000315,
+   "bandwidthSec": 3.5e-7,
+   "totalSec": 0.00031535,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|reduce_scatter|n8|S1000000": {
+   "latencySec": 0.000315,
+   "bandwidthSec": 0.00035,
+   "totalSec": 0.000665,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|reduce_scatter|n8|S100000000": {
+   "latencySec": 0.000315,
+   "bandwidthSec": 0.035,
+   "totalSec": 0.035315000000000006,
+   "algorithm": "ring"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_to_all|n2|S1000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 2e-7,
+   "totalSec": 0.0000452,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_to_all|n2|S1000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.0002,
+   "totalSec": 0.000245,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_to_all|n2|S100000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.02,
+   "totalSec": 0.020045,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_to_all|n3|S1000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 2.666666666666666e-7,
+   "totalSec": 0.00004526666666666667,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_to_all|n3|S1000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.0002666666666666667,
+   "totalSec": 0.0003116666666666667,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_to_all|n3|S100000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.026666666666666665,
+   "totalSec": 0.026711666666666665,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_to_all|n4|S1000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 3e-7,
+   "totalSec": 0.0000453,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_to_all|n4|S1000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.00030000000000000003,
+   "totalSec": 0.00034500000000000004,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_to_all|n4|S100000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.03,
+   "totalSec": 0.030045,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_to_all|n8|S1000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 3.5e-7,
+   "totalSec": 0.000045350000000000005,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_to_all|n8|S1000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.00035,
+   "totalSec": 0.000395,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|all_to_all|n8|S100000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.035,
+   "totalSec": 0.03504500000000001,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|send_recv|n2|S1000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 4e-7,
+   "totalSec": 0.000045400000000000006,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|send_recv|n2|S1000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.0004,
+   "totalSec": 0.00044500000000000003,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|send_recv|n2|S100000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.04,
+   "totalSec": 0.040045000000000004,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|send_recv|n3|S1000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 4e-7,
+   "totalSec": 0.000045400000000000006,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|send_recv|n3|S1000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.0004,
+   "totalSec": 0.00044500000000000003,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|send_recv|n3|S100000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.04,
+   "totalSec": 0.040045000000000004,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|send_recv|n4|S1000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 4e-7,
+   "totalSec": 0.000045400000000000006,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|send_recv|n4|S1000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.0004,
+   "totalSec": 0.00044500000000000003,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|send_recv|n4|S100000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.04,
+   "totalSec": 0.040045000000000004,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|send_recv|n8|S1000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 4e-7,
+   "totalSec": 0.000045400000000000006,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|send_recv|n8|S1000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.0004,
+   "totalSec": 0.00044500000000000003,
+   "algorithm": "direct"
+  },
+  "flat|thunderbolt-4-bridge-tcp-20-gb-s-negotiated|send_recv|n8|S100000000": {
+   "latencySec": 0.000045,
+   "bandwidthSec": 0.04,
+   "totalSec": 0.040045000000000004,
+   "algorithm": "direct"
+  },
   "flat|strix-halo-usb4-native-rdma-20-gb-s-negotiated|all_reduce:best|n2|S1000": {
    "latencySec": 0.000016,
    "bandwidthSec": 4e-7,
@@ -12753,35 +13258,35 @@
   },
   "rtx-4090-pcie-2|dense8b|pp2|b1": {
    "prefill.tokensPerSec": 20150.54343897173,
-   "prefill.latencySec": 0.40644932506224424,
+   "prefill.latencySec": 0.40654916506224426,
    "prefill.cycleSec": 0.2032699521184237,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.00107796,
-   "decode.tokensPerSec": 61.522989295527296,
-   "decode.latencySec": 0.01625408666663568,
-   "decode.cycleSec": 0.01625408666663568,
+   "prefill.sendSec": 0.0011778,
+   "decode.tokensPerSec": 61.52289698933492,
+   "decode.latencySec": 0.016254111053537537,
+   "decode.cycleSec": 0.016254111053537537,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.00001326
+   "decode.sendSec": 0.000013284375000000001
   },
   "rtx-4090-pcie-2|dense8b|pp2|b8": {
    "prefill.tokensPerSec": 20242.79156339654,
-   "prefill.latencySec": 2.4314266557702915,
+   "prefill.latencySec": 2.4318260157702913,
    "prefill.cycleSec": 1.6187490691378663,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.00427284,
+   "prefill.sendSec": 0.0046722,
    "decode.tokensPerSec": 379.195418105924,
    "decode.latencySec": 0.021097301333333332,
    "decode.cycleSec": 0.021097301333333332,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.000014040000000000001
+   "decode.sendSec": 0.000014137500000000001
   },
   "rtx-4090-pcie-4|dense8b|tp4|b1": {
    "prefill.tokensPerSec": 13131.690329325034,
@@ -12817,35 +13322,35 @@
   },
   "rtx-4090-pcie-4|dense8b|pp4|b1": {
    "prefill.tokensPerSec": 40057.687069869266,
-   "prefill.latencySec": 0.4086052450622439,
+   "prefill.latencySec": 0.4089047650622439,
    "prefill.cycleSec": 0.10225253377349747,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.0032338799999999997,
-   "decode.tokensPerSec": 61.42277253398235,
-   "decode.latencySec": 0.01628060666663568,
-   "decode.cycleSec": 0.01628060666663568,
+   "prefill.sendSec": 0.0035334,
+   "decode.tokensPerSec": 61.42249660746449,
+   "decode.latencySec": 0.016280679803537538,
+   "decode.cycleSec": 0.016280679803537538,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.00003978
+   "decode.sendSec": 0.000039853125
   },
   "rtx-4090-pcie-4|dense8b|pp4|b8": {
    "prefill.tokensPerSec": 40301.05218494356,
-   "prefill.latencySec": 1.4257464784162666,
+   "prefill.latencySec": 1.4263455184162666,
    "prefill.cycleSec": 0.8130805084102022,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.00642876,
+   "prefill.sendSec": 0.007027799999999999,
    "decode.tokensPerSec": 378.3352595202123,
    "decode.latencySec": 0.021145266793650794,
    "decode.cycleSec": 0.021145266793650794,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.000040560000000000005
+   "decode.sendSec": 0.000040706250000000003
   },
   "rtx-3090-pcie-2|dense8b|tp2|b1": {
    "prefill.tokensPerSec": 8858.486430469,
@@ -12881,35 +13386,35 @@
   },
   "rtx-3090-pcie-2|dense8b|pp2|b1": {
    "prefill.tokensPerSec": 9024.61894722345,
-   "prefill.latencySec": 0.9075586907064264,
+   "prefill.latencySec": 0.9076585307064263,
    "prefill.cycleSec": 0.45386957875492256,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.00107796,
-   "decode.tokensPerSec": 57.135083454923404,
-   "decode.latencySec": 0.017502381015842006,
-   "decode.cycleSec": 0.017502381015842006,
+   "prefill.sendSec": 0.0011778,
+   "decode.tokensPerSec": 57.13500384599876,
+   "decode.latencySec": 0.01750240540274386,
+   "decode.cycleSec": 0.01750240540274386,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.00001326
+   "decode.sendSec": 0.000013284375000000001
   },
   "rtx-3090-pcie-2|dense8b|pp2|b8": {
    "prefill.tokensPerSec": 9048.635666634964,
-   "prefill.latencySec": 5.435207572367226,
+   "prefill.latencySec": 5.435606932367225,
    "prefill.cycleSec": 3.621319412917182,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.00427284,
+   "prefill.sendSec": 0.0046722,
    "decode.tokensPerSec": 352.1100310983575,
    "decode.latencySec": 0.022720170666666695,
    "decode.cycleSec": 0.022720170666666695,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.000014040000000000001
+   "decode.sendSec": 0.000014137500000000001
   },
   "rtx-3090-pcie-4|dense8b|tp4|b1": {
    "prefill.tokensPerSec": 13131.690329325034,
@@ -12945,35 +13450,35 @@
   },
   "rtx-3090-pcie-4|dense8b|pp4|b1": {
    "prefill.tokensPerSec": 17996.49680103844,
-   "prefill.latencySec": 0.9097146107064267,
+   "prefill.latencySec": 0.9100141307064267,
    "prefill.cycleSec": 0.22759985153130755,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.0032338799999999997,
-   "decode.tokensPerSec": 57.04864207380908,
-   "decode.latencySec": 0.017528901015842025,
-   "decode.cycleSec": 0.017528901015842025,
+   "prefill.sendSec": 0.0035334,
+   "decode.tokensPerSec": 57.04840404727654,
+   "decode.latencySec": 0.017528974152743883,
+   "decode.cycleSec": 0.017528974152743883,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.00003978
+   "decode.sendSec": 0.000039853125
   },
   "rtx-3090-pcie-4|dense8b|pp4|b8": {
    "prefill.tokensPerSec": 18050.09710333419,
-   "prefill.latencySec": 3.1795165470373057,
+   "prefill.latencySec": 3.1801155870373057,
    "prefill.cycleSec": 1.8153918958113051,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.00642876,
+   "prefill.sendSec": 0.007027799999999999,
    "decode.tokensPerSec": 351.31131241162564,
    "decode.latencySec": 0.022771825777777782,
    "decode.cycleSec": 0.022771825777777782,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.000040560000000000005
+   "decode.sendSec": 0.000040706250000000003
   },
   "rtx-3090-nvlink-2|dense8b|tp2|b1": {
    "prefill.tokensPerSec": 8892.411261800144,
@@ -13044,14 +13549,14 @@
    "prefill.latencySec": 0.36187520879977436,
    "prefill.cycleSec": 0.36187520879977436,
    "prefill.commLatencySec": 0.00014699999999999978,
-   "prefill.commBandwidthSec": 0.0777420802539062,
+   "prefill.commBandwidthSec": 0.08503040027770986,
    "prefill.exposedCommSec": 0.00014700000000000824,
    "prefill.sendSec": 0,
    "decode.tokensPerSec": 55.2844565302433,
    "decode.latencySec": 0.01808826680701747,
    "decode.cycleSec": 0.01808826680701747,
    "decode.commLatencySec": 0.00014699999999999978,
-   "decode.commBandwidthSec": 0.00001898025390624999,
+   "decode.commBandwidthSec": 0.00002075965270996091,
    "decode.exposedCommSec": 0.0001470000000000013,
    "decode.sendSec": 0
   },
@@ -13060,62 +13565,62 @@
    "prefill.latencySec": 2.8828124581876593,
    "prefill.cycleSec": 2.8828124581876593,
    "prefill.commLatencySec": 0.00014699999999999978,
-   "prefill.commBandwidthSec": 0.6219366420312497,
+   "prefill.commBandwidthSec": 0.6802432022216789,
    "prefill.exposedCommSec": 0.00014700000000011926,
    "prefill.sendSec": 0,
    "decode.tokensPerSec": 291.00708612975995,
    "decode.latencySec": 0.027490739508771973,
    "decode.cycleSec": 0.027490739508771973,
    "decode.commLatencySec": 0.00014699999999999978,
-   "decode.commBandwidthSec": 0.00015184203124999992,
+   "decode.commBandwidthSec": 0.0001660772216796873,
    "decode.exposedCommSec": 0.0001470000000000013,
    "decode.sendSec": 0
   },
   "arc-pro-b60-pcie-2|dense8b|pp2|b1": {
    "prefill.tokensPerSec": 11714.945144947325,
-   "prefill.latencySec": 0.6977605822311275,
+   "prefill.latencySec": 0.6978604222311274,
    "prefill.cycleSec": 0.3496388544138093,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.00106596,
-   "decode.tokensPerSec": 27.875110119785006,
-   "decode.latencySec": 0.03587429774098818,
-   "decode.cycleSec": 0.03587429774098818,
+   "prefill.sendSec": 0.0011657999999999998,
+   "decode.tokensPerSec": 27.87509117064439,
+   "decode.latencySec": 0.03587432212789003,
+   "decode.cycleSec": 0.03587432212789003,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.00000126
+   "decode.sendSec": 0.0000012843749999999999
   },
   "arc-pro-b60-pcie-2|dense8b|pp2|b8": {
    "prefill.tokensPerSec": 11787.603849775549,
-   "prefill.latencySec": 4.171921294790268,
+   "prefill.latencySec": 4.172320654790267,
    "prefill.cycleSec": 2.7798694643631023,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.00426084,
+   "prefill.sendSec": 0.0046602,
    "decode.tokensPerSec": 171.54078438125129,
    "decode.latencySec": 0.04663613978947369,
    "decode.cycleSec": 0.04663613978947369,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.00000204
+   "decode.sendSec": 0.0000021375
   },
   "arc-pro-b60-pcie-4|dense8b|tp4|b1": {
    "prefill.tokensPerSec": 21054.795703298827,
    "prefill.latencySec": 0.19454000208409747,
    "prefill.cycleSec": 0.19454000208409747,
    "prefill.commLatencySec": 0.0002949999999999996,
-   "prefill.commBandwidthSec": 0.15548416076171867,
+   "prefill.commBandwidthSec": 0.17006080083312966,
    "prefill.exposedCommSec": 0.0002949999999999897,
    "prefill.sendSec": 0,
    "decode.tokensPerSec": 107.86460925080213,
    "decode.latencySec": 0.009270881403508756,
    "decode.cycleSec": 0.009270881403508756,
    "decode.commLatencySec": 0.0002949999999999996,
-   "decode.commBandwidthSec": 0.00003796076171874998,
+   "decode.commBandwidthSec": 0.00004151958312988276,
    "decode.exposedCommSec": 0.0002950000000000001,
    "decode.sendSec": 0
   },
@@ -13124,48 +13629,48 @@
    "prefill.latencySec": 1.5482400990587424,
    "prefill.cycleSec": 1.5482400990587424,
    "prefill.commLatencySec": 0.0002949999999999996,
-   "prefill.commBandwidthSec": 1.2438732860937494,
+   "prefill.commBandwidthSec": 1.3604864066650373,
    "prefill.exposedCommSec": 0.0002949999999999342,
    "prefill.sendSec": 0,
    "decode.tokensPerSec": 571.260366032974,
    "decode.latencySec": 0.014004122245614056,
    "decode.cycleSec": 0.014004122245614056,
    "decode.commLatencySec": 0.0002949999999999996,
-   "decode.commBandwidthSec": 0.00030368609374999985,
+   "decode.commBandwidthSec": 0.0003321566650390621,
    "decode.exposedCommSec": 0.0002950000000000001,
    "decode.sendSec": 0
   },
   "arc-pro-b60-pcie-4|dense8b|pp4|b1": {
    "prefill.tokensPerSec": 23248.348897430824,
-   "prefill.latencySec": 0.6998925022311268,
+   "prefill.latencySec": 0.7001920222311268,
    "prefill.cycleSec": 0.17618455478585188,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.0031978799999999997,
-   "decode.tokensPerSec": 27.873152162476487,
-   "decode.latencySec": 0.0358768177409882,
-   "decode.cycleSec": 0.0358768177409882,
+   "prefill.sendSec": 0.0034973999999999995,
+   "decode.tokensPerSec": 27.873095341610902,
+   "decode.latencySec": 0.035876890877890054,
+   "decode.cycleSec": 0.035876890877890054,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.0000037800000000000002
+   "decode.sendSec": 0.000003853125
   },
   "arc-pro-b60-pcie-4|dense8b|pp4|b8": {
    "prefill.tokensPerSec": 23431.923144761127,
-   "prefill.latencySec": 2.445753819352804,
+   "prefill.latencySec": 2.446352859352804,
    "prefill.cycleSec": 1.3984340848833066,
    "prefill.commLatencySec": 0,
    "prefill.commBandwidthSec": 0,
    "prefill.exposedCommSec": 0,
-   "prefill.sendSec": 0.006392760000000001,
+   "prefill.sendSec": 0.006991799999999999,
    "decode.tokensPerSec": 171.15166502104844,
    "decode.latencySec": 0.04674216870175438,
    "decode.cycleSec": 0.04674216870175438,
    "decode.commLatencySec": 0,
    "decode.commBandwidthSec": 0,
    "decode.exposedCommSec": 0,
-   "decode.sendSec": 0.0000045599999999999995
+   "decode.sendSec": 0.00000470625
   },
   "r9700-pcie-4|dense8b|tp4|b1": {
    "prefill.tokensPerSec": 13131.690329325034,

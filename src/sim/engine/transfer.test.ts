@@ -23,9 +23,9 @@ function expectClose(actual: number, expected: number, rel = 1e-9): void {
   expect(Math.abs(actual - expected)).toBeLessThanOrEqual(rel * Math.abs(expected));
 }
 
-/** PCIe 5.0 x16 per direction: 32e9·16·128/130/8 = 63,015,384,615.38 B/s; α 1 µs. */
+/** PCIe 5.0 x16 per direction: 32e9·16·128/130/8 × 256/280 (TLP payload) = 57,614,065,934.07 B/s; α 1 µs. */
 const PCIE5 = hostPcieLink(5, 16);
-const B_LINK = 63_015_384_615.38461;
+const B_LINK = 57_614_065_934.06594;
 /** The design doc's 990 PRO numbers (QD1 latency rounded to 45 µs; the preset carries 1/22,000 s). */
 const SSD_45US: NvmeSpec = { ...NVME_990_PRO_2TB, randomReadLatencySec: 45e-6 };
 const LINK = { latencySec: PCIE5.latencySec, bandwidthPerDirectionBytesPerSec: PCIE5.bandwidthPerDirectionBytesPerSec };
@@ -92,7 +92,7 @@ describe('U-3 hit-ratio models and their validation', () => {
 });
 
 describe('U-4 transferTime: t = α_tier + α_link + max(Little, IOPS/n, tier/n, link, host staging)', () => {
-  it('host RAM → PCIe5, reads [{8, 2,654,208}]: α 1.07 µs, link-bound service 21,233,664 / 63.015e9 = 3.36960e-4', () => {
+  it('host RAM → PCIe5, reads [{8, 2,654,208}]: α 1.07 µs, link-bound service 21,233,664 / 57.614e9 = 3.68550e-4', () => {
     const t = transferTime([{ count: 8, bytesEach: 2_654_208 }], 21_233_664, ramPath());
     expectClose(t.latencySec, 1.07e-6);
     expectClose(t.linkSec, 21_233_664 / B_LINK);
@@ -100,7 +100,7 @@ describe('U-4 transferTime: t = α_tier + α_link + max(Little, IOPS/n, tier/n, 
     expectClose(t.littleSec, (7 * 70e-9) / 64); // 7.66e-9
     expect(t.iopsSec).toBeUndefined();
     expect(t.hostSec).toBeUndefined();
-    expectClose(t.serviceSec, 3.3696e-4, 1e-5);
+    expectClose(t.serviceSec, 3.6855e-4, 1e-5);
     expectClose(t.sec, 1.07e-6 + 21_233_664 / B_LINK);
   });
   it('NVMe → host → device, reads [{16, 320}], QD 512, n 1: bytes_tier 65,536, α 46 µs, IOPS-bound service 16/1.4e6', () => {

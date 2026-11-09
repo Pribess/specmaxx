@@ -6,7 +6,7 @@ import { allUnlockSelections, resolveUnlocks } from '../unlocks';
 import {
   ETHERNET_5G_TCP, ETHERNET_10G_TCP, HOST_BOUNCE_PCIE_LINKS, IB_NDR_400, IB_XDR_800,
   LINK_PRESETS, NVLINK_4, NVLINK_5, PCIE_4_X8, PCIE_4_X16, PCIE_5_X8, PCIE_5_X16,
-  RTX_3090_NVLINK, SPARK_CONNECTX_7, TB4_TCP, TB5_RDMA, USB4_HALO_TCP,
+  RTX_3090_NVLINK, SPARK_CONNECTX_7, TB4_TCP, TB4_TCP_20G, TB5_RDMA, USB4_HALO_TCP,
   XGMI_MI300X_PER_PEER, XGMI_MI300X_8_GPU,
 } from './links';
 import { RTX_3090, RTX_3090_UNLOCKS, RTX_4090_UNLOCKS, RTX_5090_UNLOCKS } from './nvidia';
@@ -47,9 +47,10 @@ describe('interconnect presets', () => {
     }
   });
 
-  it('uses PCIe line rate after 128b/130b encoding, in bytes per second per direction', () => {
-    // Gen5 32 GT/s/lane × 16 lanes × 128/130 coding efficiency ÷ 8 bits/byte.
-    expect(PCIE_5_X16.bandwidthPerDirectionBytesPerSec).toBeCloseTo(32e9 * 16 * 128 / 130 / 8);
+  it('uses the PCIe payload rate: line rate after 128b/130b encoding × 256/280 TLP payload efficiency, B/s per direction', () => {
+    // Gen5 32 GT/s/lane × 16 lanes × 128/130 coding efficiency ÷ 8 bits/byte × 256/(256 + 24) payload efficiency.
+    expect(PCIE_5_X16.bandwidthPerDirectionBytesPerSec).toBeCloseTo(32e9 * 16 * 128 / 130 / 8 * 256 / 280);
+    expect(PCIE_5_X16.bandwidthPerDirectionBytesPerSec).toBeCloseTo(57.614e9, -6);
     expect(PCIE_4_X16.bandwidthPerDirectionBytesPerSec).toBe(PCIE_5_X16.bandwidthPerDirectionBytesPerSec / 2);
     expect(PCIE_5_X8.bandwidthPerDirectionBytesPerSec).toBe(PCIE_4_X16.bandwidthPerDirectionBytesPerSec);
     expect(PCIE_4_X8.bandwidthPerDirectionBytesPerSec).toBe(PCIE_4_X16.bandwidthPerDirectionBytesPerSec / 2);
@@ -67,7 +68,7 @@ describe('interconnect presets', () => {
   it('converts network bit rates to bytes without summing directions', () => {
     for (const [link, gigabits] of [
       [IB_NDR_400, 400], [IB_XDR_800, 800], [SPARK_CONNECTX_7, 200], [TB5_RDMA, 80],
-      [TB4_TCP, 40], [USB4_HALO_TCP, 20], [ETHERNET_5G_TCP, 5], [ETHERNET_10G_TCP, 10],
+      [TB4_TCP, 40], [TB4_TCP_20G, 20], [USB4_HALO_TCP, 20], [ETHERNET_5G_TCP, 5], [ETHERNET_10G_TCP, 10],
     ] as const) {
       expect(link.bandwidthPerDirectionBytesPerSec).toBe(gigabits * 1e9 / 8);
     }

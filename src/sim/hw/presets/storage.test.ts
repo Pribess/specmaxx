@@ -15,8 +15,11 @@ import {
   PCIE_5_X16,
   PCIE_5_X16_DIRECT,
   PCIE_5_X8,
+  PCIE_PAYLOAD_EFFICIENCY,
+  LINK_PRESETS,
   hostPcieLink,
   pcieBandwidthPerDirectionBytesPerSec,
+  pcieLineRateBytesPerSec,
 } from './links';
 import {
   APPLE_SSD_M3_M4_MAX_1TB,
@@ -168,8 +171,8 @@ describe('storage-tier presets', () => {
     expect(APPLE_SSD_M3_M4_MAX_1TB.randomReadLatencySec).toBeCloseTo(68.27e-6, 8);
     // DGX Spark: 11.4 GiB/s = 12.24e9 B/s.
     expect(DGX_SPARK_SSD_4TB.seqReadBandwidthBytesPerSec).toBeCloseTo(12.2407e9, -5);
-    // Generic Gen4 x4: the slot ceiling 16e9 × 4 × 128/130 / 8 = 7.877e9 B/s binds above the 7.0e9 drive rate.
-    expect(NVME_GEN4_X4_GENERIC.linkBandwidthBytesPerSec).toBeCloseTo(7.8769e9, -5);
+    // Generic Gen4 x4: the slot ceiling 16e9 × 4 × 128/130 / 8 × 256/280 = 7.202e9 B/s, above the 7.0e9 drive rate.
+    expect(NVME_GEN4_X4_GENERIC.linkBandwidthBytesPerSec).toBeCloseTo(7.2018e9, -5);
     for (const t of SSD_PRESETS) expect(t.readGranularityBytes).toBe(4096);
   });
 
@@ -182,10 +185,10 @@ describe('storage-tier presets', () => {
 });
 
 describe('hostPcieLink', () => {
-  it('Gen5 x16 bandwidth equals PCIE_5_X16 exactly (63,015,384,615.38… B/s)', () => {
+  it('Gen5 x16 bandwidth equals PCIE_5_X16 exactly (57,614,065,934.07… B/s)', () => {
     const link = hostPcieLink(5, 16);
     expect(link.bandwidthPerDirectionBytesPerSec).toBe(PCIE_5_X16.bandwidthPerDirectionBytesPerSec);
-    expect(link.bandwidthPerDirectionBytesPerSec).toBeCloseTo(63_015_384_615.38, 1);
+    expect(link.bandwidthPerDirectionBytesPerSec).toBeCloseTo(57_614_065_934.07, 1);
     expect(hostPcieLink(4, 16).bandwidthPerDirectionBytesPerSec).toBe(
       PCIE_4_X16.bandwidthPerDirectionBytesPerSec,
     );
@@ -197,11 +200,16 @@ describe('hostPcieLink', () => {
     );
   });
 
-  it('the existing device-to-device PCIe links keep their exact bandwidths', () => {
-    // 32e9 × 16 × 128/130 / 8 and 16e9 × 16 × 128/130 / 8, in the order the old private formula computed them.
-    expect(PCIE_5_X16.bandwidthPerDirectionBytesPerSec).toBe((32e9 * 16 * (128 / 130)) / 8);
-    expect(PCIE_5_X16_DIRECT.bandwidthPerDirectionBytesPerSec).toBe((32e9 * 16 * (128 / 130)) / 8);
-    expect(PCIE_4_X16.bandwidthPerDirectionBytesPerSec).toBe((16e9 * 16 * (128 / 130)) / 8);
+  it('every PCIe link is its line rate × the payload efficiency 256/280 (one formula for all of them)', () => {
+    // R_line = 32e9 × 16 × 128/130 / 8 and 16e9 × 16 × 128/130 / 8, then × η_PCIe.
+    expect(PCIE_PAYLOAD_EFFICIENCY).toBe(256 / 280);
+    expect(pcieLineRateBytesPerSec(5, 16)).toBe((32e9 * 16 * (128 / 130)) / 8);
+    expect(PCIE_5_X16.bandwidthPerDirectionBytesPerSec).toBe(pcieLineRateBytesPerSec(5, 16) * PCIE_PAYLOAD_EFFICIENCY);
+    expect(PCIE_5_X16_DIRECT.bandwidthPerDirectionBytesPerSec).toBe(PCIE_5_X16.bandwidthPerDirectionBytesPerSec);
+    expect(PCIE_4_X16.bandwidthPerDirectionBytesPerSec).toBe(pcieLineRateBytesPerSec(4, 16) * PCIE_PAYLOAD_EFFICIENCY);
+    for (const l of [...HOST_PCIE_LINKS, ...LINK_PRESETS.filter((x) => x.kind === 'pcie')]) {
+      expect(l.sources.some((s) => s.url.includes('an855')), `${l.name} cites the payload efficiency`).toBe(true);
+    }
   });
 
   it('Gen3 is half Gen4 and x4 a quarter of x16', () => {

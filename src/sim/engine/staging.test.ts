@@ -56,7 +56,7 @@ const PAR = { tp: 1, pp: 1, dp: 1, ep: 1 };
 const GEN5_X16 = hostPcieLink(5, 16);
 const GEN3_X16 = hostPcieLink(3, 16);
 
-/** PCIe staging of an RTX 5090 (PCIe 5.0 x16, DDR5-6000 2ch): B_pcie 63.015 GB/s, α_pcie 1 µs, B_host 96 GB/s. */
+/** PCIe staging of an RTX 5090 (PCIe 5.0 x16, DDR5-6000 2ch): B_pcie 57.614 GB/s (payload), α_pcie 1 µs, B_host 96 GB/s. */
 const STAGING: HostStaging = {
   pcie: { bandwidthBytesPerSec: GEN5_X16.bandwidthPerDirectionBytesPerSec, latencySec: 1e-6 },
   socketCopy: false,
@@ -160,13 +160,13 @@ describe('effectiveLink with host staging', () => {
     expectClose(l.latencySec, 10e-6 + 2e-6 + (2 * 524_288) / B_PCIE);
   });
 
-  it('a binding PCIe link: 50 GB/s NIC on Gen3 x16 ⇒ B_eff = 15.754 GB/s', () => {
+  it('a binding PCIe link: 50 GB/s NIC on Gen3 x16 ⇒ B_eff = 14.404 GB/s (15.754 line rate × 256/280)', () => {
     const nic: EffectiveLink = { bandwidthBytesPerSec: 50e9, latencySec: 1e-6 };
     const gen3 = {
       ...STAGING,
       pcie: { latencySec: 1e-6, bandwidthBytesPerSec: GEN3_X16.bandwidthPerDirectionBytesPerSec },
     };
-    expectClose(stagedLink(nic, gen3, 1e6).bandwidthBytesPerSec, 15.753846153846155e9);
+    expectClose(stagedLink(nic, gen3, 1e6).bandwidthBytesPerSec, 14.403516483516485e9);
   });
 
   it('a binding host share: 8 devices of a node on 96 GB/s ⇒ 96e9/(4·8) = 3 GB/s', () => {
@@ -287,17 +287,17 @@ describe('staged totals: the fill excludes the stage that sets β (docs §6 "Int
       hostMemBandwidthBytesPerSec: 1e15,
     };
     const bPcie = GEN3_X16.bandwidthPerDirectionBytesPerSec;
-    // Small (m ≤ c), serial: α + 2·α_pcie + m/B + 2·m/B_pcie = 3.60192 µs
+    // Small (m ≤ c), serial: α + 2·α_pcie + m/B + 2·m/B_pcie = 3.65067 µs (B_pcie = 14.404 GB/s, Gen3 x16 payload)
     expectClose(send(4096, nic(pcie3)), 1e-6 + 2e-6 + 4096 / 50e9 + (2 * 4096) / bPcie, 1e-12);
-    expectClose(send(4096, nic(pcie3)), 3.60192e-6, 1e-6);
-    // Large: α + 2·α_pcie + m/B_pcie + (c/B + c/B_pcie): one step through the NIC and the OTHER PCIe copy = 579.24576 µs
+    expectClose(send(4096, nic(pcie3)), 3.65067e-6, 1e-6);
+    // Large: α + 2·α_pcie + m/B_pcie + (c/B + c/B_pcie): one step through the NIC and the OTHER PCIe copy = 632.28576 µs
     const m = 8 * 1024 * 1024;
     expectClose(send(m, nic(pcie3)), 3e-6 + m / bPcie + c / 50e9 + c / bPcie, 1e-12);
-    expectClose(send(m, nic(pcie3)), 579.24576e-6, 1e-6);
+    expectClose(send(m, nic(pcie3)), 632.28576e-6, 1e-6);
   });
 
   it('host memory binds (50 GB/s NIC, PCIe 5.0 x16, 96 GB/s DRAM, one device)', () => {
-    // r_copy = min(63.015, 96) GB/s; r_net = min(50, 96/2) = 48 GB/s; B_eff = 96/4 = 24 GB/s
+    // r_copy = min(57.614, 96) GB/s; r_net = min(50, 96/2) = 48 GB/s; B_eff = 96/4 = 24 GB/s
     const rNet = 48e9;
     const bEff = 24e9;
     expectClose(send(4096, nic(STAGING)), 3e-6 + (2 * 4096) / B_PCIE + 4096 / rNet, 1e-12);
@@ -316,11 +316,11 @@ describe('staged message size per all-reduce algorithm', () => {
     interStaging: STAGING,
   };
 
-  it('explicit tree stages S per step: S = 64 KiB, n = 4 ⇒ α = 4·(10 + 2 + 2·S/B_pcie) µs = 56.32 µs', () => {
+  it('explicit tree stages S per step: S = 64 KiB, n = 4 ⇒ α = 4·(10 + 2 + 2·S/B_pcie) µs = 57.10 µs', () => {
     const S = 64 * 1024;
     const t = collectiveTime('all_reduce', S, 4, path, 'tree');
     expectClose(t.latencySec, 4 * (12e-6 + (2 * S) / B_PCIE), 1e-12);
-    expectClose(t.latencySec, 56.32e-6, 1e-4);
+    expectClose(t.latencySec, 57.1e-6, 1e-4);
   });
 
   it('best compares ring and tree each staged with its own message, crossing over where the totals meet', () => {

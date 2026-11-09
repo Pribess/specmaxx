@@ -1,6 +1,6 @@
 /**
  * DDR4 vs DDR5 host RAM for expert offload, end to end through `simulate`: with the experts in host RAM and the
- * PCIe 5.0 x16 link (63 GB/s per direction) faster than DDR4-3200 × 2 (51.2 GB/s), the expert fetch is bound by the
+ * PCIe 5.0 x16 link (57.6 GB/s payload per direction) faster than DDR4-3200 × 2 (51.2 GB/s), the expert fetch is bound by the
  * host RAM and its bandwidth term is M·W / 51.2e9; on DDR5-6000 × 2 (96 GB/s) the link binds instead.
  */
 import { describe, expect, it } from 'vitest';
@@ -22,8 +22,8 @@ const QUANT: QuantConfig = {
 const W_EXPERT = 2_654_208;
 /** Experts fetched per layer per decode step at f = 0, batch 1: the top-8 routed experts. Count. */
 const M = 8;
-/** PCIe 5.0 x16 per direction. Unit: B/s. */
-const B_LINK = (32e9 * 16 * 128) / 130 / 8;
+/** PCIe 5.0 x16 per direction: line rate × TLP payload efficiency 256/280 (links.ts). Unit: B/s. */
+const B_LINK = ((32e9 * 16 * 128) / 130 / 8) * (256 / 280);
 
 function fetchOf(ram: HostMemorySpec) {
   const r = simulate({

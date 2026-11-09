@@ -8,6 +8,12 @@
  * no staging, so no copy); simulate / ui rigs on TB5 RDMA (decode +0.3 % … +568 %, the α) and on TCP links (the copy:
  * TB4 TCP, 5 / 10GbE decode −0.0 … −1.1 %; USB4 TCP α + copy −0.02 … +1.4 %). Every non-TCP, non-TB5-RDMA key and
  * the hierarchical collectives are unchanged bit for bit.
+ * Regenerated for the PCIe payload efficiency (every PCIe link × 256/280; links.ts `PCIE_PAYLOAD_EFFICIENCY`, docs §4
+ * "PCIe payload efficiency"). Moved keys, and only these: flat collectives on the PCIe presets whose PCIe bandwidth
+ * binds (all 84 of each direct-P2P preset; host bounce only where B < hostMem / (2·n): 12 of Gen4 x16 and Gen5 x8, 48
+ * of Gen4 x8; Gen5 x16 host bounce is host-memory bound and unchanged); simulate rigs on 4090 / 3090 / B60 PCIe boxes
+ * (comm β and PP send × 280/256 = +9.4 %, decode − 0.00 %). 84 keys added for the new
+ * `thunderbolt-4-bridge-tcp-20-gb-s-negotiated`. Every other key is unchanged bit for bit.
  * Numbers are compared with exact equality (Object.is; JSON round-trips doubles exactly).
  *
  * Three levels:

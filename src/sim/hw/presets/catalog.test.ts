@@ -8,7 +8,9 @@ import {
 import { DEVICE_PRESETS } from './index';
 import {
   ETHERNET_10G_TCP, IB_NDR_400, IB_XDR_800, NVLINK_4, NVLINK_5, PCIE_4_X16, PCIE_5_X16, PCIE_5_X16_DIRECT,
-  PCIE_5_X8_DIRECT, RTX_3090_NVLINK, SPARK_CONNECTX_7, TB4_TCP, TB5_RDMA, TB5_TCP, USB4_HALO_RDMA, XGMI_MI300X_8_GPU,
+  PCIE_4_X8, PCIE_4_X8_DIRECT, PCIE_5_X8, PCIE_5_X8_DIRECT, RTX_3090_NVLINK, SPARK_CONNECTX_7, TB4_TCP, TB4_TCP_20G, TB5_RDMA,
+  TB5_TCP,
+  USB4_HALO_RDMA, XGMI_MI300X_8_GPU,
 } from './links';
 import { linkPresetId } from './topologies';
 
@@ -99,7 +101,8 @@ describe('setup catalog: every device', () => {
     ['arc-pro-b70', linkPresetId(PCIE_5_X16), linkPresetId(ETHERNET_10G_TCP)],
     ['arc-pro-b65', linkPresetId(PCIE_5_X16), linkPresetId(ETHERNET_10G_TCP)],
     ['arc-pro-b60', linkPresetId(PCIE_5_X8_DIRECT), linkPresetId(ETHERNET_10G_TCP)],
-    ['arc-b580', linkPresetId(PCIE_5_X16), linkPresetId(ETHERNET_10G_TCP)],
+    // Deliberate change from the pre-catalog PCIe 5.0 x16: the B580 is a PCIe 4.0 x8 card (practicality review, rank 3).
+    ['arc-b580', linkPresetId(PCIE_4_X8), linkPresetId(ETHERNET_10G_TCP)],
     ['dgx-spark', undefined, linkPresetId(SPARK_CONNECTX_7)],
     ['b300', linkPresetId(NVLINK_5), linkPresetId(IB_XDR_800)],
     ['b200', linkPresetId(NVLINK_5), linkPresetId(IB_NDR_400)],
@@ -123,9 +126,45 @@ describe('setup catalog: every device', () => {
     expect(uncovered.sort()).toEqual(['apple-m3-max-30c', 'apple-m3-max-40c']);
     for (const id of uncovered) {
       const o = setupOptionsFor(id);
-      expect(o.networks.map((n) => linkPresetId(n.link))).toEqual([linkPresetId(TB4_TCP)]);
+      expect(o.networks.map((n) => linkPresetId(n.link))).toEqual([linkPresetId(TB4_TCP), linkPresetId(TB4_TCP_20G)]);
       expect(o.localLinks).toEqual([]);
     }
+  });
+});
+
+/** Generation and lanes of a PCIe link preset, from the name its factory gives it (`'PCIe 4.0 x8 (host bounce)'`). */
+function pcieGenLanes(name: string): { generation: number; lanes: number } {
+  const m = /^PCIe (\d)\.0 x(\d+) /.exec(name);
+  if (m === null) throw new Error(`not a PCIe preset name: '${name}'`);
+  return { generation: Number(m[1]), lanes: Number(m[2]) };
+}
+
+describe('setup catalog: PCIe links never exceed the card', () => {
+  /**
+   * Accelerators without a `hostInterface` (OAM modules, whose host attachment no datasheet states as a slot) that
+   * are offered a PCIe link as the stand-in for an xGMI fabric the library lacks. Listed so a new device that offers
+   * PCIe without a cited `hostInterface` fails here instead of slipping through.
+   */
+  const NO_HOST_INTERFACE_PCIE = ['instinct-mi325x', 'instinct-mi355x', 'instinct-mi455x'];
+
+  it.each(DEVICE_PRESETS.map((d) => [d.id] as const))('%s: every offered PCIe link is no wider and no newer than hostInterface', (id) => {
+    const device = DEVICE_PRESETS.find((d) => d.id === id)!;
+    const pcie = setupOptionsFor(id).localLinks.filter((l) => l.link.kind === 'pcie');
+    if (device.hostInterface === undefined) {
+      expect(pcie.length === 0 || NO_HOST_INTERFACE_PCIE.includes(id), `${id} offers PCIe without a hostInterface`).toBe(true);
+      return;
+    }
+    const { generation, lanes } = device.hostInterface;
+    for (const opt of pcie) {
+      const link = pcieGenLanes(opt.link.name);
+      expect(link.generation, `${id}: ${opt.link.name} vs Gen${generation}`).toBeLessThanOrEqual(generation);
+      expect(link.lanes, `${id}: ${opt.link.name} vs x${lanes}`).toBeLessThanOrEqual(lanes);
+    }
+  });
+
+  it('Arc B580 (PCIe 4.0 x8): Gen4 x8 host bounce by default, Gen4 x8 direct as the option; Arc Pro B60 (Gen5 x8): x8 only', () => {
+    expect(setupOptionsFor('arc-b580').localLinks.map((l) => l.link)).toEqual([PCIE_4_X8, PCIE_4_X8_DIRECT]);
+    expect(setupOptionsFor('arc-pro-b60').localLinks.map((l) => l.link)).toEqual([PCIE_5_X8_DIRECT, PCIE_5_X8]);
   });
 });
 
@@ -272,9 +311,15 @@ describe('setupErrors', () => {
     }
     for (const id of ['apple-m3-max-40c', 'apple-m3-max-30c']) {
       const o = setupOptionsFor(id);
-      expect(o.networks.map((n) => n.link)).toEqual([TB4_TCP]);
+      // Default the bonded 40 Gb/s Mac ↔ Mac bridge; the 20 Gb/s negotiated variant as the option.
+      expect(o.networks.map((n) => n.link)).toEqual([TB4_TCP, TB4_TCP_20G]);
+      expect(TB4_TCP.bandwidthPerDirectionBytesPerSec).toBe(5e9);
+      expect(TB4_TCP_20G.bandwidthPerDirectionBytesPerSec).toBe(2.5e9);
       expect(networkOf(o, tb5Id)).toBeUndefined();
       expect(composeTopology(soc(id, 2)).interNode).toBe(TB4_TCP);
+      const negotiated = soc(id, 2, { networkLinkId: linkPresetId(TB4_TCP_20G) });
+      expect(setupErrors(negotiated)).toEqual([]);
+      expect(composeTopology(negotiated).interNode).toBe(TB4_TCP_20G);
     }
   });
 

@@ -648,9 +648,24 @@ costed in §6
 
 - **Per direction, per device**: `bandwidthPerDirectionBytesPerSec` is what one device can inject in one
   direction, never a bidirectional sum (vendor "900 GB/s NVLink" bidirectional → 450 GB/s).
-- **Theoretical bandwidth, hardware-floor latency**: bandwidth is the line-rate ceiling (PCIe: GT/s × lanes ×
-  128/130 ÷ 8, before packet overhead); `latencySec` is a one-way hardware / verbs-level floor (P2P write,
-  `ib_write_lat`), never an NCCL / RCCL software floor. Latencies no vendor publishes are `estimated`.
+- **Theoretical bandwidth, hardware-floor latency**: bandwidth is the line-rate ceiling (PCIe: the payload ceiling,
+  below); `latencySec` is a one-way hardware / verbs-level floor (P2P write, `ib_write_lat`), never an NCCL / RCCL
+  software floor. Latencies no vendor publishes are `estimated`.
+- **PCIe payload efficiency** (`src/sim/hw/presets/links.ts: PCIE_PAYLOAD_EFFICIENCY,
+  pcieBandwidthPerDirectionBytesPerSec, pcieLineRateBytesPerSec`): every PCIe link (host bounce, direct P2P, the
+  device's host link for offload streaming, inter-node PCIe staging, the NVMe slot ceiling) carries payload at
+
+  ```
+  R_line = GT/s per lane × 1e9 × lanes × 128/130 / 8          (128b/130b encoding, Gen3–Gen5)
+  η_PCIe = MPS / (MPS + overhead) = 256 / (256 + 24) = 0.914    (TLP framing, Intel AN 855)
+  B      = R_line × η_PCIe                                      (Gen5 x16 57.61, Gen4 x16 28.81, Gen4 x8 14.40 GB/s)
+  ```
+
+  `overhead` = 24 B per TLP without ECRC (STP token with the sequence number, a 4-dword header for 64-bit
+  addresses, LCRC); `MPS` = 256 B maximum payload size, an assumed platform setting (128 B would give 0.842). DLLPs
+  (ACK, flow control) and SKP ordered sets are left out, so `B` stays an upper bound: measured pinned copies on
+  Gen4 x16 reach 24.8–26.2 GB/s against 28.81. Only PCIe: NVLink, InfiniBand, Ethernet, Thunderbolt and USB4 keep
+  their vendor data rates. Source and review: docs/review/practicality-review.md F8.
 - **One α definition for every inter-node transport** (`src/sim/hw/types.ts: LinkSpec.latencySec`, the header of
   `src/sim/hw/presets/links.ts`): the one-way small-message floor as a collective library sees it = **half the
   average (or median) round trip of a tuned small-message ping-pong** over that transport (`ib_write_lat` /
@@ -670,7 +685,7 @@ costed in §6
   | medium               | `'rdma'`                   | `'tcp'`                               | α RDMA / TCP             |
   | -------------------- | -------------------------- | ------------------------------------- | ------------------------ |
   | Thunderbolt 5        | `TB5_RDMA`                 | `TB5_TCP`                             | 7 / 45 µs                |
-  | Thunderbolt 4        | —                          | `TB4_TCP`                             | — / 45 µs                |
+  | Thunderbolt 4        | —                          | `TB4_TCP`, `TB4_TCP_20G`              | — / 45 µs                |
   | Strix Halo USB4      | `USB4_HALO_RDMA`           | `USB4_HALO_TCP`                       | 8 / 9 µs                 |
   | DGX Spark ConnectX-7 | `SPARK_CONNECTX_7`         | — (no Spark TCP preset)               | 1.5 / — µs               |
   | InfiniBand NDR / XDR | `IB_NDR_400`, `IB_XDR_800` | —                                     | 1 / — µs                 |
@@ -681,6 +696,11 @@ costed in §6
   estimated: replace for the actual host) and `extraLatencySec` 12 µs (community P2P matrices). The
   `pcie-p2p` unlock switches the link to `'direct'`; Intel Arc Pro boxes use the `_DIRECT` links (stock driver).
   The cost is §6 "Host bounce".
+- **PCIe α = 1 µs** (every PCIe preset, estimated): the patched Gen5 x16 P2P write latency, 0.49–0.59 µs (tinygrad
+  P2P matrices), rounded up; a 2-GPU ring all-reduce pays 2α. Not raised to the measured small-message PCIe
+  all-reduce (one-shot 6.1 µs, NCCL 13.5 µs at 1 KB on 4× RTX PRO 6000, local-inference-lab rtx6kpro): those include
+  the collective's kernel launch and a system-scope barrier, and no measurement found isolates the hardware share
+  (the review's ≈ 2–3 µs is an estimate). See `PCIE_ALPHA_NOT_RAISED` in `links.ts` and practicality-review F7.
 - **GPUDirect RDMA capability** (`LinkSpec.gpuDirectRdma`, `DeviceSpec.gpuDirectRdma`; `src/sim/engine/staging.ts:
 needsHostStaging`; device citations in `src/sim/hw/presets/gpudirect.ts`). Whether an inter-node transport can move
   a message straight between the NIC and an accelerator's dedicated memory. A dedicated-memory device on an
@@ -757,8 +777,11 @@ NCCL_PTR_HOST`), and so do Gloo (`cuda_allreduce_ring.cc:82,102`) and MLX. On RD
   a switch only where one exists (Thunderbolt and USB4 have none), a mesh while (nodes − 1) · cables ≤ ports, `mesh2`
   only on TB5 RDMA, a ring from 4 machines (at 3 it is the mesh), a chain from 3, a switch only for machines with
   several GPUs, and nothing switchless beyond the vendor's direct-cabling limit; `defaultCabling` is switch, else
-  mesh, else ring, else chain, so the catalog defaults equal the pre-catalog UI defaults for every device
-  (`catalog.test.ts` pins them) and two Thunderbolt or USB4 machines are a one-cable mesh, which costs exactly a
+  mesh, else ring, else chain, so the catalog defaults equal the pre-catalog UI defaults for every device but one
+  (`catalog.test.ts` pins them; the Arc B580, a PCIe 4.0 x8 card, now defaults to PCIe 4.0 x8 host bounce instead of
+  the old, wrong PCIe 5.0 x16), no PCIe link offered to a card is wider or of a later generation than its
+  `hostInterface` (`catalog.test.ts` checks every device; B580: Gen4 x8 host bounce / direct, Arc Pro B60: Gen5 x8
+  only), and two Thunderbolt or USB4 machines are a one-cable mesh, which costs exactly a
   switch. `setupErrors` rejects impossible choices (a 5-Mac mesh on an M4 Max, a 7-Mac mesh on an M3 Ultra, two
   cables per pair on 4 M3 Ultras, a ring of 2, a switch on Thunderbolt, an 8-Spark ring); `composeTopology` builds
   the `TopologySpec` (`interNodeFabric` omitted for a switch); `setupLabel` names the exact SKU everywhere:
@@ -784,7 +807,10 @@ NCCL_PTR_HOST`), and so do Gloo (`cuda_allreduce_ring.cc:82,102`) and MLX. On RD
   small all-reduce step minus the 7 µs one-way α; TN3205: "the application is responsible for forwarding"): 2 hops =
   2 × 7 + 3 = 17 µs and 3 hops = 27 µs. `TB5_TCP` (the Thunderbolt bridge on TB5 ports at the 80 Gb/s = 10 GB/s
   per-direction line rate, Intel's TB5 brief; not an achieved goodput, none is cleanly measured) and `TB4_TCP`
-  (40 Gb/s, the M3 Max): α 45 µs (estimated, ≤ the ≈ 48 µs MLX TCP-ring step; see "Link latencies" above) and
+  (40 Gb/s = 5 GB/s, the M3 Max: the bonded link two Macs report, "Mac to Mac: 40 Gb/s x1, link width 0x2",
+  Bergeron; `TB4_TCP_20G` = 2.5 GB/s is the same bridge when a host pair links one unbonded 20 Gb/s lane, as both
+  cited Mac ↔ Linux tests did: sysfs 20.0 Gb/s and "a 20 Gigabit/s link", 15.9–18.8 Gb/s TCP measured; offered as
+  the M3 Max's second network): α 45 µs (estimated, ≤ the ≈ 48 µs MLX TCP-ring step; see "Link latencies" above) and
   α_f = 20 µs, the user-space receive-to-send turnaround, about a third of the ~45–48 µs one-way TCP time that is
   itself almost all software (MLX TCP ring ~48 µs per step; TN3205: the bridge forwards in software); 2 hops
   2 × 45 + 20 = 110 µs, 3 hops 3 × 45 + 2 × 20 = 175 µs. `USB4_HALO_RDMA` α_f = 3 µs (as TB5 RDMA; 2 hops 19 µs,
@@ -825,10 +851,11 @@ offloaded no result depends on them.
   latency (1 / QD1 IOPS when only that is published); `randomRead?: { iops, queueDepth, threads }` the datasheet
   maximum and its condition (optional: absent drops the IOPS term); `maxOutstanding` = queueDepth × threads of
   that condition (or an estimate); `readGranularityBytes` 4096 (one logical block); `linkBandwidthBytesPerSec?`
-  the slot ceiling when it binds below the drive (Gen4 x4 = 7.88 GB/s). Datasheet ceilings, not achieved rates.
+  the slot ceiling when it binds below the drive (Gen4 x4 = 7.20 GB/s payload). Datasheet ceilings, not achieved rates.
   Apple SSDs have no datasheet: their numbers rest on crowd measurements (`kind: 'community'`).
-- **Host link**: `hostPcieLink(generation, lanes)` = GT/s × lanes × 128/130 ÷ 8 per direction (Gen3 8, Gen4 16,
-  Gen5 32 GT/s per lane), the same formula as the device-to-device PCIe links (Gen5 x16 = 63.015 GB/s), α = 1 µs
+- **Host link**: `hostPcieLink(generation, lanes)` = GT/s × lanes × 128/130 ÷ 8 × 256/280 per direction (Gen3 8,
+  Gen4 16, Gen5 32 GT/s per lane; the payload efficiency above), the same formula as the device-to-device PCIe links
+  (Gen5 x16 = 57.614 GB/s), α = 1 µs
   estimated. `DeviceSpec.hostInterface?: { generation, lanes }` is the card's cited edge connector (electrical lanes:
   Arc Pro B60 is x16 mechanical, x8 electrical); the engine builds the default host link from it. SXM / OAM modules
   and SoCs carry none.
@@ -1321,8 +1348,9 @@ t_pipe = Σ_i s/r_i + (k − 1)·s/B_eff = m/B_eff + (2·s/r_pcie + s/r_net − 
   step) pays the serial sum `m/r_pcie + m/r_net + m/r_pcie`. NIC-bound with host memory not binding, the fill is
   `2·s/B_pcie`. The fill is serial with the step chain, so it goes into α (latency), never β.
 - Worked checks (`staging.test.ts`): a 50 GB/s NIC, α 1 µs, PCIe 3.0 x16, host memory not binding: a 4 KiB send
-  costs 3.60192 µs (serial); an 8 MiB send costs `3 µs + m/B_pcie + c/B + c/B_pcie` = 579.24576 µs. Host-bound
-  (50 GB/s NIC, PCIe 5.0 x16, 96 GB/s, n_stg 1): β = m / 24 GB/s, fill = `2c/63.015 GB/s + c/48 GB/s − c/24 GB/s`.
+  costs 3.65067 µs (serial); an 8 MiB send costs `3 µs + m/B_pcie + c/B + c/B_pcie` = 632.28576 µs (B_pcie =
+  14.404 GB/s, Gen3 x16 payload). Host-bound (50 GB/s NIC, PCIe 5.0 x16, 96 GB/s, n_stg 1): β = m / 24 GB/s, fill =
+  `2c/57.614 GB/s + c/48 GB/s − c/24 GB/s`.
 - `m` per step, chosen per algorithm before the ring / tree / best comparison, so each candidate gets its own staged
   α (`collectiveTime`, `fabricCollectiveTime`):
   - flat: ring all-reduce, all-gather, reduce-scatter and all-to-all `S/n`; tree all-reduce `S`; send/recv `S`;
@@ -1331,7 +1359,7 @@ t_pipe = Σ_i s/r_i + (k − 1)·s/B_eff = m/B_eff + (2·s/r_pcie + s/r_net − 
     2-node shortcut likewise).
 
   Example: S = 64 KiB, n = 4, PCIe 5.0 x16, 10GbE: an explicit tree costs `α = 4·(10 + 2 + 2·S/B_pcie) µs` =
-  56.32 µs. At n = 4, `best` switches from tree to ring at `S* = 24 µs / (5/B_pcie + 0.5/B)` ≈ 50 KB.
+  57.10 µs. At n = 4, `best` switches from tree to ring at `S* = 24 µs / (5/B_pcie + 0.5/B)` ≈ 49 KB.
 
 - Staging is not host bounce: the flat all-to-all keeps one α (no `(n−1)·α` rule). On an oversubscribed
   hierarchical switch, staging applies after the `B/o` reduction (its caps are the device's own).
@@ -1342,7 +1370,7 @@ B_stg)`, with `B_stg = stagingBandwidthCapBytesPerSec = min(B_pcie, B_host/((2·
   dedicated-memory preset uses a ring or chain.
 - The α terms land in `CollectiveTime.latencySec` (→ `PhaseResult.comm.latencySec`), the β terms in `bandwidthSec`,
   so the UI's comm latency / bandwidth split shows staging with no UI change.
-- On TCP the bandwidth terms never bind (PCIe 5.0 x16 63 GB/s, a 96 GB/s host's share 12 GB/s for one device once
+- On TCP the bandwidth terms never bind (PCIe 5.0 x16 57.6 GB/s, a 96 GB/s host's share 12 GB/s for one device once
   the socket copy joins, vs 1.25 GB/s for 10GbE); the 2 µs per message is what counts.
 - **Known inconsistency**: intra-node host bounce keeps 12 µs (the `cudaMemcpyPeer` driver path, community P2P
   matrices), while inter-node staging uses the 2 µs mapped-memory floor that NCCL's SHM and NET transports reach.

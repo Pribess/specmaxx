@@ -125,7 +125,7 @@ ceilings, no achieved fractions (Q3).
 | `apple-ssd-m3-m4-max-1tb`                              | 1e12                 | 6.4e9                                         | 68e-6 (from QD1 ≈ 60 MB/s)                                                                 | 2.5e5 @ 64 (derived)                                                                                                 | 4096  | AmorphousDiskMark crowd medians (115 runs; `kind 'community'`) https://www.reddit.com/r/mac/comments/1rpsc1n/mac_ssd_speeds_overview_updated_with_m5_promax/ ; Apple ≥ 6 GiB/s linear (arXiv 2312.11514 §2)                                 | medium                      |
 | `apple-ssd-m5-pro-max`                                 | 2e12                 | 13.1e9                                        | 65e-6 (derived)                                                                            | 2.7e5 @ 64 (derived)                                                                                                 | 4096  | same dataset, n = 1–3                                                                                                                                                                                                                       | low                         |
 | `dgx-spark-ssd-4tb`                                    | 4e12                 | 12.2e9 (11.4 GiB/s GDSIO peak)                | 50e-6 (**est.**: Gen5 2242 class, between the 990 Pro's 45 µs and the Apple drives' 65 µs) | 1.5e6 @ 32×16 (**est.**: between the 990 PRO 1.4e6 and the 9100 PRO 2.2e6; StorageReview published no random figure) | 4096  | StorageReview https://www.storagereview.com/review/nvidia-dgx-spark-review-the-ai-appliance-bringing-datacenter-capabilities-to-desktops ; NVIDIA https://docs.nvidia.com/dgx/dgx-spark/hardware.html ; both random fields in `estimated[]` | medium (seq) / low (random) |
-| `nvme-gen4-x4-generic` (Strix Halo boxes)              | 2e12                 | 7.0e9, `linkBandwidth` 7.88e9                 | 50e-6 (est.)                                                                               | 1.0e6 @ 512 (est.)                                                                                                   | 4096  | Framework Desktop: 2× PCIe 4.0 x4 M.2 https://frame.work/desktop                                                                                                                                                                            | medium                      |
+| `nvme-gen4-x4-generic` (Strix Halo boxes)              | 2e12                 | 7.0e9, `linkBandwidth` 7.20e9 (payload)                 | 50e-6 (est.)                                                                               | 1.0e6 @ 512 (est.)                                                                                                   | 4096  | Framework Desktop: 2× PCIe 4.0 x4 M.2 https://frame.work/desktop                                                                                                                                                                            | medium                      |
 
 Removed since revision 1: the quad-channel DDR5-6400 preset (no vendor citation for the channel count).
 Host-link presets: `hostPcieLink(generation, lanes)` (`HOST_PCIE_LINKS`, Gen3–5 × x4/x8/x16; Gen4 x16 31.5 GB/s,
@@ -1211,6 +1211,12 @@ Hardware `RTX_5090`, `singleDevice`, host link PCIe 5.0 x16 (`B_link = 63,015,38
 | prefill @ 8k | 0     | 128 | 339,738,624 | 5.39136 ms | 5.39243 ms     | 258.837 ms         | 377.580 ms → **21,696 tok/s @ 8k** | 636.417 ms → **12,872 tok/s @ 8k** |
 | prefill @ 8k | 0.5   | 64  | 169,869,312 | 2.69568 ms | 2.69675 ms     | 129.444 ms         | 377.580 ms → **21,696 tok/s @ 8k** | 507.024 ms → **16,157 tok/s @ 8k** |
 
+Since the PCIe payload efficiency 256/280 (`src/sim/hw/presets/links.ts: PCIE_PAYLOAD_EFFICIENCY`,
+simulation-model.md §4), `B_link` is 57.614e9 B/s instead of 63.015e9, so every link term above grows by 280/256.
+The pinned rates (`e2e-offload.test.ts`) are now decode **56.364 / 49.484** (f 0, ideal / none) and **112.40 /
+88.003 tok/s @ 8k** (f .5); prefill ideal stays **21,696** (compute bound), none **12,399** (f 0) and **15,780 tok/s
+@ 8k** (f .5). The table keeps the original derivation.
+
 Memory (f 0, ideal): device `W_s = 19,389,640,704 − 16,307,453,952 = 3,082,186,752 B`, staging `2·128·2,654,208 =
 679,477,248 B` (prefill misses all 128), KV at 8193 tokens 805,404,672 B, activation peak 469,762,048 B ⇒
 5,036,830,720 B ≤ 32e9; `tiers[host_ram] = 16,307,453,952 B ≤ 96e9`. f .5: `W_s = 11,235,913,728 B`, staging
@@ -1277,6 +1283,8 @@ max(Little, IOPS, tier, host, link)` per table.
 The `interleaved` layout gives the same numbers as above on both tiers for these two models (320 B = 256 + 64 on DDR5;
 one page either way on the SSD); `separate` on the SSD would double the Engram page reads (IOPS term 34.3 µs per table
 in decode) while `usefulBytes` stays 6,336 B. Test: the transfer op's `sec` equal to the bold values to rel 1e-6;
+With the PCIe payload efficiency (`B_link` 57.614e9) the DDR5 link terms grow by 280/256: PLE 1.1589 µs (decode) and
+0.72907 ms (prefill), Engram 2.3599 µs and 1.8039 ms for both tables; the pinned rates move by less than 0.1%.
 `tiers` bytes exact; rates within 0.1%; with `lookupTables` absent the results equal G-h1/G-h2 exactly.
 
 ---

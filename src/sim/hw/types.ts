@@ -396,7 +396,7 @@ export interface NvmeSpec {
   /** Smallest unit a read moves (the LBA / NAND page, 4096): a 320 B row read costs this much. Unit: bytes. */
   readGranularityBytes: number;
   /**
-   * The slot's own ceiling when it binds below the datasheet rate (e.g. PCIe 4.0 x4 = 7.88e9). Absent = the
+   * The slot's own ceiling when it binds below the datasheet rate (e.g. PCIe 4.0 x4 payload = 7.20e9). Absent = the
    * datasheet rate is the bound. Per direction. Unit: B/s.
    */
   linkBandwidthBytesPerSec?: number;

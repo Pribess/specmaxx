@@ -140,33 +140,38 @@ function expectRel(actual: number, expected: number, label: string, rel = 1e-3):
   );
 }
 
-/** Pinned rows (decode and prefill @ 8k; seconds per decode token for the rest). */
+/**
+ * Pinned rows (decode and prefill @ 8k; seconds per decode token for the rest). Re-pinned for the PCIe payload
+ * efficiency 256/280 (links.ts `PCIE_PAYLOAD_EFFICIENCY`): the expert transfer over PCIe 5.0 x16 grows by 280/256
+ * (3.2115 → 3.5076 ms per token), decode −5.4 % (before) to −4.6 % (+prefetch); the staged comm α grows by the
+ * slower PCIe fill (2.3799 → 2.3814 ms), the 10GbE β is unchanged.
+ */
 const ROW_BEFORE: Row = {
-  decodeTokPerSec: 192.9954,
+  decodeTokPerSec: 182.5607,
   prefillTokPerSec: 2489.7393,
-  cycleSec: 5.181471e-3,
+  cycleSec: 5.477631e-3,
   computeSec: 2.905715e-3,
   commLatencySec: 1.97e-3,
   commBandwidthSec: 0.4014144e-3,
   exposedCommSec: 1.97e-3,
-  transferSec: 3.211471e-3,
-  exposedTransferSec: 0.3057558e-3,
+  transferSec: 3.507631e-3,
+  exposedTransferSec: 0.6019158e-3,
 };
 /** +staging: ≈ 205 inter-node message steps × (2 µs + a negligible fill) = +0.41 ms of α. */
 const ROW_STAGING: Row = {
   ...ROW_BEFORE,
-  decodeTokPerSec: 178.8462,
-  prefillTokPerSec: 2486.9763,
-  cycleSec: 5.591396e-3,
-  commLatencySec: 2.379925e-3,
-  exposedCommSec: 2.379925e-3,
+  decodeTokPerSec: 169.8067,
+  prefillTokPerSec: 2486.7455,
+  cycleSec: 5.889049e-3,
+  commLatencySec: 2.381418e-3,
+  exposedCommSec: 2.381418e-3,
 };
 /** +prefetch accuracy 0.8 (the default): the copies of mispredicted experts are on the critical path. */
 const ROW_PREFETCH: Row = {
   ...ROW_STAGING,
-  decodeTokPerSec: 162.0132,
-  cycleSec: 6.172338e-3,
-  exposedTransferSec: 0.8866978e-3,
+  decodeTokPerSec: 154.5593,
+  cycleSec: 6.470007e-3,
+  exposedTransferSec: 1.1828742e-3,
 };
 /**
  * +socket copy: ≈ 205 inter-node message steps × 2·m/r_sock (r_sock = 96/2 = 48 GB/s, ≈ 0.11 µs per step) = +22 µs
@@ -174,11 +179,11 @@ const ROW_PREFETCH: Row = {
  */
 const ROW_SOCKET: Row = {
   ...ROW_PREFETCH,
-  decodeTokPerSec: 161.4273,
-  prefillTokPerSec: 2483.5175,
-  cycleSec: 6.194738e-3,
-  commLatencySec: 2.402326e-3,
-  exposedCommSec: 2.402326e-3,
+  decodeTokPerSec: 154.0261,
+  prefillTokPerSec: 2483.2873,
+  cycleSec: 6.492408e-3,
+  commLatencySec: 2.403819e-3,
+  exposedCommSec: 2.403819e-3,
 };
 const PINNED: Record<keyof ReturnType<typeof variants>, Row> = {
   before: ROW_BEFORE,

@@ -25,7 +25,7 @@ import { ARC_B580, ARC_PRO_B60, ARC_PRO_B65, ARC_PRO_B70, INTEL_DEVICE_PRESETS }
 import {
   ETHERNET_10G_TCP, ETHERNET_5G_TCP, IB_NDR_400, IB_XDR_800, LEGACY_LINK_IDS, LINK_PRESETS, NVLINK_4, NVLINK_5,
   PCIE_4_X16, PCIE_4_X16_DIRECT, PCIE_4_X8, PCIE_4_X8_DIRECT, PCIE_5_X16, PCIE_5_X16_DIRECT, PCIE_5_X8,
-  PCIE_5_X8_DIRECT, RTX_3090_NVLINK, SPARK_CONNECTX_7, TB4_TCP, TB5_RDMA, TB5_TCP, USB4_HALO_RDMA, USB4_HALO_TCP,
+  PCIE_5_X8_DIRECT, RTX_3090_NVLINK, SPARK_CONNECTX_7, TB4_TCP, TB4_TCP_20G, TB5_RDMA, TB5_TCP, USB4_HALO_RDMA, USB4_HALO_TCP,
   XGMI_MI300X_8_GPU, XGMI_MI300X_PER_PEER,
 } from './links';
 import { NVIDIA_CONSUMER_DEVICE_PRESETS, RTX_3090, RTX_4090, RTX_5090 } from './nvidia';
@@ -316,9 +316,13 @@ const M5_ULTRA_STUDIO_NETWORKS: NetworkOption[] = [
   tbTcp(TB5_TCP, 6, 'Mac Studio (2026, M5 Ultra)', STUDIO_2026_URL, 'Six Thunderbolt 5 ports; the bridge (TCP) works on all of them.'),
   ethernet10G('Apple Mac Studio (2026)', STUDIO_2026_URL, 'One 10Gb Ethernet port.'),
 ];
-/** The M3 Max MacBook Pro (2023): three Thunderbolt 4 ports, no TB5, so TCP over the bridge only; no Ethernet. */
+/**
+ * The M3 Max MacBook Pro (2023): three Thunderbolt 4 ports, no TB5, so TCP over the bridge only; no Ethernet. Default
+ * the bonded 40 Gb/s Mac ↔ Mac bridge; the 20 Gb/s negotiated variant for a host pair that links one lane.
+ */
 const M3_MAX_MBP_NETWORKS: NetworkOption[] = [
   tbTcp(TB4_TCP, 3, 'MacBook Pro (14-inch, Nov 2023)', MBP_M3_URL, 'Three Thunderbolt 4 (USB-C) ports at 40 Gb/s. No Thunderbolt 5, so no RDMA over Thunderbolt (TN3205 needs TB5): the TB4 bridge (TCP) is the only Thunderbolt link.'),
+  { ...tbTcp(TB4_TCP_20G, 3, 'MacBook Pro (14-inch, Nov 2023)', MBP_M3_URL, 'Three Thunderbolt 4 (USB-C) ports; the same bridge when the pair negotiates one 20 Gb/s lane (seen Mac ↔ Linux).'), shortName: 'TB TCP 20G' },
 ];
 
 /** Strix Halo (Ryzen AI Max+ 395) boxes: two native USB4 ports (RDMA experimental, TCP stock), 5GbE on the Framework Desktop, 10GbE with an add-in NIC. */
@@ -397,9 +401,10 @@ function mac(device: DeviceSpec, networks: NetworkOption[], nodeCounts = MAC_NOD
 /**
  * The catalog, by device id. Defaults ([0] of `localLinks` / `networks`) reproduce the UI's pre-catalog
  * `defaultLinks` for every device that existed (catalog.test.ts pins them): GeForce PCIe generation host-bounced,
- * Arc Pro B60 direct x8, other cards PCIe 5.0 x16 host-bounced, datacenter NVLink / xGMI (PCIe 5.0 x16 direct for the
- * MI325X–MI455X, whose xGMI numbers are not in the library) + InfiniBand, Macs TB5 RDMA, Strix Halo USB4 RDMA, Spark
- * ConnectX-7.
+ * Arc Pro B60 direct x8, Arc B580 PCIe 4.0 x8 host-bounced (its Gen4 x8 edge), other cards PCIe 5.0 x16
+ * host-bounced, datacenter NVLink / xGMI (PCIe 5.0 x16 direct for the MI325X–MI455X, whose xGMI numbers are not in
+ * the library) + InfiniBand, Macs TB5 RDMA, Strix Halo USB4 RDMA, Spark ConnectX-7. No PCIe link offered to a card is
+ * wider or of a later generation than the card's `hostInterface` (catalog.test.ts checks every entry).
  */
 const CATALOG: DeviceSetupOptions[] = [
   pcieCard(RTX_5090, 'RTX 5090', [PCIE5_HOST, PCIE5_X8_HOST, PCIE5_DIRECT, PCIE5_X8_DIRECT_OPT]),
@@ -420,8 +425,10 @@ const CATALOG: DeviceSetupOptions[] = [
   { deviceId: RYZEN_AI_MAX_PLUS_395.id, shortName: 'Strix Halo 395', devicesPerNodeCounts: [1], nodeCounts: HALO_NODES, localLinks: [], networks: STRIX_HALO_NETWORKS },
   pcieCard(ARC_PRO_B70, 'Arc Pro B70', [PCIE5_HOST, PCIE5_X8_HOST, PCIE5_DIRECT, PCIE5_X8_DIRECT_OPT]),
   pcieCard(ARC_PRO_B65, 'Arc Pro B65', [PCIE5_HOST, PCIE5_X8_HOST, PCIE5_DIRECT, PCIE5_X8_DIRECT_OPT, PCIE4_DIRECT]),
-  pcieCard(ARC_PRO_B60, 'Arc Pro B60', [PCIE5_X8_DIRECT_OPT, PCIE5_X8_HOST, PCIE5_DIRECT]),
-  pcieCard(ARC_B580, 'Arc B580', [PCIE5_HOST, PCIE5_X8_HOST, PCIE5_DIRECT]),
+  // PCIe 5.0 x8 electrical (hostInterface): no x16 link.
+  pcieCard(ARC_PRO_B60, 'Arc Pro B60', [PCIE5_X8_DIRECT_OPT, PCIE5_X8_HOST]),
+  // PCIe 4.0 x8 (hostInterface): Gen4 x8 links only.
+  pcieCard(ARC_B580, 'Arc B580', [PCIE4_X8_HOST, PCIE4_X8_DIRECT_OPT]),
   { deviceId: DGX_SPARK.id, shortName: 'DGX Spark', devicesPerNodeCounts: [1], nodeCounts: SPARK_NODES, localLinks: [], networks: [SPARK_CX7] },
   datacenter(B300, 'B300', [{ link: NVLINK_5, shortName: 'NVLink 5' }], [IB_XDR, IB_NDR]),
   datacenter(B200, 'B200', [{ link: NVLINK_5, shortName: 'NVLink 5' }], [IB_NDR, IB_XDR]),
