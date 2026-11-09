@@ -10,7 +10,8 @@
  * - `[1, 32]` with e8m0 scales is OCP MXFP8 → dtype `mxfp8` (the scale is inside the dtype).
  * - no block size: per-tensor scales, ≈0 overhead.
  * - `activation_scheme` dynamic/static (default dynamic) → the GEMM input is fp8 (W8A8).
- * - DeepSeek `expert_dtype: "fp4"`: routed experts are e2m1 with a ue8m0 scale per 32 → `mxfp4`, run with
+ * - DeepSeek `expert_dtype: "fp4"` (V4.1: inside `quantization_config`; V4: at the top level of config.json, next
+ *   to it): routed experts are e2m1 with a ue8m0 scale per 32 → `mxfp4`, run with
  *   fp8 activations. MiniMax-M3.1 `moe_quant_algo: "NVFP4"`: routed experts `nvfp4` W4A4.
  * Unconverted: `modules_to_not_convert` / `ignored_layers`, the LM head and embeddings (transformers never
  * converts the output embedding), and raw parameters. `modules_to_convert` adds embedding-like modules (the
@@ -63,7 +64,9 @@ export function readFp8(qc: JsonObject, ctx: SchemeContext, opts: Fp8Options = {
   // Routed-expert overrides.
   let experts: ModuleQuant | undefined;
   let expertsLabel = '';
-  if (strAt(qc, 'expert_dtype') === 'fp4') {
+  // DeepSeek-V4.1 puts expert_dtype inside quantization_config; DeepSeek-V4 next to it, at the top level.
+  const expertDtype = strAt(qc, 'expert_dtype') ?? strAt(ctx.top, 'expert_dtype') ?? strAt(ctx.text, 'expert_dtype');
+  if (expertDtype === 'fp4') {
     experts = moduleFormat('mxfp4', 0, actQuantized ? fp8 : undefined);
     expertsLabel = ', routed experts fp4 (mxfp4: e2m1 + ue8m0 per 32)';
     notes.push('routed experts fp4 with a ue8m0 scale per 32 elements → mxfp4, fp8 GEMM input');

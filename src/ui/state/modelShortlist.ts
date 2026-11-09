@@ -22,6 +22,7 @@ export const MODEL_SHORTLIST: ShortlistModel[] = [
   { id: 'Qwen/Qwen3.8-Flash-Next', name: 'Qwen3.8-Flash-Next' },
   { id: 'Qwen/Qwen3.8-27B', name: 'Qwen3.8-27B' },
   { id: 'deepseek-ai/DeepSeek-V4.1-Flash', name: 'DeepSeek-V4.1-Flash' },
+  { id: 'deepseek-ai/DeepSeek-V4-Flash-0731', name: 'DeepSeek-V4-Flash-0731' },
   { id: 'zai-org/GLM-5.3-Flash', name: 'GLM-5.3 Flash' },
   { id: 'zai-org/GLM-5.3', name: 'GLM-5.3' },
   { id: 'mistralai/Mistral-Large-4-1T-A52B', name: 'Mistral Large 4' },

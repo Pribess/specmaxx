@@ -1,6 +1,6 @@
 /**
  * Lowering of sparse-attention selections: a top-k indexer (DeepSeek-V3.2 DSA "lightning indexer" and its
- * relatives: GLM k-pool, Qwen QSA, MiniMax MSA, DeepSeek-V4.1 CSA), or a `'reuse'` of an earlier layer's top-k,
+ * relatives: GLM k-pool, Qwen QSA, MiniMax MSA, DeepSeek-V4 / V4.1 CSA), or a `'reuse'` of an earlier layer's top-k,
  * which emits no ops. The indexer is REPLICATED on every TP rank: each rank scores all keys for its own query heads'
  * selection (the indexer heads are not sharded). See docs/simulation-model.md §5 "Sparse attention indexer".
  *
@@ -31,8 +31,9 @@ export function indexerSelection(sel: SparseSelection): KvSelection {
 /**
  * Indexer ops for one sparse attention block (none for a `'reuse'` selection), in order:
  * 1. `idx.q` (m = T, n = H_I·hd_I, k = qInputDim; qInputDim = h for GQA, rq for MLA with q compression and CSA);
- * 2. if the layer owns its keys: `idx.k` (n = hd_I, k = keyInputDim ?? h) and the key LayerNorm over T·hd_I;
- * 3. with `keyPoolGate`: `idx.pool_gate` (n = hd_I, k = h) and `idx.kv_pool` (T·hd_I → T·hd_I/p);
+ * 2. if the layer owns its keys: `idx.k` (n = coff·hd_I, k = keyInputDim ?? h) and the key LayerNorm over T·hd_I;
+ * 3. with `keyPoolGate`: `idx.pool_gate` (n = coff·hd_I, k = h) and `idx.kv_pool` (T·coff·hd_I → T·hd_I/p);
+ *    coff = 2 with `keyPoolOverlap` (DeepSeek-V4 overlapping key windows), else 1;
  * 4. with `headWeights`: `idx.w` (n = H_I, k = h);
  * 5. the `indexer` scoring op over the visible keys (each pooling p tokens), capped at `maxScoredKeys`.
  * `hidden` is the block's input width; `attentionKeyTokens` is how many tokens one key of the MAIN attention
@@ -52,6 +53,9 @@ export function lowerSparseSelection(
   const p = spec.keyPoolTokens ?? 1;
   const hdI = spec.headDim;
   const ownsKeys = spec.ownsKeys !== false;
+  // coff = 2 with overlapping key pools (each key pools 2p tokens from two hd_I-wide halves), else 1.
+  const coff = spec.keyPoolOverlap === true ? 2 : 1;
+  const keyProjDim = coff * hdI;
   const act = actBpe(ctx);
   const ops: Op[] = [];
 
@@ -59,8 +63,8 @@ export function lowerSparseSelection(
   // See docs/simulation-model.md §5 "Sparse attention indexer"
   ops.push(linearGemm('idx.q', { m: T, n: spec.heads * hdI, k: qInputDim }, ctx, { module: 'indexer' }));
   if (ownsKeys) {
-    // Formula: idx.k: n = hd_I, k = kIn; key LayerNorm over T·hd_I
-    ops.push(linearGemm('idx.k', { m: T, n: hdI, k: spec.keyInputDim ?? hidden }, ctx, { module: 'indexer_key' }));
+    // Formula: idx.k: n = coff·hd_I, k = kIn; key LayerNorm over T·hd_I
+    ops.push(linearGemm('idx.k', { m: T, n: keyProjDim, k: spec.keyInputDim ?? hidden }, ctx, { module: 'indexer_key' }));
     const kNormElems = T * hdI;
     ops.push(
       elementwise(
@@ -76,10 +80,11 @@ export function lowerSparseSelection(
       ),
     );
     if (spec.keyPoolGate === true) {
-      // Formula: idx.pool_gate: n = hd_I, k = h; kv_pool over T·hd_I: read 2·T·hd_I (keys, gate logits), write T·hd_I/p,
-      //          APE p·hd_I·bpe(hp)
-      ops.push(linearGemm('idx.pool_gate', { m: T, n: hdI, k: hidden }, ctx, { module: 'indexer_key' }));
-      const poolElems = T * hdI;
+      // Formula: idx.pool_gate: n = coff·hd_I, k = h; kv_pool over T·coff·hd_I: read 2·T·coff·hd_I (keys, gate
+      //          logits), write T·hd_I/p, APE p·coff·hd_I·bpe(hp)
+      ops.push(linearGemm('idx.pool_gate', { m: T, n: keyProjDim, k: hidden }, ctx, { module: 'indexer_key' }));
+      const poolElems = T * keyProjDim;
+      const keyElems = T * hdI;
       ops.push(
         elementwise(
           'idx.kv_pool',
@@ -87,8 +92,8 @@ export function lowerSparseSelection(
           {
             elems: poolElems,
             activationReadBytes: 2 * poolElems * act,
-            activationWriteBytes: (poolElems / p) * act,
-            weightBytes: p * hdI * hpBpe(ctx),
+            activationWriteBytes: (keyElems / p) * act,
+            weightBytes: p * keyProjDim * hpBpe(ctx),
           },
           ctx,
         ),

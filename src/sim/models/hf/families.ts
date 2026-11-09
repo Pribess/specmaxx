@@ -6,7 +6,7 @@
  * A model type or architecture must appear in at most one entry (a test checks this).
  */
 
-import { deepseekV41Family } from './families/deepseekV41';
+import { deepseekV41Family, deepseekV4Family } from './families/deepseekV41';
 import { glm5NextFamily } from './families/glm5Next';
 import { glmMoeDsaFamily } from './families/glmMoeDsa';
 import { inklingFamily } from './families/inkling';
@@ -21,6 +21,7 @@ export const FAMILIES: readonly FamilyEntry[] = [
   minimaxFamily,
   inklingFamily,
   deepseekV41Family,
+  deepseekV4Family,
   glm5NextFamily,
   glmMoeDsaFamily,
   mistralLarge4Family,

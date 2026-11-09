@@ -18,9 +18,14 @@ function attentionOf(layer: LayerSpec): AttentionBlock | undefined {
   return undefined;
 }
 
-/** The sparse selection of an attention block (csa: its global branch's), or undefined when it is dense. */
+/**
+ * The sparse selection of an attention block (csa: its global branch's), or undefined when it is dense. A csa
+ * `{ kind: 'all' }` selection (attend every compressed entry) maps to undefined: it references no other layer.
+ */
 function selectionOf(block: AttentionBlock): SparseSelection | undefined {
-  return block.kind === 'csa_attention' ? block.global?.selection : block.sparse;
+  if (block.kind !== 'csa_attention') return block.sparse;
+  const sel = block.global?.selection;
+  return sel === undefined || sel.kind === 'all' ? undefined : sel;
 }
 
 /** The indexer an attention block runs, or undefined (dense or a reused top-k). */

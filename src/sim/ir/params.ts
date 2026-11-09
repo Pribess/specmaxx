@@ -7,7 +7,7 @@
  * fe/fs routed/shared expert widths, S shared experts, N residual streams, D stream width.
  */
 
-import type { BlockSpec, IndexerSpec, ModelSpec, ProjectionSpec, SparseSelection } from './model';
+import type { BlockSpec, CsaSelection, IndexerSpec, ModelSpec, ProjectionSpec } from './model';
 
 /** Weights of a list of dense projections: `Σ inputDim·outputDim`. Unit: params. */
 function projectionParams(projections: ProjectionSpec[]): number {
@@ -24,21 +24,23 @@ function indexerParams(ix: IndexerSpec, hidden: number, qInputDim: number): numb
   const hdI = ix.headDim;
   const keyIn = ix.keyInputDim ?? hidden;
   const pool = ix.keyPoolTokens ?? 1;
+  // coff = 2 with overlapping key pools (DeepSeek-V4 indexer compressor), else 1.
+  const coff = ix.keyPoolOverlap === true ? 2 : 1;
   // Formula: P_idx = qIn·H_I·hd_I (wq)
-  //               + [ownsKeys] (kIn·hd_I (wk) + 2·hd_I (key norm γ, β))
-  //               + [keyPoolGate] (h·hd_I (gate) + p·hd_I (APE))
+  //               + [ownsKeys] (kIn·coff·hd_I (wk) + 2·hd_I (key norm γ, β))
+  //               + [keyPoolGate] (h·coff·hd_I (gate) + p·coff·hd_I (APE))
   //               + [headWeights] h·H_I (weights_proj)
   // See docs/simulation-model.md §2 "Parameter counts"
   const query = qInputDim * ix.heads * hdI;
-  const keys = ix.ownsKeys === false ? 0 : keyIn * hdI + 2 * hdI;
-  const poolGate = ix.keyPoolGate === true ? hidden * hdI + pool * hdI : 0;
+  const keys = ix.ownsKeys === false ? 0 : keyIn * coff * hdI + 2 * hdI;
+  const poolGate = ix.keyPoolGate === true ? hidden * coff * hdI + pool * coff * hdI : 0;
   const headWeights = ix.headWeights === false ? 0 : hidden * ix.heads;
   return query + keys + poolGate + headWeights;
 }
 
-/** Weights of a sparse selection: its indexer's, or 0 for a reused top-k. Unit: params. */
-function sparseParams(sel: SparseSelection | undefined, hidden: number, qInputDim: number): number {
-  if (sel === undefined || sel.kind === 'reuse') return 0;
+/** Weights of a sparse / CSA selection: its indexer's, or 0 for a reused top-k or an attend-all selection. Unit: params. */
+function sparseParams(sel: CsaSelection | undefined, hidden: number, qInputDim: number): number {
+  if (sel === undefined || sel.kind === 'reuse' || sel.kind === 'all') return 0;
   return indexerParams(sel.indexer, hidden, qInputDim);
 }
 
@@ -108,7 +110,8 @@ export function blockParams(block: BlockSpec): number {
       const Ro = block.outLoraRank;
       // Formula: q = h·rq + rq + rq·H·hd (wq_a, q_norm, wq_b); kv = h·hd + hd (wkv, kv_norm)
       // Formula: o = G·R_o·(H·hd/G) (wo_a, block-diagonal) + G·R_o·h (wo_b)
-      // Formula: compressor (owner only): r > 1: 2·h·hd + hd (wkv, wgate, norm); r = 1: h·hd + hd
+      // Formula: compressor (owner only): r > 1: 2·h·coff·hd + hd (wkv, wgate, norm; coff = 2 with compressorOverlap,
+      //          else 1); r = 1: h·hd + hd. The DeepSeek-V4 APE (r·coff·hd fp32) is not counted.
       // Formula: + P_idx of the global selection (q input rq)
       // See docs/simulation-model.md §2 "Parameter counts"
       const q = h * rq + rq + rq * H * hd;
@@ -117,7 +120,8 @@ export function blockParams(block: BlockSpec): number {
       const g = block.global;
       let compressor = 0;
       if (g !== undefined && g.kvCacheFromLayer === undefined) {
-        compressor = g.compressRatio > 1 ? 2 * h * hd + hd : h * hd + hd;
+        const coff = g.compressorOverlap === true ? 2 : 1;
+        compressor = g.compressRatio > 1 ? 2 * h * coff * hd + hd : h * hd + hd;
       }
       const indexer = g === undefined ? 0 : sparseParams(g.selection, h, rq);
       return q + kv + o + compressor + indexer;

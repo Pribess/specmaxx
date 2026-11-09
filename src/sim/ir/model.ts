@@ -197,6 +197,13 @@ export interface IndexerSpec {
    */
   keyPoolGate?: boolean;
   /**
+   * True if the pooled keys come from OVERLAPPING windows (DeepSeek-V4 indexer `Compressor.overlap`, r = 4; needs
+   * `keyPoolGate`): the key and gate projections `idx.k`, `idx.pool_gate` produce coff·hd_I = 2·hd_I features per
+   * token (half for the previous window, half for the current one) and the APE holds p·2·hd_I params. Default
+   * false (coff = 1). Unit: flag.
+   */
+  keyPoolOverlap?: boolean;
+  /**
    * Input width of the key projection kIn; default the block's hidden. DeepSeek-V4.1's `wk` reads the 512-wide
    * compressed KV latent. Unit: elements.
    */
@@ -323,12 +330,12 @@ export interface MlaAttentionBlock {
 }
 
 /**
- * DeepSeek-V4.1 compressed sparse attention (CSA). Every token has ONE cached vector of `headDim` elements used as
- * both key and value (K = V). Each query attends the layer's own raw sliding window of `windowTokens` and, when
- * `global` is set, `topK` entries of a compressed global KV (r tokens pooled into one entry), concatenated into one
- * softmax. q is low-rank (`q_a → q_norm → q_b`); the output projection is low-rank and grouped (`wo_a` is
- * block-diagonal over `outGroups`, then `wo_b`). Source: DeepSeek-V4.1 `inference/model.py` `Attention`,
- * `Compressor`, `Indexer`.
+ * DeepSeek-V4 and V4.1 compressed sparse attention (CSA). Every token has ONE cached vector of `headDim` elements
+ * used as both key and value (K = V). Each query attends the layer's own raw sliding window of `windowTokens` and,
+ * when `global` is set, entries of a compressed global KV (r tokens pooled into one entry; the `topK` its selection
+ * keeps, or all of them), concatenated into one softmax. q is low-rank (`q_a → q_norm → q_b`); the output projection
+ * is low-rank and grouped (`wo_a` is block-diagonal over `outGroups`, then `wo_b`). Source: DeepSeek-V4 and V4.1
+ * `inference/model.py` `Attention`, `Compressor`, `Indexer`.
  */
 export interface CsaAttentionBlock {
   kind: 'csa_attention';
@@ -363,9 +370,30 @@ export interface CsaGlobalSpec {
    * compressor and owns the cache (a `kv_source_layer_ids` layer). A consumer has no compressor and no global cache.
    */
   kvCacheFromLayer?: number;
-  /** Which entries each query reads: its own indexer, or the top-k of an earlier one. topK in entries (`index_topk` 512). */
-  selection: SparseSelection;
+  /**
+   * True when the compressor pools OVERLAPPING windows (DeepSeek-V4 `Compressor.overlap`, set iff r = 4): `wkv_c`
+   * and `wgate_c` project to coff·hd with coff = 2 (one half for the previous window, one for the current one), so
+   * each entry pools 2r tokens, and the fp32 pooling state doubles in both dimensions (coff·r rows of coff·hd).
+   * Default false (coff = 1). Ignored with `kvCacheFromLayer` (no compressor). Unit: flag.
+   */
+  compressorOverlap?: boolean;
+  /**
+   * Which entries each query reads: its own indexer, the top-k of an earlier one (topK in entries, `index_topk`
+   * 512), or every visible entry (`{ kind: 'all' }`, see {@link CsaSelection}).
+   */
+  selection: CsaSelection;
 }
+
+/**
+ * Entry selection of a CSA global branch: a {@link SparseSelection} (top-k by an indexer, own or reused), or
+ * `{ kind: 'all' }`: each query attends EVERY visible compressed entry (about p/r of them at position p, causal), with
+ * no indexer ops, no indexer weights and no indexer keys. DeepSeek-V4 r = 128 layers (`inference/model.py`
+ * `get_compress_topk_idxs`: the indices are simply 0 … ⌊(p+1)/r⌋ − 1).
+ */
+export type CsaSelection =
+  | SparseSelection
+  /** Attend every visible compressed entry (dense over entries); no indexer. */
+  | { kind: 'all' };
 
 /**
  * Linear-attention / SSM token mixer (GatedDeltaNet, Kimi Delta Attention, Mamba2, plain linear attention) with a

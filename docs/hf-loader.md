@@ -61,6 +61,7 @@ name the model class; model types second because text-only extractions often dro
 |---|---|---|---|
 | `qwen` (`qwen.ts`) | `qwen3_5`, `qwen3_5_text`, `qwen4_exp`, `qwen4_exp_text` | `Qwen3_5ForConditionalGeneration`, `Qwen4ExpForConditionalGeneration` | Qwen3.8-27B, Qwen3.8-Flash-Next |
 | `deepseek_v41` (`deepseekV41.ts`) | `deepseek_v41`, `deepseek_v41_text` | `DeepseekV41ForCausalLM` | DeepSeek-V4.1-Flash (and `-1017`) |
+| `deepseek_v4` (`deepseekV41.ts`, `deepseekV4Family`: same builder, V4 profile) | `deepseek_v4` | `DeepseekV4ForCausalLM` | DeepSeek-V4-Flash-0731 |
 | `glm5_next` (`glm5Next.ts`) | `glm5_next`, `glm5_next_text` | `Glm5NextForConditionalGeneration` | GLM-5.3-Flash |
 | `glm_moe_dsa` (`glmMoeDsa.ts`) | `glm_moe_dsa` | `GlmMoeDsaForCausalLM` | GLM-5.3 (also GLM-5) |
 | `mistral_large4` (`mistralLarge4.ts`) | `mistral_large4`, `mistral_large4_text` | `MistralLarge4ForConditionalGeneration` | Mistral Large 4 |
@@ -156,6 +157,7 @@ compares against `safetensors.total` with the excluded estimates added.
 | Qwen3.8-27B | `Qwen/Qwen3.8-27B` | `qwen` | 26.90B / 26.90B | ok | BF16 |
 | Qwen3.8-Flash-Next | `Qwen/Qwen3.8-Flash-Next` | `qwen` | 176.94B / 7.31B | ok | BF16 |
 | DeepSeek-V4.1-Flash | `deepseek-ai/DeepSeek-V4.1-Flash` (`-1017` identical) | `deepseek_v41` | 748.49B / 16.79B | ok | FP8 32×32 ue8m0, experts FP4 |
+| DeepSeek-V4-Flash-0731 | `deepseek-ai/DeepSeek-V4-Flash-0731` | `deepseek_v4` | 284.33B (304.18B incl. MTP) / 13.27B active excl. embedding | ok | FP8 128×128 ue8m0, experts FP4 |
 | GLM-5.3 Flash | `zai-org/GLM-5.3-Flash` (`-BF16` twin) | `glm5_next` | 313.33B / 17.38B | ok | FP8 128×128 |
 | GLM-5.3 | `zai-org/GLM-5.3` (`-BF16` twin) | `glm_moe_dsa` | 743.38B / 41.25B | ok | FP8 128×128 |
 | Mistral Large 4 | `mistralai/Mistral-Large-4-1T-A52B` | `mistral_large4` | 1049.36B / 52.34B | unavailable (no safetensors totals) | FP8 128×128 |
@@ -192,6 +194,17 @@ the simulator. The tech report's "Decoder SWA Bounded Replay" (the decoder half 
 prompt), which its "8B active in prefill" figure assumes, is a deployment optimization and is left out with the
 other inference-engine knobs (docs/simulation-model.md §9).
 
+**DeepSeek-V4 (Flash-0731).** Same builder as V4.1. With no `kv_source_layer_ids` / `index_source_layer_ids` in
+the config, every r > 0 layer owns its compressor, r = 4 layers (21) run an indexer whose keys come from its own
+overlapping compressor over the hidden state, and r = 128 layers (20) attend every compressed entry
+(`CsaSelection {kind: 'all'}`). Layers 0-2 route experts by token id (`tid2eid`); the router GEMM still runs. No
+Engram tables, so no lookup-table offload. Prefill runs all 43 layers on all prompt tokens. The checkpoint has 3
+DSpark stages although `num_nextn_predict_layers` is 1 (`compress_ratios` has 43 + 3 entries, inference/config.json
+`n_mtp_layers` 3, and every safetensors dtype bucket reconciles only with 46 blocks); the loader takes
+max(`num_nextn_predict_layers`, `len(compress_ratios)` − `num_hidden_layers`) and notes the disagreement. Native
+caches (model.py QAT): window and compressed KV fp8 with bf16 RoPE dims and a ue8m0 scale per 64 (583 B per
+512-element vector), indexer keys mxfp4. Tech report: 284B total / 13B activated.
+
 **Tests.** `src/sim/models/hf/families/*.test.ts` check each family against the safetensors headers (total and
 active parameters, per-layer counts, layer roles, sibling checkpoints); `quant/*.test.ts` the derived defaults of
 every fixture repo; `shortlist.e2e.test.ts` runs every shortlist fixture through `mapHfModel` and `simulate`
@@ -215,6 +228,7 @@ position each) and absent for heads trained for several positions (Qwen3.5+/3.8 
 | `glm_moe_dsa`, `glm5_next` | `num_nextn_predict_layers` | MTP | module count |
 | `inkling` | `mtp_config.num_nextn_predict_layers` (dense MLPs; `local_layer_ids` windowed) | MTP | module count |
 | `deepseek_v41` | `num_nextn_predict_layers` + `dspark_*` | DSpark block drafter (below), the `mtp.*` stages as `moeLayers` | — |
+| `deepseek_v4` | max(`num_nextn_predict_layers`, `len(compress_ratios)` − `num_hidden_layers`) + `dspark_*` (V4-Flash-0731: 1 vs 3 → 3) | DSpark block drafter, as V4.1 (main MoE 256 / top-6 in the stages) | — |
 | `mistral_large4` | `params.json` `mtp` | none: deferred (`params.json` lacks the drafter's head counts and dims; its head type is `rnn`) | — |
 | `minimax` | MTP config fields | none: the released checkpoint has no MTP tensors | — |
 

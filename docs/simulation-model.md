@@ -86,9 +86,11 @@ hyper-connection and n-gram widths equal `residualStreams·hidden`.
 
 New block kinds (lowered in `src/sim/lower/{csa,hyperConnection,ngram,shortConv}.ts`, §5):
 
-- `csa_attention` (DeepSeek-V4.1): one cached `headDim` vector per token used as K and V; every layer attends its
-  own `windowTokens` raw window, plus (with `global`) `topK` entries of a KV compressed `compressRatio`:1; low-rank
-  q (`qLoraRank`) and grouped low-rank output (`outGroups` × `outLoraRank`).
+- `csa_attention` (DeepSeek-V4, V4.1): one cached `headDim` vector per token used as K and V; every layer attends
+  its own `windowTokens` raw window, plus (with `global`) entries of a KV compressed `compressRatio`:1, either the
+  `topK` an indexer keeps or, with `CsaSelection {kind: 'all'}` (DeepSeek-V4 r = 128 layers), every visible entry;
+  low-rank q (`qLoraRank`) and grouped low-rank output (`outGroups` × `outLoraRank`). `CsaGlobalSpec.compressorOverlap`
+  (DeepSeek-V4 r = 4) pools overlapping windows (coff = 2, below).
 - `hc_pre` / `hc_post`: hyper-connections over N streams (Qwen "Gated Residual", DeepSeek/GLM mHC). `hc_pre`
   collapses the streams through its `projections` (and an optional γ over N·D, Sinkhorn iterations); `hc_post`
   writes the sublayer output back, mixing the streams (`mixesStreams`, mHC) or not (Qwen).
@@ -96,7 +98,7 @@ New block kinds (lowered in `src/sim/lower/{csa,hyperConnection,ngram,shortConv}
   capacity), `rowsPerToken` rows gathered per token, then `projections`, a gate and an optional dilated conv,
   written into the `outputDim = N·D` residual.
 - `short_conv` (Inkling): `x + conv(x)`, a depthwise causal conv of `kernel` taps on a branch output.
-- New fields: `IndexerSpec.{keyPoolTokens, keyPoolGate, keyInputDim, ownsKeys, maxScoredKeys, headWeights}` (GLM
+- New fields: `IndexerSpec.{keyPoolTokens, keyPoolGate, keyPoolOverlap, keyInputDim, ownsKeys, maxScoredKeys, headWeights}` (GLM
   k-pool, Qwen QSA, MiniMax MSA, DeepSeek CSA indexers); `GqaAttentionBlock.{relativeBias, kvConvKernel}`
   (Inkling); `LinearAttentionBlock.variant 'kda'` with `gateRank` (GLM-5.3-Flash Kimi Delta Attention).
 
@@ -231,10 +233,12 @@ totals (unsharded), used to sanity-check mappers against published sizes.
 - mla: q path `h·rq + rq + rq·H·(dn+dr)` (or `h·H·(dn+dr)` when rq = 0), kv `h·(rkv+dr) + rkv + rkv·H·(dn+dv)`,
   o `H·dv·h`, + indexer (q input rq or h). With `kvCacheFromLayer` the `h·(rkv+dr) + rkv` term is dropped.
 - csa: q `h·rq + rq + rq·H·hd`, kv `h·hd + hd`, out `G·R_o·(H·hd/G) + G·R_o·h`; compressor (owner only)
-  `2·h·hd + hd` for r > 1, `h·hd + hd` for r = 1; + the global selection's indexer (q input rq). DeepSeek-V4.1:
-  126.6 M per layer without compressor and indexer.
-- indexer: `qIn·H_I·hd_I` + [ownsKeys] `kIn·hd_I + 2·hd_I` (key norm γ, β) + [keyPoolGate] `h·hd_I + p·hd_I`
-  - [headWeights] `h·H_I`. A `'reuse'` selection has 0.
+  `2·h·coff·hd + hd` for r > 1 (coff = 2 with `compressorOverlap`, else 1), `h·hd + hd` for r = 1; + the global
+  selection's indexer (q input rq; 0 for `reuse` and `all`). DeepSeek-V4.1: 126.6 M per layer without compressor and
+  indexer. The DeepSeek-V4 compressor APE (`r·coff·hd`, fp32) is not counted (`params.ts: blockParams`).
+- indexer: `qIn·H_I·hd_I` + [ownsKeys] `kIn·coff·hd_I + 2·hd_I` (key norm γ, β) + [keyPoolGate]
+  `h·coff·hd_I + p·coff·hd_I` + [headWeights] `h·H_I`, coff = 2 with `keyPoolOverlap`, else 1. A `'reuse'`
+  selection has 0.
 - linear_attention: in_proj `h·(2·qkH·dk + vH·dv·(gate?2:1) + 2·vH)`, conv `(2·qkH·dk + vH·dv)·K`, `2·vH`
   (A_log, dt_bias), `dv` (out norm), out_proj `vH·dv·h`.
 - kda: `h·(2·qkH·dk + vH·dv)` (q, k, v) + `h·vH` (β) + `h·r + r·vH·dk` (forget gate) + `h·r + r·vH·dv` (output
@@ -310,7 +314,9 @@ position `p` sees `p/r` keys (continuous: against `floor(p/r)` this overcounts b
 
 `metrics.ts: attentionFlops, attentionBytes, attentionPairs`. Fused QKᵀ → softmax → ·V (FlashAttention-style:
 scores never reach memory). An optional **secondary key set** (`AttentionOp.secondaryKv: AttentionKvSource`, CSA's
-compressed global entries next to its raw window) shares the same softmax: Q is read once and O written once.
+compressed global entries next to its raw window) shares the same softmax: Q is read once and O written once. Its
+`kvSelection` is `topk` (an indexer's entries) or `full` (CSA `{kind: 'all'}`: every visible entry, `p/r` at
+position p).
 
 - `pairs = attendedPairs(primary) + attendedPairs(secondary, r)` (`attentionPairs`, also used by the shape model)
 - `F = 2·seqs·heads·pairs·(qkHeadDim + vHeadDim)` (softmax not counted, §9)
@@ -863,13 +869,16 @@ Both phases and every draft head use `lower/head.ts: samplingExchangeOps` (`lowe
 
 `lower/indexer.ts: lowerSparseSelection, sparseSelectionStateBytes, indexerKeyStateBytes, indexerSelection`. Ops:
 `idx.q (n = H_I·hd_I, k = qIn)` (qIn = h, or rq for MLA with q compression and for CSA) → if the layer owns its
-keys: `idx.k (n = hd_I, k = keyInputDim ?? h)` → key LayerNorm over `T·hd_I` → with `keyPoolGate`:
-`idx.pool_gate (n = hd_I, k = h)` → `kv_pool` (APE `p·hd_I`) → with `headWeights`: `idx.w (n = H_I, k = h)` →
+keys: `idx.k (n = coff·hd_I, k = keyInputDim ?? h)` → key LayerNorm over `T·hd_I` → with `keyPoolGate`:
+`idx.pool_gate (n = coff·hd_I, k = h)` → `kv_pool` (over `T·coff·hd_I`, write `T·hd_I/p`, APE `p·coff·hd_I`) →
+with `headWeights`: `idx.w (n = H_I, k = h)` →
 the `indexer` op (key cache `QuantConfig.indexerKeyCache ?? kvCache`, `hd_I` elems per key, `p` tokens per key,
 `hd_I/p` written per token by an owner, 0 by a layer with `ownsKeys: false`; `topK_I = ceil(topK·t/p)` indexer
 keys, t = tokens per main-attention key: 1, or r for CSA). Replicated on every TP rank. The main attention gets
 `kvSelection {topk, topK}`. Module formats: `idx.q` `indexer`, `idx.k` / `idx.pool_gate` `indexer_key`, `idx.w`
 `indexer_head_weights`. Sequence state: the owned keys `ceil(ctx/p)·hd_I·bpe(key)`.
+coff = 2 with `keyPoolOverlap` (DeepSeek-V4 indexer: its own compressor over h with overlapping windows, as in
+§5 "CSA" step 3), else 1.
 
 ### Top-k reuse
 
@@ -887,22 +896,27 @@ with `kvCacheFromLayer` (DeepSeek-V4.1 consumers) runs no compressor and writes 
 
 ### CSA
 
-`lower/csa.ts: lowerCsa, csaSequenceStateBytes, compressedKvFormat`. `Hl = H/tp`, `Gl = G/tp` (tp must divide both);
+`lower/csa.ts: lowerCsa, csaSequenceStateBytes, compressedKvFormat, compressorCoff, csaEntrySelection`. `Hl = H/tp`,
+`Gl = G/tp` (tp must divide both);
 the one K = V vector per token, the compressor, the indexer and all caches are replicated (one KV head).
 
 1. `csa.q_a (n rq, k h)` → rmsnorm(T·rq) → `csa.q_b (n Hl·hd, k rq)` → rope over `T·Hl·dr`.
 2. `csa.wkv (n hd, k h)` → rmsnorm(T·hd) → rope over `T·dr`.
-3. Owner of the compressed cache: r > 1: `csa.wkv_c` + `csa.wgate_c` (n hd, k h, module `attention_kv_down`) →
-   `kv_pool` (read `2·T·hd`, write `T/r·hd`) → rmsnorm and rope over `T/r` entries; r = 1: `csa.wkv_c` → rmsnorm.
-4. The selection: indexer ops (qIn = rq, keys from the hd-wide latent, `p = r`), or nothing for `reuse`.
+3. Owner of the compressed cache: r > 1: `csa.wkv_c` + `csa.wgate_c` (n coff·hd, k h, module `attention_kv_down`)
+   → `kv_pool` (over `T·coff·hd`: read `2·T·coff·hd`, write `T/r·hd`) → rmsnorm and rope over `T/r` entries;
+   r = 1: `csa.wkv_c` → rmsnorm. coff = 2 with `compressorOverlap` (DeepSeek-V4 `Compressor.overlap`, r = 4: one
+   hd-wide half for the previous window, one for the current, so each entry pools 2r tokens), else 1.
+4. The selection: indexer ops (qIn = rq, `p = r`; keys from the hd-wide latent in V4.1, from h through the
+   indexer's own overlapping compressor in V4), nothing for `reuse`, nothing for `all`.
 5. One `AttentionOp`: `kvHeads 1`, `qk = v = hd`, `kvSelection {window, W}`, `kvRead = kvWrite = {kvCache, hd}`
-   (K = V, so one vector), and `secondaryKv {r, topk(topK entries), kvRead {compressedKvCache, hd},
-kvWrite {compressedKvCache, owner ? hd/r : 0}}` (§3 "Attention").
+   (K = V, so one vector), and `secondaryKv {r, topk(topK entries) or full (all), kvRead {compressedKvCache, hd},
+kvWrite {compressedKvCache, owner ? hd/r : 0}}` (§3 "Attention"; `csaEntrySelection`).
 6. Inverse rope over `T·Hl·dr` → `csa.wo_a` grouped (batch Gl, m T, n R_o, k H·hd/G) → `csa.wo_b` (n h, k Gl·R_o)
    → all_reduce(tp).
 
-Sequence state: `min(ctx, W)·hd·bpe(kv)` + owner `ceil(ctx/r)·hd·bpe(compressedKv)` + compressor tail `2·r·hd·4`
-(fp32 kv and score state, r > 1) + owned indexer keys `ceil(ctx/r)·hd_I·bpe(key)`.
+Sequence state: `min(ctx, W)·hd·bpe(kv)` + owner `ceil(ctx/r)·hd·bpe(compressedKv)` + compressor tail
+`2·(coff·r)·(coff·hd)·4` (fp32 kv and score state, r > 1) + owned indexer keys `ceil(ctx/r)·hd_I·bpe(key)` (none
+for `reuse` and `all`).
 
 ### KDA
 
@@ -1477,7 +1491,7 @@ Per device of stage s:
 - `state_s` per sequence at `ctx = max(promptLen, decodeContextLen + 1)` (the cache after prefill, or after the
   decode step appended its token): GQA `min(ctx, W)·2·KVl·hd·bpe(kv)`
   (a sliding window keeps W tokens) + K/V conv state `(K−1)·2·KVl·hd·bpe(act)`; MLA latent `ctx·(rkv+dr)·bpe(kv)`
-  (0 with `kvCacheFromLayer`); CSA `min(ctx, W)·hd·bpe(kv)` + owner `ceil(ctx/r)·hd·bpe(ckv) + [r > 1] 2·r·hd·4`;
+  (0 with `kvCacheFromLayer`); CSA `min(ctx, W)·hd·bpe(kv)` + owner `ceil(ctx/r)·hd·bpe(ckv) + [r > 1] 2·(coff·r)·(coff·hd)·4`;
   owned indexer keys `ceil(ctx/p)·hd_I·bpe(key)` (0 for `reuse` and `ownsKeys: false`); linear attention
   `vL·dk·dv·bpe(state) + C·(K−1)·bpe(act)`; short conv `(K−1)·dim·bpe(act)`; n-gram conv
   `(K−1)·dilation·O·bpe(act)`; hyper-connections 0.
@@ -1569,6 +1583,17 @@ Shortlist-model approximations (sub-percent unless noted):
 - The indexer key GEMM runs on all T tokens even when its keys come from pooled latents (DeepSeek: 512×128).
 - The CSA compressor weights are read in their stored (module) format; the reference code promotes r > 1
   compressor weights to fp32 at run time, an implementation detail.
+- DeepSeek-V4: the compressor APE (`r·coff·hd` fp32 per owner layer, 1.40 M params in V4-Flash) is not counted
+  in the params or weight reads (the indexer's pooled-key APE is); the final `hc_head` projection (N·D → N mixing
+  weights before the head, 65.5 k params) is not modeled (the streams collapse as in V4.1); the hash-routing table
+  `tid2eid` (`num_hash_layers · vocab · k` int64 expert ids) is not counted, and the router GEMM still runs in
+  those layers (`Gate.forward` computes the weights); the indexer compressor's fp32 pooling state is not counted
+  as sequence state.
+- DeepSeek-V4 indexer keys go through the generic indexer path: the key norm (`idx.k_norm`) runs on the `T·hd_I`
+  pre-pool elements, while model.py's indexer `Compressor` normalizes the `T/r` pooled keys after pooling, so the norm
+  is overstated by at most `(r−1)/r·T·hd_I` elements per indexer layer. The key RoPE and the Hadamard rotation
+  (`rotate_activation`) of the indexer compressor are not emitted, as for the generic indexer. Both are elementwise
+  and negligible next to the GEMM and attention bytes.
 - The hyper-connection mixing weights the projections produce are consumed on chip (only the streams are read by
   `hc_collapse`); the embedding broadcast into N streams is ignored (< 0.5%).
 - n-gram tables count toward weight memory and total params, not active params; the last n−1 token ids the hashes

@@ -128,6 +128,25 @@ const CASES: Case[] = [
     notes: [/mxfp4, fp8 GEMM input/, /Engram table/],
   },
   {
+    // expert_dtype sits at the top level of config.json, next to quantization_config (V4.1 puts it inside).
+    repo: 'deepseek-ai/DeepSeek-V4-Flash-0731',
+    dir: '',
+    scheme: /^fp8: e4m3 fp8, block 128×128 ue8m0 scales, dynamic fp8 activations, routed experts fp4/,
+    source: 'quantization_config',
+    modules: {
+      attention: ['fp8_e4m3', FP8_128_UE8M0, 'fp8_e4m3'],
+      shared_experts: ['fp8_e4m3', FP8_128_UE8M0, 'fp8_e4m3'],
+      indexer: ['fp8_e4m3', FP8_128_UE8M0, 'fp8_e4m3'],
+      routed_experts: ['mxfp4', 0, 'fp8_e4m3'],
+      attention_kv_down: ['bf16'],
+      indexer_key: ['bf16'],
+      indexer_head_weights: ['bf16'],
+      residual_mixer: ['fp32'],
+    },
+    notes: [/mxfp4, fp8 GEMM input/],
+    noNotes: [/Engram table/],
+  },
+  {
     repo: 'zai-org/GLM-5.3-Flash',
     dir: '',
     scheme: /^fp8: e4m3 fp8, block 128×128 fp32/,

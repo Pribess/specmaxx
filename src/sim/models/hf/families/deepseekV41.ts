@@ -1,35 +1,45 @@
 /**
- * Family `deepseek_v41`: DeepSeek-V4.1 (`DeepseekV41ForCausalLM`; language model under `text_config`). Not in
- * transformers; the reference is the repo's `inference/model.py` (`Block`, `Attention`, `Compressor`, `Indexer`,
- * `Engram`, `Transformer.forward`).
+ * Families `deepseek_v41` (DeepSeek-V4.1: `DeepseekV41ForCausalLM`; language model under `text_config`) and
+ * `deepseek_v4` (DeepSeek-V4: `DeepseekV4ForCausalLM`; flat config), built by ONE builder with a small
+ * per-version {@link DeepseekProfile} for the facts no config field states. Not in transformers; the reference is
+ * each repo's `inference/model.py` (`Block`, `Attention`, `Compressor`, `Indexer`, `Gate`, [`Engram`],
+ * `Transformer.forward`).
  *
- * Every layer (`num_hidden_layers` 40): [Engram before layers `engram_layer_ids`], then two mHC sublayers
- * (`hc_mult` 4 streams; each with its own `hc_*_fn [(2+N)·N, N·D]`, base, scale, Sinkhorn, and its own pre-norm):
- * compressed sparse attention (CSA) and a MoE (all layers; one shared expert of width `moe_intermediate_size`).
- * After the last layer the streams collapse without a projection (`hc_pre` with the last FFN's pre weights),
- * then the final RMSNorm and the head.
+ * Every layer (`num_hidden_layers`: 40 in V4.1-Flash, 43 in V4-Flash): [Engram before layers `engram_layer_ids`],
+ * then two mHC sublayers (`hc_mult` 4 streams; each with its own `hc_*_fn [(2+N)·N, N·D]`, base, scale, Sinkhorn,
+ * and its own pre-norm): compressed sparse attention (CSA) and a MoE (all layers; one shared expert of width
+ * `moe_intermediate_size`). After the last layer the streams collapse without a projection (`hc_pre` with the
+ * last FFN's pre weights), then the final RMSNorm and the head.
  *
  * CSA layer roles come from the config lists, entry i of each (the first `num_hidden_layers` entries of
  * `compress_ratios`; the rest belong to the MTP stages):
  * - `compress_ratios[i]` r = 0 → sliding window only (no global branch).
  * - i ∈ `kv_source_layer_ids` → owns the compressed global KV (runs the compressor); otherwise it reads the cache
- *   of the latest source layer before i.
- * - i ∈ `index_source_layer_ids` → runs its own indexer (keys pooled r tokens per key, projected from the
- *   `head_dim`-wide compressed latent); it owns indexer keys iff it is also a KV source ("Full"), else it reads
- *   the source's keys ("Reindex"). Indexers after `candidate_source_layer_id` score at most
- *   `candidate_topk_blocks · candidate_block_size` candidates. Any other r > 0 layer reuses the top-k ("Reuse").
+ *   of the latest source layer before i. Without the list (V4) every r > 0 layer owns its compressor.
+ * - i ∈ `index_source_layer_ids` → runs its own indexer (keys pooled r tokens per key; V4.1: projected from the
+ *   `head_dim`-wide compressed latent; V4: from the hidden state by the indexer's own compressor); it owns indexer
+ *   keys iff it is also a KV source ("Full"), else it reads the source's keys ("Reindex"). Indexers after
+ *   `candidate_source_layer_id` score at most `candidate_topk_blocks · candidate_block_size` candidates. Any other
+ *   r > 0 layer reuses the top-k ("Reuse"). Without the list (V4) a layer runs an indexer iff r = 4 (model.py
+ *   `Attention.__init__`: `if self.compress_ratio == 4: self.indexer = Indexer(...)`) and any other r > 0 layer
+ *   attends every compressed entry ("All", `get_compress_topk_idxs`).
+ * - r = 4 compressors pool overlapping windows (model.py `Compressor.overlap = compress_ratio == 4`).
  * DeepSeek-V4.1-Flash: 2 SWA-only, 4 Full (2, 8, 14, 20), 4 Reindex (24, 28, 32, 36), 30 Reuse, Engram at 1, 14.
+ * DeepSeek-V4-Flash-0731: 2 SWA-only (0, 1), 21 Full with r = 4 (even 2..42), 20 All with r = 128 (odd 3..41), no
+ * Engram; layers 0..`num_hash_layers`−1 route experts by token id (`tid2eid`), but the router GEMM still runs.
  * Prefill runs every layer on every token, as `model.py` does (no "Bounded Replay").
  *
- * Excluded: the DSpark MTP stages (`num_nextn_predict_layers`; estimated from the `dspark_*` fields) and the vision
- * tower (estimated from `vision_config`). Approximations: the attention sink (H per layer), the router biases
- * (`gate.bias`, `gate.bias_vl`: 2·E per layer) are not counted, and the indexer key norm is counted as a
- * LayerNorm (2·hd_I instead of hd_I); together 960 params per layer at most.
+ * Excluded: the DSpark MTP stages (estimated from the `dspark_*` fields; their count is
+ * max(`num_nextn_predict_layers`, `len(compress_ratios)` − `num_hidden_layers`), see {@link dsparkStageCount}) and
+ * the vision tower (estimated from `vision_config`). Approximations: the attention sink (H per layer), the router
+ * biases (`gate.bias`, `gate.bias_vl`: 2·E per layer) are not counted, and the indexer key norm is counted as a
+ * LayerNorm (2·hd_I instead of hd_I); together 960 params per layer at most. V4 also: the compressor APE (fp32,
+ * r·coff·hd per owner layer), the final `hc_head` projection and the `tid2eid` table are not counted.
  */
 
 import type { FfnParams, MixerParams } from '../../../ir/builders';
 import { decoderLayer, decoderModel, repeatLayers } from '../../../ir/builders';
-import type { BlockDraftSpec, CsaGlobalSpec, IndexerSpec, LayerSpec } from '../../../ir/model';
+import type { BlockDraftSpec, CsaGlobalSpec, IndexerSpec, LayerSpec, QuantConfig } from '../../../ir/model';
 import type { ConfigReader } from '../reader';
 import { createReader, isJsonObject } from '../reader';
 import { withDraft } from '../drafter';
@@ -39,23 +49,102 @@ import { layerParams, mhcCollapse, mhcResidual, readActivation, readMoeFfn, stru
 /** The CSA fields every layer shares (heads, dims, ranks, window). */
 type CsaBase = Omit<Extract<MixerParams, { kind: 'csa' }>, 'global'>;
 
-/** Role of a CSA layer, for notes and tests. */
-export type CsaRole = 'swa' | 'full' | 'reindex' | 'reuse';
+/**
+ * Role of a CSA layer, for notes and tests: window only, own KV + own indexer, own indexer on shared KV, reused
+ * KV and top-k, or own KV with every compressed entry attended (DeepSeek-V4 r = 128 layers).
+ */
+export type CsaRole = 'swa' | 'full' | 'reindex' | 'reuse' | 'all';
 
-/** The CSA role of layer i (see the module header). */
-export function csaRole(ratio: number, isKvSource: boolean, isIndexSource: boolean): CsaRole {
+/**
+ * The CSA role of layer i (see the module header). `indexListGiven` false (no `index_source_layer_ids`, V4): a
+ * layer that runs no indexer attends all its entries instead of reusing a top-k.
+ */
+export function csaRole(ratio: number, isKvSource: boolean, isIndexSource: boolean, indexListGiven = true): CsaRole {
   if (ratio === 0) return 'swa';
   if (isIndexSource) return isKvSource ? 'full' : 'reindex';
-  return 'reuse';
+  return indexListGiven ? 'reuse' : 'all';
 }
 
+/**
+ * What a DeepSeek version's `inference/model.py` fixes that no config field states. One per family entry:
+ * {@link V41_PROFILE}, {@link V4_PROFILE}.
+ */
+export interface DeepseekProfile {
+  /**
+   * Where an indexer gets its keys. `'compressed_latent'` (V4.1 model.py `Indexer.wk [index_head_dim, head_dim]`):
+   * one projection of the layer's `head_dim`-wide compressed latent. `'own_compressor'` (V4 model.py
+   * `Indexer.compressor = Compressor(args, compress_ratio, index_head_dim, rotate=True)`): its own gated pooling
+   * compressor over the hidden state (`wkv`, `wgate` h → coff·hd_I, APE, RMSNorm), overlapping at r = 4.
+   */
+  indexerKeys: 'compressed_latent' | 'own_compressor';
+  /**
+   * The architecture-native (QAT) cache formats, as family quant hints (a cache format the repo's quantization
+   * metadata states explicitly wins).
+   */
+  cacheHints: (c: DeepseekConfig) => Partial<QuantConfig>;
+  /** Version-specific approximation notes (what of that model.py the IR leaves out); may be empty. */
+  notes: string[];
+}
+
+/**
+ * DeepSeek-V4.1 (findings R2 §1, V4.1 model.py): window KV fp8 with a ue8m0 scale per 32 (`act_quant(kv,
+ * fp8_block_size, …)`) → mxfp8; compressed global KV fp4 e2m1 with an e4m3 scale per 16 → nvfp4; indexer keys fp4
+ * with a ue8m0 scale per 32 → mxfp4. Weight-module formats are not hinted: the quant readers derive them per repo
+ * (the native checkpoint keeps the compressor and indexer wk / weights_proj in bf16; quant/moduleClass.ts marks
+ * them).
+ */
+export const V41_PROFILE: DeepseekProfile = {
+  indexerKeys: 'compressed_latent',
+  cacheHints: () => ({
+    kvCache: { dtype: 'mxfp8' },
+    compressedKvCache: { dtype: 'nvfp4' },
+    indexerKeyCache: { dtype: 'mxfp4' },
+  }),
+  notes: [],
+};
+
+/**
+ * DeepSeek-V4 (V4 model.py): window KV and compressed KV quantize the hd − dr non-RoPE dims to fp8 e4m3 with a
+ * ue8m0 scale per 64 and keep the dr RoPE dims bf16 (`act_quant(kv[..., :-rd], 64, …)` in `Attention` and in
+ * `Compressor` with `rotate=False`): 583 B per 512-element vector. Indexer keys and queries: fp4 with a ue8m0 scale
+ * per 32 (`fp4_act_quant(kv, 32, True)`) → mxfp4. The vLLM card's `--kv-cache-dtype fp8` and
+ * `use_fp4_indexer_cache` agree.
+ */
+export const V4_PROFILE: DeepseekProfile = {
+  indexerKeys: 'own_compressor',
+  cacheHints: (c) => {
+    const hd = c.csa.headDim;
+    const dr = c.csa.ropeDim;
+    // Formula: extraBitsPerElem = (dr·(16 − 8) + ((hd − dr)/64)·8)/hd over an fp8 base: RoPE dims bf16, one ue8m0
+    //          scale per 64 non-RoPE dims (hd 512, dr 64: (512 + 56)/512 = 1.109375 → 583 B per vector)
+    const extraBitsPerElem = (dr * 8 + ((hd - dr) / 64) * 8) / hd;
+    const fp8Rope = { dtype: 'fp8_e4m3' as const, extraBitsPerElem };
+    return { kvCache: fp8Rope, compressedKvCache: fp8Rope, indexerKeyCache: { dtype: 'mxfp4' } };
+  },
+  notes: [
+    'compressor APE (fp32 positional bias of the pooling weights, r·coff·hd per layer) and the final hc_head projection not counted',
+    'indexer key norm costed on the T·hd_I pre-pool keys (model.py normalizes the T/r pooled keys): at most (r−1)/r·T·hd_I extra elementwise elements per indexer layer, negligible',
+    'indexer compressor key RoPE and Hadamard rotation (rotate_activation) not emitted, as for the generic indexer; elementwise, negligible',
+  ],
+};
+
 /** Everything the layer builder reads from the config. */
-interface DeepseekConfig {
+export interface DeepseekConfig {
   hidden: number;
   csa: CsaBase;
   ratios: number[];
+  /**
+   * Layers that own a compressed KV (`kv_source_layer_ids`). Default when absent (V4): every layer i < n with
+   * `compress_ratios[i]` > 0 (V4 model.py `Attention.__init__`: `if self.compress_ratio: self.compressor = …`).
+   */
   kvSources: number[];
+  /**
+   * Layers that run an indexer (`index_source_layer_ids`). Default when absent (V4): every layer i < n with
+   * `compress_ratios[i]` = 4 (V4 model.py `Attention.__init__`: `if self.compress_ratio == 4: self.indexer = …`).
+   */
   indexSources: number[];
+  /** True when `index_source_layer_ids` is given (V4.1): a non-indexer r > 0 layer reuses the top-k; else 'all'. */
+  indexListGiven: boolean;
   candidateSource: number | undefined;
   maxScoredKeys: number | undefined;
   indexer: { heads: number; headDim: number; topK: number };
@@ -71,7 +160,7 @@ interface DeepseekConfig {
  * The global branch of layer i, or undefined for an SWA-only layer. Errors (a consumer with no earlier KV source)
  * go to `errors`.
  */
-function csaGlobal(c: DeepseekConfig, i: number, errors: string[]): CsaGlobalSpec | undefined {
+function csaGlobal(c: DeepseekConfig, p: DeepseekProfile, i: number, errors: string[]): CsaGlobalSpec | undefined {
   const r = c.ratios[i];
   if (r === 0) return undefined;
   const ownsKv = c.kvSources.includes(i);
@@ -81,19 +170,33 @@ function csaGlobal(c: DeepseekConfig, i: number, errors: string[]): CsaGlobalSpe
   if (!ownsKv && kvFrom === undefined) errors.push(`kv_source_layer_ids: layer ${i} has compress ratio ${r} but no earlier KV source`);
   let selection: CsaGlobalSpec['selection'];
   if (c.indexSources.includes(i)) {
+    const keys: Partial<IndexerSpec> =
+      p.indexerKeys === 'compressed_latent'
+        ? // wk reads the compressed latent (`indexer.wk [index_head_dim, head_dim]`).
+          { keyInputDim: c.csa.headDim }
+        : // Its own gated compressor over h (`indexer.compressor.wkv / wgate`, APE), overlapping at r = 4.
+          { keyPoolGate: true, ...(r === 4 ? { keyPoolOverlap: true } : {}) };
     const indexer: IndexerSpec = {
       ...c.indexer,
       keyPoolTokens: r,
-      // wk reads the compressed latent (`indexer.wk [index_head_dim, head_dim]`).
-      keyInputDim: c.csa.headDim,
+      ...keys,
       ownsKeys: ownsKv,
       ...(c.candidateSource !== undefined && c.maxScoredKeys !== undefined && i > c.candidateSource ? { maxScoredKeys: c.maxScoredKeys } : {}),
     };
     selection = { kind: 'indexer', indexer };
-  } else {
+  } else if (c.indexListGiven) {
     selection = { kind: 'reuse', topK: c.indexer.topK };
+  } else {
+    // No indexer in this layer and none to reuse: attend every compressed entry (V4 `get_compress_topk_idxs`).
+    selection = { kind: 'all' };
   }
-  return { compressRatio: r, ...(kvFrom !== undefined ? { kvCacheFromLayer: kvFrom } : {}), selection };
+  return {
+    compressRatio: r,
+    // model.py `Compressor.overlap = compress_ratio == 4` (V4.1 has no r = 4 layer, so its IR is unchanged).
+    ...(r === 4 && ownsKv ? { compressorOverlap: true } : {}),
+    ...(kvFrom !== undefined ? { kvCacheFromLayer: kvFrom } : {}),
+    selection,
+  };
 }
 
 /** One decoder layer: [Engram], mHC + CSA, mHC + `ffn`. */
@@ -129,8 +232,8 @@ function deepseekLayer(c: DeepseekConfig, i: number, ratio: number, global: CsaG
   });
 }
 
-/** Read the config fields the layers need. */
-function readDeepseekConfig(r: ConfigReader): DeepseekConfig {
+/** Read the config fields the layers need; `n` = `num_hidden_layers` (for the V4 list defaults). */
+function readDeepseekConfig(r: ConfigReader, n: number): DeepseekConfig {
   const hidden = r.int('hidden_size');
   const csa: CsaBase = {
     kind: 'csa',
@@ -145,12 +248,18 @@ function readDeepseekConfig(r: ConfigReader): DeepseekConfig {
   const candidateBlocks = r.optInt('candidate_topk_blocks');
   const candidateBlockSize = r.optInt('candidate_block_size');
   const engramLayers = r.optNumArray('engram_layer_ids') ?? [];
+  const ratios = r.numArray('compress_ratios');
+  const mainLayers = ratios.slice(0, n).map((ratio, i) => ({ ratio, i }));
+  const indexList = r.optNumArray('index_source_layer_ids');
   return {
     hidden,
     csa,
-    ratios: r.numArray('compress_ratios'),
-    kvSources: r.optNumArray('kv_source_layer_ids') ?? [],
-    indexSources: r.optNumArray('index_source_layer_ids') ?? [],
+    ratios,
+    // Default (V4): every r > 0 layer owns its compressor (model.py `if self.compress_ratio: self.compressor = …`).
+    kvSources: r.optNumArray('kv_source_layer_ids') ?? mainLayers.filter((l) => l.ratio > 0).map((l) => l.i),
+    // Default (V4): an indexer exactly at r = 4 (model.py `if self.compress_ratio == 4: self.indexer = …`).
+    indexSources: indexList ?? mainLayers.filter((l) => l.ratio === 4).map((l) => l.i),
+    indexListGiven: indexList !== undefined,
     candidateSource: r.optInt('candidate_source_layer_id'),
     // Formula: maxScoredKeys = candidate_topk_blocks · candidate_block_size
     maxScoredKeys: candidateBlocks !== undefined && candidateBlockSize !== undefined ? candidateBlocks * candidateBlockSize : undefined,
@@ -166,11 +275,30 @@ function readDeepseekConfig(r: ConfigReader): DeepseekConfig {
 }
 
 /**
- * The DSpark MTP stages (`mtp.*`): `num_nextn_predict_layers` decoder layers (window-only CSA, MoE with
- * `dspark_n_routed_experts` / `dspark_num_experts_per_tok` when given, mHC). Empty without stages.
+ * Number of DSpark MTP stages in the checkpoint, and a note when the config fields disagree. With `dspark_block_size`
+ * set, `compress_ratios` lists one entry per main layer AND per MTP stage, so its surplus over `num_hidden_layers`
+ * also counts the stages. DeepSeek-V4-Flash-0731 says `num_nextn_predict_layers: 1` but lists 46 = 43 + 3 ratios,
+ * and its inference/config.json says `n_mtp_layers: 3`; the safetensors I8 count is exactly 46 layers of routed
+ * experts, so 3 is right. Without `dspark_block_size`: `num_nextn_predict_layers`. Unit: count.
  */
-function dsparkStages(r: ConfigReader, c: DeepseekConfig, moe: FfnParams, n: number): LayerSpec[] {
-  const stages = r.optInt('num_nextn_predict_layers') ?? 0;
+function dsparkStageCount(r: ConfigReader, c: DeepseekConfig, n: number): { stages: number; note?: string } {
+  const nextn = r.optInt('num_nextn_predict_layers') ?? 0;
+  if (r.optInt('dspark_block_size') === undefined) return { stages: nextn };
+  // Formula: stages = max(num_nextn_predict_layers, len(compress_ratios) − num_hidden_layers)
+  const fromRatios = Math.max(c.ratios.length - n, 0);
+  const stages = Math.max(nextn, fromRatios);
+  if (stages === nextn) return { stages };
+  return {
+    stages,
+    note: `num_nextn_predict_layers ${nextn}, but compress_ratios lists ${fromRatios} MTP stages (DeepSeek-V4-Flash-0731: inference/config.json n_mtp_layers 3 agrees); using ${stages}`,
+  };
+}
+
+/**
+ * The DSpark MTP stages (`mtp.*`): `stages` decoder layers ({@link dsparkStageCount}; window-only CSA, MoE with
+ * `dspark_n_routed_experts` / `dspark_num_experts_per_tok` when given, else the main MoE, mHC). Empty without stages.
+ */
+function dsparkStages(r: ConfigReader, c: DeepseekConfig, moe: FfnParams, n: number, stages: number): LayerSpec[] {
   const experts = r.optInt('dspark_n_routed_experts');
   const topK = r.optInt('dspark_num_experts_per_tok');
   const draftMoe: FfnParams = moe.kind === 'moe' ? { ...moe, ...(experts ? { experts } : {}), ...(topK ? { topK } : {}) } : moe;
@@ -253,14 +381,16 @@ function dsparkDraft(
   };
 }
 
-/** Build the DeepSeek-V4.1 IR from its text config. */
-export function buildDeepseekV41(text: JsonObject, top: JsonObject, repoId: string): FamilyBuildResult {
+/**
+ * Build the DeepSeek-V4 / V4.1 IR from its text config, with the version's {@link DeepseekProfile}.
+ */
+export function buildDeepseek(text: JsonObject, top: JsonObject, repoId: string, profile: DeepseekProfile): FamilyBuildResult {
   const r = createReader(text, text === top ? '' : 'text_config');
   const n = r.int('num_hidden_layers');
   const vocab = r.int('vocab_size');
   const tie = r.bool('tie_word_embeddings', false);
   const act = readActivation(r);
-  const c = readDeepseekConfig(r);
+  const c = readDeepseekConfig(r, n);
   const moe = readMoeFfn(r, act);
   if (c.ratios.length < n) r.errors.push(`${r.path}.compress_ratios: ${c.ratios.length} entries for ${n} layers`);
   if (c.engramRows.length < c.engramLayers.length) r.errors.push(`${r.path}.engram_num_embeddings: one entry per engram layer needed`);
@@ -270,8 +400,8 @@ export function buildDeepseekV41(text: JsonObject, top: JsonObject, repoId: stri
   const roles: CsaRole[] = [];
   const layers = repeatLayers(n, (i) => {
     const ratio = c.ratios[i];
-    roles.push(csaRole(ratio, c.kvSources.includes(i), c.indexSources.includes(i)));
-    return deepseekLayer(c, i, ratio, csaGlobal(c, i, errors), moe, `layer.${i}`);
+    roles.push(csaRole(ratio, c.kvSources.includes(i), c.indexSources.includes(i), c.indexListGiven));
+    return deepseekLayer(c, i, ratio, csaGlobal(c, profile, i, errors), moe, `layer.${i}`);
   });
   if (errors.length > 0) return { kind: 'invalid_config', errors };
   const model = decoderModel({
@@ -289,15 +419,23 @@ export function buildDeepseekV41(text: JsonObject, top: JsonObject, repoId: stri
 
   const vision = isJsonObject(top.vision_config) ? top.vision_config : isJsonObject(text.vision_config) ? text.vision_config : undefined;
   const visionParams = visionParamsEstimate(vision, c.hidden);
-  const stages = dsparkStages(r, c, moe, n);
+  const stageCount = dsparkStageCount(r, c, n);
+  const stages = dsparkStages(r, c, moe, n, stageCount.stages);
   const mtp = dsparkParamsEstimate(r, c, stages, vocab);
   const draft = dsparkDraft(r, c, stages, vocab, act, repoId);
   const count = (role: CsaRole) => roles.filter((x) => x === role).length;
+  const allNote = count('all') > 0 ? `, ${count('all')} own KV, attend all entries` : '';
+  const hashLayers = r.optInt('num_hash_layers') ?? 0;
   const notes = [
-    `CSA layers: ${count('swa')} window-only, ${count('full')} own KV + indexer, ${count('reindex')} own indexer on shared KV, ${count('reuse')} reuse KV and top-k`,
+    `CSA layers: ${count('swa')} window-only, ${count('full')} own KV + indexer, ${count('reindex')} own indexer on shared KV, ${count('reuse')} reuse KV and top-k${allNote}`,
     `mHC residual: ${c.streams} streams; Engram tables before layers ${c.engramLayers.join(', ') || 'none'} (total params, not active)`,
     'prefill runs every layer on every prompt token (reference model.py; no Bounded Replay)',
     'attention sink, router biases not counted; indexer key norm counted as LayerNorm (< 1 k params per layer)',
+    ...(hashLayers > 0
+      ? [`layers 0–${hashLayers - 1} route by token id (tid2eid); the router GEMM still runs; the table is not counted`]
+      : []),
+    ...(stageCount.note !== undefined ? [stageCount.note] : []),
+    ...profile.notes,
   ];
   const excludedParts: string[] = [];
   if (mtp > 0) excludedParts.push('DSpark MTP stages');
@@ -309,16 +447,9 @@ export function buildDeepseekV41(text: JsonObject, top: JsonObject, repoId: stri
     mtpParamsEstimate: mtp,
     visionParamsEstimate: visionParams,
     excludedParts,
-    // Architecture-native cache formats (model.py; findings R2 §1): window KV fp8 with a ue8m0 scale per 32
-    // (`act_quant(kv, fp8_block_size, …)`); compressed global KV fp4 e2m1 with an e4m3 scale per 16; indexer keys
-    // fp4 with a ue8m0 scale per 32. They are defaults: a cache format the repo's quantization metadata states
-    // explicitly wins. Weight-module formats are not hinted here: the quant readers derive them per repo (the native
-    // checkpoint keeps the compressor and indexer wk / weights_proj in bf16; quant/moduleClass.ts marks them).
-    quantHints: {
-      kvCache: { dtype: 'mxfp8' },
-      compressedKvCache: { dtype: 'nvfp4' },
-      indexerKeyCache: { dtype: 'mxfp4' },
-    },
+    // Architecture-native cache formats of this version (see the profiles). They are defaults: a cache format the
+    // repo's quantization metadata states explicitly wins.
+    quantHints: profile.cacheHints(c),
   };
 }
 
@@ -327,5 +458,17 @@ export const deepseekV41Family: FamilyEntry = {
   family: 'deepseek_v41',
   modelTypes: ['deepseek_v41', 'deepseek_v41_text'],
   architectures: ['DeepseekV41ForCausalLM'],
-  build: (text, top, files) => buildDeepseekV41(text, top, files.id),
+  build: (text, top, files) => buildDeepseek(text, top, files.id, V41_PROFILE),
+};
+
+/**
+ * Family entry for DeepSeek-V4 (CSA with r = 4 indexer layers and r = 128 attend-all layers, hyper-connections,
+ * hash-routed first layers, DSpark MTP; no Engram). Same builder as V4.1 (decision (a) of the V4 support task:
+ * the differences are config defaults plus {@link V4_PROFILE}).
+ */
+export const deepseekV4Family: FamilyEntry = {
+  family: 'deepseek_v4',
+  modelTypes: ['deepseek_v4'],
+  architectures: ['DeepseekV4ForCausalLM'],
+  build: (text, top, files) => buildDeepseek(text, top, files.id, V4_PROFILE),
 };

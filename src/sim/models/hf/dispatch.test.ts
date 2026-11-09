@@ -17,6 +17,7 @@ const EXPECTED: Record<string, string> = {
   'Qwen/Qwen3.8-Flash-Next': 'qwen',
   'deepseek-ai/DeepSeek-V4.1-Flash': 'deepseek_v41',
   'deepseek-ai/DeepSeek-V4.1-Flash-1017': 'deepseek_v41',
+  'deepseek-ai/DeepSeek-V4-Flash-0731': 'deepseek_v4',
   'zai-org/GLM-5.3-Flash': 'glm5_next',
   'zai-org/GLM-5.3-Flash-BF16': 'glm5_next',
   'zai-org/GLM-5.3': 'glm_moe_dsa',

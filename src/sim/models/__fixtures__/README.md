@@ -42,6 +42,7 @@ Copied from the research of the HF-loader task (base repos only; quantized repos
 | `Qwen/Qwen3.8-Flash-Next` | config, api | `qwen4_exp`, MoE + QSA + PLE/n-gram |
 | `deepseek-ai/DeepSeek-V4.1-Flash` | config, api | `deepseek_v41`; native fp8 + fp4 experts (`I8` unpacked) |
 | `deepseek-ai/DeepSeek-V4.1-Flash-1017` | config, api | sibling; must build identically |
+| `deepseek-ai/DeepSeek-V4-Flash-0731` | config, api | `deepseek_v4`, flat config; native fp8 128×128 ue8m0 + fp4 experts (`I8` unpacked, top-level `expert_dtype`); 3 DSpark stages in the checkpoint vs `num_nextn_predict_layers` 1; api keeps `siblings` (filtered to `config.json`) |
 | `zai-org/GLM-5.3-Flash` | config, api | `glm5_next`; native fp8 (large `quantization_config`) |
 | `zai-org/GLM-5.3-Flash-BF16` | config, api | BF16 sibling |
 | `zai-org/GLM-5.3` | config, api | `glm_moe_dsa`, flat config; native fp8 |

@@ -28,7 +28,7 @@ const csaOf = (layer: LayerSpec): CsaAttentionBlock => {
 function role(layer: LayerSpec): string {
   const g = csaOf(layer).global;
   if (g === undefined) return 'swa';
-  if (g.selection.kind === 'reuse') return 'reuse';
+  if (g.selection.kind === 'reuse' || g.selection.kind === 'all') return g.selection.kind;
   return g.selection.indexer.ownsKeys === false ? 'reindex' : 'full';
 }
 

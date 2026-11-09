@@ -70,6 +70,15 @@ const SHORTLIST: ShortlistCase[] = [
     kvCache: 'mxfp8',
   },
   {
+    id: 'deepseek-ai/DeepSeek-V4-Flash-0731',
+    family: 'deepseek_v4',
+    paramCheck: 'ok',
+    layers: 43,
+    mix: { 'csa:swa': 2, 'csa:indexer': 21, 'csa:all': 20, moe: 43 },
+    weights: 'mxfp4',
+    kvCache: 'fp8_e4m3',
+  },
+  {
     id: 'zai-org/GLM-5.3-Flash',
     family: 'glm5_next',
     paramCheck: 'ok',
@@ -240,6 +249,14 @@ describe('sequence-state growth per token, by hand', () => {
     // elements (288 B) plus a 128-element mxfp4 indexer key (68 B). The 128-token windows are constant.
     const r = mapOk('deepseek-ai/DeepSeek-V4.1-Flash');
     expect(stateGrowthPerToken(r.model, r.quant.quant)).toBe(890);
+  });
+
+  it('DeepSeek-V4-Flash-0731: (21/4 + 20/128)·583 + (21/4)·68 = 3,508.84375 B/token', () => {
+    // 21 r = 4 and 20 r = 128 compressors → 21/4 + 20/128 compressed entries per token, each 512 elements of fp8
+    // with bf16 RoPE dims and a ue8m0 scale per 64 (448 + 128 + 7 = 583 B); the 21 r = 4 indexers add a 128-element
+    // mxfp4 key (68 B) per 4 tokens. The 128-token windows and the compressor tails are constant.
+    const r = mapOk('deepseek-ai/DeepSeek-V4-Flash-0731');
+    expect(stateGrowthPerToken(r.model, r.quant.quant)).toBeCloseTo((21 / 4 + 20 / 128) * 583 + (21 / 4) * 68, 6);
   });
 
   it('GLM-5.3: 78 latents of 576 elements + 21 indexer keys of 128 elements per token', () => {

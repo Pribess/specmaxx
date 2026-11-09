@@ -25,12 +25,13 @@ describe('model shortlist', () => {
       'Qwen3.8-Flash-Next',
       'Qwen3.8-27B',
       'DeepSeek-V4.1-Flash',
+      'DeepSeek-V4-Flash-0731',
       'GLM-5.3 Flash',
       'GLM-5.3',
       'Mistral Large 4',
       'Minimax M3',
     ]);
-    expect(new Set(MODEL_SHORTLIST.map((m) => m.id)).size).toBe(7);
+    expect(new Set(MODEL_SHORTLIST.map((m) => m.id)).size).toBe(8);
     expect(MODEL_SHORTLIST.some((m) => m.id.startsWith('thinkingmachines/'))).toBe(false);
     expect(MODEL_SHORTLIST.some((m) => m.id === DEFAULT_MODEL_ID)).toBe(true);
   });
