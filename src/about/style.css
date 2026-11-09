@@ -119,3 +119,55 @@
   .about-main { margin-top: var(--space-6); padding: 0 var(--space-4); font-size: 1.0625rem; }
   .about-intro { margin-bottom: var(--space-7); }
 }
+
+/* Table of contents of the method sections. */
+.about-toc ol {
+  columns: 2 24ch;
+  column-gap: var(--space-6);
+  margin: 0;
+  padding-left: var(--space-5);
+  font-weight: 500;
+}
+.about-toc li { margin-bottom: var(--space-2); break-inside: avoid; }
+.about-toc li::marker { color: var(--muted); font-variant-numeric: tabular-nums; }
+.about-toc a { text-decoration: none; color: var(--primary); }
+.about-toc a:hover { text-decoration: underline; }
+#modeling-method { margin-bottom: var(--space-8); }
+#modeling-method h2:first-child { margin-top: 0; }
+
+/* The full reference is a disclosure, collapsed until asked for or deep-linked. */
+.about-reference { border-top: 1px solid var(--ink); }
+.about-reference > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 1.375rem;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  list-style: none;
+}
+.about-reference > summary::-webkit-details-marker { display: none; }
+.about-reference > summary::before {
+  content: '';
+  width: 0.5em;
+  height: 0.5em;
+  border-right: 2px solid var(--primary);
+  border-bottom: 2px solid var(--primary);
+  transform: rotate(-45deg);
+  transition: transform 0.15s;
+}
+.about-reference[open] > summary::before { transform: rotate(45deg); }
+.about-reference > summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.about-reference > nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-6);
+  margin-bottom: var(--space-6);
+  font-family: var(--font-sans);
+  font-weight: 600;
+}
+.about-reference > nav a { color: var(--primary); }
+@media (prefers-reduced-motion: reduce) { .about-reference > summary::before { transition: none; } }

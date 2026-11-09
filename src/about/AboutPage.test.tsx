@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import modelingMethod from '../../docs/modeling-method.md?raw';
 import simulationModel from '../../docs/simulation-model.md?raw';
 import { AboutPage, estimateHref } from './AboutPage';
 import { githubSlug, renderMarkdown, splitTables } from './markdown';
@@ -73,6 +74,41 @@ describe('About page', () => {
       }
     }
   });
+  it('renders the method sections with a table of contents, and the reference collapsed', () => {
+    const { container } = render(<AboutPage />);
+    const method = screen.getByRole('article', { name: 'Modeling method' });
+    expect(method.querySelectorAll('h2').length).toBeGreaterThanOrEqual(8);
+    const toc = screen.getByRole('navigation', { name: 'Modeling method contents' });
+    expect(toc.querySelectorAll('a').length).toBe(method.querySelectorAll('h2').length);
+    const details = container.querySelector('details#full-reference') as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(details.contains(method)).toBe(false);
+    expect(details.querySelector('article#simulation-model')).toBeTruthy();
+  });
+
+  it('opens the reference and scrolls to a heading named by the hash', async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    window.history.replaceState(null, '', '/about.html#memory-fit');
+    const { container } = render(<AboutPage />);
+    const details = container.querySelector('details#full-reference') as HTMLDetailsElement;
+    await waitFor(() => expect(details.open).toBe(true));
+    await waitFor(() => expect(scroll).toHaveBeenCalled());
+    expect(scroll.mock.contexts[0]).toBe(document.getElementById('memory-fit'));
+  });
+
+  it('keeps method headings distinct from reference ids and method links resolvable', () => {
+    const container = document.createElement('div');
+    container.innerHTML = renderMarkdown(modelingMethod);
+    const reference = document.createElement('div');
+    reference.innerHTML = renderMarkdown(simulationModel);
+    const referenceIds = new Set(Array.from(reference.querySelectorAll('[id]'), n => n.id));
+    for (const heading of container.querySelectorAll('h2')) expect(referenceIds.has(heading.id)).toBe(false);
+    const links = container.querySelectorAll<HTMLAnchorElement>('a[href^="#"]');
+    expect(links.length).toBeGreaterThan(10);
+    for (const link of links) expect(referenceIds.has(link.hash.slice(1)), link.hash).toBe(true);
+  });
+
   it('renders the Memory fit heading and document navigation', () => {
     render(<AboutPage />);
     expect(screen.getByRole('heading', { name: 'Memory fit' })).toBeTruthy();
