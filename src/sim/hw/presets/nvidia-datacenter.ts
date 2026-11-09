@@ -1,5 +1,6 @@
 /**
- * NVIDIA datacenter and DGX device presets: DGX Spark (GB10), H100 SXM, H200 SXM, B200 (HGX), B300 (HGX).
+ * NVIDIA datacenter and DGX presets: DGX Spark (GB10), V100 SXM2 / PCIe, A100 SXM4 / PCIe,
+ * H100 SXM, H200 SXM, B200 (HGX), B300 (HGX).
  * Every number is cited in `sources[]` (with the table / quote it comes from) or listed in `estimated[]` with
  * the derivation. See docs/simulation-model.md §4 ("Hardware").
  *
@@ -10,6 +11,9 @@
  * FOOTNOTE TRAPS: NVIDIA's headline tensor numbers are 2:4 SPARSE ("* With sparsity" on the H100/H200 pages,
  * "Dense is ½ sparse spec shown" on the HGX page and the Blackwell Ultra datasheet). Dense entries here are the
  * dense figure where NVIDIA prints one, else ½ of the sparse headline.
+ * Volta has FP16-only tensor cores: no BF16/TF32/FP8/integer tensor or structured sparsity.
+ * GA100 and GV100 have 64 FP32 lanes/SM: use engineSfuAtVectorClock with 128 FLOP/clk/SM,
+ * NOT nvidiaSfu (which assumes 128 lanes = 256 FLOP/clk/SM).
  *
  * Not included (yet):
  * - H100 PCIe: only preliminary 2022 tensor figures were found (Hopper architecture blog, "800/1600" FP16); the
@@ -18,14 +22,16 @@
  *   sources https://developer.nvidia.com/blog/inside-nvidia-rubin-gpu-architecture-powering-the-era-of-agentic-ai/
  *   and https://www.nvidia.com/en-us/data-center/hgx/ (Rubin NVL8 tab).
  *
- * Interconnects (NVLink 4/5, ConnectX-7/8, InfiniBand) are links, not device fields: see `links.ts`.
+ * Interconnects (NVLink 2/3/4/5, ConnectX-6/7/8, InfiniBand) are links, not device fields: see `links.ts`.
  */
 
 import type { MathFormat } from '../../ir/dtype';
 import type { ComputeEngine, DeviceSpec, EstimatedField, GemmTiling, MatmulPeak, SourceRef } from '../types';
 import { gb, gbPerSec, mb, tbPerSec, tflops } from '../units';
 import { NVIDIA_DC_GPUDIRECT_SOURCE } from './gpudirect';
-import { NVIDIA_BLACKWELL_DC_SFU, NVIDIA_BLACKWELL_ULTRA_SFU, NVIDIA_GB10_SFU, NVIDIA_SM_SFU, nvidiaSfu } from './sfu';
+import {
+  engineSfuAtVectorClock,
+  NVIDIA_BLACKWELL_DC_SFU, NVIDIA_BLACKWELL_ULTRA_SFU, NVIDIA_GB10_SFU, NVIDIA_SM_SFU, nvidiaSfu } from './sfu';
 
 // ---------------------------------------------------------------------------------------------------------------
 // Shared sources and helpers
@@ -738,8 +744,307 @@ export const B300: DeviceSpec = {
   ],
 };
 
+// ---------------------------------------------------------------------------------------------------------------
+// Ampere GA100 and Volta GV100
+// ---------------------------------------------------------------------------------------------------------------
+
+/** A100 four-SKU datasheet; memory capacities are SI bytes, bandwidths are decimal B/s. */
+const A100_DATASHEET_URL =
+  'https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-us-nvidia-1758950-r4-web.pdf';
+/** GA100 whitepaper, Tables 1 and 4: dense/sparse peaks, 108 SMs and non-tensor rates. */
+const A100_WHITEPAPER_URL =
+  'https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf';
+/** V100 datasheet (PCIe / SXM2 columns; not the faster V100S column). */
+const V100_DATASHEET_URL =
+  'https://images.nvidia.com/content/technologies/volta/pdf/volta-v100-datasheet-update-us-1165301-r5.pdf';
+/** GV100 whitepaper: 80 SMs, 64 FP32 lanes/SM, 6144 KiB L2, and FP16-only tensor cores. */
+const V100_WHITEPAPER_URL =
+  'https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf';
+
+/** GA100 tensor peaks in FLOP/s (integer OP/s), full-rate FP32 accumulation; sparse is dense-equivalent. */
+const A100_PEAKS: MatmulPeak[] = [
+  { input: 'fp16', accumulate: 'fp32', sparsity: 'dense', flopsPerSec: tflops(312) },
+  { input: 'fp16', accumulate: 'fp32', sparsity: '2:4', flopsPerSec: tflops(624) },
+  { input: 'bf16', accumulate: 'fp32', sparsity: 'dense', flopsPerSec: tflops(312) },
+  { input: 'bf16', accumulate: 'fp32', sparsity: '2:4', flopsPerSec: tflops(624) },
+  { input: 'tf32', accumulate: 'fp32', sparsity: 'dense', flopsPerSec: tflops(156) },
+  { input: 'tf32', accumulate: 'fp32', sparsity: '2:4', flopsPerSec: tflops(312) },
+  { input: 'int8', accumulate: 'int32', sparsity: 'dense', flopsPerSec: tflops(624) },
+  { input: 'int8', accumulate: 'int32', sparsity: '2:4', flopsPerSec: tflops(1248) },
+  { input: 'int4', accumulate: 'int32', sparsity: 'dense', flopsPerSec: tflops(1248) },
+  { input: 'int4', accumulate: 'int32', sparsity: '2:4', flopsPerSec: tflops(2496) },
+];
+/** Typical large CUTLASS threadblock tiles, in output elements (estimated, not fixed hardware limits). */
+const LEGACY_DC_CTA_TILES = [
+  { m: 128, n: 256 },
+  { m: 256, n: 128 },
+  { m: 128, n: 128 },
+  { m: 128, n: 64 },
+  { m: 64, n: 128 },
+  { m: 64, n: 64 },
+];
+/** GA100 format-specific MMA padding keys. */
+const A100_TILING_KEYS = ['default', 'fp16', 'bf16', 'tf32', 'int8', 'int4'];
+
+/**
+ * One GA100 SKU. Capacity in GB and bandwidth in GB/s are vendor decimal values.
+ * All four have identical published compute ceilings despite their different power limits.
+ * FP64 tensor (19.5 TFLOP/s) is omitted: AccumulateType has no fp64.
+ */
+function a100Device(sxm: boolean, capacityGb: 40 | 80, bandwidthGbPerSec: number): DeviceSpec {
+  // GA100 has 64 FP32 lanes/SM, unlike GA10x's 128: 128 FLOP/clk/SM including FMA.
+  const sfu = engineSfuAtVectorClock(
+    NVIDIA_SM_SFU,
+    108,
+    'SM',
+    tflops(19.5),
+    128,
+    'engines.0.sfuOpsPerSec',
+  );
+  return {
+    id: `a100-${sxm ? 'sxm4' : 'pcie'}-${capacityGb}gb`,
+    name: `NVIDIA A100 ${sxm ? 'SXM4' : 'PCIe'} ${capacityGb}GB`,
+    vendor: 'NVIDIA',
+    engines: [
+      {
+        id: 'gpu',
+        name: 'GA100 3rd-gen Tensor Cores (sm_80)',
+        kind: 'gpu',
+        computeUnits: 108,
+        matmulPeaks: A100_PEAKS.map((p) => ({ ...p })),
+        vectorFlopsPerSec: {
+          fp32: tflops(19.5),
+          fp64: tflops(9.7),
+          fp16: tflops(78),
+          bf16: tflops(39),
+        },
+        sfuOpsPerSec: sfu.sfuOpsPerSec,
+        gemmTiling: tilingTable(16, 8, LEGACY_DC_CTA_TILES, 1, {
+          default: 16,
+          fp16: 16,
+          bf16: 16,
+          tf32: 8,
+          int8: 32,
+          int4: 64,
+        }),
+      },
+    ],
+    memory: {
+      kind: 'dedicated',
+      technology: capacityGb === 40 ? 'HBM2' : 'HBM2e',
+      capacityOptionsBytes: [gb(capacityGb)],
+      bandwidthBytesPerSec: gbPerSec(bandwidthGbPerSec),
+    },
+    l2Bytes: 40960 * 1024,
+    ...(!sxm ? { hostInterface: { generation: 4 as const, lanes: 16 as const } } : {}),
+    gpuDirectRdma: true,
+    sources: [
+      NVIDIA_DC_GPUDIRECT_SOURCE,
+      {
+        url: A100_DATASHEET_URL,
+        title: 'NVIDIA A100 datasheet, four-SKU specification table',
+        fields: [
+          'memory.capacityOptionsBytes',
+          'memory.bandwidthBytesPerSec',
+          ...peakPaths(A100_PEAKS, (p) => p.input !== 'int4'),
+          'engines.0.vectorFlopsPerSec.fp32',
+          'engines.0.vectorFlopsPerSec.fp64',
+        ],
+        note: '40GB PCIe/SXM: 1555 GB/s; 80GB PCIe: 1935 GB/s; 80GB SXM: 2039 GB/s. FP16/BF16 312/624, TF32 156/312, INT8 624/1248 dense/sparse; FP32 19.5, FP64 9.7 TFLOP/s.',
+      },
+      {
+        url: A100_WHITEPAPER_URL,
+        title: 'NVIDIA A100 architecture whitepaper, Tables 1 and 4',
+        fields: [
+          'engines.0.computeUnits',
+          'engines.0.vectorFlopsPerSec.fp16',
+          'engines.0.vectorFlopsPerSec.bf16',
+          ...peakPaths(A100_PEAKS, (p) => p.input === 'int4'),
+          ...(sxm && capacityGb === 40 ? ['l2Bytes'] : []),
+        ],
+        note: '108 SMs; 64 FP32 lanes/SM; FP16 vector 78, BF16 vector 39 TFLOPS; INT4 tensor 1248/2496 dense/sparse TOPS. FP16 tensor with FP16 or FP32 accumulation: 312/624. L2 40960 KB.',
+      },
+      ...(!sxm
+        ? [
+            {
+              url:
+                capacityGb === 40
+                  ? 'https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/A100-PCIE-Prduct-Brief.pdf'
+                  : 'https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/PB-10577-001_v02.pdf',
+              title: 'A100 PCIe product brief, Table 1',
+              fields: ['hostInterface'],
+              note: 'PCI Express 4.0 ×16; boost 1410 MHz.',
+            },
+          ]
+        : []),
+      tilingShapeSource(
+        PTX_MMA_SYNC_URL,
+        'PTX ISA mma.sync, sm_80 shapes',
+        A100_TILING_KEYS,
+        'm16n8; FP16/BF16 k16, TF32 k8, INT8 k32, INT4 k64.',
+      ),
+      ...sfu.sources,
+    ],
+    estimated: [
+      ...tilingEstimates(A100_TILING_KEYS, 'Typical CUTLASS Sm80 CTA tiles'),
+      ...(!(sxm && capacityGb === 40)
+        ? [
+            {
+              field: 'l2Bytes',
+              reason:
+                'Same GA100 configuration as the whitepaper SXM4 40GB part (108 SMs, identical published compute peaks): 40960 KiB L2.',
+            },
+          ]
+        : []),
+      ...sfu.estimated,
+    ],
+  };
+}
+
+/** A100 SXM4 80GB HBM2e, 2039 GB/s per device; 400 W standard SKU. */
+export const A100_SXM4_80GB = a100Device(true, 80, 2039);
+/** A100 SXM4 40GB HBM2, 1555 GB/s per device; 400 W SKU. */
+export const A100_SXM4_40GB = a100Device(true, 40, 1555);
+/** A100 PCIe 80GB HBM2e, 1935 GB/s per device; PCIe Gen4 x16, 300 W. */
+export const A100_PCIE_80GB = a100Device(false, 80, 1935);
+/** A100 PCIe 40GB HBM2, 1555 GB/s per device; PCIe Gen4 x16, 250 W. */
+export const A100_PCIE_40GB = a100Device(false, 40, 1555);
+
+/**
+ * GV100 SXM2 or PCIe, with 32/16GB capacity options: both capacities share the same bandwidth/peaks.
+ * Only FP16 tensor math, full-rate FP32 accumulation; no BF16, TF32, FP8, integer tensor, or sparsity.
+ * INT8 dp4a (62 TOPS) is not a tensor entry: dequantize-to-FP16 can reach the higher tensor bound.
+ * BF16 GEMMs fall back to FP16 with a warning; BF16 vector work still uses FP32 (docs §4).
+ */
+function v100Device(sxm: boolean): DeviceSpec {
+  const fp32 = sxm ? 15.7 : 14;
+  const sfu = engineSfuAtVectorClock(
+    NVIDIA_SM_SFU,
+    80,
+    'SM',
+    tflops(fp32),
+    128,
+    'engines.0.sfuOpsPerSec',
+  );
+  const keys = ['default', 'fp16'];
+  return {
+    id: sxm ? 'v100-sxm2' : 'v100-pcie',
+    name: `NVIDIA Tesla V100 ${sxm ? 'SXM2' : 'PCIe'}`,
+    vendor: 'NVIDIA',
+    engines: [
+      {
+        id: 'gpu',
+        name: 'GV100 1st-gen Tensor Cores (sm_70)',
+        kind: 'gpu',
+        computeUnits: 80,
+        matmulPeaks: [
+          {
+            input: 'fp16',
+            accumulate: 'fp32',
+            sparsity: 'dense',
+            flopsPerSec: tflops(sxm ? 125 : 112),
+          },
+        ],
+        vectorFlopsPerSec: {
+          fp32: tflops(fp32),
+          fp64: tflops(sxm ? 7.8 : 7),
+          fp16: tflops(2 * fp32),
+        },
+        sfuOpsPerSec: sfu.sfuOpsPerSec,
+        gemmTiling: tilingTable(8, 8, LEGACY_DC_CTA_TILES, 1, { default: 4, fp16: 4 }),
+      },
+    ],
+    memory: {
+      kind: 'dedicated',
+      technology: 'HBM2',
+      capacityOptionsBytes: [gb(32), gb(16)],
+      bandwidthBytesPerSec: gbPerSec(900),
+    },
+    l2Bytes: 6144 * 1024,
+    ...(!sxm ? { hostInterface: { generation: 3 as const, lanes: 16 as const } } : {}),
+    gpuDirectRdma: true,
+    sources: [
+      NVIDIA_DC_GPUDIRECT_SOURCE,
+      {
+        url: V100_DATASHEET_URL,
+        title: 'NVIDIA V100 datasheet, PCIe / SXM2 columns (not V100S)',
+        fields: [
+          'engines.0.matmulPeaks.0',
+          'engines.0.vectorFlopsPerSec.fp32',
+          'engines.0.vectorFlopsPerSec.fp64',
+          'memory.capacityOptionsBytes',
+          'memory.bandwidthBytesPerSec',
+        ],
+        note: 'SXM2: tensor 125, FP32 15.7, FP64 7.8 TFLOPS; PCIe: tensor 112, FP32 14, FP64 7 TFLOPS. Both 32GB / 16GB HBM2, 900 GB/s. Quoted peaks, not a boost-clock reconstruction.',
+      },
+      {
+        url: V100_WHITEPAPER_URL,
+        title: 'Volta architecture whitepaper, Table 1 and Tensor Core description',
+        fields: ['engines.0.computeUnits', ...(sxm ? ['l2Bytes'] : [])],
+        note: '80 SMs, 64 FP32 cores/SM, 6144 KB L2. Tensor inputs FP16, accumulation FP16 or FP32 at the same rate.',
+      },
+      {
+        url: A100_WHITEPAPER_URL,
+        title: 'A100 architecture whitepaper, V100 column of Table 4',
+        fields: ['engines.0.matmulPeaks.0', ...(sxm ? ['engines.0.vectorFlopsPerSec.fp16'] : [])],
+        note: 'V100 non-tensor FP16: 31.4 TFLOPS; no BF16 vector/tensor, TF32, INT8/INT4 tensor. CUDA cc 7.0 packed FP16 FMA has twice the FP32 rate.',
+      },
+      ...(!sxm
+        ? [
+            {
+              url: 'https://images.nvidia.com/content/tesla/pdf/Tesla-V100-PCIe-Product-Brief.pdf',
+              title: 'Tesla V100 PCIe product brief, Tables 1–2',
+              fields: ['hostInterface'],
+              note: 'PCI Express 3.0 ×16. Genuine PCIe SKU has no NVLink (not DGX Station or an SXM2 adapter).',
+            },
+          ]
+        : []),
+      tilingShapeSource(
+        PTX_MMA_SYNC_URL,
+        'PTX ISA Volta mma.sync m8n8k4',
+        keys,
+        'FP16 m8n8k4 on sm_70. Padding uses the quad-pair instruction, not the coarser 32×32 warp interleave.',
+      ),
+      ...sfu.sources,
+    ],
+    estimated: [
+      ...tilingEstimates(keys, 'Typical CUTLASS Sm70 CTA tiles'),
+      ...(!sxm
+        ? [
+            {
+              field: 'l2Bytes',
+              reason: 'Same 80-SM GV100 die configuration as the SXM2 whitepaper: 6144 KiB L2.',
+            },
+            {
+              field: 'engines.0.vectorFlopsPerSec.fp16',
+              reason:
+                '2 × PCIe FP32 14 TFLOPS = 28 TFLOPS, using CUDA cc 7.0 packed-FP16 / FP32 ratio; SXM2 Table 4 confirms 31.4 / 15.7.',
+            },
+          ]
+        : []),
+      ...sfu.estimated,
+    ],
+  };
+}
+
+/** V100 SXM2, 32/16GB HBM2 options at 900 GB/s, FP16 tensor 125 TFLOP/s per device. */
+export const V100_SXM2 = v100Device(true);
+/** V100 PCIe Gen3 x16, 32/16GB HBM2 at 900 GB/s; FP16 tensor 112 TFLOP/s, no NVLink. */
+export const V100_PCIE = v100Device(false);
 /**
  * Every NVIDIA datacenter / DGX device preset, in display order (DGX Spark, then the datacenter parts newest
  * generation first and higher tier first). Each must pass `validateDevice`.
  */
-export const NVIDIA_DATACENTER_DEVICE_PRESETS: DeviceSpec[] = [DGX_SPARK, B300, B200, H200_SXM, H100_SXM];
+export const NVIDIA_DATACENTER_DEVICE_PRESETS: DeviceSpec[] = [
+  DGX_SPARK,
+  B300,
+  B200,
+  H200_SXM,
+  H100_SXM,
+  A100_SXM4_80GB,
+  A100_SXM4_40GB,
+  A100_PCIE_80GB,
+  A100_PCIE_40GB,
+  V100_SXM2,
+  V100_PCIE,
+];

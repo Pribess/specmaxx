@@ -31,9 +31,29 @@ import {
 import { APPLE_DEVICE_PRESETS } from './apple';
 import { INTEL_DEVICE_PRESETS } from './intel';
 import { NVIDIA_CONSUMER_DEVICE_PRESETS, RTX_3090, RTX_3090_UNLOCKS, RTX_4090, RTX_4090_UNLOCKS, RTX_5090, RTX_5090_UNLOCKS } from './nvidia';
-import { B200, B300, DGX_SPARK, H100_SXM, H200_SXM } from './nvidia-datacenter';
+import {
+  A100_SXM4_80GB,
+  A100_SXM4_40GB,
+  A100_PCIE_80GB,
+  A100_PCIE_40GB,
+  V100_SXM2,
+  V100_PCIE,
+  B200,
+  B300,
+  DGX_SPARK,
+  H100_SXM,
+  H200_SXM,
+} from './nvidia-datacenter';
+import {
+  NVIDIA_PRO_DEVICE_PRESETS,
+  RTX_PRO_6000_WS,
+  RTX_PRO_6000_MAX_Q,
+  RTX_PRO_6000_WS_UNLOCKS,
+  RTX_PRO_6000_MAX_Q_UNLOCKS,
+} from './nvidia-pro';
 
 export * from './nvidia';
+export * from './nvidia-pro';
 export * from './nvidia-datacenter';
 export * from './apple';
 export * from './amd';
@@ -61,13 +81,29 @@ export interface DevicePresetGroup {
  */
 export const DEVICE_PRESET_GROUPS: DevicePresetGroup[] = [
   { name: 'NVIDIA GeForce', devices: NVIDIA_CONSUMER_DEVICE_PRESETS },
+  { name: 'NVIDIA RTX PRO', devices: NVIDIA_PRO_DEVICE_PRESETS },
   { name: 'Apple silicon', devices: APPLE_DEVICE_PRESETS },
   { name: 'AMD Radeon / Ryzen AI', devices: [RADEON_AI_PRO_R9700, RADEON_RX_9070_XT, RYZEN_AI_MAX_PLUS_395] },
   { name: 'Intel Arc', devices: INTEL_DEVICE_PRESETS },
   { name: 'NVIDIA DGX Spark', devices: [DGX_SPARK] },
   {
     name: 'Datacenter',
-    devices: [B300, B200, H200_SXM, H100_SXM, INSTINCT_MI455X, INSTINCT_MI355X, INSTINCT_MI325X, INSTINCT_MI300X],
+    devices: [
+      B300,
+      B200,
+      H200_SXM,
+      H100_SXM,
+      A100_SXM4_80GB,
+      A100_SXM4_40GB,
+      A100_PCIE_80GB,
+      A100_PCIE_40GB,
+      V100_SXM2,
+      V100_PCIE,
+      INSTINCT_MI455X,
+      INSTINCT_MI355X,
+      INSTINCT_MI325X,
+      INSTINCT_MI300X,
+    ],
   },
 ];
 
@@ -82,6 +118,8 @@ export const DEVICE_UNLOCKS: Record<string, UnlockAxis[]> = {
   [RTX_3090.id]: RTX_3090_UNLOCKS,
   [RTX_4090.id]: RTX_4090_UNLOCKS,
   [RTX_5090.id]: RTX_5090_UNLOCKS,
+  [RTX_PRO_6000_WS.id]: RTX_PRO_6000_WS_UNLOCKS,
+  [RTX_PRO_6000_MAX_Q.id]: RTX_PRO_6000_MAX_Q_UNLOCKS,
 };
 
 /** The unlock axes of `device` (empty when it has none). */

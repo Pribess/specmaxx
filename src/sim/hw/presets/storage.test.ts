@@ -279,6 +279,13 @@ describe('DeviceSpec.hostInterface', () => {
       'rtx-5090': [5, 16],
       'rtx-4090': [4, 16],
       'rtx-3090': [4, 16],
+      'a100-pcie-80gb': [4, 16],
+      'a100-pcie-40gb': [4, 16],
+      'v100-pcie': [3, 16],
+      'rtx-pro-6000-ws': [5, 16],
+      'rtx-pro-6000-max-q': [5, 16],
+      'rtx-pro-5000': [5, 16],
+      'rtx-pro-4000-sff': [5, 8], // x16 connector, x8 electrical
       'radeon-ai-pro-r9700': [5, 16],
       'radeon-rx-9070-xt': [5, 16],
       'arc-pro-b70': [5, 16],

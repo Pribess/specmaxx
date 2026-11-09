@@ -24,12 +24,34 @@ import {
 import { ARC_B580, ARC_PRO_B60, ARC_PRO_B65, ARC_PRO_B70, INTEL_DEVICE_PRESETS } from './intel';
 import {
   ETHERNET_10G_TCP, ETHERNET_5G_TCP, IB_NDR_400, IB_XDR_800, LEGACY_LINK_IDS, LINK_PRESETS, NVLINK_4, NVLINK_5,
+  A100_NVLINK_BRIDGE,
+  IB_HDR_200,
+  NVLINK_3,
+  NVLINK_2_HCM_8,
+  NVLINK_2_MESH_4,
+  NVLINK_2_PAIR,
+  PCIE_3_X16_DIRECT,
+  PCIE_3_X16,
   PCIE_4_X16, PCIE_4_X16_DIRECT, PCIE_4_X8, PCIE_4_X8_DIRECT, PCIE_5_X16, PCIE_5_X16_DIRECT, PCIE_5_X8,
   PCIE_5_X8_DIRECT, RTX_3090_NVLINK, SPARK_CONNECTX_7, TB4_TCP, TB4_TCP_20G, TB5_RDMA, TB5_TCP, USB4_HALO_RDMA, USB4_HALO_TCP,
   XGMI_MI300X_8_GPU, XGMI_MI300X_PER_PEER,
 } from './links';
 import { NVIDIA_CONSUMER_DEVICE_PRESETS, RTX_3090, RTX_4090, RTX_5090 } from './nvidia';
-import { B200, B300, DGX_SPARK, H100_SXM, H200_SXM, NVIDIA_DATACENTER_DEVICE_PRESETS } from './nvidia-datacenter';
+import {
+  A100_SXM4_80GB,
+  A100_SXM4_40GB,
+  A100_PCIE_80GB,
+  A100_PCIE_40GB,
+  V100_SXM2,
+  V100_PCIE,
+  B200, B300, DGX_SPARK, H100_SXM, H200_SXM, NVIDIA_DATACENTER_DEVICE_PRESETS } from './nvidia-datacenter';
+import {
+  NVIDIA_PRO_DEVICE_PRESETS,
+  RTX_PRO_6000_WS,
+  RTX_PRO_6000_MAX_Q,
+  RTX_PRO_5000,
+  RTX_PRO_4000_SFF,
+} from './nvidia-pro';
 import { linkPresetId, nodeTopology } from './topologies';
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -353,6 +375,22 @@ const DESKTOP_10GBE: NetworkOption = {
   link: ETHERNET_10G_TCP, shortName: '10GbE', portsPerNode: 1, switchable: true, maxCablesPerPair: 1,
   sources: [{ url: HALO_RDMA_URL, title: 'Strix Halo Ethernet NIC configurations and tests (10GbE RTL812X)', fields: PORTS, kind: 'community', note: 'One 10GbE NIC per machine is user configuration (the link numbers are the 10GbE preset\'s); any count of machines through a switch.' }],
 };
+/** DGX A100 HDR200 per GPU: one usable NIC port per GPU network shard, switched. */
+const IB_HDR: NetworkOption = {
+  link: IB_HDR_200,
+  shortName: 'IB HDR',
+  portsPerNode: 1,
+  switchable: true,
+  maxCablesPerPair: 1,
+  sources: [
+    {
+      url: 'https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/nvidia-dgx-a100-datasheet.pdf',
+      title: 'DGX A100 datasheet',
+      fields: PORTS,
+      note: 'Eight single-port ConnectX-6 HDR200 NICs for eight GPUs, one port per GPU shard; switched InfiniBand.',
+    },
+  ],
+};
 /** InfiniBand NDR400, one NIC per GPU, through a switch (DGX H100 / B200 nodes). */
 const IB_NDR: NetworkOption = {
   link: IB_NDR_400, shortName: 'IB NDR', portsPerNode: 1, switchable: true, maxCablesPerPair: 1,
@@ -410,6 +448,25 @@ const CATALOG: DeviceSetupOptions[] = [
   pcieCard(RTX_5090, 'RTX 5090', [PCIE5_HOST, PCIE5_X8_HOST, PCIE5_DIRECT, PCIE5_X8_DIRECT_OPT]),
   pcieCard(RTX_4090, 'RTX 4090', [PCIE4_HOST, PCIE4_X8_HOST, PCIE4_DIRECT, PCIE4_X8_DIRECT_OPT]),
   pcieCard(RTX_3090, 'RTX 3090', [PCIE4_HOST, PCIE4_X8_HOST, PCIE4_DIRECT, PCIE4_X8_DIRECT_OPT, { link: RTX_3090_NVLINK, shortName: 'NVLink bridge', devicesPerNodeCounts: [2] }]),
+  pcieCard(RTX_PRO_6000_WS, 'RTX PRO 6000 WS', [
+    PCIE5_DIRECT,
+    PCIE5_X8_DIRECT_OPT,
+    PCIE5_HOST,
+    PCIE5_X8_HOST,
+  ]),
+  pcieCard(RTX_PRO_6000_MAX_Q, 'RTX PRO 6000 Max-Q', [
+    PCIE5_DIRECT,
+    PCIE5_X8_DIRECT_OPT,
+    PCIE5_HOST,
+    PCIE5_X8_HOST,
+  ]),
+  pcieCard(RTX_PRO_5000, 'RTX PRO 5000', [
+    PCIE5_DIRECT,
+    PCIE5_X8_DIRECT_OPT,
+    PCIE5_HOST,
+    PCIE5_X8_HOST,
+  ]),
+  pcieCard(RTX_PRO_4000_SFF, 'RTX PRO 4000 SFF', [PCIE5_X8_DIRECT_OPT, PCIE5_X8_HOST]),
   mac(M5_ULTRA_80C, M5_ULTRA_STUDIO_NETWORKS),
   mac(M5_ULTRA_64C, M5_ULTRA_STUDIO_NETWORKS),
   mac(M5_MAX_40C, M5_MAX_STUDIO_NETWORKS),
@@ -434,6 +491,39 @@ const CATALOG: DeviceSetupOptions[] = [
   datacenter(B200, 'B200', [{ link: NVLINK_5, shortName: 'NVLink 5' }], [IB_NDR, IB_XDR]),
   datacenter(H200_SXM, 'H200 SXM', [{ link: NVLINK_4, shortName: 'NVLink 4' }], [IB_NDR, IB_XDR]),
   datacenter(H100_SXM, 'H100 SXM', [{ link: NVLINK_4, shortName: 'NVLink 4' }], [IB_NDR, IB_XDR]),
+  datacenter(A100_SXM4_80GB, 'A100 SXM4', [{ link: NVLINK_3, shortName: 'NVLink 3' }], [IB_HDR]),
+  datacenter(A100_SXM4_40GB, 'A100 SXM4', [{ link: NVLINK_3, shortName: 'NVLink 3' }], [IB_HDR]),
+  pcieCard(A100_PCIE_80GB, 'A100 PCIe', [
+    PCIE4_DIRECT,
+    PCIE4_HOST,
+    { link: A100_NVLINK_BRIDGE, shortName: 'NVLink bridge', devicesPerNodeCounts: [2] },
+  ]),
+  pcieCard(A100_PCIE_40GB, 'A100 PCIe', [
+    PCIE4_DIRECT,
+    PCIE4_HOST,
+    { link: A100_NVLINK_BRIDGE, shortName: 'NVLink bridge', devicesPerNodeCounts: [2] },
+  ]),
+  // Count-restricted defaults select the pair, full mesh, or hybrid cube-mesh for 2, 4, or 8 GPUs.
+  {
+    deviceId: V100_SXM2.id,
+    shortName: 'V100 SXM2',
+    devicesPerNodeCounts: [1, 2, 4, 8],
+    nodeCounts: [1],
+    localLinks: [
+      { link: NVLINK_2_PAIR, shortName: 'NVLink 2 pair', devicesPerNodeCounts: [2] },
+      { link: NVLINK_2_MESH_4, shortName: 'NVLink 2 mesh', devicesPerNodeCounts: [4] },
+      { link: NVLINK_2_HCM_8, shortName: 'NVLink 2 cube-mesh', devicesPerNodeCounts: [8] },
+    ],
+    // Required catalog placeholder only: nodeCounts is [1], so no network is offered or costed.
+    networks: [DESKTOP_10GBE],
+  },
+  {
+    ...pcieCard(V100_PCIE, 'V100 PCIe', [
+      { link: PCIE_3_X16_DIRECT, shortName: 'PCIe 3.0 x16 P2P' },
+      { link: PCIE_3_X16, shortName: 'PCIe 3.0 x16' },
+    ]),
+    nodeCounts: [1],
+  },
   datacenter(INSTINCT_MI455X, 'MI455X', [PCIE5_DIRECT], [IB_NDR, IB_XDR]),
   datacenter(INSTINCT_MI355X, 'MI355X', [PCIE5_DIRECT], [IB_NDR, IB_XDR]),
   datacenter(INSTINCT_MI325X, 'MI325X', [PCIE5_DIRECT], [IB_NDR, IB_XDR]),
@@ -442,6 +532,7 @@ const CATALOG: DeviceSetupOptions[] = [
 
 /** Every device preset (the vendor arrays; `presets/index.ts` groups the same devices for the picker). */
 const ALL_DEVICES: DeviceSpec[] = [
+  ...NVIDIA_PRO_DEVICE_PRESETS,
   ...NVIDIA_CONSUMER_DEVICE_PRESETS, ...NVIDIA_DATACENTER_DEVICE_PRESETS, ...APPLE_DEVICE_PRESETS, ...AMD_DEVICE_PRESETS, ...INTEL_DEVICE_PRESETS,
 ];
 

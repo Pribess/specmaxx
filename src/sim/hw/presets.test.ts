@@ -15,6 +15,7 @@ import {
   LEGACY_LINK_IDS,
   LINK_PRESETS,
   NVIDIA_CONSUMER_DEVICE_PRESETS,
+  NVIDIA_PRO_DEVICE_PRESETS,
   NVIDIA_DATACENTER_DEVICE_PRESETS,
   RTX_5090,
   TOPOLOGY_PRESETS,
@@ -133,6 +134,7 @@ describe('preset library: every device preset', () => {
   it('DEVICE_PRESETS holds every vendor array entry exactly once, in the groups order', () => {
     const vendorArrays = [
       NVIDIA_CONSUMER_DEVICE_PRESETS,
+      NVIDIA_PRO_DEVICE_PRESETS,
       NVIDIA_DATACENTER_DEVICE_PRESETS,
       APPLE_DEVICE_PRESETS,
       AMD_DEVICE_PRESETS,
@@ -157,7 +159,20 @@ describe('preset library: every device preset', () => {
     expect(ids('AMD Radeon / Ryzen AI')).toEqual(['radeon-ai-pro-r9700', 'radeon-rx-9070-xt', 'ryzen-ai-max-plus-395']);
     expect(ids('Intel Arc')).toEqual(['arc-pro-b70', 'arc-pro-b65', 'arc-pro-b60', 'arc-b580']);
     expect(ids('Datacenter')).toEqual([
-      'b300', 'b200', 'h200-sxm', 'h100-sxm', 'instinct-mi455x', 'instinct-mi355x', 'instinct-mi325x', 'instinct-mi300x',
+      'b300',
+      'b200',
+      'h200-sxm',
+      'h100-sxm',
+      'a100-sxm4-80gb',
+      'a100-sxm4-40gb',
+      'a100-pcie-80gb',
+      'a100-pcie-40gb',
+      'v100-sxm2',
+      'v100-pcie',
+      'instinct-mi455x',
+      'instinct-mi355x',
+      'instinct-mi325x',
+      'instinct-mi300x',
     ]);
   });
 
@@ -281,13 +296,38 @@ describe('preset library: links and topologies', () => {
       expect(ids.has(to), to).toBe(true);
     }
     expect(ids).toEqual(new Set([
-      'pcie-4-0-x16-host-bounce', 'pcie-4-0-x8-host-bounce', 'pcie-5-0-x16-host-bounce', 'pcie-5-0-x8-host-bounce',
-      'pcie-4-0-x16-direct-p2p', 'pcie-4-0-x8-direct-p2p', 'pcie-5-0-x16-direct-p2p', 'pcie-5-0-x8-direct-p2p',
-      'rtx-3090-nvlink-bridge', 'nvlink4-nvswitch', 'nvlink5-nvswitch', 'infiniband-ndr400-one-nic-per-gpu',
-      'infiniband-xdr800-one-nic-per-gpu', 'dgx-spark-connectx-7-200gbe-roce', 'mi300x-xgmi-one-peer',
-      'mi300x-xgmi-8-gpu-aggregate-injection', 'thunderbolt-5-rdma-macos-26-2', 'thunderbolt-5-bridge-tcp', 'thunderbolt-4-bridge-tcp',
+      'pcie-3-0-x16-direct-p2p',
+      'pcie-3-0-x16-host-bounce',
+      'nvlink3-nvswitch',
+      'a100-nvlink-bridge-2-gpus',
+      'nvlink2-hybrid-cube-mesh-8-gpus',
+      'nvlink2-fully-connected-mesh-4-gpus',
+      'nvlink2-peer-pair-2-links',
+      'infiniband-hdr200-one-nic-per-gpu',
+      'pcie-4-0-x16-host-bounce',
+      'pcie-4-0-x8-host-bounce',
+      'pcie-5-0-x16-host-bounce',
+      'pcie-5-0-x8-host-bounce',
+      'pcie-4-0-x16-direct-p2p',
+      'pcie-4-0-x8-direct-p2p',
+      'pcie-5-0-x16-direct-p2p',
+      'pcie-5-0-x8-direct-p2p',
+      'rtx-3090-nvlink-bridge',
+      'nvlink4-nvswitch',
+      'nvlink5-nvswitch',
+      'infiniband-ndr400-one-nic-per-gpu',
+      'infiniband-xdr800-one-nic-per-gpu',
+      'dgx-spark-connectx-7-200gbe-roce',
+      'mi300x-xgmi-one-peer',
+      'mi300x-xgmi-8-gpu-aggregate-injection',
+      'thunderbolt-5-rdma-macos-26-2',
+      'thunderbolt-5-bridge-tcp',
+      'thunderbolt-4-bridge-tcp',
       'thunderbolt-4-bridge-tcp-20-gb-s-negotiated',
-      'strix-halo-usb4-native-rdma-20-gb-s-negotiated', 'strix-halo-usb4-tcp-20-gb-s-negotiated', '5gbe-tcp', '10gbe-tcp',
+      'strix-halo-usb4-native-rdma-20-gb-s-negotiated',
+      'strix-halo-usb4-tcp-20-gb-s-negotiated',
+      '5gbe-tcp',
+      '10gbe-tcp',
     ]));
   });
 
@@ -307,8 +347,14 @@ describe('preset library: unlock axes', () => {
 
   const withUnlocks = DEVICE_PRESETS.filter((d) => deviceUnlocks(d).length > 0).map((d) => [d.id, d] as const);
 
-  it('the GeForce cards have unlock axes', () => {
-    expect(withUnlocks.map(([id]) => id).sort()).toEqual(['rtx-3090', 'rtx-4090', 'rtx-5090']);
+  it('GeForce and RTX PRO 6000 cards have unlock axes', () => {
+    expect(withUnlocks.map(([id]) => id).sort()).toEqual([
+      'rtx-3090',
+      'rtx-4090',
+      'rtx-5090',
+      'rtx-pro-6000-max-q',
+      'rtx-pro-6000-ws',
+    ]);
   });
 
   it.each(withUnlocks)('%s: axes are well-formed and EVERY selection validates (device + each host-bounce PCIe link)', (_id, d) => {

@@ -1,4 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import {
+  A100_NVLINK_BRIDGE,
+  IB_HDR_200,
+  NVLINK_3,
+  NVLINK_2_HCM_8,
+  NVLINK_2_MESH_4,
+  NVLINK_2_PAIR,
+  PCIE_4_X16_DIRECT,
+} from './links';
 import { validateTopology } from '../validate';
 import {
   CABLING_IDS, POPULAR_SETUPS, allowedCablings, allowedLocalLinks, cablingLabel, cablingOf, catalogDeviceIds, composeTopology,
@@ -122,13 +131,34 @@ describe('setup catalog: every device', () => {
 
   it('covers every pre-catalog device in the defaults table (the M3 Max is new: Thunderbolt 4 TCP only)', () => {
     const covered = new Set(OLD_DEFAULTS.map(([id]) => id));
-    const uncovered = DEVICE_PRESETS.map((d) => d.id).filter((id) => !covered.has(id));
+    const uncovered = DEVICE_PRESETS.map((d) => d.id).filter(
+      (id) => !covered.has(id) && !/^(rtx-pro-|a100-|v100-)/.test(id),
+    );
     expect(uncovered.sort()).toEqual(['apple-m3-max-30c', 'apple-m3-max-40c']);
     for (const id of uncovered) {
       const o = setupOptionsFor(id);
       expect(o.networks.map((n) => linkPresetId(n.link))).toEqual([linkPresetId(TB4_TCP), linkPresetId(TB4_TCP_20G)]);
       expect(o.localLinks).toEqual([]);
     }
+  });
+
+  it('RTX PRO defaults to direct PCIe P2P: 6000 WS/Max-Q support 2/4/8 cards and SFF never offers x16', () => {
+    for (const deviceId of ['rtx-pro-6000-ws', 'rtx-pro-6000-max-q']) {
+      const options = setupOptionsFor(deviceId);
+      expect(options.devicesPerNodeCounts).toEqual([1, 2, 4, 8]);
+      expect(options.localLinks[0].link).toBe(PCIE_5_X16_DIRECT);
+      expect(options.localLinks.every((l) => l.link.kind === 'pcie')).toBe(true);
+      for (const devicesPerNode of [2, 4, 8]) {
+        const choice = { deviceId, devicesPerNode, nodes: 1 };
+        expect(setupErrors(choice)).toEqual([]);
+        expect(composeTopology(choice).intraNode).toBe(PCIE_5_X16_DIRECT);
+      }
+    }
+    const sff = setupOptionsFor('rtx-pro-4000-sff');
+    expect(sff.localLinks.map((l) => l.link)).toEqual([PCIE_5_X8_DIRECT, PCIE_5_X8]);
+    expect(
+      setupLabel({ deviceId: 'rtx-pro-5000', memCapacityBytes: 72e9, devicesPerNode: 1, nodes: 1 }),
+    ).toBe('RTX PRO 5000 72GB');
   });
 });
 
@@ -282,8 +312,8 @@ describe('setupErrors', () => {
       'NVLink bridge joins exactly 2 devices per machine (got 4)',
     ]);
     expect(setupErrors({ deviceId: 'rtx-3090', devicesPerNode: 8, nodes: 1, localLinkId: bridge })).toHaveLength(1);
-    // Every other local link of every device supports every offered count.
-    for (const id of DEVICE_PRESETS.map((d) => d.id)) {
+    // The RTX 3090 exception above predates the count-restricted A100/V100 links tested separately below.
+    for (const id of DEVICE_PRESETS.map((d) => d.id).filter((id) => !/^(a100-|v100-)/.test(id))) {
       const opts = setupOptionsFor(id);
       for (const n of opts.devicesPerNodeCounts.filter((x) => x > 1)) {
         expect(allowedLocalLinks(opts, n).length, `${id} ×${n}`).toBe(opts.localLinks.length - (id === 'rtx-3090' && n !== 2 ? 1 : 0));
@@ -468,5 +498,74 @@ describe('linkById', () => {
   it('every cabling id is a valid fabric for some setup', () => {
     const ids: CablingId[] = ['switched', 'mesh', 'mesh2', 'ring', 'chain'];
     expect([...CABLING_IDS]).toEqual(ids);
+  });
+});
+
+describe('A100 / V100 catalog', () => {
+  it('restricts A100 PCIe bridges to pairs and A100 networks to HDR200', () => {
+    for (const deviceId of ['a100-pcie-40gb', 'a100-pcie-80gb']) {
+      expect(
+        setupErrors({
+          deviceId,
+          devicesPerNode: 2,
+          nodes: 1,
+          localLinkId: linkPresetId(A100_NVLINK_BRIDGE),
+        }),
+      ).toEqual([]);
+      expect(
+        setupErrors({
+          deviceId,
+          devicesPerNode: 4,
+          nodes: 1,
+          localLinkId: linkPresetId(A100_NVLINK_BRIDGE),
+        }).length,
+      ).toBeGreaterThan(0);
+      expect(setupOptionsFor(deviceId).localLinks[0].link).toBe(PCIE_4_X16_DIRECT);
+    }
+    for (const deviceId of ['a100-sxm4-40gb', 'a100-sxm4-80gb']) {
+      const options = setupOptionsFor(deviceId);
+      expect(options.localLinks[0].link).toBe(NVLINK_3);
+      expect(options.networks.map((n) => n.link)).toEqual([IB_HDR_200]);
+      expect(setupErrors({ deviceId, devicesPerNode: 8, nodes: 2 })).toEqual([]);
+    }
+  });
+  it('offers V100 board-specific NVLink only at matching node sizes, PCIe never NVLink', () => {
+    for (const [count, link] of [
+      [2, NVLINK_2_PAIR],
+      [4, NVLINK_2_MESH_4],
+      [8, NVLINK_2_HCM_8],
+    ] as const) {
+      expect(
+        setupErrors({
+          deviceId: 'v100-sxm2',
+          devicesPerNode: count,
+          nodes: 1,
+          localLinkId: linkPresetId(link),
+        }),
+      ).toEqual([]);
+      expect(
+        composeTopology({
+          deviceId: 'v100-sxm2',
+          devicesPerNode: count,
+          nodes: 1,
+          localLinkId: linkPresetId(link),
+        }).intraNode,
+      ).toBe(link);
+      const wrongCount = count === 8 ? 4 : 8;
+      expect(
+        setupErrors({
+          deviceId: 'v100-sxm2',
+          devicesPerNode: wrongCount,
+          nodes: 1,
+          localLinkId: linkPresetId(link),
+        }).length,
+      ).toBeGreaterThan(0);
+    }
+    expect(setupOptionsFor('v100-pcie').localLinks.every((l) => l.link.kind === 'pcie')).toBe(true);
+    for (const devicesPerNode of [2, 4])
+      expect(setupErrors({ deviceId: 'v100-pcie', devicesPerNode, nodes: 1 })).toEqual([]);
+    expect(
+      setupLabel({ deviceId: 'v100-pcie', memCapacityBytes: 16e9, devicesPerNode: 1, nodes: 1 }),
+    ).toBe('V100 PCIe 16GB');
   });
 });

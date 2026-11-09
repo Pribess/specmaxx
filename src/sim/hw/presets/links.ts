@@ -193,7 +193,7 @@ const PCIE_ALPHA_NOT_RAISED =
   'those include kernel launch and a system-scope barrier, and no measurement isolates the hardware share.';
 
 /** PCIe link (device to device): payload bandwidth {@link pcieBandwidthPerDirectionBytesPerSec}, α 1 µs. */
-function pcieLink(generation: 4 | 5, lanes: 8 | 16, direct: boolean): LinkSpec {
+function pcieLink(generation: 3 | 4 | 5, lanes: 8 | 16, direct: boolean): LinkSpec {
   // B = R_line × η_PCIe = transfers/s × lanes × 128/130 / 8 × 256/280.
   const bandwidthPerDirectionBytesPerSec = pcieBandwidthPerDirectionBytesPerSec(generation, lanes);
   const sources: SourceRef[] = [
@@ -201,7 +201,8 @@ function pcieLink(generation: 4 | 5, lanes: 8 | 16, direct: boolean): LinkSpec {
       url: PCIE_SIG_URL,
       title: 'PCI-SIG PCI Express 5.0 FAQ',
       fields: [BANDWIDTH_FIELD],
-      note: 'Gen5 32 GT/s; x32 raw 128 GB/s each direction. Gen4 is half Gen5. ' +
+      note:
+        'Gen5 32 GT/s, Gen4 16 GT/s, Gen3 8 GT/s; x32 Gen5 raw 128 GB/s each direction. ' +
         'Line rate = GT/s × lanes × 128/130 ÷ 8; × 256/280 TLP payload efficiency (AN 855 below).',
     },
     PCIE_PAYLOAD_SOURCE,
@@ -233,7 +234,8 @@ function pcieLink(generation: 4 | 5, lanes: 8 | 16, direct: boolean): LinkSpec {
     estimated: [
       {
         field: 'latencySec',
-        reason: 'Rounded 1 µs PCIe DMA proxy from 0.5 µs Gen5 P2P writes; extrapolated to Gen4 and x8. ' +
+        reason:
+          'Rounded 1 µs PCIe DMA proxy from 0.5 µs Gen5 P2P writes; extrapolated to Gen3/4 and x8. ' +
           'Not a measured latency for every host/switch topology. ' + PCIE_ALPHA_NOT_RAISED,
       },
       ...(!direct ? [
@@ -257,6 +259,10 @@ export const PCIE_5_X16 = pcieLink(5, 16, false);
 export const PCIE_5_X8 = pcieLink(5, 8, false);
 /** PCIe Gen4 x16 direct P2P, only for compatible devices/drivers and host routing. Unit: B/s per direction. */
 export const PCIE_4_X16_DIRECT = pcieLink(4, 16, true);
+/** PCIe Gen3 x16 direct P2P, 14.40 GB/s payload per direction; compatible Tesla host routing required. */
+export const PCIE_3_X16_DIRECT = pcieLink(3, 16, true);
+/** PCIe Gen3 x16 with host staging, 14.40 GB/s link payload per direction before staging costs. */
+export const PCIE_3_X16 = pcieLink(3, 16, false);
 /** PCIe Gen4 x8 direct P2P, only for compatible devices/drivers and host routing. Unit: B/s per direction. */
 export const PCIE_4_X8_DIRECT = pcieLink(4, 8, true);
 /** PCIe Gen5 x16 direct P2P, only for compatible devices/drivers and host routing. Unit: B/s per direction. */
@@ -373,6 +379,99 @@ export const RTX_3090_NVLINK: LinkSpec = {
   ],
 };
 
+/** GA100 NVLink3/NVSwitch: 12 × 25 GB/s = 300 GB/s per direction per GPU. */
+export const NVLINK_3: LinkSpec = {
+  kind: 'nvlink',
+  name: 'NVLink3 / NVSwitch',
+  bandwidthPerDirectionBytesPerSec: 300e9,
+  latencySec: 0.8e-6,
+  p2p: 'direct',
+  sources: [
+    {
+      url: 'https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf',
+      title: 'A100 architecture whitepaper, third-generation NVLink',
+      fields: [BANDWIDTH_FIELD],
+      note: 'Twelve links, each 25 GB/s per direction: 600 GB/s bidirectional, 300 GB/s per direction.',
+    },
+  ],
+  estimated: [
+    {
+      field: 'latencySec',
+      reason: `NVLink3 latency unpublished; 0.8 µs NVLink5 remote-store proxy as for NVLINK_4 (${GB200_LATENCY_URL}).`,
+    },
+  ],
+};
+
+/** A100 PCIe three-bridge pair: 600 GB/s bidirectional = 300 GB/s per direction; exactly two cards. */
+export const A100_NVLINK_BRIDGE: LinkSpec = {
+  ...NVLINK_3,
+  kind: 'nvlink_bridge',
+  name: 'A100 NVLink bridge (2 GPUs)',
+  sources: [
+    {
+      url: 'https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/PB-10577-001_v02.pdf',
+      title: 'A100 PCIe product brief, NVLink Table 5',
+      fields: [BANDWIDTH_FIELD],
+      note: 'All three bridges to one adjacent A100: total maximum NVLink bandwidth 600 Gbytes/s (Tx + Rx), 300 GB/s per direction. Same rate on 40GB and 80GB; do not mix capacities.',
+    },
+  ],
+};
+
+/**
+ * V100 DGX-1 hybrid cube-mesh, aggregate six-link injection: 150 GB/s per direction per GPU.
+ * NOT all-to-all: only four peers direct. Optimistic for subgroups and non-neighbour traffic (docs §6).
+ */
+export const NVLINK_2_HCM_8: LinkSpec = {
+  kind: 'nvlink',
+  name: 'NVLink2 hybrid cube-mesh (8 GPUs)',
+  bandwidthPerDirectionBytesPerSec: 150e9,
+  latencySec: 0.8e-6,
+  p2p: 'direct',
+  sources: [
+    {
+      url: 'https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf',
+      title: 'Volta architecture whitepaper, NVLink and Figure 12',
+      fields: [BANDWIDTH_FIELD],
+      note: 'Six links × 25 GB/s each direction; DGX-1 hybrid cube-mesh (four distinct direct peers per GPU), not a switch. Full-node collective injection, not per-peer bandwidth.',
+    },
+  ],
+  estimated: [
+    {
+      field: 'latencySec',
+      reason: `NVLink2 latency unpublished; transferred 0.8 µs NVLink5 remote-store proxy (${GB200_LATENCY_URL}); not a measured V100 latency.`,
+    },
+  ],
+};
+
+/** Four V100 SXM2 fully connected board: 3 peers × 2 links × 25 GB/s = 150 GB/s aggregate per direction. */
+export const NVLINK_2_MESH_4: LinkSpec = {
+  ...NVLINK_2_HCM_8,
+  name: 'NVLink2 fully connected mesh (4 GPUs)',
+  sources: [
+    ...NVLINK_2_HCM_8.sources,
+    {
+      url: 'https://github.com/NVIDIA/nccl-tests/issues/251',
+      title: 'Four V100-SXM2-16GB topology matrix',
+      kind: 'community',
+      fields: [BANDWIDTH_FIELD],
+      note: 'All four GPUs have NV2 to each of the other three: 50 GB/s per peer, 150 GB/s aggregate injection. Optimistic for TP2 subgroups.',
+    },
+  ],
+};
+/** One V100 SXM2 NV2 peer pair: two links × 25 GB/s = 50 GB/s per direction (not a standalone dual board claim). */
+export const NVLINK_2_PAIR: LinkSpec = {
+  ...NVLINK_2_MESH_4,
+  name: 'NVLink2 peer pair (2 links)',
+  bandwidthPerDirectionBytesPerSec: 50e9,
+  sources: [
+    {
+      url: 'https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf',
+      title: 'Volta NVLink, Figure 12 NV2 edges',
+      fields: [BANDWIDTH_FIELD],
+      note: 'Two direct NVLinks × 25 GB/s per direction = 50 GB/s for a selected NV2 pair.',
+    },
+  ],
+};
 /** H100/H200 NVLink4 switched injection ceiling: 900 GB/s bidirectional / 2 = 450 GB/s per direction. */
 export const NVLINK_4: LinkSpec = {
   kind: 'nvlink',
@@ -463,6 +562,29 @@ export const IB_NDR_400: LinkSpec = {
   ],
 };
 
+/** DGX A100 ConnectX-6 HDR200: one NIC per GPU, 25 GB/s per direction; fits the Gen4 host path. */
+export const IB_HDR_200: LinkSpec = {
+  ...IB_NDR_400,
+  name: 'InfiniBand HDR200 (one NIC per GPU)',
+  bandwidthPerDirectionBytesPerSec: 200e9 / 8,
+  sources: [
+    IB_SOURCE,
+    {
+      url: 'https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/nvidia-dgx-a100-datasheet.pdf',
+      title: 'DGX A100 datasheet',
+      fields: [BANDWIDTH_FIELD],
+      note: 'Eight single-port Mellanox ConnectX-6 VPI 200Gb/s HDR InfiniBand adapters for eight GPUs: 25 GB/s per GPU per direction.',
+    },
+    ...IB_NDR_400.sources.filter((source) => source.fields.includes('latencySec')),
+  ],
+  estimated: [
+    {
+      field: 'latencySec',
+      reason:
+        '1 µs generic ib_write_lat verbs-floor proxy as for NDR; adapter unidentified, not a measured ConnectX-6 latency.',
+    },
+  ],
+};
 /** ConnectX-8 XDR800: one 800 Gb/s NIC per GPU, 100 GB/s injection per direction. */
 export const IB_XDR_800: LinkSpec = {
   kind: 'infiniband',
@@ -1003,6 +1125,14 @@ export const ETHERNET_10G_TCP = ethernetTcp(10);
 export const HOST_BOUNCE_PCIE_LINKS: LinkSpec[] = [PCIE_4_X16, PCIE_4_X8, PCIE_5_X16, PCIE_5_X8];
 /** All link presets, including per-peer and full-node xGMI conventions. Every entry must validate. */
 export const LINK_PRESETS: LinkSpec[] = [
+  PCIE_3_X16_DIRECT,
+  PCIE_3_X16,
+  NVLINK_3,
+  A100_NVLINK_BRIDGE,
+  NVLINK_2_HCM_8,
+  NVLINK_2_MESH_4,
+  NVLINK_2_PAIR,
+  IB_HDR_200,
   ...HOST_BOUNCE_PCIE_LINKS, PCIE_4_X16_DIRECT, PCIE_4_X8_DIRECT, PCIE_5_X16_DIRECT, PCIE_5_X8_DIRECT,
   RTX_3090_NVLINK, NVLINK_4, NVLINK_5, IB_NDR_400, IB_XDR_800, SPARK_CONNECTX_7,
   XGMI_MI300X_PER_PEER, XGMI_MI300X_8_GPU, TB5_RDMA, TB5_TCP, TB4_TCP, TB4_TCP_20G,
@@ -1028,6 +1158,7 @@ export interface LinkMedium {
 
 /** Every inter-node preset by physical medium (see {@link LinkMedium}): the RDMA ≤ TCP latency invariant's pairs. */
 export const LINK_MEDIA: LinkMedium[] = [
+  { medium: 'infiniband-hdr', rdma: [IB_HDR_200], tcp: [] },
   { medium: 'thunderbolt-5', rdma: [TB5_RDMA], tcp: [TB5_TCP] },
   { medium: 'thunderbolt-4', rdma: [], tcp: [TB4_TCP, TB4_TCP_20G] },
   { medium: 'strix-halo-usb4', rdma: [USB4_HALO_RDMA], tcp: [USB4_HALO_TCP] },

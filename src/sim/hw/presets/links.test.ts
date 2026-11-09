@@ -5,6 +5,17 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import {
+  A100_NVLINK_BRIDGE,
+  IB_HDR_200,
+  NVLINK_3,
+  NVLINK_2_HCM_8,
+  NVLINK_2_MESH_4,
+  NVLINK_2_PAIR,
+  PCIE_3_X16_DIRECT,
+  PCIE_3_X16,
+  pcieBandwidthPerDirectionBytesPerSec,
+} from './links';
 import type { LinkSpec } from '../types';
 import { validateLink } from '../validate';
 import {
@@ -95,5 +106,25 @@ describe('LINK_MEDIA: RDMA ≤ TCP on one physical medium', () => {
   it('cross-medium: Thunderbolt 5 RDMA is also no slower than the Thunderbolt 4 bridge', () => {
     expect(TB5_RDMA.latencySec).toBeLessThanOrEqual(TB4_TCP.latencySec);
     expect(TB5_RDMA.latencySec).toBeLessThan(TB5_TCP.latencySec);
+  });
+});
+
+describe('Ampere and Volta links', () => {
+  it('records directional bandwidth, not bidirectional headlines', () => {
+    expect(NVLINK_3.bandwidthPerDirectionBytesPerSec).toBe(300e9);
+    expect(A100_NVLINK_BRIDGE.bandwidthPerDirectionBytesPerSec).toBe(300e9);
+    expect(A100_NVLINK_BRIDGE.kind).toBe('nvlink_bridge');
+    expect(NVLINK_2_HCM_8.bandwidthPerDirectionBytesPerSec).toBe(150e9);
+    expect(NVLINK_2_MESH_4.bandwidthPerDirectionBytesPerSec).toBe(150e9);
+    expect(NVLINK_2_PAIR.bandwidthPerDirectionBytesPerSec).toBe(50e9);
+    expect(IB_HDR_200.bandwidthPerDirectionBytesPerSec).toBe(25e9);
+    expect(PCIE_3_X16_DIRECT.bandwidthPerDirectionBytesPerSec).toBe(
+      pcieBandwidthPerDirectionBytesPerSec(3, 16),
+    );
+    expect(PCIE_3_X16.bandwidthPerDirectionBytesPerSec).toBe(
+      PCIE_3_X16_DIRECT.bandwidthPerDirectionBytesPerSec,
+    );
+    expect(PCIE_3_X16_DIRECT.p2p).toBe('direct');
+    expect(PCIE_3_X16.p2p).toBe('host_bounce');
   });
 });

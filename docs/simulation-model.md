@@ -490,6 +490,17 @@ Every non-exact hit pushes one warning naming the requested and the used key (th
 Vector peak: the bf16 / fp16 entry for those dtypes, else fp32. Validation requires every float input with a
 peak to list an fp32-accumulate entry.
 
+**V100 format fallback.** Volta has only dense FP16 tensor cores (FP16 or FP32 accumulation): no BF16,
+TF32, FP8, INT8/INT4 tensor or 2:4 path. BF16 GEMMs/attention therefore use FP16/FP32 at 125 TFLOP/s
+(SXM2) or 112 TFLOP/s (PCIe), with a warning explaining the cast (real engines need, e.g., vLLM
+`--dtype=half`). The simulation deduplicates identical peak warnings. FP8/INT8 math also falls back to
+FP16 tensor math (integer accumulation switches to FP32); narrow weights with wider activations already use
+the wider math format. This models cast/dequantize-to-FP16 computation, not native low-bit support or its
+conversion overhead. Storage and KV bytes keep the selected dtype; FP16 range/overflow is not modeled.
+BF16 vector work without a BF16 vector entry still uses FP32, not FP16, per the generic vector rule.
+Sources: [Volta whitepaper](https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf),
+[A100 whitepaper, V100 comparison](https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf).
+
 ### Shape efficiency
 
 `src/sim/hw/efficiency.ts: gemmComputeSec`.
@@ -561,8 +572,8 @@ sfuOpsPerSec = compute units · exp2 results per clock per unit · clock     (th
 ```
 
 | Family (presets)                                                                               | exp2 / clock / unit | Status                                                                           |
-| ---------------------------------------------------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------- |
-| NVIDIA Ampere, Ada, Hopper, B200, GeForce Blackwell (RTX 3090 / 4090 / 5090, H100, H200, B200) | 16 / SM             | sourced: CUDA guide throughput table (cc 8.6, 8.9, 9.0, 10.0, 12.0)              |
+| ----------------------------------------------------------------------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NVIDIA Volta, Ampere, Ada, Hopper, B200, GeForce Blackwell (V100, A100, RTX 3090 / 4090 / 5090, H100, H200, B200) | 16 / SM             | sourced: CUDA guide throughput table (cc 7.0, 8.0, 8.6, 8.9, 9.0, 10.0, 12.0). GA100/GV100 have 64 FP32 lanes/SM, so their clock uses 128 FP32 FLOP/clk/SM, not 256. |
 | NVIDIA GB10 (DGX Spark)                                                                        | 16 / SM             | estimate: cc 12.1 is not in the table; the cc 12.0 rate                          |
 | NVIDIA Blackwell Ultra (B300)                                                                  | 32 / SM             | sourced: Blackwell Ultra blog ("SFU throughput doubled"), FA4 paper              |
 | AMD CDNA3 (MI300X, MI325X)                                                                     | 16 / CU             | estimate: quarter-rate transcendentals (AMD RDNA deck "¼ rate (like GCN)", LLVM) |
@@ -631,15 +642,16 @@ spot values against the datasheet).
 | File                           | Covers                                                                                                                                                                          | Export                                                                                                                   |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `presets/nvidia.ts`            | GeForce RTX 3090, 4090, 5090 and their unlock axes                                                                                                                              | `NVIDIA_CONSUMER_DEVICE_PRESETS`, `RTX_3090_UNLOCKS`, `RTX_4090_UNLOCKS`, `RTX_5090_UNLOCKS`                             |
-| `presets/nvidia-datacenter.ts` | DGX Spark (GB10), H100 SXM, H200 SXM, B200, B300                                                                                                                                | `NVIDIA_DATACENTER_DEVICE_PRESETS`                                                                                       |
+| `presets/nvidia-pro.ts` | RTX PRO Blackwell 6000 Workstation / Max-Q, 5000 (48/72GB), 4000 SFF; sustained-clock options | `NVIDIA_PRO_DEVICE_PRESETS`, `RTX_PRO_6000_WS_UNLOCKS`, `RTX_PRO_6000_MAX_Q_UNLOCKS` |
+| `presets/nvidia-datacenter.ts` | DGX Spark (GB10), H100 SXM, H200 SXM, B200, B300, A100 SXM4 / PCIe 40/80GB, V100 SXM2 / PCIe 16/32GB                                                                            | `NVIDIA_DATACENTER_DEVICE_PRESETS`                                                                                       |
 | `presets/apple.ts`             | M5 Ultra, M5 Max, M4 Max, M3 Ultra, M3 Max; binned GPU-core counts as separate SKUs                                                                                             | `APPLE_DEVICE_PRESETS`                                                                                                   |
 | `presets/amd.ts`               | Radeon AI PRO R9700, RX 9070 XT, Ryzen AI Max+ 395 (Strix Halo iGPU), Instinct MI300X / MI325X / MI355X / MI455X                                                                | `AMD_DEVICE_PRESETS`                                                                                                     |
 | `presets/intel.ts`             | Arc Pro B70, B65, B60, Arc B580                                                                                                                                                 | `INTEL_DEVICE_PRESETS`                                                                                                   |
-| `presets/links.ts`             | PCIe, NVLink bridge / NVLink 4 / 5, InfiniBand, ConnectX-7, xGMI, Thunderbolt, USB4, Ethernet                                                                                   | `LINK_PRESETS`, `HOST_BOUNCE_PCIE_LINKS`                                                                                 |
-| `presets/topologies.ts`        | PCIe boxes, SoC clusters (with the inter-node fabric shape), HGX nodes, MI300X xGMI node                                                                                        | `TOPOLOGY_PRESETS`, `pcieBox`, `socCluster`, `hgxCluster`, `nodeTopology`, `fabricIdSuffix`                              |
+| `presets/links.ts` | PCIe Gen3/4/5, NVLink bridge / NVLink 2/3/4/5, InfiniBand HDR200/NDR400/XDR800, ConnectX-7, xGMI, Thunderbolt, USB4, Ethernet | `LINK_PRESETS`, `HOST_BOUNCE_PCIE_LINKS` |
+| `presets/topologies.ts` | PCIe boxes, SoC clusters (with fabric shape), HGX A100/H100/B200/B300 nodes, A100 bridge pairs, V100 4/8-GPU NVLink boards and Gen3 PCIe boxes, MI300X xGMI node | `TOPOLOGY_PRESETS`, `pcieBox`, `socCluster`, `hgxCluster`, `nodeTopology`, `fabricIdSuffix` |
 | `presets/catalog.ts`           | The setup catalog: what each device composes into (GPUs per machine, machines, local and network links, cabling), validation, `composeTopology`, SKU labels, the popular setups | `setupOptionsFor`, `allowedCablings`, `defaultCabling`, `setupErrors`, `composeTopology`, `setupLabel`, `POPULAR_SETUPS` |
 
-`DEVICE_PRESET_GROUPS` is the display order: consumer / prosumer first (GeForce, Apple, AMD Radeon and Strix
+`DEVICE_PRESET_GROUPS` is the display order: consumer / prosumer first (GeForce, NVIDIA RTX PRO, Apple, AMD Radeon and Strix
 Halo, Intel Arc, DGX Spark), datacenter last; `DEVICE_PRESETS` is the groups flattened. Within a group: newest
 generation first, then by tier (Ultra before Max, more cores first).
 
@@ -663,8 +675,9 @@ Conventions every preset follows (each file's header states its own traps):
   recorded as `'2:4'`.
 - **GeForce fp32-accumulate half rate**: on GeForce, fp16 / fp8 matmuls with fp32 accumulate run at half the
   fp16-accumulate rate, and bf16 / tf32 accumulate only in fp32, so GeForce lists both accumulators.
-  Datacenter parts, DGX Spark, AMD and Intel run both accumulators at one rate and list only fp32-accumulate
-  entries (peak lookup step 2 maps an fp16-accumulate request onto them).
+  RTX PRO, datacenter parts (including A100/V100), DGX Spark, AMD and Intel run both accumulators at one rate
+  and list only fp32-accumulate entries (peak lookup step 2 maps an fp16-accumulate request onto them).
+  RTX PRO 5000 / 4000 SFF full-rate FP32 accumulation is an estimate; the 6000 WS / Max-Q rates are vendor-cited.
 - Formats a vendor gives no rate for are omitted (the lookup falls back to a wider format and warns), not
   invented. Capacities are recorded as quoted (SI bytes), unified-memory devices list their SKU options.
 
@@ -812,6 +825,21 @@ NCCL_PTR_HOST`), and so do Gloo (`cuda_allreduce_ring.cc:82,102`) and MLX. On RD
   (https://github.com/dstackai/dstack/issues/3069); MLX's TCP ring 290–300 µs for 4 Macs over Thunderbolt. That is
   5–10× the floor: software, which the bound leaves out.
 
+- **A100 / V100 interconnects** (`links.ts`, `topologies.ts`): HGX A100 uses NVLink3/NVSwitch
+  (600 GB/s bidirectional = 300 GB/s per direction per GPU); clusters default to one HDR200 NIC per GPU
+  (25 GB/s per direction), not NDR400, which exceeds the A100 Gen4 host path. PCIe A100's three-bridge
+  NVLink connection is offered for exactly two matching-capacity cards. V100 PCIe uses Gen3 x16 and has no
+  NVLink (DGX Station's special SKU is not modeled).
+- **V100 NVLink2 is not a switch.** `NVLINK_2_HCM_8` represents DGX-1's eight-GPU hybrid cube-mesh:
+  six links × 25 GB/s = 150 GB/s aggregate injection per direction, but only four directly connected peers.
+  The uniform intra-node link model is optimistic for subgroups (a quad is at most about 100 GB/s,
+  a pair 25–50 GB/s) and send/recv/all-to-all to non-neighbours, which require explicit relay or PCIe.
+  A distinct `NVLINK_2_MESH_4` describes four-GPU fully connected NV2 boards: 150 GB/s aggregate,
+  50 GB/s per peer; TP2 subgroups are optimistic there too. The catalog restricts these links to eight
+  and four devices respectively and offers a 50 GB/s NV2 pair option for two selected GPUs.
+  A per-group link matrix would be needed to remove this approximation; no V100 inter-node setup is offered.
+  Sources: [Volta whitepaper Figure 12](https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf),
+  [four-GPU board matrix](https://github.com/NVIDIA/nccl-tests/issues/251).
 - **xGMI aggregate**: `XGMI_MI300X_8_GPU` (used by `MI300X_XGMI_8`) is 7 peers × 64 GB/s = 448 GB/s per
   direction, the full-mesh injection ceiling, because the collective formulas treat B as a device's aggregate
   injection; it is optimistic for subgroups and send/recv. `XGMI_MI300X_PER_PEER` (64 GB/s) is the one-peer link.

@@ -1,4 +1,21 @@
 import { describe, expect, it } from 'vitest';
+import {
+  A100_NVLINK_BRIDGE,
+  IB_HDR_200,
+  NVLINK_3,
+  NVLINK_2_HCM_8,
+  NVLINK_2_MESH_4,
+  PCIE_3_X16_DIRECT,
+} from './links';
+import {
+  HGX_A100_8,
+  HGX_A100_16_HDR,
+  A100_PCIE_NVLINK_2,
+  V100_SXM2_NVLINK_4,
+  V100_SXM2_NVLINK_8,
+  V100_PCIE_2,
+  V100_PCIE_4,
+} from './topologies';
 import { effectiveLink, ringAllReduceSec } from '../../engine/collectives';
 import { applyLinkModifiers } from '../modifiers';
 import { validateLink, validateLinkModifiers, validateTopology } from '../validate';
@@ -222,5 +239,23 @@ describe('fabric shapes in the builders', () => {
       expect(clusters[2].id).toBe(`cluster-4-${RYZEN_AI_MAX_PLUS_395.id}-${linkPresetId(clusters[2].interNode!)}-ring`);
     }
     for (const t of STRIX_HALO_5GBE_CLUSTERS) expect(t.interNodeFabric).toBeUndefined();
+  });
+});
+
+describe('A100 and V100 board configurations', () => {
+  it('HGX A100 uses NVSwitch and HDR200, never NDR400 by default', () => {
+    expect(HGX_A100_8).toMatchObject({ devicesPerNode: 8, nodes: 1 });
+    expect(HGX_A100_8.intraNode).toBe(NVLINK_3);
+    expect(HGX_A100_16_HDR.interNode).toBe(IB_HDR_200);
+    expect(HGX_A100_16_HDR.nodes).toBe(2);
+  });
+  it('distinguishes 4-GPU fully connected V100 boards from the 8-GPU hybrid cube-mesh', () => {
+    expect(V100_SXM2_NVLINK_4.intraNode).toBe(NVLINK_2_MESH_4);
+    expect(V100_SXM2_NVLINK_4.devicesPerNode).toBe(4);
+    expect(V100_SXM2_NVLINK_8.intraNode).toBe(NVLINK_2_HCM_8);
+    expect(V100_SXM2_NVLINK_8.devicesPerNode).toBe(8);
+    expect(A100_PCIE_NVLINK_2.intraNode).toBe(A100_NVLINK_BRIDGE);
+    expect([V100_PCIE_2, V100_PCIE_4].map((t) => t.devicesPerNode)).toEqual([2, 4]);
+    expect(V100_PCIE_4.intraNode).toBe(PCIE_3_X16_DIRECT);
   });
 });

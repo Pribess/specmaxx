@@ -96,7 +96,7 @@ export function engineSfuAtVectorClock(
   return engineSfu(rate, computeUnits, unitName, clockHz, field);
 }
 
-/** FP32 FLOP per clock per SM of every NVIDIA SM in the presets (Ampere to Blackwell): 128 FP32 lanes × 2 (FMA). */
+/** GA10x/Ada/Hopper/Blackwell FP32 FLOP/clk/SM: 128 lanes × 2 (FMA). NOT GA100/GV100 (64 lanes; use 128). */
 const NVIDIA_FP32_FLOP_PER_CLOCK_PER_SM = 128 * 2;
 
 /**
@@ -134,7 +134,7 @@ const CUDA_EXP2_ROW =
   'exponential (exp2f), sine (__sinf), cosine (__cosf)": 16 results per clock per SM for compute capability 7.x–9.0, ' +
   '10.0 and 12.0 (4 MUFU lanes per SM sub-partition).';
 
-/** NVIDIA SMs of Ampere (cc 8.6), Ada (8.9), Hopper (9.0), GeForce Blackwell (12.0): 16 MUFU exp2/clk per SM. */
+/** NVIDIA Volta (7.0), Ampere (8.0/8.6), Ada (8.9), Hopper (9.0), GeForce Blackwell (12.0): 16 exp2/clk/SM. */
 export const NVIDIA_SM_SFU: SfuRate = {
   exp2PerClockPerUnit: 16,
   source: {

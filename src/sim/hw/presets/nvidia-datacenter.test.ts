@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { AccumulateType, MathFormat } from '../../ir/dtype';
 import type { DeviceSpec } from '../types';
 import { validateDevice } from '../validate';
-import { B200, B300, DGX_SPARK, H100_SXM, H200_SXM, NVIDIA_DATACENTER_DEVICE_PRESETS } from './nvidia-datacenter';
+import {
+  A100_SXM4_80GB, A100_SXM4_40GB, A100_PCIE_80GB, A100_PCIE_40GB, V100_SXM2, V100_PCIE,
+  B200, B300, DGX_SPARK, H100_SXM, H200_SXM, NVIDIA_DATACENTER_DEVICE_PRESETS,
+} from './nvidia-datacenter';
 
 /** The engines[0] peak for (input, accumulate, sparsity); throws if the preset lists none. Unit: FLOP/s (OP/s). */
 function peak(d: DeviceSpec, input: MathFormat, acc: AccumulateType, sparsity: 'dense' | '2:4'): number {
@@ -18,7 +21,19 @@ function expectClose(actual: number, expected: number, rel = 1e-9): void {
 
 describe('NVIDIA datacenter presets', () => {
   it('every preset passes validateDevice and has sourced URLs', () => {
-    expect(NVIDIA_DATACENTER_DEVICE_PRESETS.map((d) => d.id)).toEqual(['dgx-spark', 'b300', 'b200', 'h200-sxm', 'h100-sxm']);
+    expect(NVIDIA_DATACENTER_DEVICE_PRESETS.map((d) => d.id)).toEqual([
+      'dgx-spark',
+      'b300',
+      'b200',
+      'h200-sxm',
+      'h100-sxm',
+      'a100-sxm4-80gb',
+      'a100-sxm4-40gb',
+      'a100-pcie-80gb',
+      'a100-pcie-40gb',
+      'v100-sxm2',
+      'v100-pcie',
+    ]);
     for (const d of NVIDIA_DATACENTER_DEVICE_PRESETS) {
       expect(validateDevice(d)).toEqual([]);
       expect(d.sources.length).toBeGreaterThan(0);
@@ -115,4 +130,50 @@ describe('NVIDIA datacenter presets', () => {
     expect(B300.memory.bandwidthBytesPerSec).toBe(7.7e12);
     expect(B300.l2Bytes).toBeUndefined(); // not published
   });
+});
+
+describe('A100 / V100 vendor spot checks', () => {
+  it.each([
+    [A100_SXM4_80GB, 80e9, 2039e9],
+    [A100_SXM4_40GB, 40e9, 1555e9],
+    [A100_PCIE_80GB, 80e9, 1935e9],
+    [A100_PCIE_40GB, 40e9, 1555e9],
+  ] as const)(
+    '%s: capacity, bandwidth, full-rate FP32 accumulate and Ampere formats',
+    (device, capacity, bandwidth) => {
+      expect(device.memory.capacityOptionsBytes).toEqual([capacity]);
+      expect(device.memory.bandwidthBytesPerSec).toBe(bandwidth);
+      expect(peak(device, 'fp16', 'fp32', 'dense')).toBe(312e12);
+      expect(peak(device, 'bf16', 'fp32', '2:4')).toBe(624e12);
+      expect(peak(device, 'tf32', 'fp32', 'dense')).toBe(156e12);
+      expect(peak(device, 'int4', 'int32', '2:4')).toBe(2496e12);
+      expect(device.engines[0].vectorFlopsPerSec).toEqual({
+        fp32: 19.5e12,
+        fp64: 9.7e12,
+        fp16: 78e12,
+        bf16: 39e12,
+      });
+      expectClose(device.engines[0].sfuOpsPerSec!, 2.4375e12); // GA100: 64 FP32 lanes/SM, not 128
+      expect(device.engines[0].computeUnits).toBe(108);
+      expect(device.engines[0].gemmTiling.int4?.mmaK).toBe(64);
+    },
+  );
+
+  it.each([
+    [V100_SXM2, 125e12, 15.7e12, 1.9625e12],
+    [V100_PCIE, 112e12, 14e12, 1.75e12],
+  ] as const)(
+    '%s: both capacities share 900 GB/s; only FP16 tensor, correct 64-lane SFU clock',
+    (device, tensor, vector, sfu) => {
+      expect(device.memory.capacityOptionsBytes).toEqual([32e9, 16e9]);
+      expect(device.memory.bandwidthBytesPerSec).toBe(900e9);
+      expect(device.engines[0].matmulPeaks).toEqual([
+        { input: 'fp16', accumulate: 'fp32', sparsity: 'dense', flopsPerSec: tensor },
+      ]);
+      expect(device.engines[0].vectorFlopsPerSec.fp32).toBe(vector);
+      expect(device.engines[0].vectorFlopsPerSec.fp16).toBe(2 * vector);
+      expectClose(device.engines[0].sfuOpsPerSec!, sfu);
+      expect(device.engines[0].gemmTiling.fp16).toMatchObject({ mmaM: 8, mmaN: 8, mmaK: 4 });
+    },
+  );
 });

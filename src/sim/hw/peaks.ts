@@ -109,7 +109,10 @@ export function matmulPeakFlopsPerSec(
           if (used !== requested) {
             warnings.push(
               `peak: engine '${engine.id}' lists no ${requested} matmul peak; using ${used} ` +
-                `(${hit.flopsPerSec / 1e12} TFLOP/s)`,
+                `(${hit.flopsPerSec / 1e12} TFLOP/s)` +
+                (input === 'bf16' && hit.input === 'fp16'
+                  ? '; assumes a cast to FP16 (e.g. --dtype=half); FP16 range/overflow is not modeled'
+                  : ''),
             );
           }
           return { flopsPerSec: hit.flopsPerSec, usedInput: hit.input, usedAccumulate: hit.accumulate, usedSparsity: hit.sparsity };

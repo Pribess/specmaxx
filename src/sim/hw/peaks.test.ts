@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SYNTH_UNIFIED } from '../__fixtures__/synthetic';
 import { matmulPeakFlopsPerSec, vectorPeakFlopsPerSec } from './peaks';
 import { RTX_5090 } from './presets/nvidia';
+import { V100_SXM2, V100_PCIE } from './presets/nvidia-datacenter';
 import type { AccumulateType, MathFormat } from '../ir/dtype';
 
 const GPU = RTX_5090.engines[0];
@@ -82,4 +83,45 @@ describe('vectorPeakFlopsPerSec', () => {
     expect(vectorPeakFlopsPerSec(GPU, 'fp8_e4m3')).toBe(104.8e12); // computed in fp32
     expect(vectorPeakFlopsPerSec(SYNTH_UNIFIED.engines[0], 'bf16')).toBe(5e12); // no bf16 entry → fp32
   });
+});
+
+describe('Volta unsupported math formats', () => {
+  it.each([
+    [V100_SXM2, 125e12],
+    [V100_PCIE, 112e12],
+  ] as const)('%s: BF16 model GEMM uses FP16 tensor and explains the cast', (device, peak) => {
+    const warnings: string[] = [];
+    const result = matmulPeakFlopsPerSec(device.engines[0], 'bf16', 'fp32', 'dense', warnings);
+    expect(result).toEqual({
+      flopsPerSec: peak,
+      usedInput: 'fp16',
+      usedAccumulate: 'fp32',
+      usedSparsity: 'dense',
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('bf16/fp32/dense');
+    expect(warnings[0]).toContain('using fp16/fp32/dense');
+    expect(warnings[0]).toContain('--dtype=half');
+  });
+  it.each(['fp8', 'int8', 'int4'] as const)(
+    '%s dequantizes to FP16 tensor, not an invented native tensor path',
+    (format) => {
+      const warnings: string[] = [];
+      const result = matmulPeakFlopsPerSec(
+        V100_SXM2.engines[0],
+        format,
+        format.startsWith('int') ? 'int32' : 'fp32',
+        '2:4',
+        warnings,
+      );
+      expect(result).toEqual({
+        flopsPerSec: 125e12,
+        usedInput: 'fp16',
+        usedAccumulate: 'fp32',
+        usedSparsity: 'dense',
+      });
+      expect(warnings).toHaveLength(1);
+      expect(vectorPeakFlopsPerSec(V100_SXM2.engines[0], 'bf16')).toBe(15.7e12);
+    },
+  );
 });

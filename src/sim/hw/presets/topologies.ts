@@ -11,9 +11,15 @@ import { RADEON_AI_PRO_R9700, RYZEN_AI_MAX_PLUS_395 } from './amd';
 import { M3_ULTRA_80C, M4_MAX_40C, M5_MAX_40C, M5_ULTRA_80C } from './apple';
 import { ARC_PRO_B60 } from './intel';
 import { RTX_3090, RTX_4090, RTX_5090 } from './nvidia';
-import { DGX_SPARK } from './nvidia-datacenter';
+import { A100_PCIE_80GB, DGX_SPARK, V100_PCIE, V100_SXM2 } from './nvidia-datacenter';
 import {
   ETHERNET_5G_TCP, ETHERNET_10G_TCP, IB_NDR_400, IB_XDR_800, NVLINK_4, NVLINK_5,
+  A100_NVLINK_BRIDGE,
+  IB_HDR_200,
+  NVLINK_3,
+  NVLINK_2_HCM_8,
+  NVLINK_2_MESH_4,
+  PCIE_3_X16_DIRECT,
   PCIE_4_X16, PCIE_5_X16, PCIE_5_X8_DIRECT, RTX_3090_NVLINK, SPARK_CONNECTX_7,
   TB4_TCP, TB5_RDMA, USB4_HALO_RDMA, USB4_HALO_TCP, XGMI_MI300X_8_GPU,
 } from './links';
@@ -151,12 +157,19 @@ export function socCluster(device: Pick<DeviceSpec, 'id' | 'name'>, nodes: numbe
  * Eight-GPU HGX node(s). `nodes` is a configuration count; `interNode` assumes one full-rate NIC per GPU,
  * not one NIC shared by the entire node (hierarchical collective formulas run eight network shards in parallel).
  */
-export function hgxCluster(generation: 'h100' | 'b200' | 'b300', nodes = 1, interNode?: LinkSpec): TopologySpec {
-  const intraNode = generation === 'h100' ? NVLINK_4 : NVLINK_5;
-  const network = interNode ?? (generation === 'b300' ? IB_XDR_800 : IB_NDR_400);
-  const productUrl = generation === 'h100'
-    ? 'https://www.nvidia.com/en-us/data-center/dgx-h100/'
-    : `https://www.nvidia.com/en-us/data-center/dgx-${generation}/`;
+export function hgxCluster(
+  generation: 'a100' | 'h100' | 'b200' | 'b300',
+  nodes = 1, interNode?: LinkSpec): TopologySpec {
+  const intraNode = generation === 'a100' ? NVLINK_3 : generation === 'h100' ? NVLINK_4 : NVLINK_5;
+  const network =
+    interNode ??
+    (generation === 'a100' ? IB_HDR_200 : generation === 'b300' ? IB_XDR_800 : IB_NDR_400);
+  const productUrl =
+    generation === 'a100'
+      ? 'https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/nvidia-dgx-a100-datasheet.pdf'
+      : generation === 'h100'
+        ? 'https://www.nvidia.com/en-us/data-center/dgx-h100/'
+        : `https://www.nvidia.com/en-us/data-center/dgx-${generation}/`;
   return {
     id: `hgx-${generation}-${nodes}-nodes-${linkPresetId(network)}`,
     name: `${nodes} × HGX ${generation.toUpperCase()} (8 GPUs/node)`,
@@ -274,6 +287,51 @@ export const R9700_PCIE_4: TopologySpec = {
     note: '"Bus Type PCIe® 5.0 x16": the card\'s link; the count of four is user configuration.',
   }],
 };
+/** Eight A100 SXM4 GPUs on HGX/DGX NVSwitch: 300 GB/s per device per direction. */
+export const HGX_A100_8 = hgxCluster('a100');
+/** Two eight-GPU HGX A100 nodes, one HDR200 NIC (25 GB/s per direction) per GPU. */
+export const HGX_A100_16_HDR = hgxCluster('a100', 2);
+/** Two matching A100 PCIe 80GB cards, all three NVLink bridges: 300 GB/s per direction. */
+export const A100_PCIE_NVLINK_2: TopologySpec = {
+  ...pcieBox(A100_PCIE_80GB, 2, A100_NVLINK_BRIDGE),
+  sources: [
+    {
+      url: A100_NVLINK_BRIDGE.sources[0]!.url,
+      title: 'A100 PCIe bridge pair',
+      fields: ['devicesPerNode'],
+      note: 'One adjacent matching-capacity A100, all three bridges; exactly two GPUs.',
+    },
+  ],
+};
+/** Four V100 SXM2s, fully connected NV2 board: aggregate 150 GB/s per GPU per direction (TP2 only 50). */
+export const V100_SXM2_NVLINK_4: TopologySpec = {
+  ...pcieBox(V100_SXM2, 4, NVLINK_2_MESH_4),
+  sources: [
+    {
+      url: 'https://github.com/NVIDIA/nccl-tests/issues/251',
+      title: 'Four V100 SXM2 NV2 mesh',
+      kind: 'community',
+      fields: ['devicesPerNode'],
+      note: 'Four GPUs, NV2 to every other GPU; not a DGX-1 quad.',
+    },
+  ],
+};
+/** Eight V100 SXM2 DGX-1 hybrid cube-mesh; full-node injection 150 GB/s, not uniform peer bandwidth. */
+export const V100_SXM2_NVLINK_8: TopologySpec = {
+  ...pcieBox(V100_SXM2, 8, NVLINK_2_HCM_8),
+  sources: [
+    {
+      url: NVLINK_2_HCM_8.sources[0]!.url,
+      title: 'Volta whitepaper DGX-1 Figure 12',
+      fields: ['devicesPerNode'],
+      note: 'Eight GPUs in a hybrid cube-mesh, not all-to-all. Uniform link model is optimistic for subgroups and non-neighbours.',
+    },
+  ],
+};
+/** Two genuine V100 PCIe cards, Gen3 x16 direct P2P; no NVLink. */
+export const V100_PCIE_2 = pcieBox(V100_PCIE, 2, PCIE_3_X16_DIRECT);
+/** Four genuine V100 PCIe cards, Gen3 x16 direct P2P; host routing and lane provisioning assumed. */
+export const V100_PCIE_4 = pcieBox(V100_PCIE, 4, PCIE_3_X16_DIRECT);
 /** One HGX H100 eight-GPU NVLink4 scale-up node, 450 GB/s per direction per GPU. */
 export const HGX_H100_8 = hgxCluster('h100');
 /** Two HGX H100 nodes, NVLink4 inside and NDR400 per GPU between nodes. */
@@ -299,6 +357,13 @@ export const MI300X_XGMI_8: TopologySpec = {
 
 /** All named multi-device topology presets; each is independently schema-valid. */
 export const TOPOLOGY_PRESETS: TopologySpec[] = [
+  HGX_A100_8,
+  HGX_A100_16_HDR,
+  A100_PCIE_NVLINK_2,
+  V100_SXM2_NVLINK_4,
+  V100_SXM2_NVLINK_8,
+  V100_PCIE_2,
+  V100_PCIE_4,
   RTX_5090_PCIE_2, RTX_5090_PCIE_4, RTX_4090_PCIE_2, RTX_4090_PCIE_4, RTX_3090_PCIE_2, RTX_3090_PCIE_4,
   RTX_3090_NVLINK_2, DGX_SPARK_PAIR, DGX_SPARK_3, DGX_SPARK_4, DGX_SPARK_4_RING, ARC_PRO_B60_PCIE_2, ARC_PRO_B60_PCIE_4, R9700_PCIE_4,
   ...M3_ULTRA_TB5_CLUSTERS, ...M4_MAX_TB5_CLUSTERS, ...M5_MAX_TB5_CLUSTERS, ...M5_ULTRA_TB5_CLUSTERS,
