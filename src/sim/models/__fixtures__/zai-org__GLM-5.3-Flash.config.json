@@ -1,18 +1,12 @@
 {
-  "architectures": [
-    "Glm5NextForConditionalGeneration"
-  ],
+  "architectures": ["Glm5NextForConditionalGeneration"],
   "text_config": {
     "attention_bias": false,
     "attention_dropout": 0.0,
     "dtype": "bfloat16",
-    "eos_token_id": [
-      154820,
-      154827,
-      154829
-    ],
+    "eos_token_id": [154820, 154827, 154829],
     "first_k_dense_replace": 3,
-    "hc_eps": 1e-06,
+    "hc_eps": 1e-6,
     "hc_mult": 4,
     "hc_sinkhorn_iters": 20,
     "head_dim": 0,
@@ -129,54 +123,10 @@
       "head_dim": 128,
       "short_conv_kernel_size": 4,
       "kda_layers": [
-        0,
-        1,
-        2,
-        4,
-        5,
-        6,
-        8,
-        9,
-        10,
-        12,
-        13,
-        14,
-        16,
-        17,
-        18,
-        20,
-        21,
-        22,
-        24,
-        25,
-        26,
-        28,
-        29,
-        30,
-        32,
-        33,
-        34,
-        36,
-        37,
-        38,
-        40,
-        41,
-        42,
-        44
+        0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, 16, 17, 18, 20, 21, 22, 24, 25, 26, 28, 29, 30, 32,
+        33, 34, 36, 37, 38, 40, 41, 42, 44
       ],
-      "full_attn_layers": [
-        3,
-        7,
-        11,
-        15,
-        19,
-        23,
-        27,
-        31,
-        35,
-        39,
-        43
-      ]
+      "full_attn_layers": [3, 7, 11, 15, 19, 23, 27, 31, 35, 39, 43]
     },
     "max_position_embeddings": 1048576,
     "mhc": true,
@@ -246,7 +196,7 @@
     "qk_head_dim": 256,
     "qk_nope_head_dim": 256,
     "qk_rope_head_dim": 0,
-    "rms_norm_eps": 1e-05,
+    "rms_norm_eps": 1e-5,
     "routed_scaling_factor": 2.5,
     "router_aux_loss_coef": 0.001,
     "scoring_func": "sigmoid",
@@ -273,7 +223,7 @@
     "out_hidden_size": 4096,
     "patch_size": 14,
     "projection_intermediate_size": 10240,
-    "rms_norm_eps": 1e-05,
+    "rms_norm_eps": 1e-5,
     "spatial_merge_size": 2,
     "swiglu_limit": 10.0,
     "temporal_patch_size": 2
@@ -1802,9 +1752,6 @@
       "weights_proj"
     ],
     "quant_method": "fp8",
-    "weight_block_size": [
-      128,
-      128
-    ]
+    "weight_block_size": [128, 128]
   }
 }

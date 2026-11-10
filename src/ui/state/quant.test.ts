@@ -86,20 +86,24 @@ describe('applyQuantOverride with EXL3 weights', () => {
     const fromRepo = applyQuantOverride(exl3Repo.quant, { weights: 'exl3' }, exl3Repo.exl3);
     expect(fromRepo.weights.valueBitsPerElem).toBe(4);
     expect(fromRepo.lmHead?.valueBitsPerElem).toBe(5);
-    expect(applyQuantOverride(qwen.quant, { weights: 'exl3', bpw: 3, headBpw: 16 }).lmHead).toEqual({ dtype: 'fp16' });
+    expect(applyQuantOverride(qwen.quant, { weights: 'exl3', bpw: 3, headBpw: 16 }).lmHead).toEqual(
+      { dtype: 'fp16' },
+    );
   });
 
   it('labels the override with its bpw', () => {
-    expect(quantSummary(qwen, { weights: 'exl3', bpw: 2.5 })).toBe('weights exl3 2.5 bpw (head 6) (over bf16 (unquantized))');
+    expect(quantSummary(qwen, { weights: 'exl3', bpw: 2.5 })).toBe(
+      'weights exl3 2.5 bpw (head 6) (over bf16 (unquantized))',
+    );
   });
 });
 
 describe('quant labels and choices', () => {
   it('summarizes the scheme or the overrides over it', () => {
     expect(quantSummary(REFERENCE_QUANT_DEFAULTS, {})).toBe('bf16 (unquantized)');
-    expect(quantSummary(REFERENCE_QUANT_DEFAULTS, { weights: 'fp8_e4m3', kvCache: 'fp8_e4m3' })).toBe(
-      'weights fp8_e4m3, KV fp8_e4m3 (over bf16 (unquantized))',
-    );
+    expect(
+      quantSummary(REFERENCE_QUANT_DEFAULTS, { weights: 'fp8_e4m3', kvCache: 'fp8_e4m3' }),
+    ).toBe('weights fp8_e4m3, KV fp8_e4m3 (over bf16 (unquantized))');
     expect(hasQuantOverride({})).toBe(false);
     expect(hasQuantOverride({ activations: 'bf16' })).toBe(true);
   });
@@ -149,13 +153,21 @@ describe('exl3PickerKey', () => {
 
 describe('KV cache format lists', () => {
   it('splits the panel formats from the advanced ones with no overlap, all valid dtypes', async () => {
-    const { KV_MAIN_DTYPES, KV_ADVANCED_DTYPES, QUANT_DTYPE_CHOICES, isKvAdvancedDtype, isQuantDtype } = await import('./quant');
+    const {
+      KV_MAIN_DTYPES,
+      KV_ADVANCED_DTYPES,
+      QUANT_DTYPE_CHOICES,
+      isKvAdvancedDtype,
+      isQuantDtype,
+    } = await import('./quant');
     expect(KV_MAIN_DTYPES).toEqual(['bf16', 'fp8_e4m3']);
     for (const d of KV_ADVANCED_DTYPES) {
       expect(KV_MAIN_DTYPES).not.toContain(d);
       expect(isQuantDtype(d)).toBe(true);
     }
-    expect([...KV_MAIN_DTYPES, ...KV_ADVANCED_DTYPES].sort()).toEqual([...QUANT_DTYPE_CHOICES].sort());
+    expect([...KV_MAIN_DTYPES, ...KV_ADVANCED_DTYPES].sort()).toEqual(
+      [...QUANT_DTYPE_CHOICES].sort(),
+    );
     for (const d of ['nvfp4', 'mxfp4', 'fp4_e2m1']) expect(isKvAdvancedDtype(d)).toBe(true);
     expect(isKvAdvancedDtype('bf16')).toBe(false);
     expect(isKvAdvancedDtype(undefined)).toBe(false);

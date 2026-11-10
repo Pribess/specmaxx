@@ -39,12 +39,25 @@
 
 import type { FfnParams, MixerParams } from '../../../ir/builders';
 import { decoderLayer, decoderModel, repeatLayers } from '../../../ir/builders';
-import type { BlockDraftSpec, CsaGlobalSpec, IndexerSpec, LayerSpec, QuantConfig } from '../../../ir/model';
+import type {
+  BlockDraftSpec,
+  CsaGlobalSpec,
+  IndexerSpec,
+  LayerSpec,
+  QuantConfig,
+} from '../../../ir/model';
 import type { ConfigReader } from '../reader';
 import { createReader, isJsonObject } from '../reader';
 import { withDraft } from '../drafter';
 import type { FamilyBuildResult, FamilyEntry, JsonObject } from '../types';
-import { layerParams, mhcCollapse, mhcResidual, readActivation, readMoeFfn, structuralErrors } from './mlaCommon';
+import {
+  layerParams,
+  mhcCollapse,
+  mhcResidual,
+  readActivation,
+  readMoeFfn,
+  structuralErrors,
+} from './mlaCommon';
 
 /** The CSA fields every layer shares (heads, dims, ranks, window). */
 type CsaBase = Omit<Extract<MixerParams, { kind: 'csa' }>, 'global'>;
@@ -59,7 +72,12 @@ export type CsaRole = 'swa' | 'full' | 'reindex' | 'reuse' | 'all';
  * The CSA role of layer i (see the module header). `indexListGiven` false (no `index_source_layer_ids`, V4): a
  * layer that runs no indexer attends all its entries instead of reusing a top-k.
  */
-export function csaRole(ratio: number, isKvSource: boolean, isIndexSource: boolean, indexListGiven = true): CsaRole {
+export function csaRole(
+  ratio: number,
+  isKvSource: boolean,
+  isIndexSource: boolean,
+  indexListGiven = true,
+): CsaRole {
   if (ratio === 0) return 'swa';
   if (isIndexSource) return isKvSource ? 'full' : 'reindex';
   return indexListGiven ? 'reuse' : 'all';
@@ -160,14 +178,20 @@ export interface DeepseekConfig {
  * The global branch of layer i, or undefined for an SWA-only layer. Errors (a consumer with no earlier KV source)
  * go to `errors`.
  */
-function csaGlobal(c: DeepseekConfig, p: DeepseekProfile, i: number, errors: string[]): CsaGlobalSpec | undefined {
+function csaGlobal(
+  c: DeepseekConfig,
+  p: DeepseekProfile,
+  i: number,
+  errors: string[],
+): CsaGlobalSpec | undefined {
   const r = c.ratios[i];
   if (r === 0) return undefined;
   const ownsKv = c.kvSources.includes(i);
   const earlierSources = c.kvSources.filter((s) => s < i);
   // Formula: kvCacheFromLayer = max{ s ∈ kv_source_layer_ids : s < i } for a non-source layer
   const kvFrom = ownsKv || earlierSources.length === 0 ? undefined : Math.max(...earlierSources);
-  if (!ownsKv && kvFrom === undefined) errors.push(`kv_source_layer_ids: layer ${i} has compress ratio ${r} but no earlier KV source`);
+  if (!ownsKv && kvFrom === undefined)
+    errors.push(`kv_source_layer_ids: layer ${i} has compress ratio ${r} but no earlier KV source`);
   let selection: CsaGlobalSpec['selection'];
   if (c.indexSources.includes(i)) {
     const keys: Partial<IndexerSpec> =
@@ -181,7 +205,9 @@ function csaGlobal(c: DeepseekConfig, p: DeepseekProfile, i: number, errors: str
       keyPoolTokens: r,
       ...keys,
       ownsKeys: ownsKv,
-      ...(c.candidateSource !== undefined && c.maxScoredKeys !== undefined && i > c.candidateSource ? { maxScoredKeys: c.maxScoredKeys } : {}),
+      ...(c.candidateSource !== undefined && c.maxScoredKeys !== undefined && i > c.candidateSource
+        ? { maxScoredKeys: c.maxScoredKeys }
+        : {}),
     };
     selection = { kind: 'indexer', indexer };
   } else if (c.indexListGiven) {
@@ -200,7 +226,14 @@ function csaGlobal(c: DeepseekConfig, p: DeepseekProfile, i: number, errors: str
 }
 
 /** One decoder layer: [Engram], mHC + CSA, mHC + `ffn`. */
-function deepseekLayer(c: DeepseekConfig, i: number, ratio: number, global: CsaGlobalSpec | undefined, ffn: FfnParams, name: string): LayerSpec {
+function deepseekLayer(
+  c: DeepseekConfig,
+  i: number,
+  ratio: number,
+  global: CsaGlobalSpec | undefined,
+  ffn: FfnParams,
+  name: string,
+): LayerSpec {
   const N = c.streams;
   const D = c.hidden;
   const engramIndex = c.engramLayers.indexOf(i);
@@ -219,7 +252,13 @@ function deepseekLayer(c: DeepseekConfig, i: number, ratio: number, global: CsaG
             rowDim: c.engramRowDim,
             rowsPerToken: c.engramRowsPerToken,
             // Formula: wkv: rowsPerToken·rowDim → (N + 1)·D (one key per stream + a shared value)
-            projections: [{ name: 'engram.wkv', inputDim: c.engramRowsPerToken * c.engramRowDim, outputDim: (N + 1) * D }],
+            projections: [
+              {
+                name: 'engram.wkv',
+                inputDim: c.engramRowsPerToken * c.engramRowDim,
+                outputDim: (N + 1) * D,
+              },
+            ],
             outputDim: N * D,
             // Formula: q_weight, k_weight: 2·N·D
             vectorParams: 2 * N * D,
@@ -256,21 +295,30 @@ function readDeepseekConfig(r: ConfigReader, n: number): DeepseekConfig {
     csa,
     ratios,
     // Default (V4): every r > 0 layer owns its compressor (model.py `if self.compress_ratio: self.compressor = …`).
-    kvSources: r.optNumArray('kv_source_layer_ids') ?? mainLayers.filter((l) => l.ratio > 0).map((l) => l.i),
+    kvSources:
+      r.optNumArray('kv_source_layer_ids') ?? mainLayers.filter((l) => l.ratio > 0).map((l) => l.i),
     // Default (V4): an indexer exactly at r = 4 (model.py `if self.compress_ratio == 4: self.indexer = …`).
     indexSources: indexList ?? mainLayers.filter((l) => l.ratio === 4).map((l) => l.i),
     indexListGiven: indexList !== undefined,
     candidateSource: r.optInt('candidate_source_layer_id'),
     // Formula: maxScoredKeys = candidate_topk_blocks · candidate_block_size
-    maxScoredKeys: candidateBlocks !== undefined && candidateBlockSize !== undefined ? candidateBlocks * candidateBlockSize : undefined,
-    indexer: { heads: r.int('index_n_heads'), headDim: r.int('index_head_dim'), topK: r.int('index_topk') },
+    maxScoredKeys:
+      candidateBlocks !== undefined && candidateBlockSize !== undefined
+        ? candidateBlocks * candidateBlockSize
+        : undefined,
+    indexer: {
+      heads: r.int('index_n_heads'),
+      headDim: r.int('index_head_dim'),
+      topK: r.int('index_topk'),
+    },
     streams: r.int('hc_mult'),
     sinkhornIters: r.optInt('hc_sinkhorn_iters') ?? 0,
     engramLayers,
     engramRows: engramLayers.length > 0 ? r.numArray('engram_num_embeddings') : [],
     engramRowDim: engramLayers.length > 0 ? r.int('engram_head_dim') : 0,
     // Formula: rowsPerToken = (engram_max_ngram_size − 1) · engram_n_heads
-    engramRowsPerToken: engramLayers.length > 0 ? (r.int('engram_max_ngram_size') - 1) * r.int('engram_n_heads') : 0,
+    engramRowsPerToken:
+      engramLayers.length > 0 ? (r.int('engram_max_ngram_size') - 1) * r.int('engram_n_heads') : 0,
   };
 }
 
@@ -281,7 +329,11 @@ function readDeepseekConfig(r: ConfigReader, n: number): DeepseekConfig {
  * and its inference/config.json says `n_mtp_layers: 3`; the safetensors I8 count is exactly 46 layers of routed
  * experts, so 3 is right. Without `dspark_block_size`: `num_nextn_predict_layers`. Unit: count.
  */
-function dsparkStageCount(r: ConfigReader, c: DeepseekConfig, n: number): { stages: number; note?: string } {
+function dsparkStageCount(
+  r: ConfigReader,
+  c: DeepseekConfig,
+  n: number,
+): { stages: number; note?: string } {
   const nextn = r.optInt('num_nextn_predict_layers') ?? 0;
   if (r.optInt('dspark_block_size') === undefined) return { stages: nextn };
   // Formula: stages = max(num_nextn_predict_layers, len(compress_ratios) − num_hidden_layers)
@@ -298,12 +350,30 @@ function dsparkStageCount(r: ConfigReader, c: DeepseekConfig, n: number): { stag
  * The DSpark MTP stages (`mtp.*`): `stages` decoder layers ({@link dsparkStageCount}; window-only CSA, MoE with
  * `dspark_n_routed_experts` / `dspark_num_experts_per_tok` when given, else the main MoE, mHC). Empty without stages.
  */
-function dsparkStages(r: ConfigReader, c: DeepseekConfig, moe: FfnParams, n: number, stages: number): LayerSpec[] {
+function dsparkStages(
+  r: ConfigReader,
+  c: DeepseekConfig,
+  moe: FfnParams,
+  n: number,
+  stages: number,
+): LayerSpec[] {
   const experts = r.optInt('dspark_n_routed_experts');
   const topK = r.optInt('dspark_num_experts_per_tok');
-  const draftMoe: FfnParams = moe.kind === 'moe' ? { ...moe, ...(experts ? { experts } : {}), ...(topK ? { topK } : {}) } : moe;
+  const draftMoe: FfnParams =
+    moe.kind === 'moe'
+      ? { ...moe, ...(experts ? { experts } : {}), ...(topK ? { topK } : {}) }
+      : moe;
   // DSpark attention is window-only (`assert self.compress_ratio == 0`); a non-zero ratio is ignored.
-  return repeatLayers(stages, (j) => deepseekLayer({ ...c, engramLayers: [] }, n + j, c.ratios[n + j] ?? 0, undefined, draftMoe, `mtp.${j}`));
+  return repeatLayers(stages, (j) =>
+    deepseekLayer(
+      { ...c, engramLayers: [] },
+      n + j,
+      c.ratios[n + j] ?? 0,
+      undefined,
+      draftMoe,
+      `mtp.${j}`,
+    ),
+  );
 }
 
 /**
@@ -312,7 +382,12 @@ function dsparkStages(r: ConfigReader, c: DeepseekConfig, moe: FfnParams, n: num
  * vocab × `dspark_markov_rank`) and confidence projection (h + rank → 1). Embedding and head are shared with the
  * main model. Unit: params.
  */
-function dsparkParamsEstimate(r: ConfigReader, c: DeepseekConfig, stages: LayerSpec[], vocab: number): number {
+function dsparkParamsEstimate(
+  r: ConfigReader,
+  c: DeepseekConfig,
+  stages: LayerSpec[],
+  vocab: number,
+): number {
   if (stages.length === 0) return 0;
   const total = stages.reduce((sum, layer) => sum + layerParams(layer), 0);
   const h = c.hidden;
@@ -355,7 +430,8 @@ function dsparkDraft(
 ): BlockDraftSpec | undefined {
   const block = r.optInt('dspark_block_size');
   const targets = r.optNumArray('dspark_target_layer_ids');
-  if (stages.length === 0 || block === undefined || targets === undefined || targets.length === 0) return undefined;
+  if (stages.length === 0 || block === undefined || targets === undefined || targets.length === 0)
+    return undefined;
   const moe = stages[0].blocks.find((b) => b.kind === 'moe');
   const rank = r.optInt('dspark_markov_rank');
   return {
@@ -384,7 +460,12 @@ function dsparkDraft(
 /**
  * Build the DeepSeek-V4 / V4.1 IR from its text config, with the version's {@link DeepseekProfile}.
  */
-export function buildDeepseek(text: JsonObject, top: JsonObject, repoId: string, profile: DeepseekProfile): FamilyBuildResult {
+export function buildDeepseek(
+  text: JsonObject,
+  top: JsonObject,
+  repoId: string,
+  profile: DeepseekProfile,
+): FamilyBuildResult {
   const r = createReader(text, text === top ? '' : 'text_config');
   const n = r.int('num_hidden_layers');
   const vocab = r.int('vocab_size');
@@ -392,15 +473,19 @@ export function buildDeepseek(text: JsonObject, top: JsonObject, repoId: string,
   const act = readActivation(r);
   const c = readDeepseekConfig(r, n);
   const moe = readMoeFfn(r, act);
-  if (c.ratios.length < n) r.errors.push(`${r.path}.compress_ratios: ${c.ratios.length} entries for ${n} layers`);
-  if (c.engramRows.length < c.engramLayers.length) r.errors.push(`${r.path}.engram_num_embeddings: one entry per engram layer needed`);
+  if (c.ratios.length < n)
+    r.errors.push(`${r.path}.compress_ratios: ${c.ratios.length} entries for ${n} layers`);
+  if (c.engramRows.length < c.engramLayers.length)
+    r.errors.push(`${r.path}.engram_num_embeddings: one entry per engram layer needed`);
   if (r.errors.length > 0) return { kind: 'invalid_config', errors: r.errors };
 
   const errors: string[] = [];
   const roles: CsaRole[] = [];
   const layers = repeatLayers(n, (i) => {
     const ratio = c.ratios[i];
-    roles.push(csaRole(ratio, c.kvSources.includes(i), c.indexSources.includes(i), c.indexListGiven));
+    roles.push(
+      csaRole(ratio, c.kvSources.includes(i), c.indexSources.includes(i), c.indexListGiven),
+    );
     return deepseekLayer(c, i, ratio, csaGlobal(c, profile, i, errors), moe, `layer.${i}`);
   });
   if (errors.length > 0) return { kind: 'invalid_config', errors };
@@ -417,7 +502,11 @@ export function buildDeepseek(text: JsonObject, top: JsonObject, repoId: string,
   const structural = structuralErrors(model);
   if (structural.length > 0) return { kind: 'invalid_config', errors: structural };
 
-  const vision = isJsonObject(top.vision_config) ? top.vision_config : isJsonObject(text.vision_config) ? text.vision_config : undefined;
+  const vision = isJsonObject(top.vision_config)
+    ? top.vision_config
+    : isJsonObject(text.vision_config)
+      ? text.vision_config
+      : undefined;
   const visionParams = visionParamsEstimate(vision, c.hidden);
   const stageCount = dsparkStageCount(r, c, n);
   const stages = dsparkStages(r, c, moe, n, stageCount.stages);
@@ -432,7 +521,9 @@ export function buildDeepseek(text: JsonObject, top: JsonObject, repoId: string,
     'prefill runs every layer on every prompt token (reference model.py; no Bounded Replay)',
     'attention sink, router biases not counted; indexer key norm counted as LayerNorm (< 1 k params per layer)',
     ...(hashLayers > 0
-      ? [`layers 0–${hashLayers - 1} route by token id (tid2eid); the router GEMM still runs; the table is not counted`]
+      ? [
+          `layers 0–${hashLayers - 1} route by token id (tid2eid); the router GEMM still runs; the table is not counted`,
+        ]
       : []),
     ...(stageCount.note !== undefined ? [stageCount.note] : []),
     ...profile.notes,

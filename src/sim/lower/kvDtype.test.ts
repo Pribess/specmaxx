@@ -81,7 +81,10 @@ describe('KV bytes per token by dtype', () => {
   });
 
   it('GQA KV is sharded across TP ranks; MLA latent is replicated', () => {
-    expect(blockSequenceStateBytes(GQA, ctxFor('nvfp4', 4), 1)).toBeCloseTo(2 * 2 * 128 * 0.5625, 9);
+    expect(blockSequenceStateBytes(GQA, ctxFor('nvfp4', 4), 1)).toBeCloseTo(
+      2 * 2 * 128 * 0.5625,
+      9,
+    );
     expect(blockSequenceStateBytes(DSV3_MLA, ctxFor('nvfp4', 4), 1)).toBeCloseTo(576 * 0.5625, 9);
   });
 

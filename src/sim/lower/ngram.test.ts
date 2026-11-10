@@ -217,13 +217,19 @@ describe('U-16 n-gram tables off-device: read layouts, tier bytes and PCIe bytes
     it('row bytes of the off-device gather follow the override (PLE d 160: bf16 320 B → nvfp4 90 B)', () => {
       const f = fetches(
         { model: PLE.model, quant: withTables(PLE, NVFP4) },
-        { prefetchAccuracy: 1, lookupTables: [{ tier: 'host_ram', layers: ALL_LAYERS, scaleLayout: 'interleaved' }] },
+        {
+          prefetchAccuracy: 1,
+          lookupTables: [{ tier: 'host_ram', layers: ALL_LAYERS, scaleLayout: 'interleaved' }],
+        },
       );
       expect(f[0].op.reads).toEqual([{ count: 16, bytesEach: 90 }]);
       expect(f[0].op.usefulBytes).toBe(16 * 90);
       const sep = fetches(
         { model: PLE.model, quant: withTables(PLE, NVFP4) },
-        { prefetchAccuracy: 1, lookupTables: [{ tier: 'host_ram', layers: ALL_LAYERS, scaleLayout: 'separate' }] },
+        {
+          prefetchAccuracy: 1,
+          lookupTables: [{ tier: 'host_ram', layers: ALL_LAYERS, scaleLayout: 'separate' }],
+        },
       );
       expect(sep[0].op.reads).toEqual([
         { count: 16, bytesEach: 80 },

@@ -3,12 +3,14 @@ import { mockHf } from './hf-mock';
 
 test('HF fixture loads and computes real worker rates', async ({ page }) => {
   const errors: string[] = [];
-  page.on('pageerror', e => errors.push(e.message));
+  page.on('pageerror', (e) => errors.push(e.message));
   await mockHf(page);
   await page.goto('/');
   // The bundled default model gives numbers before any network call.
   await expect(page.getByTestId('decode-tps')).toHaveText(/[1-9]/);
-  await page.getByRole('combobox', { name: 'Hugging Face model ID' }).fill('Qwen/Qwen3.8-Flash-Next');
+  await page
+    .getByRole('combobox', { name: 'Hugging Face model ID' })
+    .fill('Qwen/Qwen3.8-Flash-Next');
   await page.getByRole('combobox', { name: 'Hugging Face model ID' }).press('Enter');
   await expect(page.getByTestId('model-facts')).toContainText('qwen');
   for (const phase of ['prefill', 'decode']) {
@@ -36,7 +38,9 @@ test('EXL3 weights at 2.5 bpw change the rate and survive a reload', async ({ pa
   await expect(page.getByTestId('decode-tps')).toHaveText(after ?? '');
 });
 
-test('prefix cache hit 50% shows a computed prefill rate and survives a reload', async ({ page }) => {
+test('prefix cache hit 50% shows a computed prefill rate and survives a reload', async ({
+  page,
+}) => {
   await mockHf(page);
   await page.goto('/');
   await expect(page.getByTestId('prefill-tps')).toHaveText(/[1-9]/);

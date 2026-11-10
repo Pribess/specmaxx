@@ -4,22 +4,30 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { App } from './App';
 import { inlineRunner } from './sim/runner';
 
-const sources = import.meta.glob('/src/**/*.tsx', { query: '?raw', import: 'default', eager: true }) as Record<
-  string,
-  string
->;
+const sources = import.meta.glob('/src/**/*.tsx', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
 
 afterEach(cleanup);
 
 describe('no OS-native choosers', () => {
   it('renders no select, datalist or native color/date/time input, even with every details opened', async () => {
-    const { container } = render(<App runner={inlineRunner} loader={async () => ({ kind: 'network_error', message: 'offline' }) as never} />);
+    const { container } = render(
+      <App
+        runner={inlineRunner}
+        loader={async () => ({ kind: 'network_error', message: 'offline' }) as never}
+      />,
+    );
     await screen.findByTestId('decode-tps');
     container.querySelectorAll('details').forEach((d) => (d.open = true));
     await screen.findByText(/Edit spec numbers/);
     expect(container.querySelectorAll('select, datalist')).toHaveLength(0);
     expect(
-      container.querySelectorAll('input[type=color], input[type=date], input[type=time], input[type=datetime-local], input[type=month], input[type=week]'),
+      container.querySelectorAll(
+        'input[type=color], input[type=date], input[type=time], input[type=datetime-local], input[type=month], input[type=week]',
+      ),
     ).toHaveLength(0);
   });
   it('has no <select or <datalist element in any component source', () => {

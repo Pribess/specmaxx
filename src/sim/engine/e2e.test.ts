@@ -33,7 +33,11 @@ function expectWithin(actual: number, ref: number, lo: number, hi: number): void
   expect(actual).toBeLessThanOrEqual(hi * ref);
 }
 
-const BF16: QuantConfig = { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } };
+const BF16: QuantConfig = {
+  weights: { dtype: 'bf16' },
+  activations: 'bf16',
+  kvCache: { dtype: 'bf16' },
+};
 const P1: ParallelConfig = { tp: 1, pp: 1, dp: 1, ep: 1 };
 const ON_5090: HardwareStack = { device: RTX_5090, topology: singleDevice(RTX_5090) };
 const ON_SYNTH_1: HardwareStack = { device: SYNTH_GPU, topology: singleDevice(SYNTH_GPU) };
@@ -43,14 +47,24 @@ const ON_SYNTH_CLUSTER: HardwareStack = { device: SYNTH_GPU, topology: SYNTH_CLU
 const T9_WORKLOAD: Workload = { batch: 1, promptLen: 4096, decodeContextLen: 1024 };
 
 function input(over: Partial<SimInput> = {}): SimInput {
-  return { model: REF_DENSE_8B, quant: BF16, parallel: P1, workload: T9_WORKLOAD, hardware: ON_5090, ...over };
+  return {
+    model: REF_DENSE_8B,
+    quant: BF16,
+    parallel: P1,
+    workload: T9_WORKLOAD,
+    hardware: ON_5090,
+    ...over,
+  };
 }
 
-const phaseOps = (p: PhaseResult): OpResult[] => p.stages.flatMap((s) => s.layers.flatMap((l) => l.ops));
+const phaseOps = (p: PhaseResult): OpResult[] =>
+  p.stages.flatMap((s) => s.layers.flatMap((l) => l.ops));
 
 /** The bf16 / fp32-accumulate dense peak of the RTX 5090 preset (whitepaper Table 3: 209.5 TFLOP/s). */
 function rtx5090Bf16Peak(): number {
-  const p = RTX_5090.engines[0].matmulPeaks.find((x) => x.input === 'bf16' && x.accumulate === 'fp32' && x.sparsity === 'dense');
+  const p = RTX_5090.engines[0].matmulPeaks.find(
+    (x) => x.input === 'bf16' && x.accumulate === 'fp32' && x.sparsity === 'dense',
+  );
   if (p === undefined) throw new Error('preset lacks bf16/fp32/dense');
   return p.flopsPerSec;
 }
@@ -67,8 +81,14 @@ describe('T9 REF_DENSE_8B on 1×RTX 5090, bf16 (fp32 acc), batch 1', () => {
     // 622,329,856, × 2 B) + KV cache 36 layers × 1025 tokens × (2·8·128 elems × 2 B = 4096 B):
     // 2·(36·192,937,984 + 622,329,856) + 36·1025·4096 = 15,136,194,560 + 151,142,400 = 15,287,336,960 B.
     const streamedBytes = 15_287_336_960;
-    const decodeOps = lowerModel(REF_DENSE_8B, { phase: 'decode', seqs: 1, qLen: 1, kvLen: 1025, quant: BF16, parallel: P1 })
-      .stages.flatMap((s) => s.layers.flatMap((l) => l.ops));
+    const decodeOps = lowerModel(REF_DENSE_8B, {
+      phase: 'decode',
+      seqs: 1,
+      qLen: 1,
+      kvLen: 1025,
+      quant: BF16,
+      parallel: P1,
+    }).stages.flatMap((s) => s.layers.flatMap((l) => l.ops));
     const gemmWeightAndKv = decodeOps.reduce(
       (s, op) => s + (op.kind === 'gemm' ? opBytes(op).weightBytes : 0) + opBytes(op).kvReadBytes,
       0,
@@ -81,7 +101,11 @@ describe('T9 REF_DENSE_8B on 1×RTX 5090, bf16 (fp32 acc), batch 1', () => {
     expectWithin(r.decode.tokensPerSec, naive, 0.9, 1.15);
     expect(r.decode.perSequenceTokensPerSec).toBe(r.decode.tokensPerSec); // batch 1
     // Every decode op of this config is memory-bound (M = 1 GEMMs, tiny attention).
-    expect(phaseOps(r.decode).filter((o) => o.op.kind !== 'collective').every((o) => o.bound === 'memory')).toBe(true);
+    expect(
+      phaseOps(r.decode)
+        .filter((o) => o.op.kind !== 'collective')
+        .every((o) => o.bound === 'memory'),
+    ).toBe(true);
   });
 
   it('prefill @4096 is within the FLOP bound (13,874 tok/s); fusion none ≥ 0.83×, ideal ≥ 0.90×', () => {
@@ -92,8 +116,14 @@ describe('T9 REF_DENSE_8B on 1×RTX 5090, bf16 (fp32 acc), batch 1', () => {
     // + LM head for the last position only 2·622,329,856 = 1,244,659,712
     // = 61,849,981,681,664 FLOP.
     const tensorFlops = 61_849_981_681_664;
-    const prefillOps = lowerModel(REF_DENSE_8B, { phase: 'prefill', seqs: 1, qLen: 4096, kvLen: 4096, quant: BF16, parallel: P1 })
-      .stages.flatMap((s) => s.layers.flatMap((l) => l.ops));
+    const prefillOps = lowerModel(REF_DENSE_8B, {
+      phase: 'prefill',
+      seqs: 1,
+      qLen: 4096,
+      kvLen: 4096,
+      quant: BF16,
+      parallel: P1,
+    }).stages.flatMap((s) => s.layers.flatMap((l) => l.ops));
     expect(prefillOps.filter(isTensor).reduce((s, op) => s + opFlops(op), 0)).toBe(tensorFlops);
     // Bound: 61.85e12 FLOP / 209.5e12 FLOP/s = 0.29523 s → 4096 / 0.29523 = 13,874 tok/s.
     const boundTokensPerSec = 4096 / (tensorFlops / rtx5090Bf16Peak());
@@ -124,10 +154,14 @@ describe('T9 REF_DENSE_8B on 1×RTX 5090, bf16 (fp32 acc), batch 1', () => {
 
 describe('T10 batch sweep on RTX 5090', () => {
   it('decode tok/s non-decreasing over batch [1, 8, 64]; per-sequence non-increasing', () => {
-    const rs = [1, 8, 64].map((batch) => simulate(input({ workload: { batch, promptLen: 128, decodeContextLen: 1024 } })));
+    const rs = [1, 8, 64].map((batch) =>
+      simulate(input({ workload: { batch, promptLen: 128, decodeContextLen: 1024 } })),
+    );
     for (let i = 1; i < rs.length; i++) {
       expect(rs[i].decode.tokensPerSec).toBeGreaterThanOrEqual(rs[i - 1].decode.tokensPerSec);
-      expect(rs[i].decode.perSequenceTokensPerSec).toBeLessThanOrEqual(rs[i - 1].decode.perSequenceTokensPerSec);
+      expect(rs[i].decode.perSequenceTokensPerSec).toBeLessThanOrEqual(
+        rs[i - 1].decode.perSequenceTokensPerSec,
+      );
     }
   });
 
@@ -152,7 +186,9 @@ describe('T10 batch sweep on RTX 5090', () => {
 describe('T11 TP 8 on SYNTH_GPU × SYNTH_CLUSTER', () => {
   const W: Workload = { batch: 1, promptLen: 1024, decodeContextLen: 1024 };
   const single = simulate(input({ workload: W, hardware: ON_SYNTH_1 }));
-  const tp8 = simulate(input({ workload: W, hardware: ON_SYNTH_CLUSTER, parallel: { ...P1, tp: 8 } }));
+  const tp8 = simulate(
+    input({ workload: W, hardware: ON_SYNTH_CLUSTER, parallel: { ...P1, tp: 8 } }),
+  );
 
   it('single < decode < 8 × single; prefill ≤ 8 × single', () => {
     expect(tp8.decode.tokensPerSec).toBeGreaterThan(single.decode.tokensPerSec);
@@ -162,14 +198,21 @@ describe('T11 TP 8 on SYNTH_GPU × SYNTH_CLUSTER', () => {
   });
 
   it('73 all-reduces (2 per layer + embed), all intra-node', () => {
-    const ars = phaseOps(tp8.decode).filter((o) => o.op.kind === 'collective' && o.op.collective === 'all_reduce');
+    const ars = phaseOps(tp8.decode).filter(
+      (o) => o.op.kind === 'collective' && o.op.collective === 'all_reduce',
+    );
     expect(ars).toHaveLength(73); // 36 · 2 + 1
     expect(ars.every((o) => o.linkLevel === 'intra')).toBe(true);
   });
 
   it("'ideal' stage time = lat + max(compute, bw) ≤ 'none'", () => {
     const none = simulate(
-      input({ workload: W, hardware: ON_SYNTH_CLUSTER, parallel: { ...P1, tp: 8 }, options: { overlap: 'none' } }),
+      input({
+        workload: W,
+        hardware: ON_SYNTH_CLUSTER,
+        parallel: { ...P1, tp: 8 },
+        options: { overlap: 'none' },
+      }),
     );
     for (const phase of ['prefill', 'decode'] as const) {
       const s = tp8[phase].stages[0];
@@ -198,7 +241,11 @@ describe('T15 sparsity and format fallback on RTX 5090', () => {
   });
 
   it('nvfp4 weights + nvfp4 activations run at the fp4 dense peak (1676e12)', () => {
-    const r = simulate(input({ quant: { weights: { dtype: 'nvfp4' }, activations: 'nvfp4', kvCache: { dtype: 'bf16' } } }));
+    const r = simulate(
+      input({
+        quant: { weights: { dtype: 'nvfp4' }, activations: 'nvfp4', kvCache: { dtype: 'bf16' } },
+      }),
+    );
     const o = gateUp(r);
     expect(o.usedInput).toBe('fp4');
     expect(o.peakFlopsPerSec).toBe(1676e12); // Table 3: FP4 Tensor, FP32 accumulate, dense
@@ -209,7 +256,14 @@ describe('T18 hybrid + MLA smoke (synthetic)', () => {
   const W: Workload = { batch: 2, promptLen: 256, decodeContextLen: 1000 };
   for (const tp of [1, 2]) {
     it(`TINY_HYBRID tp ${tp}: decode reads and writes the recurrent state`, () => {
-      const r = simulate(input({ model: TINY_HYBRID, workload: W, hardware: ON_SYNTH_CLUSTER, parallel: { ...P1, tp } }));
+      const r = simulate(
+        input({
+          model: TINY_HYBRID,
+          workload: W,
+          hardware: ON_SYNTH_CLUSTER,
+          parallel: { ...P1, tp },
+        }),
+      );
       expect(r.decode.tokensPerSec).toBeGreaterThan(0);
       expect(r.prefill.tokensPerSec).toBeGreaterThan(0);
       const rec = phaseOps(r.decode).filter((o) => o.op.kind === 'recurrent');
@@ -223,7 +277,14 @@ describe('T18 hybrid + MLA smoke (synthetic)', () => {
     });
 
     it(`TINY_MLA_SPARSE tp ${tp}: decode attention reads 64 selected latent tokens`, () => {
-      const r = simulate(input({ model: TINY_MLA_SPARSE, workload: W, hardware: ON_SYNTH_CLUSTER, parallel: { ...P1, tp } }));
+      const r = simulate(
+        input({
+          model: TINY_MLA_SPARSE,
+          workload: W,
+          hardware: ON_SYNTH_CLUSTER,
+          parallel: { ...P1, tp },
+        }),
+      );
       const attn = phaseOps(r.decode).filter((o) => o.op.kind === 'attention');
       expect(attn).toHaveLength(2);
       for (const o of attn) {
@@ -241,12 +302,18 @@ describe('T19 e2e: memoryBandwidth modifier', () => {
       kind: 'memoryBandwidth',
       bandwidthBytesPerSec: 2.0e12,
       note: 'synthetic memory overclock',
-      sources: [{ url: 'synthetic://test', title: 'Synthetic', fields: ['memory.bandwidthBytesPerSec'] }],
+      sources: [
+        { url: 'synthetic://test', title: 'Synthetic', fields: ['memory.bandwidthBytesPerSec'] },
+      ],
     };
     const base = simulate(input());
     const fast = simulate(input({ hardware: { ...ON_5090, deviceModifiers: [mod] } }));
     // Decode is memory-bound in every op, so its time scales with 1/bandwidth.
-    expectClose(fast.decode.tokensPerSec, base.decode.tokensPerSec * (2.0e12 / RTX_5090.memory.bandwidthBytesPerSec), 1e-6);
+    expectClose(
+      fast.decode.tokensPerSec,
+      base.decode.tokensPerSec * (2.0e12 / RTX_5090.memory.bandwidthBytesPerSec),
+      1e-6,
+    );
     expect(fast.effectiveDevice.memory.bandwidthBytesPerSec).toBe(2.0e12);
     expect(RTX_5090.memory.bandwidthBytesPerSec).toBe(1.792e12); // base untouched
     expect(fast.warnings.some((w) => w.startsWith('variant: memoryBandwidth'))).toBe(true);
@@ -268,23 +335,37 @@ describe('defaults', () => {
 
 describe('shortlist block kinds end to end (TINY fixtures on the synthetic cluster, tp 2, pp 2)', () => {
   const models = [TINY_CSA, TINY_HC_NGRAM, TINY_KDA, TINY_MLA_SHARED, TINY_INKLING, TINY_KIMI];
-  it.each(models.map((m) => [m.name, m] as const))('%s simulates with positive rates and memory', (_name, model) => {
+  it.each(models.map((m) => [m.name, m] as const))(
+    '%s simulates with positive rates and memory',
+    (_name, model) => {
+      const r = simulate(
+        input({
+          model,
+          parallel: { tp: 2, pp: 2, dp: 1, ep: 1 },
+          workload: { batch: 2, promptLen: 256, decodeContextLen: 512 },
+          hardware: ON_SYNTH_CLUSTER,
+        }),
+      );
+      expect(r.prefill.tokensPerSec).toBeGreaterThan(0);
+      expect(r.decode.tokensPerSec).toBeGreaterThan(0);
+      expect(r.memory.perStage.every((s) => s.sequenceStateBytes > 0)).toBe(true);
+    },
+  );
+  it('a cross-stage source warns; an invalid cross-layer reference is rejected', () => {
     const r = simulate(
       input({
-        model,
-        parallel: { tp: 2, pp: 2, dp: 1, ep: 1 },
-        workload: { batch: 2, promptLen: 256, decodeContextLen: 512 },
+        model: TINY_MLA_SHARED,
+        parallel: { tp: 1, pp: 3, dp: 1, ep: 1 },
         hardware: ON_SYNTH_CLUSTER,
       }),
     );
-    expect(r.prefill.tokensPerSec).toBeGreaterThan(0);
-    expect(r.decode.tokensPerSec).toBeGreaterThan(0);
-    expect(r.memory.perStage.every((s) => s.sequenceStateBytes > 0)).toBe(true);
-  });
-  it('a cross-stage source warns; an invalid cross-layer reference is rejected', () => {
-    const r = simulate(input({ model: TINY_MLA_SHARED, parallel: { tp: 1, pp: 3, dp: 1, ep: 1 }, hardware: ON_SYNTH_CLUSTER }));
     expect(r.warnings.filter((w) => w.includes('on another pipeline stage'))).toHaveLength(3);
-    const broken = { ...TINY_MLA_SHARED, layers: [TINY_MLA_SHARED.layers[2], ...TINY_MLA_SHARED.layers.slice(1)] };
-    expect(() => simulate(input({ model: broken }))).toThrow(/kvCacheFromLayer 0 must be an earlier layer index/);
+    const broken = {
+      ...TINY_MLA_SHARED,
+      layers: [TINY_MLA_SHARED.layers[2], ...TINY_MLA_SHARED.layers.slice(1)],
+    };
+    expect(() => simulate(input({ model: broken }))).toThrow(
+      /kvCacheFromLayer 0 must be an earlier layer index/,
+    );
   });
 });

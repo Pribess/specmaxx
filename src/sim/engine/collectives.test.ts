@@ -24,7 +24,13 @@ function link(bandwidthPerDirectionBytesPerSec: number, latencySec: number): Lin
     bandwidthPerDirectionBytesPerSec,
     latencySec,
     p2p: 'direct',
-    sources: [{ url: 'synthetic://test', title: 't', fields: ['bandwidthPerDirectionBytesPerSec', 'latencySec'] }],
+    sources: [
+      {
+        url: 'synthetic://test',
+        title: 't',
+        fields: ['bandwidthPerDirectionBytesPerSec', 'latencySec'],
+      },
+    ],
     estimated: [],
   };
 }
@@ -65,7 +71,13 @@ describe('flat alpha-beta collectives (T7)', () => {
 
 describe('hierarchical collectives (T7)', () => {
   it('all-reduce n 16 = 2 nodes × 8: 38.111e-6 + 50e-6 + 38.111e-6 = 126.22e-6', () => {
-    const path = { kind: 'hierarchical', devicesPerNode: 8, nodes: 2, intra: link(450e9, 1e-6), inter: link(50e9, 5e-6) } as const;
+    const path = {
+      kind: 'hierarchical',
+      devicesPerNode: 8,
+      nodes: 2,
+      intra: link(450e9, 1e-6),
+      inter: link(50e9, 5e-6),
+    } as const;
     const t = collectiveTime('all_reduce', 16e6, 16, path, 'best');
     // RS_intra(16e6, 8) = 7·1e-6 + 7/8·16e6/450e9 = 7e-6 + 31.111e-6 = 38.111e-6 (AG_intra the same)
     const intraPhase = 7e-6 + ((7 / 8) * 16e6) / 450e9;

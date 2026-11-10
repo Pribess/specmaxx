@@ -55,7 +55,14 @@ import { resolveSpeculative } from './specdec';
 import { resolveHostStaging, type HostStaging } from './staging';
 import { stageNStream, type TransferPath } from './transfer';
 import { computedPromptTokens } from './types';
-import type { OffloadTier, PhaseRates, PhaseResult, SimInput, SimOptions, SimResult } from './types';
+import type {
+  OffloadTier,
+  PhaseRates,
+  PhaseResult,
+  SimInput,
+  SimOptions,
+  SimResult,
+} from './types';
 import { DEFAULT_DISPATCH_SEC_PER_KERNEL, stageKernelCount, withDispatch } from './dispatch';
 import { validateInput } from './validate';
 
@@ -160,19 +167,39 @@ function stageTransferPaths(
       st.layers.some((l) => l.ops.some((op) => op.kind === 'transfer' && op.source === tier)),
     );
   const nStreamOf = (streams: readonly boolean[]): number =>
-    stageNStream(input.parallel, topology.devicesPerNode, streams, s, offload.prefetching, microbatches);
+    stageNStream(
+      input.parallel,
+      topology.devicesPerNode,
+      streams,
+      s,
+      offload.prefetching,
+      microbatches,
+    );
   const streams = { host_ram: streamsFrom('host_ram'), nvme: streamsFrom('nvme') };
   // Formula: hostStreams[s] = streams_ram[s] ∨ streams_nvme[s];  n_host = stageNStream(hostStreams)
   const hostStreams = streams.host_ram.map((ram, i) => ram || streams.nvme[i] === true);
   const n_host = hostStreams[s] === true ? nStreamOf(hostStreams) : 1;
   if (streams.host_ram[s] === true) {
     // Formula: n(host_ram) = n_host
-    paths.host_ram = transferPath('host_ram', offload.host, offload.queueDepth, n_host, offload.ssdReadRate);
+    paths.host_ram = transferPath(
+      'host_ram',
+      offload.host,
+      offload.queueDepth,
+      n_host,
+      offload.ssdReadRate,
+    );
   }
   if (streams.nvme[s] === true) {
     // Formula: n(nvme) = n_nvme (drive bandwidth, IOPS);  staging shares host RAM by n_host
     const n_nvme = nStreamOf(streams.nvme);
-    paths.nvme = transferPath('nvme', offload.host, offload.queueDepth, n_nvme, offload.ssdReadRate, n_host);
+    paths.nvme = transferPath(
+      'nvme',
+      offload.host,
+      offload.queueDepth,
+      n_nvme,
+      offload.ssdReadRate,
+      n_host,
+    );
   }
   return paths;
 }
@@ -215,7 +242,13 @@ function simulatePhase(
     st.layers.some((l) => l.ops.some((op) => op.kind === 'collective' && op.group === 'dcp')),
   );
   const dcpPath = usesDcp
-    ? { dcp: collectivePath(groupSpan(input.parallel.dcp ?? 1, topology), topology, base.interStaging) }
+    ? {
+        dcp: collectivePath(
+          groupSpan(input.parallel.dcp ?? 1, topology),
+          topology,
+          base.interStaging,
+        ),
+      }
     : {};
   const stages = lowered.stages.map((stage) => {
     const ppPath: CollectivePath =
@@ -229,7 +262,9 @@ function simulatePhase(
       collectiveAlgorithm: base.collectiveAlgorithm,
       elementwiseFusion: base.elementwiseFusion,
       warnings: base.warnings,
-      ...(base.perOpLatencyFloorSec === undefined ? {} : { perOpLatencyFloorSec: base.perOpLatencyFloorSec }),
+      ...(base.perOpLatencyFloorSec === undefined
+        ? {}
+        : { perOpLatencyFloorSec: base.perOpLatencyFloorSec }),
     };
     if (offload !== undefined) {
       ctx.transferPaths = stageTransferPaths(
@@ -256,12 +291,7 @@ function simulatePhase(
         collectivePaths: { ...ctx.collectivePaths, pp: returnPath },
       });
     }
-    const original = stageResult(
-      stage.index,
-      layers,
-      send,
-      options.overlap,
-    );
+    const original = stageResult(stage.index, layers, send, options.overlap);
     if (options.overlap !== 'ideal' || options.collectiveAlgorithm !== 'best') return original;
     // Formula (G7): choose min_assignment [Σα + max(compute_s, Σβ)].
     // Bounded heuristic: compare per-op min-total, uniform ring, uniform tree; ties keep the original.
@@ -280,12 +310,7 @@ function simulatePhase(
           ),
         ),
       );
-      const candidate = stageResult(
-        stage.index,
-        candidateLayers,
-        send,
-        options.overlap,
-      );
+      const candidate = stageResult(stage.index, candidateLayers, send, options.overlap);
       const coreSec =
         candidate.commLatencySec + Math.max(candidate.computeSec, candidate.commBandwidthSec);
       if (coreSec < bestCoreSec) {
@@ -410,7 +435,9 @@ export function simulate(input: SimInput): SimResult {
     epPath: collectivePath(groupSpan(parallel.ep, hw.topology), hw.topology, interStaging),
     ...(interStaging === undefined ? {} : { interStaging }),
     // The per-op latency floor only when set: with 0 the op contexts are exactly as before.
-    ...(options.perOpLatencyFloorSec > 0 ? { perOpLatencyFloorSec: options.perOpLatencyFloorSec } : {}),
+    ...(options.perOpLatencyFloorSec > 0
+      ? { perOpLatencyFloorSec: options.perOpLatencyFloorSec }
+      : {}),
   };
 
   // 3. Offload placement and host (docs §12). Nothing off-device ⇒ offload undefined, hardware.host never read.
@@ -527,7 +554,10 @@ export function simulate(input: SimInput): SimResult {
   // 5b. Labelled what-if figures next to the headline; neither changes `prefill` or `decode`.
   // Prefill without overlap (review F7): the same prefill under overlap 'none', when it has inter-device comm.
   let prefillWithoutOverlap: PhaseRates | undefined;
-  if (options.overlap === 'ideal' && (prefill.comm.latencySec > 0 || prefill.comm.bandwidthSec > 0)) {
+  if (
+    options.overlap === 'ideal' &&
+    (prefill.comm.latencySec > 0 || prefill.comm.bandwidthSec > 0)
+  ) {
     const none = simulatePhase(
       prefillLowered,
       'prefill',
@@ -577,10 +607,16 @@ export function simulate(input: SimInput): SimResult {
     const chunkCtx: LoweringContext = { ...prefillCtx, ...chunk };
     chunkLowered = lowerModel(model, chunkCtx);
     if (spec !== undefined)
-      chunkLowered = withDraftLayers(chunkLowered, lowerDraftPrefill(model, spec.lowering.draft, chunkCtx));
+      chunkLowered = withDraftLayers(
+        chunkLowered,
+        lowerDraftPrefill(model, spec.lowering.draft, chunkCtx),
+      );
   }
   const capacityBytes = input.hardware.memCapacityBytes ?? device.memory.capacityOptionsBytes[0];
-  const gpuUsableFraction = resolveGpuUsableFraction(device.memory, input.hardware.gpuUsableFraction);
+  const gpuUsableFraction = resolveGpuUsableFraction(
+    device.memory,
+    input.hardware.gpuUsableFraction,
+  );
   const memory = memoryReport({
     model,
     ctx: decodeCtx,

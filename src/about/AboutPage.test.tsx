@@ -16,7 +16,7 @@ describe('repository Markdown', () => {
   it('resolves every simulation-model fragment to an element id', () => {
     const container = document.createElement('div');
     container.innerHTML = renderMarkdown(simulationModel);
-    const ids = new Set(Array.from(container.querySelectorAll('[id]'), node => node.id));
+    const ids = new Set(Array.from(container.querySelectorAll('[id]'), (node) => node.id));
     const links = container.querySelectorAll<HTMLAnchorElement>('a[href^="#"]');
     expect(links.length).toBeGreaterThan(10);
     for (const link of links) {
@@ -25,31 +25,39 @@ describe('repository Markdown', () => {
   });
 
   it('keeps underscores and deduplicates heading ids, including suffix collisions', () => {
-    expect(githubSlug('10. Worked example: REF_DENSE_8B on one RTX 5090'))
-      .toBe('10-worked-example-ref_dense_8b-on-one-rtx-5090');
+    expect(githubSlug('10. Worked example: REF_DENSE_8B on one RTX 5090')).toBe(
+      '10-worked-example-ref_dense_8b-on-one-rtx-5090',
+    );
     const html = renderMarkdown('# Same\n# Same\n# Same-1\n# Same');
     const container = document.createElement('div');
     container.innerHTML = html;
-    expect(Array.from(container.querySelectorAll('h1'), node => node.id))
-      .toEqual(['same', 'same-1', 'same-1-1', 'same-2']);
+    expect(Array.from(container.querySelectorAll('h1'), (node) => node.id)).toEqual([
+      'same',
+      'same-1',
+      'same-1-1',
+      'same-2',
+    ]);
     expect(renderMarkdown('# Same')).toContain('id="same"');
   });
   it('rewrites rendered document links and leaves unavailable repository references as text', () => {
     const container = document.createElement('div');
     container.innerHTML = renderMarkdown(
-      '[Model](simulation-model.md) [Checks](sanity-check.md) '
-      + '[Section](simulation-model.md#per-op-time) [Source](../src/sim/) '
-      + '[Other](assets/example.json) [Web](https://example.com)',
+      '[Model](simulation-model.md) [Checks](sanity-check.md) ' +
+        '[Section](simulation-model.md#per-op-time) [Source](../src/sim/) ' +
+        '[Other](assets/example.json) [Web](https://example.com)',
       ['simulation-model.md', 'sanity-check.md'],
     );
-    expect(Array.from(container.querySelectorAll('a'), node => node.getAttribute('href')))
-      .toEqual(['#simulation-model', '#sanity-check', '#per-op-time', 'https://example.com']);
+    expect(
+      Array.from(container.querySelectorAll('a'), (node) => node.getAttribute('href')),
+    ).toEqual(['#simulation-model', '#sanity-check', '#per-op-time', 'https://example.com']);
     expect(container.textContent).toContain('Source Other');
     expect(renderMarkdown('[Checks](sanity-check.md)')).toBe('<p>Checks</p>\n');
   });
 
   it('splits rendered GFM tables out of the prose', () => {
-    const html = renderMarkdown('Intro\n\n| Limit | Value |\n| --- | --- |\n| Memory | 32 GB |\n\nOutro');
+    const html = renderMarkdown(
+      'Intro\n\n| Limit | Value |\n| --- | --- |\n| Memory | 32 GB |\n\nOutro',
+    );
     const segments = splitTables(html);
     expect(segments.map((s) => s.kind)).toEqual(['html', 'table', 'html']);
     const container = document.createElement('div');
@@ -63,7 +71,7 @@ describe('About page', () => {
   it('renders both documents without repository paths and resolves all fragment links', () => {
     const { container } = render(<AboutPage />);
     expect(screen.getByRole('article', { name: 'Sanity checks' })).toBeTruthy();
-    const ids = new Set(Array.from(container.querySelectorAll('[id]'), node => node.id));
+    const ids = new Set(Array.from(container.querySelectorAll('[id]'), (node) => node.id));
     for (const link of container.querySelectorAll<HTMLAnchorElement>('a[href]')) {
       const href = link.getAttribute('href')!;
       // External benchmark sources can legitimately end in .md (e.g. GitHub files).
@@ -102,8 +110,9 @@ describe('About page', () => {
     container.innerHTML = renderMarkdown(modelingMethod);
     const reference = document.createElement('div');
     reference.innerHTML = renderMarkdown(simulationModel);
-    const referenceIds = new Set(Array.from(reference.querySelectorAll('[id]'), n => n.id));
-    for (const heading of container.querySelectorAll('h2')) expect(referenceIds.has(heading.id)).toBe(false);
+    const referenceIds = new Set(Array.from(reference.querySelectorAll('[id]'), (n) => n.id));
+    for (const heading of container.querySelectorAll('h2'))
+      expect(referenceIds.has(heading.id)).toBe(false);
     const links = container.querySelectorAll<HTMLAnchorElement>('a[href^="#"]');
     expect(links.length).toBeGreaterThan(10);
     for (const link of links) expect(referenceIds.has(link.hash.slice(1)), link.hash).toBe(true);

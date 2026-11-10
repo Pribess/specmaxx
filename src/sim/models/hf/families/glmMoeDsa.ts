@@ -30,7 +30,11 @@ import {
 } from './mlaCommon';
 
 /** Build the GLM-5.3 IR from its (flat) config. */
-export function buildGlmMoeDsa(text: JsonObject, top: JsonObject, repoId: string): FamilyBuildResult {
+export function buildGlmMoeDsa(
+  text: JsonObject,
+  top: JsonObject,
+  repoId: string,
+): FamilyBuildResult {
   const r = createReader(text, text === top ? '' : 'text_config');
   const hidden = r.int('hidden_size');
   const n = r.int('num_hidden_layers');
@@ -54,12 +58,23 @@ export function buildGlmMoeDsa(text: JsonObject, top: JsonObject, repoId: string
       ffn: mlpTypes[i] === 'dense' ? dense : moe,
     }),
   );
-  const model = decoderModel({ name: repoId, hidden, vocab, tieEmbeddings: tie, layers, source: repoId });
+  const model = decoderModel({
+    name: repoId,
+    hidden,
+    vocab,
+    tieEmbeddings: tie,
+    layers,
+    source: repoId,
+  });
   const errors = structuralErrors(model);
   if (errors.length > 0) return { kind: 'invalid_config', errors };
 
   // The MTP layer is a full-indexer MoE layer (checkpoint `layers.<n>.*`, with its own indexer weights).
-  const mtpLayer = decoderLayer({ hidden, mixer: { ...mixer, sparse: dsaSelection('full', indexer) }, ffn: moe });
+  const mtpLayer = decoderLayer({
+    hidden,
+    mixer: { ...mixer, sparse: dsaSelection('full', indexer) },
+    ffn: moe,
+  });
   const full = indexerModes.filter((m) => m === 'full').length;
   const notes = [
     `MLA + DSA: ${full} layers run an indexer, ${n - full} reuse the previous full layer's top-k`,
@@ -69,7 +84,10 @@ export function buildGlmMoeDsa(text: JsonObject, top: JsonObject, repoId: string
   if (mtpLayers > 0) notes.push(`${mtpLayers} MTP layer(s) excluded from the IR`);
   return {
     kind: 'ok',
-    model: withDraft(model, mtpDraft(() => mtpLayer, mtpLayers, true)),
+    model: withDraft(
+      model,
+      mtpDraft(() => mtpLayer, mtpLayers, true),
+    ),
     notes,
     mtpParamsEstimate: mtpParamsEstimate(mtpLayer, hidden, mtpLayers),
     visionParamsEstimate: 0,

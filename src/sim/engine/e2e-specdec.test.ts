@@ -21,7 +21,11 @@ function expectClose(actual: number, expected: number, rel = 1e-9): void {
   expect(Math.abs(actual - expected)).toBeLessThanOrEqual(rel * Math.abs(expected));
 }
 
-const BF16: QuantConfig = { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } };
+const BF16: QuantConfig = {
+  weights: { dtype: 'bf16' },
+  activations: 'bf16',
+  kvCache: { dtype: 'bf16' },
+};
 const GPU = { device: RTX_5090, topology: singleDevice(RTX_5090) };
 /** PCIe 5.0 x16 per direction: line rate × TLP payload efficiency 256/280 (links.ts). Unit: B/s. */
 const B_LINK = ((32e9 * 16 * 128) / 130 / 8) * (256 / 280);
@@ -101,7 +105,9 @@ describe('W2 MTP k = 1 on REF_DENSE_8B, one RTX 5090, bf16, b 1, decode @ 8k (de
     expect(r.memory.perStage[0].draftBytes).toBe(453_026_304 + 8194 * 4096);
     expect(base.memory.perStage[0].draftBytes).toBe(0);
     // The verify appends k + 1 = 2 rows: the target's KV is sized for N + k + 1 = 8194 tokens.
-    expect(r.memory.perStage[0].sequenceStateBytes - base.memory.perStage[0].sequenceStateBytes).toBe(36 * 4096);
+    expect(
+      r.memory.perStage[0].sequenceStateBytes - base.memory.perStage[0].sequenceStateBytes,
+    ).toBe(36 * 4096);
     expect(r.memory.perStage[0].speculativeTransientBytes).toBe(0); // dense: no recurrent state
   });
   it('prefill gets the drafter: one MTP forward over the prompt, slower than without', () => {
@@ -127,7 +133,9 @@ describe('U-8 verify lowering: REF_DENSE_8B k 1 @ N 8192', () => {
 
 describe('U-18 MTP cache advance (REF_DENSE_8B k 1, explicit per-position acceptance)', () => {
   it('alphas [1] (E[τ] = 2): the catch-up pass has qLen 2, writes 2·4096 B of KV, eh_proj m 2, lm_head m 1', () => {
-    const { draft } = splitOps(run(REF_DENSE_8B_MTP, mtp(1, { kind: 'per_position', alphas: [1] })));
+    const { draft } = splitOps(
+      run(REF_DENSE_8B_MTP, mtp(1, { kind: 'per_position', alphas: [1] })),
+    );
     const core = draft.find((o) => o.op.name === 'draft.attn.core');
     expect(core?.op.kind === 'attention' && core.op.qLen).toBe(2);
     expect(core?.bytes.kvWriteBytes).toBe(8_192);
@@ -137,7 +145,9 @@ describe('U-18 MTP cache advance (REF_DENSE_8B k 1, explicit per-position accept
     expect(head.kind === 'gemm' && head.m).toBe(1);
   });
   it('alphas [0] (E[τ] = 1): qLen 1, 4,096 B of KV; the previous tentative row is overwritten (no extra write)', () => {
-    const { draft } = splitOps(run(REF_DENSE_8B_MTP, mtp(1, { kind: 'per_position', alphas: [0] })));
+    const { draft } = splitOps(
+      run(REF_DENSE_8B_MTP, mtp(1, { kind: 'per_position', alphas: [0] })),
+    );
     const core = draft.find((o) => o.op.name === 'draft.attn.core');
     expect(core?.op.kind === 'attention' && core.op.qLen).toBe(1);
     expect(core?.bytes.kvWriteBytes).toBe(4_096);
@@ -147,7 +157,9 @@ describe('U-18 MTP cache advance (REF_DENSE_8B k 1, explicit per-position accept
     for (let i = 0; i < 3; i++) {
       // Stepping helper: step i starts with N + 2i committed tokens.
       const over = { workload: { batch: 1, promptLen: 8192, decodeContextLen: N + 2 * i } };
-      const { draft } = splitOps(run(REF_DENSE_8B_MTP, mtp(1, { kind: 'per_position', alphas: [1] }), over));
+      const { draft } = splitOps(
+        run(REF_DENSE_8B_MTP, mtp(1, { kind: 'per_position', alphas: [1] }), over),
+      );
       const core = opNamed(draft, 'draft.attn.core');
       expect(core.kind === 'attention' && core.kvLen).toBe(N + 2 * i + 2);
     }
@@ -173,16 +185,33 @@ describe('U-14 hybrid verify: TINY_HYBRID with an MTP module, k 3, B_r 2', () =>
       expect(o.bytes.stateWriteBytes).toBe(4 * plainRec[i].bytes.stateWriteBytes);
       expect(o.bytes.stateReadBytes).toBe(plainRec[i].bytes.stateReadBytes);
     });
-    const conv = verifyOps.filter((o) => o.op.kind === 'elementwise' && o.bytes.stateWriteBytes > 0);
-    const plainConv = plainOps.filter((o) => o.op.kind === 'elementwise' && o.bytes.stateWriteBytes > 0);
+    const conv = verifyOps.filter(
+      (o) => o.op.kind === 'elementwise' && o.bytes.stateWriteBytes > 0,
+    );
+    const plainConv = plainOps.filter(
+      (o) => o.op.kind === 'elementwise' && o.bytes.stateWriteBytes > 0,
+    );
     expect(conv.length).toBe(plainConv.length);
-    conv.forEach((o, i) => expect(o.bytes.stateWriteBytes).toBe(4 * plainConv[i].bytes.stateWriteBytes));
+    conv.forEach((o, i) =>
+      expect(o.bytes.stateWriteBytes).toBe(4 * plainConv[i].bytes.stateWriteBytes),
+    );
   });
   it('speculativeTransientBytes = 4 · state_s · B_r (state_s = the three GDN layers’ recurrent + conv state)', () => {
-    const ctx: LoweringContext = { phase: 'decode', seqs: 2, qLen: 1, kvLen: 257, quant: BF16, parallel: { tp: 1, pp: 1, dp: 1, ep: 1 } };
+    const ctx: LoweringContext = {
+      phase: 'decode',
+      seqs: 2,
+      qLen: 1,
+      kvLen: 257,
+      quant: BF16,
+      parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
+    };
     const gdnState = TINY_HYBRID.layers
       .flatMap((l) => l.blocks)
-      .reduce((sum, b) => sum + (b.kind === 'linear_attention' ? linearAttentionSequenceStateBytes(b, ctx) : 0), 0);
+      .reduce(
+        (sum, b) =>
+          sum + (b.kind === 'linear_attention' ? linearAttentionSequenceStateBytes(b, ctx) : 0),
+        0,
+      );
     expect(stageSnapshotStateBytesPerSeq(TINY_HYBRID, ctx, 0)).toBe(gdnState);
     expect(r.memory.perStage[0].speculativeTransientBytes).toBe(4 * gdnState * 2);
     expect(base.memory.perStage[0].speculativeTransientBytes).toBe(0);
@@ -191,13 +220,28 @@ describe('U-14 hybrid verify: TINY_HYBRID with an MTP module, k 3, B_r 2', () =>
 
 describe('§3.8 spec-dec × offload: W1 (experts in DDR5, f = h = .5) with an MTP module k = 1', () => {
   const W_EXPERT = 2_654_208;
-  const W1_QUANT: QuantConfig = { ...BF16, modules: { routed_experts: { weights: { dtype: 'int4', extraBitsPerElem: 0.5 } } } };
+  const W1_QUANT: QuantConfig = {
+    ...BF16,
+    modules: { routed_experts: { weights: { dtype: 'int4', extraBitsPerElem: 0.5 } } },
+  };
   const model: ModelSpec = {
     ...REF_MOE_30B_A3B,
-    draft: { kind: 'mtp', layers: [REF_MOE_30B_A3B.layers[0]], hiddenProj: true, maxReliableDepth: 1 },
+    draft: {
+      kind: 'mtp',
+      layers: [REF_MOE_30B_A3B.layers[0]],
+      hiddenProj: true,
+      maxReliableDepth: 1,
+    },
   };
   const deployment = (includeDraft: boolean): DeploymentConfig => ({
-    offload: { routedExperts: { tier: 'host_ram', residentFraction: 0.5, hitRatio: { kind: 'uniform' }, includeDraft } },
+    offload: {
+      routedExperts: {
+        tier: 'host_ram',
+        residentFraction: 0.5,
+        hitRatio: { kind: 'uniform' },
+        includeDraft,
+      },
+    },
     speculative: { method: 'mtp', draftLength: 1, acceptance: { kind: 'iid', alpha: 0.85 } },
   });
   const over = { quant: W1_QUANT };

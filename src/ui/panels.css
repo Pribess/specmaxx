@@ -21,13 +21,17 @@
   line-height: 20px;
   font-weight: 650;
 }
-.deployment-section > legend + * { clear: both; }
+.deployment-section > legend + * {
+  clear: both;
+}
 .deployment-section > .field + .field,
 .deployment-section > .field + .fields,
 .deployment-section > .fields + .field,
 .deployment-section > .fields + .fields,
 .deployment-section > * + .drafter-field,
-.deployment-section > .drafter-field + .field { margin-top: var(--gap-field); }
+.deployment-section > .drafter-field + .field {
+  margin-top: var(--gap-field);
+}
 .deployment-section > .hint {
   display: block;
   margin-top: var(--space-2);
@@ -55,7 +59,10 @@ button.chip {
   font-weight: 500;
   white-space: nowrap;
 }
-button.chip:hover { background: var(--tint); border-color: var(--ink); }
+button.chip:hover {
+  background: var(--tint);
+  border-color: var(--ink);
+}
 .badge {
   flex: none;
   display: inline-flex;

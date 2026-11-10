@@ -8,13 +8,7 @@
 
 import { opBytes } from '../ir/metrics';
 import type { CollectiveOp, Op } from '../ir/ops';
-import type {
-  BlockSpec,
-  DraftSpec,
-  ModelSpec,
-  ParallelConfig,
-  QuantConfig,
-} from '../ir/model';
+import type { BlockSpec, DraftSpec, ModelSpec, ParallelConfig, QuantConfig } from '../ir/model';
 import { actBpe, stepTokens } from './common';
 import { csaSequenceStateBytes, lowerCsa } from './csa';
 import { lowerEmbedding } from './embedding';

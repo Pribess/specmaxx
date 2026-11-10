@@ -42,7 +42,17 @@ export type Dtype =
  * Matmul input class: the first key of a device's matmul peak table (`MatmulPeak.input`).
  * Several storage dtypes share one class (e.g. `fp8_e4m3`, `fp8_e5m2` and `mxfp8` all run as `fp8`).
  */
-export type MathFormat = 'fp64' | 'fp32' | 'tf32' | 'bf16' | 'fp16' | 'fp8' | 'fp6' | 'fp4' | 'int8' | 'int4';
+export type MathFormat =
+  | 'fp64'
+  | 'fp32'
+  | 'tf32'
+  | 'bf16'
+  | 'fp16'
+  | 'fp8'
+  | 'fp6'
+  | 'fp4'
+  | 'int8'
+  | 'int4';
 
 /**
  * Matmul accumulator type: the second key of a device's matmul peak table (`MatmulPeak.accumulate`).
@@ -125,7 +135,10 @@ export function bitsPerElement(f: TensorFormat): number {
   const info = DTYPE_INFO[f.dtype];
   // Formula: bits = valueBits + blockScaleBitsPerElem + extraBitsPerElem      (valueBits = elementBits by default)
   // See docs/simulation-model.md §2
-  const bits = (f.valueBitsPerElem ?? info.elementBits) + info.blockScaleBitsPerElem + (f.extraBitsPerElem ?? 0);
+  const bits =
+    (f.valueBitsPerElem ?? info.elementBits) +
+    info.blockScaleBitsPerElem +
+    (f.extraBitsPerElem ?? 0);
   return bits;
 }
 
@@ -143,7 +156,12 @@ export function bytesPerElement(f: TensorFormat): number {
  * e.g. q, k and v in one `qkv_proj` GEMM: the parts sum to `rows`, each part stores its own row vector and its
  * own copy of the `cols` column vector, and empty parts are skipped.
  */
-export function sideVectorBytes(f: TensorFormat, rows: number, cols: number, rowParts?: readonly number[]): number {
+export function sideVectorBytes(
+  f: TensorFormat,
+  rows: number,
+  cols: number,
+  rowParts?: readonly number[],
+): number {
   if (rows <= 0 || cols <= 0) return 0;
   const matrices = rowParts === undefined ? 1 : rowParts.filter((p) => p > 0).length;
   // Formula: bytes = perDimBits·(rows + P·cols)/8      (P = physical matrices sharing the columns)
@@ -155,7 +173,12 @@ export function sideVectorBytes(f: TensorFormat, rows: number, cols: number, row
  * Stored bytes of one dense `rows × cols` weight in format `f`: the elements plus {@link sideVectorBytes}.
  * Empty weights store nothing. Unit: bytes.
  */
-export function matrixStoredBytes(f: TensorFormat, rows: number, cols: number, rowParts?: readonly number[]): number {
+export function matrixStoredBytes(
+  f: TensorFormat,
+  rows: number,
+  cols: number,
+  rowParts?: readonly number[],
+): number {
   if (rows <= 0 || cols <= 0) return 0;
   // Formula: bytes = rows·cols·bits/8 + sideVectorBytes
   return (rows * cols * bitsPerElement(f)) / 8 + sideVectorBytes(f, rows, cols, rowParts);

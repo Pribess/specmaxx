@@ -6,7 +6,13 @@
  * or top-k of a {@link KvSelection}.
  */
 
-import { bitsPerElement, bytesPerElement, sideVectorBytes, type Dtype, type TensorFormat } from './dtype';
+import {
+  bitsPerElement,
+  bytesPerElement,
+  sideVectorBytes,
+  type Dtype,
+  type TensorFormat,
+} from './dtype';
 import type {
   AttentionOp,
   EmbeddingOp,
@@ -168,7 +174,12 @@ function selectionCap(sel: KvSelection): number {
  * full `ceil(kvLen/r)`; window `min(ceil(kvLen/r), W + qLen − 1)`; top-k `min(ceil(kvLen/r), topK · qLen)`.
  * Unit: keys (tokens when r = 1). See docs §3.
  */
-export function kvTokensRead(qLen: number, kvLen: number, sel: KvSelection, tokensPerEntry = 1): number {
+export function kvTokensRead(
+  qLen: number,
+  kvLen: number,
+  sel: KvSelection,
+  tokensPerEntry = 1,
+): number {
   const visible = Math.ceil(kvLen / tokensPerEntry);
   switch (sel.kind) {
     case 'full':
@@ -198,7 +209,10 @@ export function attentionPairs(op: AttentionOp): number {
   const primary = attendedPairs(op.qLen, op.kvLen, op.causal, op.kvSelection);
   const sec = op.secondaryKv;
   // Formula: pairs = pairs(primary) + pairs(secondary, r)
-  const secondary = sec === undefined ? 0 : attendedPairs(op.qLen, op.kvLen, op.causal, sec.kvSelection, sec.tokensPerEntry);
+  const secondary =
+    sec === undefined
+      ? 0
+      : attendedPairs(op.qLen, op.kvLen, op.causal, sec.kvSelection, sec.tokensPerEntry);
   const shards = op.kvTokenShards;
   if (shards === undefined) return primary + secondary;
   // Formula: pairs_rank = pairs / d   (the keys of every query spread evenly over the d DCP ranks)
@@ -208,7 +222,9 @@ export function attentionPairs(op: AttentionOp): number {
 
 /** The scoring cap of an indexer: every visible key, or at most `maxScoredKeys`. */
 function indexerScoredSelection(op: IndexerOp): KvSelection {
-  return op.maxScoredKeys === undefined ? { kind: 'full' } : { kind: 'topk', topK: op.maxScoredKeys };
+  return op.maxScoredKeys === undefined
+    ? { kind: 'full' }
+    : { kind: 'topk', topK: op.maxScoredKeys };
 }
 
 /**
@@ -301,7 +317,15 @@ function gemmBytes(op: GemmOp): ByteBreakdown {
   //          b_w = distinctWeightMatrices ?? b   (MoE: the expected distinct experts U ≤ b)
   // See docs/simulation-model.md §3 "GEMM", §5 "Expected distinct experts"
   const weightMatrices = op.distinctWeightMatrices ?? op.batch;
-  const matrixBytes = gemmWeightBytes(weightMatrices, op.n, op.k, op.weight, op.sparsity, op.outParts, op.sideVectorElems);
+  const matrixBytes = gemmWeightBytes(
+    weightMatrices,
+    op.n,
+    op.k,
+    op.weight,
+    op.sparsity,
+    op.outParts,
+    op.sideVectorElems,
+  );
   const biasBytes = op.biasDtype === undefined ? 0 : weightMatrices * op.n * bpeOf(op.biasDtype);
   const inputBytes = op.batch * op.m * op.k * bpeOf(op.inputDtype);
   const outputBytes = op.batch * op.m * op.n * bpeOf(op.outputDtype);
@@ -371,8 +395,10 @@ function attentionBytes(op: AttentionOp): ByteBreakdown {
   // See docs/simulation-model.md §3 "Attention"
   const qBytes = op.seqs * op.qLen * op.heads * op.qkHeadDim * act;
   const oBytes = op.seqs * op.qLen * op.heads * op.vHeadDim * act;
-  const kvReadBytes = op.seqs * tokensRead * op.kvRead.elemsPerToken * bytesPerElement(op.kvRead.format);
-  const kvWriteBytes = op.seqs * writeTokens * op.kvWrite.elemsPerToken * bytesPerElement(op.kvWrite.format);
+  const kvReadBytes =
+    op.seqs * tokensRead * op.kvRead.elemsPerToken * bytesPerElement(op.kvRead.format);
+  const kvWriteBytes =
+    op.seqs * writeTokens * op.kvWrite.elemsPerToken * bytesPerElement(op.kvWrite.format);
   // Formula: secondary: kvRead += seqs·kvTokensRead(sel, r)·elemsPerEntry·bpe; kvWrite += seqs·writeTokens·elemsPerNewToken·bpe
   const sec = op.secondaryKv;
   const secReadBytes =
@@ -383,7 +409,9 @@ function attentionBytes(op: AttentionOp): ByteBreakdown {
         sec.kvRead.elemsPerToken *
         bytesPerElement(sec.kvRead.format);
   const secWriteBytes =
-    sec === undefined ? 0 : op.seqs * writeTokens * sec.kvWrite.elemsPerToken * bytesPerElement(sec.kvWrite.format);
+    sec === undefined
+      ? 0
+      : op.seqs * writeTokens * sec.kvWrite.elemsPerToken * bytesPerElement(sec.kvWrite.format);
   return breakdown({
     weightBytes: 0,
     activationReadBytes: qBytes,
@@ -450,16 +478,24 @@ function recurrentFlops(op: RecurrentOp): number {
     // Intra-chunk, per token: causal C·Bᵀ over (Q+1)/2 keys × 2 FLOP × N, once per group, plus (L∘CBᵀ)·X
     // over (Q+1)/2 keys × 2 FLOP × P per head.
     const intraChunkPerToken =
-      op.mode === 'chunked' ? (op.chunkLen + 1) * (op.qkHeads * op.keyDim + op.heads * op.valueDim) : 0;
+      op.mode === 'chunked'
+        ? (op.chunkLen + 1) * (op.qkHeads * op.keyDim + op.heads * op.valueDim)
+        : 0;
     // Formula: F = T·( H·c_s·N·P + (chunked ? (Q+1)·(G·N + H·P) : 0) ),  T = seqs·qLen, G = qkHeads, Q = chunkLen
     // See docs/simulation-model.md §3 "Recurrent", §5 "Mamba-2"
     return T * (statePerToken + intraChunkPerToken);
   }
   // Intra-chunk causal attention: on average (C+1)/2 keys per query, 2 FLOP per element over dk + dv.
-  const intraChunkPerToken = op.mode === 'chunked' ? (op.chunkLen + 1) * (op.keyDim + op.valueDim) : 0;
+  const intraChunkPerToken =
+    op.mode === 'chunked' ? (op.chunkLen + 1) * (op.keyDim + op.valueDim) : 0;
   // Formula: F = seqs·qLen·heads·( c_s·dk·dv + (chunked ? (C+1)·(dk+dv) : 0) )
   // See docs/simulation-model.md §3 "Recurrent"
-  return op.seqs * op.qLen * op.heads * (op.stateFlopsPerElemPerToken * stateElemsPerHead + intraChunkPerToken);
+  return (
+    op.seqs *
+    op.qLen *
+    op.heads *
+    (op.stateFlopsPerElemPerToken * stateElemsPerHead + intraChunkPerToken)
+  );
 }
 
 /**

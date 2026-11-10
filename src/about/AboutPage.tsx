@@ -5,7 +5,9 @@ import { ScrollArea } from '../ui/components/ScrollArea';
 import { renderMarkdown, splitTables } from './markdown';
 
 const optionalDocs = import.meta.glob<string>('../../docs/sanity-check.md', {
-  query: '?raw', import: 'default', eager: true,
+  query: '?raw',
+  import: 'default',
+  eager: true,
 });
 const sanitySource = optionalDocs['../../docs/sanity-check.md'];
 const renderedDocs = sanitySource
@@ -66,7 +68,9 @@ export function AboutPage() {
   return (
     <>
       <header className="about-header">
-        <a className="about-wordmark" href={estimateHref()}>specmaxx</a>
+        <a className="about-wordmark" href={estimateHref()}>
+          specmaxx
+        </a>
         <a href={estimateHref()}>Back to the estimate</a>
       </header>
       <main className="about-main">
@@ -80,14 +84,20 @@ export function AboutPage() {
           <nav className="about-toc" aria-label="Modeling method contents">
             <ol>
               {methodSections.map((section) => (
-                <li key={section.id}><a href={`#${section.id}`}>{section.title}</a></li>
+                <li key={section.id}>
+                  <a href={`#${section.id}`}>{section.title}</a>
+                </li>
               ))}
             </ol>
           </nav>
         </section>
         <Prose id="modeling-method" label="Modeling method" html={methodHtml} />
-        <details className="about-reference" id={REFERENCE_ID} open={referenceOpen}
-          onToggle={(event) => setReferenceOpen(event.currentTarget.open)}>
+        <details
+          className="about-reference"
+          id={REFERENCE_ID}
+          open={referenceOpen}
+          onToggle={(event) => setReferenceOpen(event.currentTarget.open)}
+        >
           <summary>Full reference</summary>
           <nav aria-label="Reference documents">
             <a href="#simulation-model">Simulation model</a>
@@ -96,7 +106,9 @@ export function AboutPage() {
           <Prose id="simulation-model" label="Simulation model" html={simulationHtml} />
           {sanitySource && <Prose id="sanity-check" label="Sanity checks" html={sanityHtml} />}
         </details>
-        <footer className="about-footer"><a href={estimateHref()}>Back to the estimate</a></footer>
+        <footer className="about-footer">
+          <a href={estimateHref()}>Back to the estimate</a>
+        </footer>
       </main>
     </>
   );
@@ -112,12 +124,20 @@ function Prose({ id, label, html }: { id: string; label: string; html: string })
     <article className="about-prose" id={id} aria-label={label}>
       {splitTables(html).map((segment, n) =>
         segment.kind === 'table' ? (
-          <ScrollArea key={n} axis="horizontal" className="table-scroll"
-            viewportProps={{ tabIndex: 0, role: 'region', 'aria-label': 'Data table' }}>
+          <ScrollArea
+            key={n}
+            axis="horizontal"
+            className="table-scroll"
+            viewportProps={{ tabIndex: 0, role: 'region', 'aria-label': 'Data table' }}
+          >
             <div dangerouslySetInnerHTML={{ __html: segment.html }} />
           </ScrollArea>
         ) : (
-          <div key={n} className="prose-segment" dangerouslySetInnerHTML={{ __html: segment.html }} />
+          <div
+            key={n}
+            className="prose-segment"
+            dangerouslySetInnerHTML={{ __html: segment.html }}
+          />
         ),
       )}
     </article>

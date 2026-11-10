@@ -33,7 +33,13 @@ import {
   strAt,
   strListAt,
 } from './common';
-import { anyMatch, compilePattern, compilePatterns, patternMatches, type NamePattern } from './patterns';
+import {
+  anyMatch,
+  compilePattern,
+  compilePatterns,
+  patternMatches,
+  type NamePattern,
+} from './patterns';
 import { isJsonObject } from '../reader';
 import type { JsonObject, QuantDefaults } from '../types';
 
@@ -75,9 +81,12 @@ export function ctWeightFormat(
     return { dtype: 'fp4_e2m1', extraBitsPerElem: group ? groupScaleBits(scaleBits, 0, group) : 0 };
   }
   if (type === 'float' && bits === 8) {
-    if (fmt.includes('mxfp8') || (group === 32 && dtypeNameBits(w.scale_dtype, 0) === 8)) return { dtype: 'mxfp8' };
-    if (block && block.length === 2) return { dtype: 'fp8_e4m3', extraBitsPerElem: blockScaleBits(scaleBits, block[0], block[1]) };
-    if (strategy === 'group' && group) return { dtype: 'fp8_e4m3', extraBitsPerElem: groupScaleBits(scaleBits, 0, group) };
+    if (fmt.includes('mxfp8') || (group === 32 && dtypeNameBits(w.scale_dtype, 0) === 8))
+      return { dtype: 'mxfp8' };
+    if (block && block.length === 2)
+      return { dtype: 'fp8_e4m3', extraBitsPerElem: blockScaleBits(scaleBits, block[0], block[1]) };
+    if (strategy === 'group' && group)
+      return { dtype: 'fp8_e4m3', extraBitsPerElem: groupScaleBits(scaleBits, 0, group) };
     if (strategy === 'channel') notes.push('fp8 per-channel weight scales: overhead ≈0');
     return { dtype: 'fp8_e4m3' };
   }
@@ -88,7 +97,8 @@ export function ctWeightFormat(
       if (strategy === 'channel') notes.push(`int${bits} per-channel weight scales: overhead ≈0`);
       return { dtype };
     }
-    if (block && block.length === 2) return { dtype, extraBitsPerElem: blockScaleBits(scaleBits, block[0], block[1]) };
+    if (block && block.length === 2)
+      return { dtype, extraBitsPerElem: blockScaleBits(scaleBits, block[0], block[1]) };
     const zpBits = w.symmetric === false ? dtypeNameBits(w.zp_dtype, bits) : 0;
     return { dtype, extraBitsPerElem: groupScaleBits(scaleBits, zpBits, group ?? 0) };
   }
@@ -103,9 +113,12 @@ export function ctInputDtype(a: unknown, format: string | undefined): Dtype | un
   const type = strAt(a, 'type') ?? 'int';
   const group = numAt(a, 'group_size');
   const fmt = format ?? '';
-  if (type === 'float' && bits === 4) return fmt.includes('mxfp4') || group === 32 ? 'mxfp4' : 'nvfp4';
+  if (type === 'float' && bits === 4)
+    return fmt.includes('mxfp4') || group === 32 ? 'mxfp4' : 'nvfp4';
   if (type === 'float' && bits === 8) {
-    return fmt.includes('mxfp8') || (group === 32 && dtypeNameBits(a.scale_dtype, 0) === 8) ? 'mxfp8' : 'fp8_e4m3';
+    return fmt.includes('mxfp8') || (group === 32 && dtypeNameBits(a.scale_dtype, 0) === 8)
+      ? 'mxfp8'
+      : 'fp8_e4m3';
   }
   if (type === 'int' && bits === 8) return 'int8';
   if (type === 'int' && bits === 4) return 'int4';
@@ -122,7 +135,12 @@ function specificity(p: NamePattern): number {
  * Compile the `config_groups` of a compressed-tensors (or ModelOpt) config. `exact`: plain-name targets match
  * whole module names only (compressed-tensors); ModelOpt targets also name parent modules (`…mlp.experts`).
  */
-export function compileCtGroups(qc: JsonObject, ctx: SchemeContext, notes: string[], exact = true): CtGroup[] {
+export function compileCtGroups(
+  qc: JsonObject,
+  ctx: SchemeContext,
+  notes: string[],
+  exact = true,
+): CtGroup[] {
   const groups = objAt(qc, 'config_groups') ?? {};
   const topFormat = strAt(qc, 'format');
   const scaleFallback = ctx.modelDtype === 'fp32' ? 32 : 16;
@@ -185,7 +203,8 @@ export function readCompressedTensors(
   const ignore = compilePatterns(ignoreRaw, { exact: true });
   const kvCache = ctKvCache(qc.kv_cache_scheme);
   const sparsity = objAt(qc, 'sparsity_config');
-  if (sparsity && Object.keys(sparsity).length > 0) notes.push('sparsity_config present but not modeled (dense weights assumed)');
+  if (sparsity && Object.keys(sparsity).length > 0)
+    notes.push('sparsity_config present but not modeled (dense weights assumed)');
 
   const resolve = (p: Probe): ModuleQuant => {
     if (anyMatch(ignore, p) || p.nativeHighPrecision) return ctx.native;

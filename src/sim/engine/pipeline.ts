@@ -384,7 +384,10 @@ export function phaseResult(stages: StageResult[], shape: PhaseShape): PhaseResu
         latencySec,
         tokensPerSec: (shape.dp * shape.sequencesPerReplica * shape.promptLen) / cycleSec,
         ...(hit
-          ? { computedTokensPerSec: (shape.dp * shape.sequencesPerReplica * shape.computedTokens!) / cycleSec }
+          ? {
+              computedTokensPerSec:
+                (shape.dp * shape.sequencesPerReplica * shape.computedTokens!) / cycleSec,
+            }
           : {}),
         perSequenceTokensPerSec: shape.promptLen / latencySec,
       };

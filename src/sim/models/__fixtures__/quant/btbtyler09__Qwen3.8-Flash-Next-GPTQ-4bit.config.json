@@ -1,7 +1,5 @@
 {
-  "architectures": [
-    "Qwen4ExpForConditionalGeneration"
-  ],
+  "architectures": ["Qwen4ExpForConditionalGeneration"],
   "image_token_id": 248056,
   "language_model_only": false,
   "model_type": "qwen4_exp",
@@ -39,9 +37,7 @@
       "offload_to_disk": true,
       "offload_to_disk_path": "/mnt/slow-storage/gptq-offload-q38fn",
       "pack_impl": "cpu",
-      "quantizer": [
-        "gptqmodel:7.3.5"
-      ],
+      "quantizer": ["gptqmodel:7.3.5"],
       "static_groups": false,
       "true_sequential": true,
       "uri": "https://github.com/modelcloud/gptqmodel",
@@ -133,9 +129,7 @@
     "moe_intermediate_size": 640,
     "mtp": {
       "hybrid": true,
-      "layer_types": [
-        "full_attention"
-      ],
+      "layer_types": ["full_attention"],
       "mtp_use_hidden_state_from_layer": null,
       "num_hidden_layers": 1,
       "rope_theta": 10000000
@@ -155,17 +149,11 @@
     "partial_rotary_factor": 0.25,
     "ple_conv_kernel_size": 4,
     "ple_embed_dim": 2560,
-    "ple_layer_ids": [
-      2
-    ],
-    "rms_norm_eps": 1e-06,
+    "ple_layer_ids": [2],
+    "rms_norm_eps": 1e-6,
     "rope_parameters": {
       "mrope_interleaved": true,
-      "mrope_section": [
-        11,
-        11,
-        10
-      ],
+      "mrope_section": [11, 11, 10],
       "partial_rotary_factor": 0.25,
       "rope_theta": 10000000,
       "rope_type": "default"

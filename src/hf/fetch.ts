@@ -85,9 +85,16 @@ async function getJson(
  * @param options revision, token, injectable fetch/storage (see {@link HfFetchOptions}).
  * @returns the parsed JSON value, or an {@link HfError} (use `isHfError`).
  */
-export async function fetchHfJsonFile(id: string, file: string, options: HfFetchOptions = {}): Promise<{ value: unknown } | HfError> {
+export async function fetchHfJsonFile(
+  id: string,
+  file: string,
+  options: HfFetchOptions = {},
+): Promise<{ value: unknown } | HfError> {
   if (!isValidModelId(id)) {
-    return { kind: 'invalid_id', message: `"${id}" is not a Hugging Face model id. Use the form owner/name.` };
+    return {
+      kind: 'invalid_id',
+      message: `"${id}" is not a Hugging Face model id. Use the form owner/name.`,
+    };
   }
   const revision = options.revision?.trim() || DEFAULT_REVISION;
   const f = options.fetchImpl ?? globalThis.fetch?.bind(globalThis);
@@ -95,12 +102,16 @@ export async function fetchHfJsonFile(id: string, file: string, options: HfFetch
   const ctx: Ctx = {
     fetchImpl: f,
     token: options.token === undefined ? getHfToken(options.tokenStorage) : options.token || null,
-    cache: options.cache ?? (options.storage === undefined ? createCache() : createCache(options.storage)),
+    cache:
+      options.cache ??
+      (options.storage === undefined ? createCache() : createCache(options.storage)),
     revision,
   };
   const r = await getJson(ctx, id, file, resolveUrl(id, file, revision), false);
   if (r.tag === 'ok') return { value: r.value };
-  return r.tag === 'error' ? r.error : { kind: 'not_found', status: 404, message: `${id} has no ${file}.` };
+  return r.tag === 'error'
+    ? r.error
+    : { kind: 'not_found', status: 404, message: `${id} has no ${file}.` };
 }
 
 function baseModelOf(api: HfApiModelInfo): string | undefined {
@@ -147,7 +158,8 @@ export async function fetchHfRepoFiles(
     fetchImpl: f,
     token: options.token === undefined ? getHfToken(options.tokenStorage) : options.token || null,
     cache:
-      options.cache ?? (options.storage === undefined ? createCache() : createCache(options.storage)),
+      options.cache ??
+      (options.storage === undefined ? createCache() : createCache(options.storage)),
     revision,
   };
 
@@ -178,7 +190,13 @@ async function fetchRepo(ctx: Ctx, id: string): Promise<HfRepoFiles | HfError> {
   const listed = new Set((api.siblings ?? []).map((s) => s.rfilename));
 
   const file = (name: string, repo = id) =>
-    getJson(ctx, repo, name, resolveUrl(repo, name, repo === id ? revision : DEFAULT_REVISION), true);
+    getJson(
+      ctx,
+      repo,
+      name,
+      resolveUrl(repo, name, repo === id ? revision : DEFAULT_REVISION),
+      true,
+    );
 
   const out: HfRepoFiles = { id, revision, api, config: null };
   const config = await file('config.json');

@@ -15,7 +15,13 @@ import { DEFAULT_SIM_OPTIONS } from '../../sim/engine/simulate';
 import { DEFAULT_EP_IMBALANCE } from '../../sim/lower/moe';
 import type { CablingId } from '../../sim/hw/presets/catalog';
 import { DEFAULT_MODEL_ID } from './modelShortlist';
-import { devicesPerNodeForLocalLink, nearestCount, normalizeCabling, normalizeLocalLink, setupOptionsOf } from './hardware';
+import {
+  devicesPerNodeForLocalLink,
+  nearestCount,
+  normalizeCabling,
+  normalizeLocalLink,
+  setupOptionsOf,
+} from './hardware';
 import {
   normalizeDeployment,
   normalizeHost,
@@ -157,8 +163,13 @@ export function isDpAttentionEpShape(parallel: ParallelConfig): boolean {
  * `parallel` with `denseTpGroup` normalized for the layout: kept only as `'ep'` and only in DP attention + EP (an
  * absent field is the default, so `'tp'` and `undefined` are removed).
  */
-function normalizeDenseTp(parallel: ParallelConfig, layout: AppState['parallelLayout']): ParallelConfig {
-  return layout === 'dpAttentionEp' && parallel.denseTpGroup === 'ep' ? parallel : without(parallel, 'denseTpGroup');
+function normalizeDenseTp(
+  parallel: ParallelConfig,
+  layout: AppState['parallelLayout'],
+): ParallelConfig {
+  return layout === 'dpAttentionEp' && parallel.denseTpGroup === 'ep'
+    ? parallel
+    : without(parallel, 'denseTpGroup');
 }
 
 /**
@@ -169,9 +180,11 @@ function normalizeDenseTp(parallel: ParallelConfig, layout: AppState['parallelLa
  */
 export function normalizeEpBalance(parallel: ParallelConfig): ParallelConfig {
   let out = parallel;
-  if (out.epImbalance === undefined || out.epImbalance === DEFAULT_EP_IMBALANCE) out = without(out, 'epImbalance');
+  if (out.epImbalance === undefined || out.epImbalance === DEFAULT_EP_IMBALANCE)
+    out = without(out, 'epImbalance');
   if (out.epImbalanceScalesAllToAll !== true) out = without(out, 'epImbalanceScalesAllToAll');
-  if (out.redundantExpertsPerRank === undefined || out.redundantExpertsPerRank === 0) out = without(out, 'redundantExpertsPerRank');
+  if (out.redundantExpertsPerRank === undefined || out.redundantExpertsPerRank === 0)
+    out = without(out, 'redundantExpertsPerRank');
   return out;
 }
 
@@ -180,7 +193,10 @@ export function normalizeEpBalance(parallel: ParallelConfig): ParallelConfig {
  * EP (TP is 1 there, so there is no TP group to split the KV cache over). Any other value is kept as typed, so an
  * invalid one shows its error on the field.
  */
-function normalizeDcp(parallel: ParallelConfig, layout: AppState['parallelLayout']): ParallelConfig {
+function normalizeDcp(
+  parallel: ParallelConfig,
+  layout: AppState['parallelLayout'],
+): ParallelConfig {
   return layout === 'dpAttentionEp' || parallel.dcp === undefined || parallel.dcp === 1
     ? without(parallel, 'dcp')
     : parallel;
@@ -235,7 +251,11 @@ export type AppAction =
    */
   | { type: 'setModel'; model: ModelChoice }
   /** Set (dtype) or clear (undefined) one quant override. */
-  | { type: 'setQuant'; field: 'weights' | 'activations' | 'kvCache' | 'lookupTables'; dtype: Dtype | 'exl3' | undefined }
+  | {
+      type: 'setQuant';
+      field: 'weights' | 'activations' | 'kvCache' | 'lookupTables';
+      dtype: Dtype | 'exl3' | undefined;
+    }
   /** Set one EXL3 bits-per-weight override (`bpw`: linear layers, `headBpw`: LM head). */
   | { type: 'setBpw'; field: 'bpw' | 'headBpw'; value: number }
   /** Clear every quant override. */
@@ -295,7 +315,11 @@ export type AppAction =
   /** Replace the host choice (normalized; `{}` = defaults). */
   | { type: 'setHost'; host: HostChoice }
   /** Set (value) or clear (undefined: the default) one memory-fit knob of the hardware (Hardware → Advanced). */
-  | { type: 'setMemoryFit'; field: 'gpuUsableFraction' | 'runtimeReserveBytes'; value: number | undefined }
+  | {
+      type: 'setMemoryFit';
+      field: 'gpuUsableFraction' | 'runtimeReserveBytes';
+      value: number | undefined;
+    }
   /** Turn the engine dispatch overlay on or off (Hardware → Advanced). */
   | { type: 'setEngineDispatchOverlay'; on: boolean };
 
@@ -316,7 +340,8 @@ export function normalizeOptions(options: Partial<SimOptions>): Partial<SimOptio
   const out: Partial<SimOptions> = {};
   for (const key of Object.keys(options) as (keyof SimOptions)[]) {
     const value = options[key];
-    if (value !== undefined && value !== DEFAULT_SIM_OPTIONS[key]) Object.assign(out, { [key]: value });
+    if (value !== undefined && value !== DEFAULT_SIM_OPTIONS[key])
+      Object.assign(out, { [key]: value });
   }
   return out;
 }
@@ -338,17 +363,26 @@ export function reduce(state: AppState, action: AppAction): AppState {
       return action.state;
     case 'setModel': {
       const model: ModelChoice =
-        action.model.kind === 'hf' && (action.model.revision === undefined || action.model.revision === 'main')
+        action.model.kind === 'hf' &&
+        (action.model.revision === undefined || action.model.revision === 'main')
           ? { kind: 'hf', id: action.model.id }
           : action.model;
       const specDec = state.deployment.specDec && without(state.deployment.specDec, 'drafter');
-      return { ...state, model, quant: {}, deployment: normalizeDeployment({ ...state.deployment, specDec }) };
+      return {
+        ...state,
+        model,
+        quant: {},
+        deployment: normalizeDeployment({ ...state.deployment, specDec }),
+      };
     }
     case 'setQuant': {
       let quant: QuantOverrides =
-        action.dtype === undefined ? without(state.quant, action.field) : { ...state.quant, [action.field]: action.dtype };
+        action.dtype === undefined
+          ? without(state.quant, action.field)
+          : { ...state.quant, [action.field]: action.dtype };
       // The bpw overrides belong to EXL3 weights; leaving EXL3 drops them.
-      if (action.field === 'weights' && action.dtype !== 'exl3') quant = without(without(quant, 'bpw'), 'headBpw');
+      if (action.field === 'weights' && action.dtype !== 'exl3')
+        quant = without(without(quant, 'bpw'), 'headBpw');
       return { ...state, quant };
     }
     case 'setBpw':
@@ -359,7 +393,8 @@ export function reduce(state: AppState, action: AppAction): AppState {
       return { ...state, hw: withNodeHost(action.hw, hw.host) };
     case 'setDevice': {
       const options = setupOptionsOf({ deviceId: action.deviceId });
-      const snap = (offered: number[], n: number) => (offered.includes(n) ? n : nearestCount(offered, n));
+      const snap = (offered: number[], n: number) =>
+        offered.includes(n) ? n : nearestCount(offered, n);
       return {
         ...state,
         hw: {
@@ -372,12 +407,20 @@ export function reduce(state: AppState, action: AppAction): AppState {
     }
     case 'setUnlock': {
       const unlocks =
-        action.optionId === undefined ? without(hw.unlocks, action.axisId) : { ...hw.unlocks, [action.axisId]: action.optionId };
+        action.optionId === undefined
+          ? without(hw.unlocks, action.axisId)
+          : { ...hw.unlocks, [action.axisId]: action.optionId };
       // An unlock change can change the PCIe host interface (CMP 170HX): a local link it no longer runs is dropped.
-      return { ...state, hw: normalizeCabling(normalizeLocalLink({ ...hw, unlocks, capacityIndex: 0 })) };
+      return {
+        ...state,
+        hw: normalizeCabling(normalizeLocalLink({ ...hw, unlocks, capacityIndex: 0 })),
+      };
     }
     case 'setEngine': {
-      const next = action.engineId === undefined ? without(hw, 'engineId') : { ...hw, engineId: action.engineId };
+      const next =
+        action.engineId === undefined
+          ? without(hw, 'engineId')
+          : { ...hw, engineId: action.engineId };
       return { ...state, hw: next };
     }
     case 'setCapacity':
@@ -385,7 +428,10 @@ export function reduce(state: AppState, action: AppAction): AppState {
     case 'setMemoryFit':
       return {
         ...state,
-        hw: action.value === undefined ? without(hw, action.field) : { ...hw, [action.field]: action.value },
+        hw:
+          action.value === undefined
+            ? without(hw, action.field)
+            : { ...hw, [action.field]: action.value },
       };
     case 'setCounts': {
       const devicesPerNode = action.devicesPerNode ?? hw.devicesPerNode;
@@ -397,20 +443,32 @@ export function reduce(state: AppState, action: AppAction): AppState {
     }
     case 'setLink': {
       const idKey = action.level === 'intra' ? 'intraLinkId' : 'interLinkId';
-      const base = action.linkId === undefined ? without(hw, idKey) : { ...hw, [idKey]: action.linkId };
+      const base =
+        action.linkId === undefined ? without(hw, idKey) : { ...hw, [idKey]: action.linkId };
       // A local link restricted to other counts (the 2-card NVLink bridge) moves the count to one it joins.
       const devicesPerNode =
-        action.level === 'intra' && action.linkId !== undefined ? devicesPerNodeForLocalLink(hw, action.linkId) : hw.devicesPerNode;
+        action.level === 'intra' && action.linkId !== undefined
+          ? devicesPerNodeForLocalLink(hw, action.linkId)
+          : hw.devicesPerNode;
       // A local link the (unlocked) PCIe host interface cannot run is refused: the default stays.
-      return { ...state, hw: normalizeCabling(normalizeLocalLink({ ...base, devicesPerNode, [editsKey(action.level)]: {} })) };
+      return {
+        ...state,
+        hw: normalizeCabling(
+          normalizeLocalLink({ ...base, devicesPerNode, [editsKey(action.level)]: {} }),
+        ),
+      };
     }
     case 'setCabling': {
-      const base = action.cabling === undefined ? without(hw, 'cabling') : { ...hw, cabling: action.cabling };
+      const base =
+        action.cabling === undefined ? without(hw, 'cabling') : { ...hw, cabling: action.cabling };
       return { ...state, hw: normalizeCabling(base) };
     }
     case 'setEdit': {
       const key = editsKey(action.target);
-      const edits = action.value === undefined ? without(hw[key], action.path) : { ...hw[key], [action.path]: action.value };
+      const edits =
+        action.value === undefined
+          ? without(hw[key], action.path)
+          : { ...hw[key], [action.path]: action.value };
       return { ...state, hw: { ...hw, [key]: edits } };
     }
     case 'resetEdits':
@@ -421,13 +479,25 @@ export function reduce(state: AppState, action: AppAction): AppState {
       // Every degree is kept as given; dense models simulate with EP 1 (effectiveParallel). Degrees that leave the
       // DP attention + EP shape (TP 1, DP = EP) leave the layout too.
       const parallel = { ...state.parallel, ...action.parallel };
-      const layout = state.parallelLayout !== undefined && isDpAttentionEpShape(parallel) ? state.parallelLayout : undefined;
-      const next = layout === undefined ? without(state, 'parallelLayout') : { ...state, parallelLayout: layout };
-      return { ...next, parallel: normalizeDcp(normalizeEpBalance(normalizeDenseTp(parallel, layout)), layout) };
+      const layout =
+        state.parallelLayout !== undefined && isDpAttentionEpShape(parallel)
+          ? state.parallelLayout
+          : undefined;
+      const next =
+        layout === undefined
+          ? without(state, 'parallelLayout')
+          : { ...state, parallelLayout: layout };
+      return {
+        ...next,
+        parallel: normalizeDcp(normalizeEpBalance(normalizeDenseTp(parallel, layout)), layout),
+      };
     }
     case 'setParallelLayout': {
       if (action.layout === 'custom') {
-        return { ...without(state, 'parallelLayout'), parallel: without(state.parallel, 'denseTpGroup') };
+        return {
+          ...without(state, 'parallelLayout'),
+          parallel: without(state.parallel, 'denseTpGroup'),
+        };
       }
       // Formula: N = devices / pp (dp = ep = N, tp = 1), with pp kept when it divides the device count.
       const devices = hw.devicesPerNode * hw.nodes;
@@ -442,7 +512,9 @@ export function reduce(state: AppState, action: AppAction): AppState {
     case 'setWorkload':
       return { ...state, workload: { ...state.workload, ...action.workload } };
     case 'setEngineDispatchOverlay':
-      return action.on ? { ...state, engineDispatchOverlay: true } : without(state, 'engineDispatchOverlay');
+      return action.on
+        ? { ...state, engineDispatchOverlay: true }
+        : without(state, 'engineDispatchOverlay');
     case 'setOptions':
       return { ...state, options: normalizeOptions({ ...state.options, ...action.options }) };
     case 'setOffload': {
@@ -454,7 +526,10 @@ export function reduce(state: AppState, action: AppAction): AppState {
       return { ...state, deployment: normalizeDeployment({ ...state.deployment, offload }) };
     }
     case 'setSpecDec':
-      return { ...state, deployment: normalizeDeployment({ ...state.deployment, specDec: action.specDec }) };
+      return {
+        ...state,
+        deployment: normalizeDeployment({ ...state.deployment, specDec: action.specDec }),
+      };
     case 'setHost': {
       const host = normalizeHost(action.host);
       return { ...state, hw: Object.keys(host).length > 0 ? { ...hw, host } : without(hw, 'host') };

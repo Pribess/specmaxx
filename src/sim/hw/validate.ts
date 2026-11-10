@@ -6,7 +6,12 @@
  */
 
 import type { MathFormat } from '../ir/dtype';
-import { applyDeviceModifiers, applyLinkModifiers, deviceModifierErrors, linkModifierErrors } from './modifiers';
+import {
+  applyDeviceModifiers,
+  applyLinkModifiers,
+  deviceModifierErrors,
+  linkModifierErrors,
+} from './modifiers';
 import { fabricShapeErrors } from './fabric';
 import type { DeviceModifier, LinkModifier } from './modifiers';
 import type {
@@ -57,7 +62,12 @@ export function isPathCovered(path: string, covers: string[]): boolean {
 }
 
 /** Errors for numbers that are not finite or negative, and for numeric leaves no source or estimate covers. */
-function leafErrors(obj: unknown, sources: SourceRef[], estimated: EstimatedField[], label: string): string[] {
+function leafErrors(
+  obj: unknown,
+  sources: SourceRef[],
+  estimated: EstimatedField[],
+  label: string,
+): string[] {
   const covers = [...sources.flatMap((s) => s.fields), ...estimated.map((e) => e.field)];
   const errors: string[] = [];
   for (const leaf of numericLeafPaths(obj)) {
@@ -65,21 +75,28 @@ function leafErrors(obj: unknown, sources: SourceRef[], estimated: EstimatedFiel
       errors.push(`${label}: ${leaf.path} must be finite and ≥ 0 (got ${leaf.value})`);
     }
     if (!isPathCovered(leaf.path, covers)) {
-      errors.push(`${label}: ${leaf.path} is not covered by any sources[].fields or estimated[].field`);
+      errors.push(
+        `${label}: ${leaf.path} is not covered by any sources[].fields or estimated[].field`,
+      );
     }
   }
   return errors;
 }
 
 /** Errors in the citation records themselves (empty URL, empty fields, empty reasons). */
-function provenanceRecordErrors(sources: SourceRef[], estimated: EstimatedField[], label: string): string[] {
+function provenanceRecordErrors(
+  sources: SourceRef[],
+  estimated: EstimatedField[],
+  label: string,
+): string[] {
   const errors: string[] = [];
   sources.forEach((s, i) => {
     if (s.url.trim() === '') errors.push(`${label}: sources[${i}] has an empty url`);
     if (s.fields.length === 0) errors.push(`${label}: sources[${i}] (${s.url}) covers no fields`);
   });
   estimated.forEach((e, i) => {
-    if (e.reason.trim() === '') errors.push(`${label}: estimated[${i}] (${e.field}) has an empty reason`);
+    if (e.reason.trim() === '')
+      errors.push(`${label}: estimated[${i}] (${e.field}) has an empty reason`);
   });
   return errors;
 }
@@ -87,13 +104,25 @@ function provenanceRecordErrors(sources: SourceRef[], estimated: EstimatedField[
 /** Errors in one tiling: positive MMA shape, ≥ 1 CTA tile, tiles aligned to the MMA shape, ctasPerUnit ≥ 1. */
 function tilingErrors(t: GemmTiling, label: string): string[] {
   const errors: string[] = [];
-  for (const [name, v] of [['mmaM', t.mmaM], ['mmaN', t.mmaN], ['mmaK', t.mmaK], ['ctasPerUnit', t.ctasPerUnit]] as const) {
-    if (!Number.isInteger(v) || v < 1) errors.push(`${label}: ${name} must be an integer ≥ 1 (got ${v})`);
+  for (const [name, v] of [
+    ['mmaM', t.mmaM],
+    ['mmaN', t.mmaN],
+    ['mmaK', t.mmaK],
+    ['ctasPerUnit', t.ctasPerUnit],
+  ] as const) {
+    if (!Number.isInteger(v) || v < 1)
+      errors.push(`${label}: ${name} must be an integer ≥ 1 (got ${v})`);
   }
   if (t.ctaTiles.length === 0) errors.push(`${label}: ctaTiles is empty`);
   t.ctaTiles.forEach((tile, i) => {
-    if (tile.m <= 0 || tile.m % t.mmaM !== 0) errors.push(`${label}: ctaTiles[${i}].m = ${tile.m} is not a positive multiple of mmaM ${t.mmaM}`);
-    if (tile.n <= 0 || tile.n % t.mmaN !== 0) errors.push(`${label}: ctaTiles[${i}].n = ${tile.n} is not a positive multiple of mmaN ${t.mmaN}`);
+    if (tile.m <= 0 || tile.m % t.mmaM !== 0)
+      errors.push(
+        `${label}: ctaTiles[${i}].m = ${tile.m} is not a positive multiple of mmaM ${t.mmaM}`,
+      );
+    if (tile.n <= 0 || tile.n % t.mmaN !== 0)
+      errors.push(
+        `${label}: ctaTiles[${i}].n = ${tile.n} is not a positive multiple of mmaN ${t.mmaN}`,
+      );
   });
   return errors;
 }
@@ -114,14 +143,19 @@ function engineErrors(e: ComputeEngine, label: string): string[] {
     errors.push(`${label}: computeUnits must be an integer ≥ 1 (got ${e.computeUnits})`);
   }
   e.matmulPeaks.forEach((p, i) => {
-    if (!(p.flopsPerSec > 0)) errors.push(`${label}: matmulPeaks.${i}.flopsPerSec must be > 0 (got ${p.flopsPerSec})`);
+    if (!(p.flopsPerSec > 0))
+      errors.push(`${label}: matmulPeaks.${i}.flopsPerSec must be > 0 (got ${p.flopsPerSec})`);
   });
   for (const [dtype, v] of Object.entries(e.vectorFlopsPerSec)) {
-    if (v !== undefined && !(v > 0)) errors.push(`${label}: vectorFlopsPerSec.${dtype} must be > 0 (got ${v})`);
+    if (v !== undefined && !(v > 0))
+      errors.push(`${label}: vectorFlopsPerSec.${dtype} must be > 0 (got ${v})`);
   }
-  if (e.vectorFlopsPerSec.fp32 === undefined) errors.push(`${label}: vectorFlopsPerSec.fp32 is required (the last peak fallback)`);
+  if (e.vectorFlopsPerSec.fp32 === undefined)
+    errors.push(`${label}: vectorFlopsPerSec.fp32 is required (the last peak fallback)`);
   if (e.memBandwidthCapBytesPerSec !== undefined && !(e.memBandwidthCapBytesPerSec > 0)) {
-    errors.push(`${label}: memBandwidthCapBytesPerSec must be > 0 (got ${e.memBandwidthCapBytesPerSec})`);
+    errors.push(
+      `${label}: memBandwidthCapBytesPerSec must be > 0 (got ${e.memBandwidthCapBytesPerSec})`,
+    );
   }
   if (e.sfuOpsPerSec !== undefined && !(Number.isFinite(e.sfuOpsPerSec) && e.sfuOpsPerSec > 0)) {
     errors.push(`${label}: sfuOpsPerSec must be a finite number > 0 (got ${e.sfuOpsPerSec})`);
@@ -135,16 +169,24 @@ function engineErrors(e: ComputeEngine, label: string): string[] {
     if (keys.has(key)) errors.push(`${label}: duplicate matmul peak ${key}`);
     keys.add(key);
     if (isIntegerInput(p.input) !== (p.accumulate === 'int32')) {
-      errors.push(`${label}: peak ${key}: integer inputs accumulate in int32, float inputs in fp16/fp32`);
+      errors.push(
+        `${label}: peak ${key}: integer inputs accumulate in int32, float inputs in fp16/fp32`,
+      );
     }
     if (p.sparsity === '2:4') {
-      const dense = e.matmulPeaks.find((d) => d.input === p.input && d.accumulate === p.accumulate && d.sparsity === 'dense');
+      const dense = e.matmulPeaks.find(
+        (d) => d.input === p.input && d.accumulate === p.accumulate && d.sparsity === 'dense',
+      );
       if (dense === undefined) errors.push(`${label}: sparse peak ${key} has no dense counterpart`);
-      else if (p.flopsPerSec < dense.flopsPerSec) errors.push(`${label}: sparse peak ${key} is below its dense peak`);
+      else if (p.flopsPerSec < dense.flopsPerSec)
+        errors.push(`${label}: sparse peak ${key} is below its dense peak`);
     }
   }
   for (const input of new Set(e.matmulPeaks.map((p) => p.input))) {
-    if (!isIntegerInput(input) && !e.matmulPeaks.some((p) => p.input === input && p.accumulate === 'fp32')) {
+    if (
+      !isIntegerInput(input) &&
+      !e.matmulPeaks.some((p) => p.input === input && p.accumulate === 'fp32')
+    ) {
       errors.push(`${label}: float input ${input} has peaks but no fp32-accumulate entry`);
     }
   }
@@ -167,7 +209,10 @@ export function validateDevice(d: DeviceSpec): string[] {
   const label = `device ${d.id}`;
   // The nested link owns its provenance, like links on a topology; do not require duplicate device citations.
   const { hostLink, ...deviceNumbers } = d;
-  const errors = [...leafErrors(deviceNumbers, d.sources, d.estimated, label), ...provenanceRecordErrors(d.sources, d.estimated, label)];
+  const errors = [
+    ...leafErrors(deviceNumbers, d.sources, d.estimated, label),
+    ...provenanceRecordErrors(d.sources, d.estimated, label),
+  ];
   if (hostLink !== undefined) errors.push(...validateLink(hostLink));
   if (d.engines.length === 0) errors.push(`${label}: no engines`);
   const ids = new Set<string>();
@@ -176,16 +221,25 @@ export function validateDevice(d: DeviceSpec): string[] {
     ids.add(e.id);
     errors.push(...engineErrors(e, `${label}.engines.${i}`));
   });
-  if (d.memory.capacityOptionsBytes.length === 0) errors.push(`${label}: memory.capacityOptionsBytes is empty`);
-  if (d.memory.capacityOptionsBytes.some((c) => c <= 0)) errors.push(`${label}: memory.capacityOptionsBytes must be > 0`);
-  if (!(d.memory.bandwidthBytesPerSec > 0)) errors.push(`${label}: memory.bandwidthBytesPerSec must be > 0`);
-  if (d.hostInterface !== undefined) errors.push(...hostInterfaceErrors(d.hostInterface, `${label}.hostInterface`));
+  if (d.memory.capacityOptionsBytes.length === 0)
+    errors.push(`${label}: memory.capacityOptionsBytes is empty`);
+  if (d.memory.capacityOptionsBytes.some((c) => c <= 0))
+    errors.push(`${label}: memory.capacityOptionsBytes must be > 0`);
+  if (!(d.memory.bandwidthBytesPerSec > 0))
+    errors.push(`${label}: memory.bandwidthBytesPerSec must be > 0`);
+  if (d.hostInterface !== undefined)
+    errors.push(...hostInterfaceErrors(d.hostInterface, `${label}.hostInterface`));
   if (d.memory.kind === 'unified' && d.gpuDirectRdma !== undefined) {
-    errors.push(`${label}: gpuDirectRdma applies to dedicated memory only (unified memory never stages); leave it absent`);
+    errors.push(
+      `${label}: gpuDirectRdma applies to dedicated memory only (unified memory never stages); leave it absent`,
+    );
   }
   const f = d.memory.gpuUsableFraction;
   if (f !== undefined) {
-    if (d.memory.kind !== 'unified') errors.push(`${label}: memory.gpuUsableFraction applies to unified memory only; leave it absent`);
+    if (d.memory.kind !== 'unified')
+      errors.push(
+        `${label}: memory.gpuUsableFraction applies to unified memory only; leave it absent`,
+      );
     if (!(f > 0 && f <= 1)) errors.push(`${label}: memory.gpuUsableFraction must be in (0, 1]`);
   }
   return errors;
@@ -194,8 +248,10 @@ export function validateDevice(d: DeviceSpec): string[] {
 /** Errors of a PCIe host interface: generation one of 1 to 5, lanes one of 4 / 8 / 16 (values the type allows). */
 function hostInterfaceErrors(h: HostInterfaceSpec, label: string): string[] {
   const errors: string[] = [];
-  if (![1, 2, 3, 4, 5].includes(h.generation)) errors.push(`${label}: generation must be 1, 2, 3, 4 or 5 (got ${h.generation})`);
-  if (![4, 8, 16].includes(h.lanes)) errors.push(`${label}: lanes must be 4, 8 or 16 (got ${h.lanes})`);
+  if (![1, 2, 3, 4, 5].includes(h.generation))
+    errors.push(`${label}: generation must be 1, 2, 3, 4 or 5 (got ${h.generation})`);
+  if (![4, 8, 16].includes(h.lanes))
+    errors.push(`${label}: lanes must be 4, 8 or 16 (got ${h.lanes})`);
   return errors;
 }
 
@@ -221,7 +277,10 @@ function countErrors(entries: [string, number | undefined][], label: string): st
  * ("Host and storage tiers").
  */
 export function validateStorageTier(t: StorageTierSpec, label = `${t.kind} ${t.id}`): string[] {
-  const errors = [...leafErrors(t, t.sources, t.estimated, label), ...provenanceRecordErrors(t.sources, t.estimated, label)];
+  const errors = [
+    ...leafErrors(t, t.sources, t.estimated, label),
+    ...provenanceRecordErrors(t.sources, t.estimated, label),
+  ];
   if (t.kind === 'host_ram') {
     errors.push(
       ...positiveErrors(
@@ -286,11 +345,17 @@ export function validateHost(h: HostSpec, label = 'host'): string[] {
   const errors: string[] = [];
   if (h.link !== undefined) errors.push(...validateLink(h.link, `${label}.link`));
   if (h.ram !== undefined) {
-    if (h.ram.kind !== 'host_ram') errors.push(`${label}.ram: must be a 'host_ram' tier (got '${(h.ram as StorageTierSpec).kind}')`);
+    if (h.ram.kind !== 'host_ram')
+      errors.push(
+        `${label}.ram: must be a 'host_ram' tier (got '${(h.ram as StorageTierSpec).kind}')`,
+      );
     errors.push(...validateStorageTier(h.ram, `${label}.ram`));
   }
   if (h.ssd !== undefined) {
-    if (h.ssd.kind !== 'nvme') errors.push(`${label}.ssd: must be an 'nvme' tier (got '${(h.ssd as StorageTierSpec).kind}')`);
+    if (h.ssd.kind !== 'nvme')
+      errors.push(
+        `${label}.ssd: must be an 'nvme' tier (got '${(h.ssd as StorageTierSpec).kind}')`,
+      );
     errors.push(...validateStorageTier(h.ssd, `${label}.ssd`));
   }
   return errors;
@@ -303,8 +368,12 @@ export function validateHost(h: HostSpec, label = 'host'): string[] {
  * `gpuDirectRdma: false` (a socket takes host pointers only).
  */
 export function validateLink(l: LinkSpec, label = `link ${l.name}`): string[] {
-  const errors = [...leafErrors(l, l.sources, l.estimated, label), ...provenanceRecordErrors(l.sources, l.estimated, label)];
-  if (!(l.bandwidthPerDirectionBytesPerSec > 0)) errors.push(`${label}: bandwidthPerDirectionBytesPerSec must be > 0`);
+  const errors = [
+    ...leafErrors(l, l.sources, l.estimated, label),
+    ...provenanceRecordErrors(l.sources, l.estimated, label),
+  ];
+  if (!(l.bandwidthPerDirectionBytesPerSec > 0))
+    errors.push(`${label}: bandwidthPerDirectionBytesPerSec must be > 0`);
   if ((l.p2p === 'host_bounce') !== (l.hostBounce !== undefined)) {
     errors.push(`${label}: hostBounce must be present iff p2p is 'host_bounce'`);
   }
@@ -313,10 +382,14 @@ export function validateLink(l: LinkSpec, label = `link ${l.name}`): string[] {
   }
   const cap = l.allPortsCapPerDirectionBytesPerSec;
   if (cap !== undefined && !(cap >= l.bandwidthPerDirectionBytesPerSec)) {
-    errors.push(`${label}: allPortsCapPerDirectionBytesPerSec (${cap}) must be ≥ bandwidthPerDirectionBytesPerSec (${l.bandwidthPerDirectionBytesPerSec}): one port alone reaches its own rate`);
+    errors.push(
+      `${label}: allPortsCapPerDirectionBytesPerSec (${cap}) must be ≥ bandwidthPerDirectionBytesPerSec (${l.bandwidthPerDirectionBytesPerSec}): one port alone reaches its own rate`,
+    );
   }
   if (l.transport === 'tcp' && l.gpuDirectRdma !== false) {
-    errors.push(`${label}: transport 'tcp' needs gpuDirectRdma: false (a socket takes host pointers only)`);
+    errors.push(
+      `${label}: transport 'tcp' needs gpuDirectRdma: false (a socket takes host pointers only)`,
+    );
   }
   return errors;
 }
@@ -333,14 +406,19 @@ export function validateLink(l: LinkSpec, label = `link ${l.name}`): string[] {
 export function validateTopology(t: TopologySpec): string[] {
   const label = `topology ${t.id}`;
   const errors: string[] = [];
-  if (!Number.isInteger(t.devicesPerNode) || t.devicesPerNode < 1) errors.push(`${label}: devicesPerNode must be an integer ≥ 1`);
-  if (!Number.isInteger(t.nodes) || t.nodes < 1) errors.push(`${label}: nodes must be an integer ≥ 1`);
+  if (!Number.isInteger(t.devicesPerNode) || t.devicesPerNode < 1)
+    errors.push(`${label}: devicesPerNode must be an integer ≥ 1`);
+  if (!Number.isInteger(t.nodes) || t.nodes < 1)
+    errors.push(`${label}: nodes must be an integer ≥ 1`);
   if (t.intraNode !== undefined) errors.push(...validateLink(t.intraNode, `${label}.intraNode`));
   if (t.interNode !== undefined) errors.push(...validateLink(t.interNode, `${label}.interNode`));
   if (t.interNodeFabric !== undefined) {
     if (t.interNode === undefined) errors.push(`${label}: interNodeFabric needs an interNode link`);
     if (t.nodes <= 1) errors.push(`${label}: interNodeFabric needs nodes > 1 (got ${t.nodes})`);
-    const shapeErrors = fabricShapeErrors(t.interNodeFabric, { nodes: t.nodes, devicesPerNode: t.devicesPerNode });
+    const shapeErrors = fabricShapeErrors(t.interNodeFabric, {
+      nodes: t.nodes,
+      devicesPerNode: t.devicesPerNode,
+    });
     errors.push(...shapeErrors.map((e) => `${label}.interNodeFabric: ${e}`));
   }
   return errors;

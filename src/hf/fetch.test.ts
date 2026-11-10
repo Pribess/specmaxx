@@ -31,7 +31,9 @@ const opts = (impl: typeof fetch) => ({
 
 describe('urls', () => {
   it('builds urls and validates ids', () => {
-    expect(resolveUrl('a/b', 'config.json')).toBe('https://huggingface.co/a/b/resolve/main/config.json');
+    expect(resolveUrl('a/b', 'config.json')).toBe(
+      'https://huggingface.co/a/b/resolve/main/config.json',
+    );
     expect(resolveUrl('a/b', 'config.json', 'refs/pr/1')).toContain('/resolve/refs%2Fpr%2F1/');
     expect(apiUrl('a/b')).toBe('https://huggingface.co/api/models/a/b');
     expect(apiUrl('a/b', 'v1')).toBe('https://huggingface.co/api/models/a/b/revision/v1');
@@ -77,7 +79,8 @@ describe('fetchHfRepoFiles', () => {
       expect(isHfError(r) && r.kind).toBe(kind);
       if (isHfError(r) && kind === 'unauthorized') expect(r.message).toMatch(/token/i);
     }
-    const boom = (() => Promise.reject(new TypeError('Failed to fetch'))) as unknown as typeof fetch;
+    const boom = (() =>
+      Promise.reject(new TypeError('Failed to fetch'))) as unknown as typeof fetch;
     const r = await fetchHfRepoFiles('a/b', opts(boom));
     expect(isHfError(r) && r.kind).toBe('network');
   });
@@ -131,7 +134,11 @@ describe('fetchHfRepoFiles', () => {
   it('caches in memory/sessionStorage and does not cache errors', async () => {
     const { impl, seen } = fakeFetch(routes);
     const storage = memoryStorage();
-    const o = { fetchImpl: impl, cache: createCache(storage, new Map()), tokenStorage: memoryStorage() };
+    const o = {
+      fetchImpl: impl,
+      cache: createCache(storage, new Map()),
+      tokenStorage: memoryStorage(),
+    };
     await fetchHfRepoFiles('a/b', o);
     await fetchHfRepoFiles('a/b', o);
     expect(seen).toHaveLength(2);
@@ -148,7 +155,11 @@ describe('fetchHfRepoFiles', () => {
       return new Response(JSON.stringify(routes[url] ?? {}), { status: 200 });
     }) as unknown as typeof fetch;
     const s2 = memoryStorage();
-    const m2 = { fetchImpl: flaky, cache: createCache(s2, new Map()), tokenStorage: memoryStorage() };
+    const m2 = {
+      fetchImpl: flaky,
+      cache: createCache(s2, new Map()),
+      tokenStorage: memoryStorage(),
+    };
     const first = await fetchHfRepoFiles('c/d', m2);
     expect(isHfError(first) && first.kind).toBe('unauthorized');
     const second = await fetchHfRepoFiles('c/d', { ...m2, token: 'hf_x' });
@@ -166,7 +177,11 @@ describe('fetchHfRepoFiles', () => {
       },
       removeItem: () => {},
     };
-    const r = await fetchHfRepoFiles('a/b', { fetchImpl: impl, cache: createCache(bad, new Map()), tokenStorage: bad });
+    const r = await fetchHfRepoFiles('a/b', {
+      fetchImpl: impl,
+      cache: createCache(bad, new Map()),
+      tokenStorage: bad,
+    });
     expect(isHfError(r)).toBe(false);
   });
 
@@ -204,7 +219,11 @@ describe('fetchHfRepoFiles', () => {
 describe('fetchHfRepoFiles gated-mirror fallback', () => {
   const official = 'meta-models/Muse-Spark-Open-816B-A42B';
   const mirror = 'unsloth/Muse-Spark-Open-816B-A42B';
-  const mirrorApi = { id: mirror, siblings: [{ rfilename: 'config.json' }], safetensors: { total: 7 } };
+  const mirrorApi = {
+    id: mirror,
+    siblings: [{ rfilename: 'config.json' }],
+    safetensors: { total: 7 },
+  };
   const mirrorConfig = { model_type: 'muse_spark' };
   /** The official repo is gated (401 without a token), the mirror is public. */
   const gatedRoutes = {
@@ -225,7 +244,11 @@ describe('fetchHfRepoFiles gated-mirror fallback', () => {
     const { impl, seen } = fakeFetch(gatedRoutes);
     const r = await fetchHfRepoFiles(official, opts(impl));
     if (isHfError(r)) throw new Error(r.message);
-    expect(seen.map((s) => s.url)).toEqual([apiUrl(official), apiUrl(mirror), resolveUrl(mirror, 'config.json')]);
+    expect(seen.map((s) => s.url)).toEqual([
+      apiUrl(official),
+      apiUrl(mirror),
+      resolveUrl(mirror, 'config.json'),
+    ]);
     expect(seen.every((s) => s.auth === undefined)).toBe(true);
     expect(r.id).toBe(official);
     expect(r.revision).toBe('main');
@@ -236,7 +259,10 @@ describe('fetchHfRepoFiles gated-mirror fallback', () => {
   });
 
   it('also falls back when only the official config.json is gated', async () => {
-    const { impl, seen } = fakeFetch({ ...gatedRoutes, [apiUrl(official)]: { siblings: [{ rfilename: 'config.json' }] } });
+    const { impl, seen } = fakeFetch({
+      ...gatedRoutes,
+      [apiUrl(official)]: { siblings: [{ rfilename: 'config.json' }] },
+    });
     const r = await fetchHfRepoFiles(official, opts(impl));
     if (isHfError(r)) throw new Error(r.message);
     expect(seen.map((s) => s.url)).toEqual([
@@ -287,7 +313,10 @@ describe('fetchHfRepoFiles gated-mirror fallback', () => {
   });
 
   it('(f) a failing mirror returns the original 401', async () => {
-    for (const broken of [{ [apiUrl(mirror)]: 404 }, { [resolveUrl(mirror, 'config.json')]: 500 }]) {
+    for (const broken of [
+      { [apiUrl(mirror)]: 404 },
+      { [resolveUrl(mirror, 'config.json')]: 500 },
+    ]) {
       const { impl } = fakeFetch({ ...gatedRoutes, ...broken });
       const r = await fetchHfRepoFiles(official, opts(impl));
       expect(isHfError(r) && r.kind).toBe('unauthorized');

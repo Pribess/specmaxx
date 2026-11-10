@@ -1,7 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { SYNTH_CLUSTER, SYNTH_GPU, SYNTH_IB, SYNTH_UNIFIED } from '../__fixtures__/synthetic';
-import type { DeviceSpec, HostMemorySpec, HostSpec, LinkSpec, NvmeSpec, TopologySpec } from './types';
-import { validateDevice, validateHost, validateLink, validateStorageTier, validateTopology } from './validate';
+import type {
+  DeviceSpec,
+  HostMemorySpec,
+  HostSpec,
+  LinkSpec,
+  NvmeSpec,
+  TopologySpec,
+} from './types';
+import {
+  validateDevice,
+  validateHost,
+  validateLink,
+  validateStorageTier,
+  validateTopology,
+} from './validate';
 
 /** Four single-device nodes on {@link SYNTH_IB}. */
 const FOUR_NODES: TopologySpec = {
@@ -123,9 +136,14 @@ const SYNTH_RAM: HostMemorySpec = {
   readGranularityBytes: 64,
   maxOutstanding: 64,
   sources: [],
-  estimated: ['capacityBytes', 'bandwidthBytesPerSec', 'latencySec', 'channels', 'readGranularityBytes', 'maxOutstanding'].map(
-    (field) => ({ field, reason: 'synthetic' }),
-  ),
+  estimated: [
+    'capacityBytes',
+    'bandwidthBytesPerSec',
+    'latencySec',
+    'channels',
+    'readGranularityBytes',
+    'maxOutstanding',
+  ].map((field) => ({ field, reason: 'synthetic' })),
 };
 
 /** A synthetic SSD tier: 10 GB/s, 50 µs, 1M IOPS at QD32 × 16, a 7.88 GB/s slot. */
@@ -140,8 +158,19 @@ const SYNTH_SSD: NvmeSpec = {
   maxOutstanding: 512,
   readGranularityBytes: 4096,
   linkBandwidthBytesPerSec: 7.88e9,
-  sources: [{ url: 'https://example.com/ssd', title: 'synthetic datasheet', fields: ['capacityBytes', 'seqReadBandwidthBytesPerSec', 'randomRead'] }],
-  estimated: ['randomReadLatencySec', 'maxOutstanding', 'readGranularityBytes', 'linkBandwidthBytesPerSec'].map((field) => ({
+  sources: [
+    {
+      url: 'https://example.com/ssd',
+      title: 'synthetic datasheet',
+      fields: ['capacityBytes', 'seqReadBandwidthBytesPerSec', 'randomRead'],
+    },
+  ],
+  estimated: [
+    'randomReadLatencySec',
+    'maxOutstanding',
+    'readGranularityBytes',
+    'linkBandwidthBytesPerSec',
+  ].map((field) => ({
     field,
     reason: 'synthetic',
   })),
@@ -160,11 +189,19 @@ describe('validateStorageTier', () => {
     expect(validateStorageTier({ ...SYNTH_RAM, bandwidthBytesPerSec: 0 })).toEqual([
       'host_ram synth-ram: bandwidthBytesPerSec must be finite and > 0 (got 0)',
     ]);
-    expect(validateStorageTier({ ...SYNTH_RAM, latencySec: Infinity }).some((e) => e.includes('latencySec must be finite and > 0'))).toBe(true);
-    expect(validateStorageTier({ ...SYNTH_SSD, seqReadBandwidthBytesPerSec: -1 }).some((e) => e.includes('seqReadBandwidthBytesPerSec must be finite and > 0'))).toBe(true);
-    expect(validateStorageTier({ ...SYNTH_SSD, randomRead: { iops: 0, queueDepth: 32, threads: 16 } })).toEqual([
-      'nvme synth-ssd: randomRead.iops must be finite and > 0 (got 0)',
-    ]);
+    expect(
+      validateStorageTier({ ...SYNTH_RAM, latencySec: Infinity }).some((e) =>
+        e.includes('latencySec must be finite and > 0'),
+      ),
+    ).toBe(true);
+    expect(
+      validateStorageTier({ ...SYNTH_SSD, seqReadBandwidthBytesPerSec: -1 }).some((e) =>
+        e.includes('seqReadBandwidthBytesPerSec must be finite and > 0'),
+      ),
+    ).toBe(true);
+    expect(
+      validateStorageTier({ ...SYNTH_SSD, randomRead: { iops: 0, queueDepth: 32, threads: 16 } }),
+    ).toEqual(['nvme synth-ssd: randomRead.iops must be finite and > 0 (got 0)']);
     expect(validateStorageTier({ ...SYNTH_SSD, linkBandwidthBytesPerSec: 0 })).toEqual([
       'nvme synth-ssd: linkBandwidthBytesPerSec must be finite and > 0 (got 0)',
     ]);
@@ -177,10 +214,15 @@ describe('validateStorageTier', () => {
     expect(validateStorageTier({ ...SYNTH_RAM, maxOutstanding: 1.5 })).toEqual([
       'host_ram synth-ram: maxOutstanding must be an integer ≥ 1 (got 1.5)',
     ]);
-    expect(validateStorageTier({ ...SYNTH_RAM, channels: 0 })).toEqual(['host_ram synth-ram: channels must be an integer ≥ 1 (got 0)']);
-    expect(validateStorageTier({ ...SYNTH_SSD, randomRead: { iops: 1e6, queueDepth: 0.5, threads: 16 } })).toEqual([
-      'nvme synth-ssd: randomRead.queueDepth must be an integer ≥ 1 (got 0.5)',
+    expect(validateStorageTier({ ...SYNTH_RAM, channels: 0 })).toEqual([
+      'host_ram synth-ram: channels must be an integer ≥ 1 (got 0)',
     ]);
+    expect(
+      validateStorageTier({
+        ...SYNTH_SSD,
+        randomRead: { iops: 1e6, queueDepth: 0.5, threads: 16 },
+      }),
+    ).toEqual(['nvme synth-ssd: randomRead.queueDepth must be an integer ≥ 1 (got 0.5)']);
   });
 
   it('every number must be sourced or estimated', () => {
@@ -197,10 +239,16 @@ describe('validateHost', () => {
   });
 
   it('labels errors by slot and rejects a tier in the wrong slot', () => {
-    expect(validateHost({ ram: { ...SYNTH_RAM, latencySec: 0 } })).toEqual(['host.ram: latencySec must be finite and > 0 (got 0)']);
+    expect(validateHost({ ram: { ...SYNTH_RAM, latencySec: 0 } })).toEqual([
+      'host.ram: latencySec must be finite and > 0 (got 0)',
+    ]);
     const swapped = { ram: SYNTH_SSD } as unknown as HostSpec;
     expect(validateHost(swapped)).toContain("host.ram: must be a 'host_ram' tier (got 'nvme')");
-    expect(validateHost({ link: { ...SYNTH_IB, bandwidthPerDirectionBytesPerSec: 0 } }).some((e) => e.startsWith('host.link:'))).toBe(true);
+    expect(
+      validateHost({ link: { ...SYNTH_IB, bandwidthPerDirectionBytesPerSec: 0 } }).some((e) =>
+        e.startsWith('host.link:'),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -209,7 +257,10 @@ describe('validateDevice: hostInterface', () => {
     ({
       ...SYNTH_GPU,
       hostInterface,
-      sources: [...SYNTH_GPU.sources, { url: 'https://example.com/card', title: 'synthetic', fields: ['hostInterface'] }],
+      sources: [
+        ...SYNTH_GPU.sources,
+        { url: 'https://example.com/card', title: 'synthetic', fields: ['hostInterface'] },
+      ],
     }) as DeviceSpec;
 
   it('accepts a cited PCIe interface', () => {
@@ -222,7 +273,11 @@ describe('validateDevice: hostInterface', () => {
       'device synth-gpu.hostInterface: generation must be 1, 2, 3, 4 or 5 (got 6)',
       'device synth-gpu.hostInterface: lanes must be 4, 8 or 16 (got 2)',
     ]);
-    expect(validateDevice({ ...SYNTH_GPU, hostInterface: { generation: 4, lanes: 8 } }).filter((e) => e.includes('not covered'))).toHaveLength(2);
+    expect(
+      validateDevice({ ...SYNTH_GPU, hostInterface: { generation: 4, lanes: 8 } }).filter((e) =>
+        e.includes('not covered'),
+      ),
+    ).toHaveLength(2);
   });
 });
 
@@ -237,18 +292,29 @@ describe('validateDevice: gpuDirectRdma', () => {
 });
 
 describe('validateDevice: sfuOpsPerSec and gemvMaxRows', () => {
-  const withEngine = (extra: object): DeviceSpec => ({ ...SYNTH_GPU, engines: [{ ...SYNTH_GPU.engines[0], ...extra }] });
+  const withEngine = (extra: object): DeviceSpec => ({
+    ...SYNTH_GPU,
+    engines: [{ ...SYNTH_GPU.engines[0], ...extra }],
+  });
   it('accepts a positive SFU rate and an integer row limit (covered by the engines source)', () => {
     expect(validateDevice(withEngine({ sfuOpsPerSec: 1e12, gemvMaxRows: 4 }))).toEqual([]);
   });
   it('rejects a zero, negative or NaN SFU rate', () => {
     for (const v of [0, -1, NaN, Infinity]) {
-      expect(validateDevice(withEngine({ sfuOpsPerSec: v })).some((e) => e.includes('sfuOpsPerSec must be a finite number > 0'))).toBe(true);
+      expect(
+        validateDevice(withEngine({ sfuOpsPerSec: v })).some((e) =>
+          e.includes('sfuOpsPerSec must be a finite number > 0'),
+        ),
+      ).toBe(true);
     }
   });
   it('rejects a row limit that is not an integer ≥ 1', () => {
     for (const v of [0, 1.5, -2]) {
-      expect(validateDevice(withEngine({ gemvMaxRows: v })).some((e) => e.includes('gemvMaxRows must be an integer ≥ 1'))).toBe(true);
+      expect(
+        validateDevice(withEngine({ gemvMaxRows: v })).some((e) =>
+          e.includes('gemvMaxRows must be an integer ≥ 1'),
+        ),
+      ).toBe(true);
     }
   });
 });

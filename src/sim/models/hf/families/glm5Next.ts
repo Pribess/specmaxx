@@ -42,7 +42,11 @@ import {
 const ATTENTION_LAYER_TYPES = ['deepseek_sparse_attention', 'indexed_attention', 'full_attention'];
 
 /** Build the GLM-5.3-Flash IR from its text config. */
-export function buildGlm5Next(text: JsonObject, top: JsonObject, repoId: string): FamilyBuildResult {
+export function buildGlm5Next(
+  text: JsonObject,
+  top: JsonObject,
+  repoId: string,
+): FamilyBuildResult {
   const r = createReader(text, text === top ? '' : 'text_config');
   const hidden = r.int('hidden_size');
   const n = r.int('num_hidden_layers');
@@ -73,11 +77,14 @@ export function buildGlm5Next(text: JsonObject, top: JsonObject, repoId: string)
     gateRank: kdaHeadDim,
   };
 
-  const layerTypes = r.optStrArray('layer_types') ?? Array.from({ length: n }, (_, i) => (i % 4 === 3 ? 'indexed_attention' : 'linear_attention'));
+  const layerTypes =
+    r.optStrArray('layer_types') ??
+    Array.from({ length: n }, (_, i) => (i % 4 === 3 ? 'indexed_attention' : 'linear_attention'));
   const at = r.path ? `${r.path}.layer_types` : 'layer_types';
   if (layerTypes.length < n) r.errors.push(`${at}: ${layerTypes.length} entries for ${n} layers`);
   layerTypes.slice(0, n).forEach((t, i) => {
-    if (t !== 'linear_attention' && !ATTENTION_LAYER_TYPES.includes(t)) r.errors.push(`${at}[${i}]: unknown type '${t}'`);
+    if (t !== 'linear_attention' && !ATTENTION_LAYER_TYPES.includes(t))
+      r.errors.push(`${at}[${i}]: unknown type '${t}'`);
   });
 
   const useMhc = r.bool('mhc', true);
@@ -85,7 +92,9 @@ export function buildGlm5Next(text: JsonObject, top: JsonObject, repoId: string)
   const sinkhorn = useMhc ? r.int('hc_sinkhorn_iters') : 0;
   if (r.errors.length > 0) return { kind: 'invalid_config', errors: r.errors };
 
-  const residual: ResidualParams = useMhc ? mhcResidual(streams, hidden, sinkhorn) : { kind: 'plain' };
+  const residual: ResidualParams = useMhc
+    ? mhcResidual(streams, hidden, sinkhorn)
+    : { kind: 'plain' };
   const isKda = (i: number) => layerTypes[i] === 'linear_attention';
   const layers = repeatLayers(n, (i) =>
     decoderLayer({
@@ -109,14 +118,24 @@ export function buildGlm5Next(text: JsonObject, top: JsonObject, repoId: string)
   if (errors.length > 0) return { kind: 'invalid_config', errors };
 
   // MTP layer `layers.<n>.*`: MLA with its own indexer + MoE, plain residual (no hc_* tensors).
-  const mtpLayer = decoderLayer({ hidden, mixer: { ...mla, sparse: dsaSelection('full', indexer) }, ffn: moe });
-  const vision = isJsonObject(top.vision_config) ? top.vision_config : isJsonObject(text.vision_config) ? text.vision_config : undefined;
+  const mtpLayer = decoderLayer({
+    hidden,
+    mixer: { ...mla, sparse: dsaSelection('full', indexer) },
+    ffn: moe,
+  });
+  const vision = isJsonObject(top.vision_config)
+    ? top.vision_config
+    : isJsonObject(text.vision_config)
+      ? text.vision_config
+      : undefined;
   const visionParams = estimateVisionParams(vision, hidden);
 
   const kdaCount = layers.filter((_, i) => isKda(i)).length;
   const notes = [
     `hybrid: ${kdaCount} KDA layers, ${n - kdaCount} NoPE MLA + DSA layers (k-pool ${indexer.keyPoolTokens ?? 1})`,
-    useMhc ? `mHC residual: ${streams} streams, ${sinkhorn} Sinkhorn iterations` : 'plain residual (mhc false)',
+    useMhc
+      ? `mHC residual: ${streams} streams, ${sinkhorn} Sinkhorn iterations`
+      : 'plain residual (mhc false)',
     'router bias (e_score_correction_bias) not counted (E params per MoE layer)',
   ];
   const excludedParts: string[] = [];
@@ -124,7 +143,10 @@ export function buildGlm5Next(text: JsonObject, top: JsonObject, repoId: string)
   if (visionParams > 0) excludedParts.push('vision tower');
   return {
     kind: 'ok',
-    model: withDraft(model, mtpDraft(() => mtpLayer, mtpLayers, true)),
+    model: withDraft(
+      model,
+      mtpDraft(() => mtpLayer, mtpLayers, true),
+    ),
     notes,
     mtpParamsEstimate: mtpParamsEstimate(mtpLayer, hidden, mtpLayers),
     visionParamsEstimate: visionParams,

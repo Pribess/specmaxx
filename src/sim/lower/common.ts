@@ -46,7 +46,10 @@ export const SHAPE_DEPENDENT_FNS: readonly ShapeDependentFn[] = [
  * `candidate_score` 2 (one multiply-add per rank element); `relu2` 2 (max, square).
  * Unit: FLOP/element. See docs/simulation-model.md §3 "Elementwise".
  */
-export const ELEMENTWISE_FLOPS_PER_ELEM: Record<Exclude<ElementwiseOp['fn'], ShapeDependentFn>, number> = {
+export const ELEMENTWISE_FLOPS_PER_ELEM: Record<
+  Exclude<ElementwiseOp['fn'], ShapeDependentFn>,
+  number
+> = {
   rmsnorm: 4,
   layernorm: 8,
   residual_add: 1,
@@ -157,7 +160,10 @@ export function denseTpGroupSize(ctx: LoweringContext): number {
 }
 
 /** Math format and accumulator of the attention-like cores (attentionMath ?? activations). */
-export function attentionMath(ctx: LoweringContext): { math: MathFormat; accumulate: AccumulateType } {
+export function attentionMath(ctx: LoweringContext): {
+  math: MathFormat;
+  accumulate: AccumulateType;
+} {
   const math = mathFormatOf(ctx.quant.attentionMath ?? ctx.quant.activations);
   return { math, accumulate: resolveAccumulate(math, ctx.quant.accumulate ?? 'fp32') };
 }
@@ -214,8 +220,10 @@ export interface ResolvedModuleQuant {
  */
 export function moduleQuant(ctx: LoweringContext, module: WeightModule): ResolvedModuleQuant {
   const parent = WEIGHT_MODULE_FALLBACK[module];
-  const override = ctx.quant.modules?.[module] ?? (parent === undefined ? undefined : ctx.quant.modules?.[parent]);
-  const defaultWeights = module === 'residual_mixer' ? { dtype: highPrecision(ctx) } : ctx.quant.weights;
+  const override =
+    ctx.quant.modules?.[module] ?? (parent === undefined ? undefined : ctx.quant.modules?.[parent]);
+  const defaultWeights =
+    module === 'residual_mixer' ? { dtype: highPrecision(ctx) } : ctx.quant.weights;
   return {
     weights: override?.weights ?? defaultWeights,
     gemmInput: override?.gemmInput ?? ctx.quant.activations,
@@ -242,8 +250,16 @@ export function linearGemm(
     opts.module !== undefined
       ? moduleQuant(ctx, opts.module)
       : opts.format !== undefined
-        ? { weights: opts.format.weights, gemmInput: opts.format.gemmInput ?? act, sparsity: 'dense' }
-        : { weights: ctx.quant.weights, gemmInput: act, sparsity: ctx.quant.weightSparsity ?? 'dense' };
+        ? {
+            weights: opts.format.weights,
+            gemmInput: opts.format.gemmInput ?? act,
+            sparsity: 'dense',
+          }
+        : {
+            weights: ctx.quant.weights,
+            gemmInput: act,
+            sparsity: ctx.quant.weightSparsity ?? 'dense',
+          };
   const weight = fmt.weights;
   const sparsity = opts.sparsity ?? fmt.sparsity;
   const math = resolveGemmMath(weight.dtype, fmt.gemmInput);
@@ -303,7 +319,8 @@ export function elementwise(
 ): ElementwiseOp {
   let flopsPerElem = f.flopsPerElem;
   if (flopsPerElem === undefined) {
-    if (isShapeDependent(fn)) throw new Error(`${fn} needs an explicit flopsPerElem (set by its lowering)`);
+    if (isShapeDependent(fn))
+      throw new Error(`${fn} needs an explicit flopsPerElem (set by its lowering)`);
     flopsPerElem = ELEMENTWISE_FLOPS_PER_ELEM[fn];
   }
   const op: ElementwiseOp = {
@@ -413,7 +430,12 @@ export function convStateTokens(conv: { kernel: number; dilation?: number }): nu
  * The TP all-reduce of a `tokens × hidden` partial sum, carried at `reduceBpe`; none when tp = 1.
  * messageBytes = the full buffer S per device.
  */
-export function tpAllReduce(name: string, tokens: number, hidden: number, ctx: LoweringContext): CollectiveOp[] {
+export function tpAllReduce(
+  name: string,
+  tokens: number,
+  hidden: number,
+  ctx: LoweringContext,
+): CollectiveOp[] {
   const tp = ctx.parallel.tp;
   if (tp === 1) return [];
   // Formula: S = T·h·reduceBpe

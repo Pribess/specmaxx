@@ -10,7 +10,11 @@ const EXCL = { mtpParamsEstimate: 1_000_000, visionParamsEstimate: 2_000_000 };
 const ACTUAL = P + 3_000_000;
 
 function api(parameters: Record<string, number>, total: number, base?: string): HfApiModelInfo {
-  return { id: 'org/repo', safetensors: { parameters, total }, ...(base ? { cardData: { base_model: base } } : {}) };
+  return {
+    id: 'org/repo',
+    safetensors: { parameters, total },
+    ...(base ? { cardData: { base_model: base } } : {}),
+  };
 }
 
 describe('checkParams', () => {
@@ -29,14 +33,21 @@ describe('checkParams', () => {
 
   it('packed for U8/U32/I32 keys, pointing at the base model', () => {
     for (const key of ['U8', 'U32', 'I32']) {
-      const r = checkParams(REF_DENSE_8B, EXCL, api({ BF16: 1, [key]: 2 }, ACTUAL / 3, 'org/base'), 'gptq');
+      const r = checkParams(
+        REF_DENSE_8B,
+        EXCL,
+        api({ BF16: 1, [key]: 2 }, ACTUAL / 3, 'org/base'),
+        'gptq',
+      );
       expect(r.status, key).toBe('packed');
       expect(r.note).toContain('org/base');
     }
   });
 
   it('packed for I8 with a packing quant method, but not for DeepSeek fp8 (I8 = one fp4 weight each)', () => {
-    expect(checkParams(REF_DENSE_8B, EXCL, api({ I8: 1 }, ACTUAL / 2), 'compressed-tensors').status).toBe('packed');
+    expect(
+      checkParams(REF_DENSE_8B, EXCL, api({ I8: 1 }, ACTUAL / 2), 'compressed-tensors').status,
+    ).toBe('packed');
     expect(checkParams(REF_DENSE_8B, EXCL, api({ I8: 1 }, ACTUAL), 'fp8').status).toBe('ok');
   });
 
@@ -52,7 +63,9 @@ describe('checkParams', () => {
     expect([close.expected, close.relError]).toEqual([ACTUAL, 0]);
     expect(checkParams(REF_DENSE_8B, EXCL, api({ BF16: 1 }, ACTUAL)).expected).toBe(ACTUAL);
     // The packed rule runs before the sum rule (a U8 sum above the total counts packed words, not params)...
-    expect(checkParams(REF_DENSE_8B, EXCL, api({ U8: ACTUAL * 2 }, ACTUAL / 2)).status).toBe('packed');
+    expect(checkParams(REF_DENSE_8B, EXCL, api({ U8: ACTUAL * 2 }, ACTUAL / 2)).status).toBe(
+      'packed',
+    );
     // ...but after the tolerance check: a total that matches the IR is a parameter count whatever its keys.
     expect(checkParams(REF_DENSE_8B, EXCL, api({ U8: ACTUAL * 2 }, ACTUAL)).status).toBe('ok');
   });
@@ -82,9 +95,22 @@ describe('estimateVisionParams', () => {
 
   it('matches the hand formula on a synthetic config', () => {
     // 2·(4·10² + 2·10·40) + (10·2²)² + 40·8 = 2·1200 + 1600 + 320
-    expect(estimateVisionParams({ depth: 2, hidden_size: 10, intermediate_size: 40, spatial_merge_size: 2, out_hidden_size: 8 })).toBe(4320);
+    expect(
+      estimateVisionParams({
+        depth: 2,
+        hidden_size: 10,
+        intermediate_size: 40,
+        spatial_merge_size: 2,
+        out_hidden_size: 8,
+      }),
+    ).toBe(4320);
     // no merge size: 3·(4·10² + 3·10·40) + 10·16 (gated silu, projection to textHidden)
-    expect(estimateVisionParams({ num_hidden_layers: 3, hidden_size: 10, intermediate_size: 40, hidden_act: 'silu' }, 16)).toBe(4960);
+    expect(
+      estimateVisionParams(
+        { num_hidden_layers: 3, hidden_size: 10, intermediate_size: 40, hidden_act: 'silu' },
+        16,
+      ),
+    ).toBe(4960);
     expect(estimateVisionParams({ n_layers: 4 })).toBe(0);
     expect(estimateVisionParams(undefined)).toBe(0);
   });

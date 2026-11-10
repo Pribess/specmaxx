@@ -11,9 +11,17 @@ import type { ParallelConfig, QuantConfig } from '../ir/model';
 import { decoderLayer, decoderModel } from '../ir/builders';
 import { REF_DENSE_8B } from '../models/reference';
 
-const BF16: QuantConfig = { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } };
+const BF16: QuantConfig = {
+  weights: { dtype: 'bf16' },
+  activations: 'bf16',
+  kvCache: { dtype: 'bf16' },
+};
 
-function ctx(phase: 'prefill' | 'decode', parallel: Partial<ParallelConfig> = {}, seqs = 1): LoweringContext {
+function ctx(
+  phase: 'prefill' | 'decode',
+  parallel: Partial<ParallelConfig> = {},
+  seqs = 1,
+): LoweringContext {
   const qLen = phase === 'prefill' ? 128 : 1;
   return {
     phase,
@@ -37,7 +45,8 @@ function label(op: Op): string {
   }
 }
 
-const allOps = (m: ReturnType<typeof lowerModel>): Op[] => m.stages.flatMap((s) => s.layers.flatMap((l) => l.ops));
+const allOps = (m: ReturnType<typeof lowerModel>): Op[] =>
+  m.stages.flatMap((s) => s.layers.flatMap((l) => l.ops));
 
 describe('T4 dense structure (REF_DENSE_8B)', () => {
   it('tp 1 decode: 36 identical layers of 12 ops, plus embed and head', () => {
@@ -67,7 +76,9 @@ describe('T4 dense structure (REF_DENSE_8B)', () => {
 
   it('tp 8: 2 all-reduces per layer + 1 for the embedding, KV heads sharded 8/8 = 1', () => {
     const ops = allOps(lowerModel(REF_DENSE_8B, ctx('decode', { tp: 8 })));
-    expect(ops.filter((o) => o.kind === 'collective' && o.collective === 'all_reduce')).toHaveLength(73); // 36·2 + 1
+    expect(
+      ops.filter((o) => o.kind === 'collective' && o.collective === 'all_reduce'),
+    ).toHaveLength(73); // 36·2 + 1
     const qkv = ops.find((o) => o.name === 'attn.qkv_proj');
     expect(qkv?.kind === 'gemm' && qkv.n).toBe(768); // (32/8 + 2·1)·128
     const ar = ops.find((o) => o.kind === 'collective');
@@ -85,8 +96,14 @@ describe('T4 dense structure (REF_DENSE_8B)', () => {
     expect(stageLayerRange(36, 2, 1)).toEqual([18, 36]);
     const lowered = lowerModel(REF_DENSE_8B, ctx('decode', { pp: 2 }, 4));
     const [s0, s1] = lowered.stages;
-    expect(s0.layers.map((l) => l.layerIndex)).toEqual([null, ...Array.from({ length: 18 }, (_, i) => i)]);
-    expect(s1.layers.map((l) => l.layerIndex)).toEqual([...Array.from({ length: 18 }, (_, i) => i + 18), null]);
+    expect(s0.layers.map((l) => l.layerIndex)).toEqual([
+      null,
+      ...Array.from({ length: 18 }, (_, i) => i),
+    ]);
+    expect(s1.layers.map((l) => l.layerIndex)).toEqual([
+      ...Array.from({ length: 18 }, (_, i) => i + 18),
+      null,
+    ]);
     expect(s0.sendToNext?.messageBytes).toBe(32_768); // T 4 · 4096 · 2 B
     expect(s1.sendToNext).toBeUndefined();
     expect(() => lowerModel(REF_DENSE_8B, ctx('decode', { pp: 37 }))).toThrow();
@@ -119,7 +136,10 @@ describe('T4 dense structure (REF_DENSE_8B)', () => {
       ],
     });
     const attn = allOps(lowerModel(model, ctx('decode'))).find((o) => o.kind === 'attention');
-    expect(attn?.kind === 'attention' && attn.kvSelection).toEqual({ kind: 'window', windowTokens: 512 });
+    expect(attn?.kind === 'attention' && attn.kvSelection).toEqual({
+      kind: 'window',
+      windowTokens: 512,
+    });
     const block = model.layers[0].blocks[1];
     // min(4096, 512) tokens · (2·2·64 = 256) elems · 2 B
     expect(blockSequenceStateBytes(block, ctx('decode'), 4096)).toBe(262_144);
@@ -134,7 +154,13 @@ describe('T4 dense structure (REF_DENSE_8B)', () => {
       layers: [
         decoderLayer({
           hidden: 256,
-          mixer: { kind: 'gqa', heads: 4, kvHeads: 2, headDim: 64, sparse: { kind: 'indexer', indexer: { heads: 2, headDim: 16, topK: 32 } } },
+          mixer: {
+            kind: 'gqa',
+            heads: 4,
+            kvHeads: 2,
+            headDim: 64,
+            sparse: { kind: 'indexer', indexer: { heads: 2, headDim: 16, topK: 32 } },
+          },
           ffn: { kind: 'dense', intermediate: 512 },
         }),
       ],

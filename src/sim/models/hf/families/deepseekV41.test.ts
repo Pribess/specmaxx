@@ -57,7 +57,12 @@ describe('deepseek_v41: DeepSeek-V4.1-Flash', () => {
     expect(count('reuse')).toBe(30);
     expect([0, 1].map((i) => roles[i])).toEqual(['swa', 'swa']);
     expect([2, 8, 14, 20].map((i) => roles[i])).toEqual(['full', 'full', 'full', 'full']);
-    expect([24, 28, 32, 36].map((i) => roles[i])).toEqual(['reindex', 'reindex', 'reindex', 'reindex']);
+    expect([24, 28, 32, 36].map((i) => roles[i])).toEqual([
+      'reindex',
+      'reindex',
+      'reindex',
+      'reindex',
+    ]);
   });
 
   it('points each consumer at the latest earlier KV source and bounds the late indexers', () => {
@@ -74,10 +79,25 @@ describe('deepseek_v41: DeepSeek-V4.1-Flash', () => {
       const s = g(i)?.selection;
       return s?.kind === 'indexer' ? s.indexer : undefined;
     };
-    expect(ix(2)).toEqual({ heads: 32, headDim: 128, topK: 512, keyPoolTokens: 2, keyInputDim: 512, ownsKeys: true });
+    expect(ix(2)).toEqual({
+      heads: 32,
+      headDim: 128,
+      topK: 512,
+      keyPoolTokens: 2,
+      keyInputDim: 512,
+      ownsKeys: true,
+    });
     // Layer 20 is the candidate source itself: it scores every key.
     expect(ix(20)?.maxScoredKeys).toBeUndefined();
-    expect(ix(24)).toEqual({ heads: 32, headDim: 128, topK: 512, keyPoolTokens: 1, keyInputDim: 512, ownsKeys: false, maxScoredKeys: 16384 });
+    expect(ix(24)).toEqual({
+      heads: 32,
+      headDim: 128,
+      topK: 512,
+      keyPoolTokens: 1,
+      keyInputDim: 512,
+      ownsKeys: false,
+      maxScoredKeys: 16384,
+    });
     expect(g(25)?.selection).toEqual({ kind: 'reuse', topK: 512 });
   });
 
@@ -85,7 +105,13 @@ describe('deepseek_v41: DeepSeek-V4.1-Flash', () => {
     const engrams = m.layers.flatMap((l, i) => (l.blocks[0].kind === 'ngram_embedding' ? [i] : []));
     expect(engrams).toEqual([1, 14]);
     const e = m.layers[1].blocks[0];
-    expect(e).toMatchObject({ kind: 'ngram_embedding', tableRows: 384006168, rowDim: 256, rowsPerToken: 24, outputDim: 4 * h });
+    expect(e).toMatchObject({
+      kind: 'ngram_embedding',
+      tableRows: 384006168,
+      rowDim: 256,
+      rowsPerToken: 24,
+      outputDim: 4 * h,
+    });
   });
 
   // Per-layer params from the safetensors headers (findings R2, dsv41/tensors.json, I8 fp4 bytes counted twice,
@@ -124,7 +150,11 @@ describe('deepseek_v41: DeepSeek-V4.1-Flash', () => {
   });
 
   it('hints the native KV-cache formats', () => {
-    expect(b.quantHints).toEqual({ kvCache: { dtype: 'mxfp8' }, compressedKvCache: { dtype: 'nvfp4' }, indexerKeyCache: { dtype: 'mxfp4' } });
+    expect(b.quantHints).toEqual({
+      kvCache: { dtype: 'mxfp8' },
+      compressedKvCache: { dtype: 'nvfp4' },
+      indexerKeyCache: { dtype: 'mxfp4' },
+    });
   });
 
   it('builds the -1017 checkpoint identically', () => {

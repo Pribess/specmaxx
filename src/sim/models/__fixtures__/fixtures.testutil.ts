@@ -39,7 +39,10 @@ export function listFixturePaths(): string[] {
 export function listFixtureRepos(dir = ''): string[] {
   const prefix = dir ? `./${dir}/` : './';
   return listFixturePaths()
-    .filter((p) => p.startsWith(prefix) && p.endsWith('.config.json') && !p.slice(prefix.length).includes('/'))
+    .filter(
+      (p) =>
+        p.startsWith(prefix) && p.endsWith('.config.json') && !p.slice(prefix.length).includes('/'),
+    )
     .map((p) => p.slice(prefix.length, -'.config.json'.length).replace('__', '/'));
 }
 
@@ -48,12 +51,18 @@ export function listFixtureRepos(dir = ''): string[] {
  * With `configFrom`, config.json is read from that repo's fixture (repos without one, e.g. Mistral NVFP4).
  * Throws when the config fixture is missing (a test bug, not an input case).
  */
-export function fixtureRepoFiles(repoId: string, opts: { dir?: string; configFrom?: string } = {}): HfRepoFiles {
+export function fixtureRepoFiles(
+  repoId: string,
+  opts: { dir?: string; configFrom?: string } = {},
+): HfRepoFiles {
   const base = opts.dir ? `${opts.dir}/` : '';
-  const file = (id: string, kind: string) => readFixtureJson(`${base}${fixtureStem(id)}.${kind}.json`);
+  const file = (id: string, kind: string) =>
+    readFixtureJson(`${base}${fixtureStem(id)}.${kind}.json`);
   const configRepo = opts.configFrom ?? repoId;
-  const config = file(configRepo, 'config') ?? readFixtureJson(`${fixtureStem(configRepo)}.config.json`);
-  if (config === undefined) throw new Error(`fixture missing: ${base}${fixtureStem(configRepo)}.config.json`);
+  const config =
+    file(configRepo, 'config') ?? readFixtureJson(`${fixtureStem(configRepo)}.config.json`);
+  if (config === undefined)
+    throw new Error(`fixture missing: ${base}${fixtureStem(configRepo)}.config.json`);
   const api = file(repoId, 'api') as HfApiModelInfo | undefined;
   return {
     id: repoId,

@@ -5,14 +5,25 @@ import type { ParallelConfig, QuantConfig } from '../ir/model';
 import { REF_DENSE_8B } from '../models/reference';
 import { prefillChunkShape } from './memory';
 import { simulate } from './simulate';
-import { cachedPrefixTokens, computedPromptTokens, type PhaseResult, type SimInput, type Workload } from './types';
+import {
+  cachedPrefixTokens,
+  computedPromptTokens,
+  type PhaseResult,
+  type SimInput,
+  type Workload,
+} from './types';
 import { validateInput } from './validate';
 
-const BF16: QuantConfig = { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } };
+const BF16: QuantConfig = {
+  weights: { dtype: 'bf16' },
+  activations: 'bf16',
+  kvCache: { dtype: 'bf16' },
+};
 const P1: ParallelConfig = { tp: 1, pp: 1, dp: 1, ep: 1 };
 const hardware = { device: RTX_5090, topology: singleDevice(RTX_5090) };
 const W: Workload = { batch: 1, promptLen: 4096, decodeContextLen: 1024 };
-const run = (workload: Workload) => simulate({ model: REF_DENSE_8B, quant: BF16, parallel: P1, workload, hardware });
+const run = (workload: Workload) =>
+  simulate({ model: REF_DENSE_8B, quant: BF16, parallel: P1, workload, hardware });
 const ops = (p: PhaseResult) => p.stages.flatMap((s) => s.layers.flatMap((l) => l.ops));
 
 describe('prefix-cache hit ratio (docs §7 "Prefix cache")', () => {
@@ -33,7 +44,10 @@ describe('prefix-cache hit ratio (docs §7 "Prefix cache")', () => {
     const full = run(W);
     const hit = run({ ...W, prefixCacheHitRatio: 0.5 });
     // GEMM FLOPs/time shrink by ~half; the weights are read once either way.
-    const gemmSec = (p: PhaseResult) => ops(p).filter((o) => o.op.kind === 'gemm').reduce((s, o) => s + o.sec, 0);
+    const gemmSec = (p: PhaseResult) =>
+      ops(p)
+        .filter((o) => o.op.kind === 'gemm')
+        .reduce((s, o) => s + o.sec, 0);
     expect(gemmSec(hit.prefill)).toBeLessThan(gemmSec(full.prefill) * 0.6);
     expect(hit.prefill.latencySec).toBeLessThan(full.prefill.latencySec * 0.6);
     // Attention: FLOPs follow qLen·kvLen (new × all), so more than the 1/2·1/2 of a cache-less half prompt;
@@ -64,7 +78,11 @@ describe('prefix-cache hit ratio (docs §7 "Prefix cache")', () => {
 
   it('validation rejects h outside [0, 1)', () => {
     const bad = (h: number): SimInput => ({
-      model: REF_DENSE_8B, quant: BF16, parallel: P1, workload: { ...W, prefixCacheHitRatio: h }, hardware,
+      model: REF_DENSE_8B,
+      quant: BF16,
+      parallel: P1,
+      workload: { ...W, prefixCacheHitRatio: h },
+      hardware,
     });
     expect(JSON.stringify(validateInput(bad(1)))).toContain('prefixCacheHitRatio');
     expect(JSON.stringify(validateInput(bad(-0.1)))).toContain('prefixCacheHitRatio');

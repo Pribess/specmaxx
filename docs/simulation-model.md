@@ -69,11 +69,11 @@ The builders (`src/sim/ir/builders.ts`: `decoderLayer`, `decoderModel`, `repeatL
 pre-norm decoder layers from `MixerParams` + `FfnParams` (+ optional `residual`, `ngram`, `shortConv`):
 
 - plain residual: `[ngram] → norm → mixer → [short_conv] → [post-norm] → residual → norm → ffn → [short_conv] →
-[post-norm] → residual`;
+  [post-norm] → residual`;
 - hyper-connections (`residual.kind: 'hyper'`, N streams): each `norm … residual` pair becomes
   `hc_pre → [norm if subNorms] … hc_post`. DeepSeek-V4.1 and GLM-5.3-Flash keep the sub-norms, Qwen4Exp does not.
 - Attention Residuals (`residual.kind: 'attn_res'`, Kimi K3): `[residual_mix] → norm → mixer → residual →
-residual_mix → norm → ffn → residual`, and `attnResCollapse` as `beforeHead` (§5 "Attention Residuals").
+  residual_mix → norm → ffn → residual`, and `attnResCollapse` as `beforeHead` (§5 "Attention Residuals").
 - `decoderModel({ beforeHead })` appends blocks (the final hyper-connection collapse) to the LAST layer, so they are
   lowered and pipeline-staged as part of it. `finalNorm: 'none'` (Qwen4Exp) has no final norm.
 - `ModelSpec.residualStreams` N (default 1): each token carries `N·hidden` residual elements; the PP activation
@@ -214,11 +214,11 @@ scale or zero point outside the dtype goes into `extraBitsPerElem`, amortized pe
   per-tensor allocation (and `--recipe` files) are not in `config.json`, so the simulation applies the average to
   every linear layer.
 - `config.json` `quantization_config`: `{ quant_method: "exl3", version, bits, head_bits, calibration, out_scales,
-codebook, mtp_bits, vision_bits, original_quantization_config? }`. The average key is `bits` (turboderp,
+  codebook, mtp_bits, vision_bits, original_quantization_config? }`. The average key is `bits` (turboderp,
   converter `-b`), `bpw` or `avg_bits` (community mixed-precision optimizers); `head_bits` (converter default 6;
   16 = unquantized) is the LM head; `mtp_bits` / `vision_bits` concern parts outside the IR;
   `original_quantization_config` describes the source checkpoint and is ignored. A community `scope:
-"…routed_experts_only"` quantizes only the routed experts. turboderp publishes one repo per model with a branch
+  "…routed_experts_only"` quantizes only the routed experts. turboderp publishes one repo per model with a branch
   per bitrate (`SC_4.00bpw_H5_V6`, `sc_3.10bpw`), each with its own `config.json`.
 - Scope: attention, MLP, shared and routed experts, indexer and linear-attention projections at `bits`; LM head at
   `head_bits`; embeddings, routers, norms, hyper-connection mixers and n-gram lookup tables stay unquantized
@@ -587,17 +587,17 @@ Apple's SIMD transcendental path) compute the softmax exponential, one FP32 `exp
 sfuOpsPerSec = compute units · exp2 results per clock per unit · clock     (the clock of the vector FP32 peak)
 ```
 
-| Family (presets)                                                                               | exp2 / clock / unit | Status                                                                           |
+| Family (presets)                                                                                                  | exp2 / clock / unit | Status                                                                                                                                                               |
 | ----------------------------------------------------------------------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | NVIDIA Volta, Ampere, Ada, Hopper, B200, GeForce Blackwell (V100, A100, RTX 3090 / 4090 / 5090, H100, H200, B200) | 16 / SM             | sourced: CUDA guide throughput table (cc 7.0, 8.0, 8.6, 8.9, 9.0, 10.0, 12.0). GA100/GV100 have 64 FP32 lanes/SM, so their clock uses 128 FP32 FLOP/clk/SM, not 256. |
-| NVIDIA GB10 (DGX Spark)                                                                        | 16 / SM             | estimate: cc 12.1 is not in the table; the cc 12.0 rate                          |
-| NVIDIA Blackwell Ultra (B300)                                                                  | 32 / SM             | sourced: Blackwell Ultra blog ("SFU throughput doubled"), FA4 paper              |
-| AMD CDNA3 (MI300X, MI325X)                                                                     | 16 / CU             | estimate: quarter-rate transcendentals (AMD RDNA deck "¼ rate (like GCN)", LLVM) |
-| AMD CDNA4 (MI355X)                                                                             | 32 / CU             | sourced 2×: CDNA 4 whitepaper "transcendental rates increased by 2x"             |
-| AMD MI455X                                                                                     | 64 / unit           | estimate, no source: CDNA4's ratio to vector FP32 (the upper-bound rule)         |
-| AMD RDNA 3.5 / 4 (Strix Halo, R9700, RX 9070 XT)                                               | 16 / CU             | estimate: one quarter-rate unit per SIMD32                                       |
-| Intel Xe2 (Arc Pro B70 / B65 / B60, B580)                                                      | 32 / Xe core        | estimate, no source: the upper end of 16–32                                      |
-| Apple M3 / M4 / M5 GPU (both M5 engines)                                                       | 32 / core           | estimate: philipturner/metal-benchmarks M1 measurement, assumed for M3+          |
+| NVIDIA GB10 (DGX Spark)                                                                                           | 16 / SM             | estimate: cc 12.1 is not in the table; the cc 12.0 rate                                                                                                              |
+| NVIDIA Blackwell Ultra (B300)                                                                                     | 32 / SM             | sourced: Blackwell Ultra blog ("SFU throughput doubled"), FA4 paper                                                                                                  |
+| AMD CDNA3 (MI300X, MI325X)                                                                                        | 16 / CU             | estimate: quarter-rate transcendentals (AMD RDNA deck "¼ rate (like GCN)", LLVM)                                                                                     |
+| AMD CDNA4 (MI355X)                                                                                                | 32 / CU             | sourced 2×: CDNA 4 whitepaper "transcendental rates increased by 2x"                                                                                                 |
+| AMD MI455X                                                                                                        | 64 / unit           | estimate, no source: CDNA4's ratio to vector FP32 (the upper-bound rule)                                                                                             |
+| AMD RDNA 3.5 / 4 (Strix Halo, R9700, RX 9070 XT)                                                                  | 16 / CU             | estimate: one quarter-rate unit per SIMD32                                                                                                                           |
+| Intel Xe2 (Arc Pro B70 / B65 / B60, B580)                                                                         | 32 / Xe core        | estimate, no source: the upper end of 16–32                                                                                                                          |
+| Apple M3 / M4 / M5 GPU (both M5 engines)                                                                          | 32 / core           | estimate: philipturner/metal-benchmarks M1 measurement, assumed for M3+                                                                                              |
 
 The vendors' "TeraExponentials/s" figures (Hopper 4.5, Blackwell 5, Blackwell Ultra 10.7) are full-die numbers
 (≈ 144 / 160 SMs); the presets use the per-SKU derivation instead (H100 4.19e12, B200 4.69e12, B300 9.38e12
@@ -629,17 +629,17 @@ A variant (VRAM mod, tensor-rate unlock, power limit, P2P driver) is **a base sp
 partial overrides**, not a copied spec. Device and link modifiers are separate unions, because P2P is a
 property of the link.
 
-| Kind                 | Effect                                                                                                                           | Paths its provenance covers                                                            |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `memoryCapacity`     | replaces `memory.capacityOptionsBytes`                                                                                           | `memory.capacityOptionsBytes`                                                          |
-| `memoryBandwidth`    | replaces `memory.bandwidthBytesPerSec`                                                                                           | `memory.bandwidthBytesPerSec`                                                          |
-| `peakScale`          | multiplies every matmul peak matching ALL given filters (engineId, input, accumulate, sparsity) by `factor`; must match ≥ 1 peak | `engines.<i>.matmulPeaks`                                                              |
-| `clockScale`         | multiplies all matmul AND vector peaks and the SFU rate of an engine (default all) by `factor`; memory bandwidth unchanged       | `engines.<i>.matmulPeaks`, `engines.<i>.vectorFlopsPerSec`, `engines.<i>.sfuOpsPerSec` |
-| `vectorScale`        | multiplies the vector peaks of an engine (default all) by `factor`: only the `dtype` entry when given, else every listed one; must match ≥ 1 | `engines.<i>.vectorFlopsPerSec.<dtype>` (each scaled entry)                            |
-| `computeUnits`       | sets `computeUnits` of an engine (default all) to N and multiplies its matmul and vector peaks and SFU rate by N / units (per-unit rate and clock kept) | `engines.<i>.computeUnits`, `engines.<i>.matmulPeaks`, `engines.<i>.vectorFlopsPerSec`, `engines.<i>.sfuOpsPerSec` |
-| `hostInterface`      | replaces `hostInterface.generation` and / or `.lanes`, each given field alone (Gen2 from one axis + x16 from another = Gen2 x16); needs a `hostInterface` | `hostInterface.generation`, `hostInterface.lanes` (the given ones)                     |
-| link `p2p`           | sets `p2p`; `'direct'` drops `hostBounce`, `'host_bounce'` requires it                                                           | `p2p`, `hostBounce`                                                                    |
-| link `linkBandwidth` | replaces `bandwidthPerDirectionBytesPerSec`                                                                                      | `bandwidthPerDirectionBytesPerSec`                                                     |
+| Kind                 | Effect                                                                                                                                                    | Paths its provenance covers                                                                                        |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `memoryCapacity`     | replaces `memory.capacityOptionsBytes`                                                                                                                    | `memory.capacityOptionsBytes`                                                                                      |
+| `memoryBandwidth`    | replaces `memory.bandwidthBytesPerSec`                                                                                                                    | `memory.bandwidthBytesPerSec`                                                                                      |
+| `peakScale`          | multiplies every matmul peak matching ALL given filters (engineId, input, accumulate, sparsity) by `factor`; must match ≥ 1 peak                          | `engines.<i>.matmulPeaks`                                                                                          |
+| `clockScale`         | multiplies all matmul AND vector peaks and the SFU rate of an engine (default all) by `factor`; memory bandwidth unchanged                                | `engines.<i>.matmulPeaks`, `engines.<i>.vectorFlopsPerSec`, `engines.<i>.sfuOpsPerSec`                             |
+| `vectorScale`        | multiplies the vector peaks of an engine (default all) by `factor`: only the `dtype` entry when given, else every listed one; must match ≥ 1              | `engines.<i>.vectorFlopsPerSec.<dtype>` (each scaled entry)                                                        |
+| `computeUnits`       | sets `computeUnits` of an engine (default all) to N and multiplies its matmul and vector peaks and SFU rate by N / units (per-unit rate and clock kept)   | `engines.<i>.computeUnits`, `engines.<i>.matmulPeaks`, `engines.<i>.vectorFlopsPerSec`, `engines.<i>.sfuOpsPerSec` |
+| `hostInterface`      | replaces `hostInterface.generation` and / or `.lanes`, each given field alone (Gen2 from one axis + x16 from another = Gen2 x16); needs a `hostInterface` | `hostInterface.generation`, `hostInterface.lanes` (the given ones)                                                 |
+| link `p2p`           | sets `p2p`; `'direct'` drops `hostBounce`, `'host_bounce'` requires it                                                                                    | `p2p`, `hostBounce`                                                                                                |
+| link `linkBandwidth` | replaces `bandwidthPerDirectionBytesPerSec`                                                                                                               | `bandwidthPerDirectionBytesPerSec`                                                                                 |
 
 - Applied **in list order**; scales compose multiplicatively (`clockScale 0.8` then `peakScale ×2` on bf16 =
   209.5 · 0.8 · 2 = 335.2 TFLOP/s).
@@ -663,20 +663,20 @@ property of the link.
 checked by `src/sim/hw/presets.test.ts` (every preset) and one `<vendor>.test.ts` per file (vendor ratios and
 spot values against the datasheet).
 
-| File                           | Covers                                                                                                                                                                          | Export                                                                                                                   |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `presets/nvidia.ts`            | GeForce RTX 3090, 4090, 5090 and their unlock axes                                                                                                                              | `NVIDIA_CONSUMER_DEVICE_PRESETS`, `RTX_3090_UNLOCKS`, `RTX_4090_UNLOCKS`, `RTX_5090_UNLOCKS`                             |
-| `presets/nvidia-cmp.ts`        | CMP 170HX 8 GB (GA100 mining card, no vendor datasheet: review / community sources, peaks derived from A100 per-SM rates) and its unlock axes                                    | `NVIDIA_CMP_DEVICE_PRESETS`, `CMP_170HX_UNLOCKS`                                                                         |
-| `presets/nvidia-pro.ts` | RTX PRO Blackwell 6000 Workstation / Max-Q, 5000 (48/72GB), 4000 SFF; sustained-clock options | `NVIDIA_PRO_DEVICE_PRESETS`, `RTX_PRO_6000_WS_UNLOCKS`, `RTX_PRO_6000_MAX_Q_UNLOCKS` |
-| `presets/nvidia-datacenter.ts` | DGX Spark (GB10), GB200 and GB300 (one Grace Blackwell GPU each, with its NVLink-C2C host link), H100 SXM, H200 SXM, B200, B300, A100 SXM4 / PCIe 40/80GB, V100 SXM2 / PCIe 16/32GB | `NVIDIA_DATACENTER_DEVICE_PRESETS`, `GB200`, `GB300`                                                                     |
-| `presets/apple.ts`             | M5 Ultra, M5 Max, M4 Max, M3 Ultra, M3 Max; binned GPU-core counts as separate SKUs                                                                                             | `APPLE_DEVICE_PRESETS`                                                                                                   |
-| `presets/amd.ts`               | Radeon AI PRO R9700, RX 9070 XT, Ryzen AI Max+ 395 (Strix Halo iGPU), Instinct MI300X / MI325X / MI355X / MI455X                                                                | `AMD_DEVICE_PRESETS`                                                                                                     |
-| `presets/intel.ts`             | Arc Pro B70, B65, B60, Arc B580                                                                                                                                                 | `INTEL_DEVICE_PRESETS`                                                                                                   |
-| `presets/links.ts` | PCIe Gen3/4/5, NVLink bridge / NVLink 2/3/4/5, NVL72 NVLink Switch, GB200 NVL4 bridge, NVLink-C2C, InfiniBand HDR200/NDR400/XDR800, ConnectX-7, xGMI (MI300X / MI325X / MI355X), MI455X UALoE, Thunderbolt, USB4, Ethernet; the device's default host link | `LINK_PRESETS`, `HOST_BOUNCE_PCIE_LINKS`, `NVLINK_5_NVL72`, `NVLINK_5_NVL4`, `NVLINK_C2C`, `deviceHostLink` |
-| `presets/topologies.ts` | PCIe boxes, SoC clusters (with fabric shape), HGX A100/H100/B200/B300 nodes, GB200 / GB300 NVL72 racks, GB200 NVL4 trays, A100 bridge pairs, V100 4/8-GPU NVLink boards and Gen3 PCIe boxes, MI300X / MI325X / MI355X xGMI nodes, MI455X Helios rack | `TOPOLOGY_PRESETS`, `pcieBox`, `socCluster`, `hgxCluster`, `nodeTopology`, `nvl72Rack`, `nvl4Trays`, `fabricIdSuffix` |
-| `presets/storage.ts` | Host RAM and SSD presets, the pooled Grace LPDDR5X of a GB200 / GB300 node, the default host RAM per device | `HOST_RAM_PRESETS`, `SSD_PRESETS`, `graceHostRam`, `defaultHostRamFor` |
-| `presets/rack-scale-sources.ts` | Vendor URLs shared by the GB200 / GB300, NVL72 / NVL4, Grace, MI325X / MI355X and MI455X presets | `BLACKWELL_DATASHEET_URL`, `GB200_NVL72_URL`, `GB300_NVL72_URL`, ... |
-| `presets/catalog.ts`           | The setup catalog: what each device composes into (GPUs per machine, machines, local and network links, cabling), validation, `composeTopology`, SKU labels, the popular setups | `setupOptionsFor`, `allowedCablings`, `defaultCabling`, `setupErrors`, `composeTopology`, `setupLabel`, `POPULAR_SETUPS` |
+| File                            | Covers                                                                                                                                                                                                                                                     | Export                                                                                                                   |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `presets/nvidia.ts`             | GeForce RTX 3090, 4090, 5090 and their unlock axes                                                                                                                                                                                                         | `NVIDIA_CONSUMER_DEVICE_PRESETS`, `RTX_3090_UNLOCKS`, `RTX_4090_UNLOCKS`, `RTX_5090_UNLOCKS`                             |
+| `presets/nvidia-cmp.ts`         | CMP 170HX 8 GB (GA100 mining card, no vendor datasheet: review / community sources, peaks derived from A100 per-SM rates) and its unlock axes                                                                                                              | `NVIDIA_CMP_DEVICE_PRESETS`, `CMP_170HX_UNLOCKS`                                                                         |
+| `presets/nvidia-pro.ts`         | RTX PRO Blackwell 6000 Workstation / Max-Q, 5000 (48/72GB), 4000 SFF; sustained-clock options                                                                                                                                                              | `NVIDIA_PRO_DEVICE_PRESETS`, `RTX_PRO_6000_WS_UNLOCKS`, `RTX_PRO_6000_MAX_Q_UNLOCKS`                                     |
+| `presets/nvidia-datacenter.ts`  | DGX Spark (GB10), GB200 and GB300 (one Grace Blackwell GPU each, with its NVLink-C2C host link), H100 SXM, H200 SXM, B200, B300, A100 SXM4 / PCIe 40/80GB, V100 SXM2 / PCIe 16/32GB                                                                        | `NVIDIA_DATACENTER_DEVICE_PRESETS`, `GB200`, `GB300`                                                                     |
+| `presets/apple.ts`              | M5 Ultra, M5 Max, M4 Max, M3 Ultra, M3 Max; binned GPU-core counts as separate SKUs                                                                                                                                                                        | `APPLE_DEVICE_PRESETS`                                                                                                   |
+| `presets/amd.ts`                | Radeon AI PRO R9700, RX 9070 XT, Ryzen AI Max+ 395 (Strix Halo iGPU), Instinct MI300X / MI325X / MI355X / MI455X                                                                                                                                           | `AMD_DEVICE_PRESETS`                                                                                                     |
+| `presets/intel.ts`              | Arc Pro B70, B65, B60, Arc B580                                                                                                                                                                                                                            | `INTEL_DEVICE_PRESETS`                                                                                                   |
+| `presets/links.ts`              | PCIe Gen3/4/5, NVLink bridge / NVLink 2/3/4/5, NVL72 NVLink Switch, GB200 NVL4 bridge, NVLink-C2C, InfiniBand HDR200/NDR400/XDR800, ConnectX-7, xGMI (MI300X / MI325X / MI355X), MI455X UALoE, Thunderbolt, USB4, Ethernet; the device's default host link | `LINK_PRESETS`, `HOST_BOUNCE_PCIE_LINKS`, `NVLINK_5_NVL72`, `NVLINK_5_NVL4`, `NVLINK_C2C`, `deviceHostLink`              |
+| `presets/topologies.ts`         | PCIe boxes, SoC clusters (with fabric shape), HGX A100/H100/B200/B300 nodes, GB200 / GB300 NVL72 racks, GB200 NVL4 trays, A100 bridge pairs, V100 4/8-GPU NVLink boards and Gen3 PCIe boxes, MI300X / MI325X / MI355X xGMI nodes, MI455X Helios rack       | `TOPOLOGY_PRESETS`, `pcieBox`, `socCluster`, `hgxCluster`, `nodeTopology`, `nvl72Rack`, `nvl4Trays`, `fabricIdSuffix`    |
+| `presets/storage.ts`            | Host RAM and SSD presets, the pooled Grace LPDDR5X of a GB200 / GB300 node, the default host RAM per device                                                                                                                                                | `HOST_RAM_PRESETS`, `SSD_PRESETS`, `graceHostRam`, `defaultHostRamFor`                                                   |
+| `presets/rack-scale-sources.ts` | Vendor URLs shared by the GB200 / GB300, NVL72 / NVL4, Grace, MI325X / MI355X and MI455X presets                                                                                                                                                           | `BLACKWELL_DATASHEET_URL`, `GB200_NVL72_URL`, `GB300_NVL72_URL`, ...                                                     |
+| `presets/catalog.ts`            | The setup catalog: what each device composes into (GPUs per machine, machines, local and network links, cabling), validation, `composeTopology`, SKU labels, the popular setups                                                                            | `setupOptionsFor`, `allowedCablings`, `defaultCabling`, `setupErrors`, `composeTopology`, `setupLabel`, `POPULAR_SETUPS` |
 
 `DEVICE_PRESET_GROUPS` is the display order: consumer / prosumer first (GeForce, NVIDIA RTX PRO, Apple, AMD Radeon and Strix
 Halo, Intel Arc, DGX Spark), datacenter last; `DEVICE_PRESETS` is the groups flattened. Within a group: newest
@@ -751,14 +751,14 @@ every tensor instruction fused to 1/32 issue rate, 8 GB, PCIe Gen1 x4). Stock pe
 the order their modifiers apply; every option is a complete stage, so every combination is physically possible
 (`nvidia-cmp.test.ts` checks the prerequisites of all 24):
 
-| Axis (`id`)          | Option: modifiers                                                                                                                                                                                                   | Source class                                      |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| `vbios-6d`           | `6d`: `memoryBandwidth` 1728 MHz × 2 × 4096 bit / 8 = 1769.47 GB/s, `clockScale` 1470 / 1410                                                                                                                        | community (PixelML, vBIOS flash guide)            |
-| `compute-path`       | `locked-workarounds`: `vectorScale` fp32 ×16 (FADD + FMUL, 6.32 TFLOP/s); `peakScale` fp16 / **fp16-accumulate** dense ×8, 2:4 ×4 (HFMA2, 50.5); `peakScale` int8 dense ×2 (DP2A, 25.3 TOP/s, estimated)              | community (arabel1a, llama.cpp #24616)            |
-|                      | `cmpunlocker`: `peakScale` all ×32; `vectorScale` fp32 and fp64 ×32; `memoryCapacity` [64 GB, 32 GB]; `hostInterface` generation 2                                                                                 | community (cmpunlocker, Consensus wiki, PixelML)  |
-|                      | `cmpunlocker-hbm-1890`: the same (once) plus `memoryBandwidth` 1890 MHz × 2 × 4096 / 8 = 1935.36 GB/s (the HBM PLL overclock needs cmpunlocker's PLM patch, so it exists only here; it overrides 6D's 1769)            | community (170tune, wanghar)                      |
-|                      | `cmpunlocker-74sm`, `cmpunlocker-74sm-hbm-1890`: the two above plus `computeUnits` 74 (cmpunlocker PR #58 re-enables 4 fused-off SMs: every compute rate × 74/70, 74-SM waves; part of the patched driver, so only here) | community (cmpunlocker PR #58)                    |
-| `pcie-capacitor-mod` | `x16`: `hostInterface` lanes 16                                                                                                                                                                                     | community + review (Consensus wiki, niconiconi)   |
+| Axis (`id`)          | Option: modifiers                                                                                                                                                                                                        | Source class                                     |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
+| `vbios-6d`           | `6d`: `memoryBandwidth` 1728 MHz × 2 × 4096 bit / 8 = 1769.47 GB/s, `clockScale` 1470 / 1410                                                                                                                             | community (PixelML, vBIOS flash guide)           |
+| `compute-path`       | `locked-workarounds`: `vectorScale` fp32 ×16 (FADD + FMUL, 6.32 TFLOP/s); `peakScale` fp16 / **fp16-accumulate** dense ×8, 2:4 ×4 (HFMA2, 50.5); `peakScale` int8 dense ×2 (DP2A, 25.3 TOP/s, estimated)                 | community (arabel1a, llama.cpp #24616)           |
+|                      | `cmpunlocker`: `peakScale` all ×32; `vectorScale` fp32 and fp64 ×32; `memoryCapacity` [64 GB, 32 GB]; `hostInterface` generation 2                                                                                       | community (cmpunlocker, Consensus wiki, PixelML) |
+|                      | `cmpunlocker-hbm-1890`: the same (once) plus `memoryBandwidth` 1890 MHz × 2 × 4096 / 8 = 1935.36 GB/s (the HBM PLL overclock needs cmpunlocker's PLM patch, so it exists only here; it overrides 6D's 1769)              | community (170tune, wanghar)                     |
+|                      | `cmpunlocker-74sm`, `cmpunlocker-74sm-hbm-1890`: the two above plus `computeUnits` 74 (cmpunlocker PR #58 re-enables 4 fused-off SMs: every compute rate × 74/70, 74-SM waves; part of the patched driver, so only here) | community (cmpunlocker PR #58)                   |
+| `pcie-capacitor-mod` | `x16`: `hostInterface` lanes 16                                                                                                                                                                                          | community + review (Consensus wiki, niconiconi)  |
 
 The two PCIe unlocks compose through two `hostInterface` modifiers: Gen1 x4 → Gen2 x4 (cmpunlocker), Gen1 x16
 (capacitor mod), Gen2 x16 (both). The device-to-device links follow: the setup catalog offers a PCIe local link only
@@ -788,7 +788,7 @@ costed in §6
   below); `latencySec` is a one-way hardware / verbs-level floor (P2P write, `ib_write_lat`), never an NCCL / RCCL
   software floor. Latencies no vendor publishes are `estimated`.
 - **PCIe payload efficiency** (`src/sim/hw/presets/links.ts: PCIE_PAYLOAD_EFFICIENCY,
-pcieBandwidthPerDirectionBytesPerSec, pcieLineRateBytesPerSec`): every PCIe link (host bounce, direct P2P, the
+  pcieBandwidthPerDirectionBytesPerSec, pcieLineRateBytesPerSec`): every PCIe link (host bounce, direct P2P, the
   device's host link for offload streaming, inter-node PCIe staging, the NVMe slot ceiling) carries payload at
 
   ```
@@ -841,11 +841,11 @@ pcieBandwidthPerDirectionBytesPerSec, pcieLineRateBytesPerSec`): every PCIe link
   the collective's kernel launch and a system-scope barrier, and no measurement found isolates the hardware share
   (the review's ≈ 2–3 µs is an estimate). See `PCIE_ALPHA_NOT_RAISED` in `links.ts` and practicality-review F7.
 - **GPUDirect RDMA capability** (`LinkSpec.gpuDirectRdma`, `DeviceSpec.gpuDirectRdma`; `src/sim/engine/staging.ts:
-needsHostStaging`; device citations in `src/sim/hw/presets/gpudirect.ts`). Whether an inter-node transport can move
+  needsHostStaging`; device citations in `src/sim/hw/presets/gpudirect.ts`). Whether an inter-node transport can move
   a message straight between the NIC and an accelerator's dedicated memory. A dedicated-memory device on an
   inter-node path stages every message through host memory when the link or the device lacks it (§6 "Inter-node host
   staging"). TCP never has it: NCCL's socket transport takes host pointers only (`net_socket.cc:57`, `ptrSupport =
-NCCL_PTR_HOST`), and so do Gloo (`cuda_allreduce_ring.cc:82,102`) and MLX. On RDMA, both ends must support it.
+  NCCL_PTR_HOST`), and so do Gloo (`cuda_allreduce_ring.cc:82,102`) and MLX. On RDMA, both ends must support it.
   Absent = capable, the pre-staging convention, so every earlier result is unchanged; every inter-node link preset
   and every dedicated device preset sets the field (a test), and unified-memory devices must leave it absent
   (`validateDevice`).
@@ -869,15 +869,15 @@ NCCL_PTR_HOST`), and so do Gloo (`cuda_allreduce_ring.cc:82,102`) and MLX. On RD
 - **Link latencies, RDMA and TCP, one method** (`src/sim/hw/presets/links.ts`, `ui/components/linkHelp.tsx`). Each is
   the one-way floor by the definition above, not what a socket collective library achieves:
 
-  | link                 | old    | new                | evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-  | -------------------- | ------ | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | link                 | old    | new                | evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+  | -------------------- | ------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
   | `TB5_RDMA`           | 50 µs  | **7 µs**, measured | `ibv_uc_pingpong` M4 Pro ↔ M3 Ultra over TB5: "1000 iters in 0.01 seconds = 13.72 usec/iter" (one iteration = one round trip ⇒ 6.86 µs one way; Anemll, https://x.com/anemll/status/1993182652204187929). Cross-check: JACCL 4-way all-reduce ≈ 9–10 µs at 1–2 KB, one mesh step for small messages (MLX PR 2808), an upper bound. The former 50 µs was Jeff Geerling's "memory access latency … <50us", read off the all-reduce plot: a collective upper bound, not a link α. (An earlier note attributed the ping-pong to MLX PR #3900; its source is the Anemll post.) |
   | `TB4_TCP`, `TB5_TCP` | 45 µs  | 45 µs, estimated   | No tuned TCP ping-pong over a Thunderbolt bridge found. MLX PR 2808 (https://github.com/ml-explore/mlx/pull/2808): a 4-Mac TCP-ring all-reduce takes 290–300 µs flat over 1–32 KB, 2(N−1) = 6 steps of ≈ 48 µs including thread hand-offs and the reduction, an upper bound; 45 µs sits just below it. The 0.142 ms ICMP RTT (MacBook Air ↔ Linux PC, untuned) is context only.                                                                                                                                                                                           |
-  | `USB4_HALO_RDMA`     | 8 µs   | 8 µs, measured     | Level1Techs usb4_rdma `ib_write_lat` 2 B, n = 10000: average 8.33 µs (minimum 7.39, 99 % 9.98). Hellas: ≈ 7 µs at 64 B. The verbs are emulated over the same USB4 DMA rings as TCP, so RDMA ≈ TCP is plausible here.                                                                                                                                                                                                                                                                                                                                                       |
-  | `USB4_HALO_TCP`      | 10 µs  | **9 µs**, measured | Level1Techs (post 3), tuned 1-byte TCP ping-pong: RTT average Base 20.25 / Partial 17.35 / Full 19.56 µs (minimum 15.15 / 14.13 / 17.41 µs); α = the best-tuned average / 2 = 8.7 µs, rounded to 9 µs.                                                                                                                                                                                                                                                                                                                                                                     |
-  | `SPARK_CONNECTX_7`   | 1.5 µs | 1.5 µs, measured   | `ib_write_lat` 2 B, t_typical (median) 1.45 µs (alessandrosangiorgi.net). No Spark TCP preset, so no pair.                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-  | `ETHERNET_10G_TCP`   | 10 µs  | 10 µs, estimated   | No 10GbE desktop ping-pong found: carried over from the 5GbE direct measurement. Cross-checks: 10GBASE-T PHY 2–4 µs; IX (OSDI'14) Linux 10GbE one-way 24 µs through a switch with epoll; Cloudflare's tuned switched UDP echo average 30.7 µs RTT.                                                                                                                                                                                                                                                                                                                         |
-  | `ETHERNET_5G_TCP`    | 10 µs  | 10 µs              | Level1Techs (Framework Desktop built-in 5GbE, tuned 1-byte ping-pong): direct RTT average 20.8–22.8 µs (minimum 19.9 µs). Through a 10G switch the same port measured average 31.8–40.3 µs (minimum 29.4–32.3): a switch adds ≈ 5 µs one way; α is the direct-cable figure.                                                                                                                                                                                                                                                                                                |
+  | `USB4_HALO_RDMA`     | 8 µs   | 8 µs, measured     | Level1Techs usb4_rdma `ib_write_lat` 2 B, n = 10000: average 8.33 µs (minimum 7.39, 99 % 9.98). Hellas: ≈ 7 µs at 64 B. The verbs are emulated over the same USB4 DMA rings as TCP, so RDMA ≈ TCP is plausible here.                                                                                                                                                                                                                                                                                                                                                      |
+  | `USB4_HALO_TCP`      | 10 µs  | **9 µs**, measured | Level1Techs (post 3), tuned 1-byte TCP ping-pong: RTT average Base 20.25 / Partial 17.35 / Full 19.56 µs (minimum 15.15 / 14.13 / 17.41 µs); α = the best-tuned average / 2 = 8.7 µs, rounded to 9 µs.                                                                                                                                                                                                                                                                                                                                                                    |
+  | `SPARK_CONNECTX_7`   | 1.5 µs | 1.5 µs, measured   | `ib_write_lat` 2 B, t_typical (median) 1.45 µs (alessandrosangiorgi.net). No Spark TCP preset, so no pair.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+  | `ETHERNET_10G_TCP`   | 10 µs  | 10 µs, estimated   | No 10GbE desktop ping-pong found: carried over from the 5GbE direct measurement. Cross-checks: 10GBASE-T PHY 2–4 µs; IX (OSDI'14) Linux 10GbE one-way 24 µs through a switch with epoll; Cloudflare's tuned switched UDP echo average 30.7 µs RTT.                                                                                                                                                                                                                                                                                                                        |
+  | `ETHERNET_5G_TCP`    | 10 µs  | 10 µs              | Level1Techs (Framework Desktop built-in 5GbE, tuned 1-byte ping-pong): direct RTT average 20.8–22.8 µs (minimum 19.9 µs). Through a 10G switch the same port measured average 31.8–40.3 µs (minimum 29.4–32.3): a switch adds ≈ 5 µs one way; α is the direct-cable figure.                                                                                                                                                                                                                                                                                               |
 
   What a collective library over sockets measures in practice, for scale (the Network link's "?" says so too): NCCL
   on sockets 57–64 µs for a small all-reduce between two nodes of 4 GH200 over Slingshot TCP
@@ -1020,14 +1020,15 @@ B_aggregate  = links × B_dir,link                  a mesh GPU's injection over 
 - **AMD xGMI** (full mesh of 8, one link per peer; the MI300X caveat applies: aggregate injection is optimistic for
   subgroups and send/recv, the per-peer link is the one-pair figure):
 
-  | device | per link, bidirectional | per link, per direction | aggregate (7 peers), per direction | source |
-  | ------ | ----------------------- | ----------------------- | ---------------------------------- | ------ |
-  | MI300X | 128 GB/s | 64 GB/s | 448 GB/s | MI300X datasheet, CDNA 3 whitepaper |
-  | MI325X | 128 GB/s | 64 GB/s | 448 GB/s | MI325X datasheet ("7x 128 GB/s") |
-  | MI355X | 144 GB/s | 72 GB/s | 504 GB/s | MI355X platform brochure; CDNA 4 whitepaper p. 13 (36 Gb/s × 16 lanes = 72 GB/s each direction), Table 2 (1,008 GB/s bidirectional) |
+  | device | per link, bidirectional | per link, per direction | aggregate (7 peers), per direction | source                                                                                                                              |
+  | ------ | ----------------------- | ----------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+  | MI300X | 128 GB/s                | 64 GB/s                 | 448 GB/s                           | MI300X datasheet, CDNA 3 whitepaper                                                                                                 |
+  | MI325X | 128 GB/s                | 64 GB/s                 | 448 GB/s                           | MI325X datasheet ("7x 128 GB/s")                                                                                                    |
+  | MI355X | 144 GB/s                | 72 GB/s                 | 504 GB/s                           | MI355X platform brochure; CDNA 4 whitepaper p. 13 (36 Gb/s × 16 lanes = 72 GB/s each direction), Table 2 (1,008 GB/s bidirectional) |
 
   The 153.6 GB/s / 1,075 GB/s MI355X figure is a stale label in CDNA 4 Figure 5; the text, Table 2 and the product
   page say 144 / 1,008. α = 1.5 µs, estimated as for MI300X.
+
 - **MI455X** (`UALOE_MI455X`, `MI455X_HELIOS_72`): a switched UALink-over-Ethernet domain of 72 GPUs (Helios: 18
   four-GPU trays, 6 switch trays, one switch hop), 3.6 TB/s bidirectional per GPU = **1.8 TB/s per direction**
   (MI455X product page). α = 1.5 µs, estimated (UALoE latency unpublished).
@@ -1035,15 +1036,16 @@ B_aggregate  = links × B_dir,link                  a mesh GPU's injection over 
   Blackwell / Blackwell Ultra datasheets, OCT25). Both: 8 TB/s HBM3e, FP8/FP6 10 PFLOP/s, BF16 5 PFLOP/s sparse
   (dense = ½), FP32 80 TFLOP/s; `hostLink` = NVLink-C2C ("Host and storage tiers").
 
-  | device | HBM3e | FP4 dense / 2:4 sparse | INT8 dense / sparse | FP64 |
-  | ------ | ----- | ---------------------- | ------------------- | ---- |
-  | GB200  | 186 GB | 10 / 20 PFLOP/s | 5 / 10 POP/s | 40 TFLOP/s |
-  | GB300  | 279 GB | 15 / 20 PFLOP/s | 0.165 / 0.33 POP/s | 1.3 TFLOP/s |
+  | device | HBM3e  | FP4 dense / 2:4 sparse | INT8 dense / sparse | FP64        |
+  | ------ | ------ | ---------------------- | ------------------- | ----------- |
+  | GB200  | 186 GB | 10 / 20 PFLOP/s        | 5 / 10 POP/s        | 40 TFLOP/s  |
+  | GB300  | 279 GB | 15 / 20 PFLOP/s        | 0.165 / 0.33 POP/s  | 1.3 TFLOP/s |
 
   186 GB and 279 GB are the products (rack 13.4 TB / 72 and 20 TB / 72); 192 GB and 288 GB are the full-chip
   maxima. GB300's FP4 sparse is NOT 2 × dense. MXFP4 / MXFP6 take the NVFP4 / FP6 rates (not listed separately),
   and the SM count (148) is estimated; the SFU rule derives its clock from the FP32 peak, so the count does not
   change the softmax bound.
+
 - **Group sizes** (§5 "Rank layout"): a group inside a domain must divide `devicesPerNode`, so on 72 GPUs an EP64
   group does not tile; use a 64-GPU domain (the catalog offers 64). EP must also divide the expert count: a
   256-expert model runs EP64 at most inside one NVL72, and EP72 / EP144 need redundant experts (research report
@@ -1107,6 +1109,7 @@ offloaded no result depends on them.
   the others of the node, so NUMA placement is ignored; each GPU is still bounded by its own C2C link, and when every
   GPU streams the pooled RAM binds first (§12 "Transfer path": 384 / 2 = 192 GB/s per GPU < 450). Other devices keep
   `DDR5_6000_2CH`.
+
 - **Defaults**: `DDR5_6000_2CH` (host RAM; Grace pool on GB200 / GB300) and `NVME_990_PRO_2TB` (SSD), used with a
   warning when the stack names
   no tier.
@@ -1246,7 +1249,7 @@ the one K = V vector per token, the compressor, the indexer and all caches are r
    indexer's own overlapping compressor in V4), nothing for `reuse`, nothing for `all`.
 5. One `AttentionOp`: `kvHeads 1`, `qk = v = hd`, `kvSelection {window, W}`, `kvRead = kvWrite = {kvCache, hd}`
    (K = V, so one vector), and `secondaryKv {r, topk(topK entries) or full (all), kvRead {compressedKvCache, hd},
-kvWrite {compressedKvCache, owner ? hd/r : 0}}` (§3 "Attention"; `csaEntrySelection`).
+   kvWrite {compressedKvCache, owner ? hd/r : 0}}` (§3 "Attention"; `csaEntrySelection`).
 6. Inverse rope over `T·Hl·dr` → `csa.wo_a` grouped (batch Gl, m T, n R_o, k H·hd/G) → `csa.wo_b` (n h, k Gl·R_o)
    → all_reduce(tp).
 
@@ -1504,6 +1507,7 @@ A_max = min(T_g·min(k, Eloc), max(A, ceil(ρ·T_g·k/ep)))  the busiest device'
   results are exactly the ones from before the switch existed. A separate switch, not a side effect of setting ρ, so
   the result moves continuously with ρ (absent ρ and an explicit 1.2 are the same). Mode A has no all-to-all, so it
   is unchanged either way.
+
 - **Not scaled**: the expert weights read (`U` comes from the mean share A: the imbalance comes from hot experts
   drawing more tokens, so the busiest device runs more rows through the same experts, not more distinct experts;
   in prefill `U = Eloc` anyway), the router and top-k, the shared experts, the mode B weighted sum (over the
@@ -1674,14 +1678,14 @@ read dominates the step (large batch at long context).
 
 Which blocks are sharded (`dcpBlockRole`):
 
-| Block                                                | d > 1                                                     |
-| ---------------------------------------------------- | --------------------------------------------------------- |
-| `mla_attention` without `sparse`                     | sharded (latent; `kvCacheFromLayer` consumers read shards) |
-| `gqa_attention`, full attention                      | sharded; needs `d \| r`, `r = tp/kvHeads` (1 if kvHeads ≥ tp) |
-| `gqa_attention` with `slidingWindow`                 | local: unchanged, KV not sharded (≤ W tokens)              |
-| linear attention, Mamba-2, KDA, short convs          | unchanged (fixed-size state, not token-shardable)         |
-| `sparse` (DSA top-k) MLA / GQA, `csa_attention`      | rejected                                                  |
-| GQA with `relativeBias` or `kvConvKernel`            | rejected                                                  |
+| Block                                           | d > 1                                                         |
+| ----------------------------------------------- | ------------------------------------------------------------- |
+| `mla_attention` without `sparse`                | sharded (latent; `kvCacheFromLayer` consumers read shards)    |
+| `gqa_attention`, full attention                 | sharded; needs `d \| r`, `r = tp/kvHeads` (1 if kvHeads ≥ tp) |
+| `gqa_attention` with `slidingWindow`            | local: unchanged, KV not sharded (≤ W tokens)                 |
+| linear attention, Mamba-2, KDA, short convs     | unchanged (fixed-size state, not token-shardable)             |
+| `sparse` (DSA top-k) MLA / GQA, `csa_attention` | rejected                                                      |
+| GQA with `relativeBias` or `kvConvKernel`       | rejected                                                      |
 
 Rules (`dcpErrors`, and lowering through `blockShardingErrors`, prefixed `<layer>: `; exact messages):
 
@@ -1707,6 +1711,7 @@ Prefill lowers exactly as without DCP (vLLM's prefill context parallelism is "un
 prefill still computes the full K/V of the prompt, and only the memory fit stores the rank's shard. With d = 1 (or
 `dcp` absent) no op, field or number differs from before: no `kvTokenShards`, no `dcp` collective, no `dcp` path
 (pinned by `engine/dcp.test.ts` and the unchanged identity fixtures). Limits are listed in §9.
+
 ### PP split
 
 `lower/lower.ts: lowerModel, stageLayerRange, ppBoundaryResidualVectors`. Stage s holds layers
@@ -1858,13 +1863,13 @@ copy, wire and GPU copy; one within a step pays them one after another.
 **Parameters** (`HostStaging`, no new free number; `B_pcie`, `α_pcie` in `HostStaging.pcie`, absent when nothing
 PCIe-stages):
 
-| symbol   | meaning                                    | value                                                                                                   |
-| -------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `B_pcie` | the device's host link, per direction | `hardware.host.link ?? deviceHostLink(device)` (C2C on GB200 / GB300, else `hostPcieLink(device.hostInterface)`), else PCIe 5.0 x16 with a warning |
-| `α_pcie` | one PCIe crossing                          | that link's `latencySec`, 1 µs (estimated)                                                              |
-| `B_host` | node DRAM, read + write combined           | `hardware.host.ram ?? defaultHostRamFor(device, dpn)` (DDR5-6000 2ch, 96 GB/s; the Grace pool on GB200 / GB300); the pool peak on unified memory |
-| `c`      | one pipeline step of the staging buffer    | `HOST_STAGING_STEP_BYTES` = 4 MiB / 8 = 512 KiB (NCCL `NCCL_BUFFSIZE` default 4 MiB / `NCCL_STEPS` = 8) |
-| `n_stg`  | devices of one node staging at once        | `min(devicesPerNode, tp·dp)`                                                                            |
+| symbol   | meaning                                 | value                                                                                                                                              |
+| -------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `B_pcie` | the device's host link, per direction   | `hardware.host.link ?? deviceHostLink(device)` (C2C on GB200 / GB300, else `hostPcieLink(device.hostInterface)`), else PCIe 5.0 x16 with a warning |
+| `α_pcie` | one PCIe crossing                       | that link's `latencySec`, 1 µs (estimated)                                                                                                         |
+| `B_host` | node DRAM, read + write combined        | `hardware.host.ram ?? defaultHostRamFor(device, dpn)` (DDR5-6000 2ch, 96 GB/s; the Grace pool on GB200 / GB300); the pool peak on unified memory   |
+| `c`      | one pipeline step of the staging buffer | `HOST_STAGING_STEP_BYTES` = 4 MiB / 8 = 512 KiB (NCCL `NCCL_BUFFSIZE` default 4 MiB / `NCCL_STEPS` = 8)                                            |
+| `n_stg`  | devices of one node staging at once     | `min(devicesPerNode, tp·dp)`                                                                                                                       |
 
 **Formula** (`stagedStageRates`, `stagedLink`, applied inside `effectiveLink` after the host-bounce lines), in α-β
 terms, here with PCIe staging only (`socketCopy` false; the general form with the copy is in "TCP socket copy", and
@@ -1911,7 +1916,7 @@ t_pipe = Σ_i s/r_i + (k − 1)·s/B_eff = m/B_eff + (2·s/r_pcie + s/r_net − 
 - Staging is not host bounce: the flat all-to-all keeps one α (no `(n−1)·α` rule). On an oversubscribed
   hierarchical switch, staging applies after the `B/o` reduction (its caps are the device's own).
 - Fabric shapes (`fabricLinkParams`): every hop gets the staging α, and `B_L = min(B_L, B_stg)`, `C = min(C,
-B_stg)`, with `B_stg = stagingBandwidthCapBytesPerSec = min(B_pcie, B_host/((2·a + 2)·n_stg))` (a = 1 here, so
+  B_stg)`, with `B_stg = stagingBandwidthCapBytesPerSec = min(B_pcie, B_host/((2·a + 2)·n_stg))` (a = 1 here, so
   `B_host/(4·n_stg)`; the staging bandwidth is per device, whatever the port count). A relay already holds the bytes
   in host memory, so charging the staging α per hop over-counts relays: a documented approximation; no
   dedicated-memory preset uses a ring or chain.
@@ -1953,7 +1958,7 @@ the wire in steps.
 
 | symbol   | meaning                                 | value                                                                                                                                               |
 | -------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `B_host` | the DRAM the copy runs in, read + write | unified memory: the pool peak `device.memory.bandwidthBytesPerSec`; dedicated: `hardware.host.ram ?? defaultHostRamFor(device, dpn)` |
+| `B_host` | the DRAM the copy runs in, read + write | unified memory: the pool peak `device.memory.bandwidthBytesPerSec`; dedicated: `hardware.host.ram ?? defaultHostRamFor(device, dpn)`                |
 | `c`      | one pipeline step                       | `SOCKET_COPY_STEP_BYTES` = 64 KiB (Linux `include/linux/netdevice.h:2333`, v6.12; ESTIMATED for macOS) without PCIe staging; with it NCCL's 512 KiB |
 | `n_stg`  | devices of one node copying at once     | `min(devicesPerNode, tp·dp)`                                                                                                                        |
 
@@ -1994,7 +1999,7 @@ B_stg  = min(B_pcie, B_hj)                       stagingBandwidthCapBytesPerSec 
   copies it into and out of skbs. That is a third, physically separate copy, so dedicated + TCP = PCIe copy + socket
   copy at each end. A dedicated GPU on RDMA without GPUDirect (a GeForce on InfiniBand) keeps the PCIe copy only.
 - **Magnitude: small on the presets.** B_mem is 0.4–1.2 TB/s on Macs and 256 GB/s on Strix Halo, so `r_sock ≥ 128
-GB/s` and `B_mem/6 ≥ 42 GB/s`, far above the 2.5–10 GB/s links: a 4 KiB decode step gains 0.02–0.06 µs and β never
+  GB/s` and `B_mem/6 ≥ 42 GB/s`, far above the 2.5–10 GB/s links: a 4 KiB decode step gains 0.02–0.06 µs and β never
   binds. The RDMA vs TCP gap on one cable comes from α (§4 "Link latencies", TB5 7 vs 45 µs), not from the copy.
 - Worked checks (`socketCopy.test.ts`): unified TCP, n 1, B 10 GB/s, B_mem 800 GB/s: a 4 KiB step gains 8192 B / 400
   GB/s = 0.02048 µs with β unchanged; an 8 MiB step has β = 838.8608 µs and a fill of 2·64 KiB / 400 GB/s = 0.32768 µs.
@@ -2266,7 +2271,7 @@ t_s    = lat_s + core_s + xfer_s − pbar_s·min(core_s, xfer_s)
 ```
 
 - `pbar_s = 1` (p = 1, perfect prediction): `t_s = lat_s + max(core_s, xfer_s)`, the former `offloadOverlap
-'ideal'`.
+  'ideal'`.
 - `pbar_s = 0` (p = 0, no prefetching): `t_s = t_core,s + xfer_s`, the former `'none'`.
 - Always `lat_s + max(core_s, xfer_s) ≤ t_s ≤ t_core,s + xfer_s`.
 - `exposedTransferSec = t_s − t_core,s`. With `xfer_s = 0`, `t_s = t_core,s` exactly. The code computes `xfer_s = 0`
@@ -2737,11 +2742,11 @@ crossing the host link and requests paying a latency are added. Worked examples 
 `TransferOp` (§3 op catalogue: `kind 'transfer'`) in front of the block that consumes it, **only when it has bytes
 to move**:
 
-| group                                 | selector                             | stays on device                                                   | `reads` / `usefulBytes` per step       |
-| ------------------------------------- | ------------------------------------ | ----------------------------------------------------------------- | -------------------------------------- |
-| `routed_experts` (`moe.expert_fetch`) | MoE layers in `layers` (default all) | `C = f·E_loc` experts, router, latent projections, shared experts | `[{ M, W_expert }]` / `M·W_expert`     |
-| `lookup_table` (`<block>.row_fetch`)  | n-gram tables in `layers` (default all) | projections, gate vectors, conv taps                           | per scale layout, below / `R·rowBytes` |
-| `token_embedding` (`embed.row_fetch`) | `embeddings` (stage 0; no layers)       | the gather's output only (no weights)                          | separate layout / `R·rowBytes`         |
+| group                                 | selector                                | stays on device                                                   | `reads` / `usefulBytes` per step       |
+| ------------------------------------- | --------------------------------------- | ----------------------------------------------------------------- | -------------------------------------- |
+| `routed_experts` (`moe.expert_fetch`) | MoE layers in `layers` (default all)    | `C = f·E_loc` experts, router, latent projections, shared experts | `[{ M, W_expert }]` / `M·W_expert`     |
+| `lookup_table` (`<block>.row_fetch`)  | n-gram tables in `layers` (default all) | projections, gate vectors, conv taps                              | per scale layout, below / `R·rowBytes` |
+| `token_embedding` (`embed.row_fetch`) | `embeddings` (stage 0; no layers)       | the gather's output only (no weights)                             | separate layout / `R·rowBytes`         |
 
 - `W_expert = gemmWeightBytes(gated ? 3 : 2, l, fe/etp, w_routed)`, `l = latentDim ?? h` (`moe.ts: expertWeightBytes`); the grouped
   expert GEMMs keep their `a` active experts, so the device-memory bytes of the step are unchanged.
@@ -3008,6 +3013,7 @@ ms, 5.555 → 6.269 tok/s @ 8k). All experts in RAM (the PLE table on the SSD ma
 Which configs move: any device that prefetches from both tiers at p > 0, including experts in RAM next to PLE /
 Engram tables on the SSD (DeepSeek-V4.1-Flash, experts in RAM + Engram on the SSD: 12.456 → 12.476 tok/s @ 8k), and
 an Engram table split across the tiers at p > 0.
+
 ### Memory tiers
 
 `src/sim/engine/memory.ts: stageWeightBytes, stageStagingBytes, stageTierBytes, stageTierBreakdown, tierMemory,

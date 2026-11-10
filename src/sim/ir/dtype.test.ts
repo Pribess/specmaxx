@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { DTYPE_INFO, bitsPerElement, bytesPerElement, mathFormatOf, resolveAccumulate, resolveGemmMath } from './dtype';
+import {
+  DTYPE_INFO,
+  bitsPerElement,
+  bytesPerElement,
+  mathFormatOf,
+  resolveAccumulate,
+  resolveGemmMath,
+} from './dtype';
 
 describe('DTYPE_INFO', () => {
   it('stores element bits and block-scale overhead', () => {

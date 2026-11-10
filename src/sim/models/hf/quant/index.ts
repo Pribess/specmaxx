@@ -51,7 +51,9 @@ export interface QuantInputs {
 
 /** True for an MLX-style quantization object (`bits` and `group_size`, no `quant_method`). */
 function isMlxShape(q: JsonObject): boolean {
-  return q.quant_method === undefined && typeof q.bits === 'number' && typeof q.group_size === 'number';
+  return (
+    q.quant_method === undefined && typeof q.bits === 'number' && typeof q.group_size === 'number'
+  );
 }
 
 /** Reader for a `quantization_config`-shaped object, by `quant_method`; null for an unknown method. */
@@ -66,8 +68,13 @@ function readByMethod(
   switch (method) {
     case 'fp8':
     case 'mxfp8': {
-      const native = readFp8(qc, ctx, { source, ...(paramsQuantization ? { paramsQuantization } : {}) });
-      return method === 'fp8' && isModeloptFp8(qc) ? readModelopt(qc, ctx, { source, base: native }) : native;
+      const native = readFp8(qc, ctx, {
+        source,
+        ...(paramsQuantization ? { paramsQuantization } : {}),
+      });
+      return method === 'fp8' && isModeloptFp8(qc)
+        ? readModelopt(qc, ctx, { source, base: native })
+        : native;
     }
     case 'modelopt':
       return readModelopt(qc, ctx, { source });
@@ -119,32 +126,46 @@ export function deriveQuantDefaults(input: QuantInputs): QuantDefaults {
   const paramsQc = objAt(input.paramsJson, 'quantization_config');
   const configQc = objAt(top, 'quantization_config') ?? objAt(text, 'quantization_config');
   const hfQuant = objAt(input.hfQuantConfig, 'quantization');
-  const qcJson = isJsonObject(input.quantizationConfigJson) ? input.quantizationConfigJson : undefined;
+  const qcJson = isJsonObject(input.quantizationConfigJson)
+    ? input.quantizationConfigJson
+    : undefined;
   const mlx = isJsonObject(input.mlx) ? input.mlx : undefined;
   const paramsQuant = objAt(input.paramsJson, 'quantization');
 
   /** Read a `quantization_config`-shaped object; an unknown method gives a note and no reading. */
-  const read = (qc: JsonObject, source: QuantDefaults['source']): { reading: SchemeReading | null; meta: unknown } => {
+  const read = (
+    qc: JsonObject,
+    source: QuantDefaults['source'],
+  ): { reading: SchemeReading | null; meta: unknown } => {
     const reading = readByMethod(qc, ctx, source, input.paramsJson);
     if (!reading) {
-      notes.push(`unrecognised quantization '${strAt(qc, 'quant_method') ?? '?'}' (${source}); using torch_dtype`);
+      notes.push(
+        `unrecognised quantization '${strAt(qc, 'quant_method') ?? '?'}' (${source}); using torch_dtype`,
+      );
     }
     return { reading, meta: qc };
   };
 
-  if (configQc && Object.keys(configQc).length === 0) notes.push('quantization_config is empty; ignored');
-  const usableConfig = configQc !== undefined && Object.keys(configQc).length > 0 ? configQc : undefined;
+  if (configQc && Object.keys(configQc).length === 0)
+    notes.push('quantization_config is empty; ignored');
+  const usableConfig =
+    configQc !== undefined && Object.keys(configQc).length > 0 ? configQc : undefined;
 
   // The first source found wins (see the module comment).
   let picked: { reading: SchemeReading | null; meta: unknown } = { reading: null, meta: undefined };
   if (paramsQc) picked = read(paramsQc, 'params.json');
-  else if (usableConfig && mlx && isMlxShape(usableConfig)) picked = { reading: readMlx(mlx, ctx), meta: mlx };
+  else if (usableConfig && mlx && isMlxShape(usableConfig))
+    picked = { reading: readMlx(mlx, ctx), meta: mlx };
   else if (usableConfig) picked = read(usableConfig, 'quantization_config');
   else if (hfQuant) {
-    picked = { reading: readModelopt(hfQuant, ctx, { source: 'hf_quant_config.json' }), meta: input.hfQuantConfig };
+    picked = {
+      reading: readModelopt(hfQuant, ctx, { source: 'hf_quant_config.json' }),
+      meta: input.hfQuantConfig,
+    };
   } else if (qcJson) picked = read(qcJson, 'quantization_config.json');
   else if (mlx) picked = { reading: readMlx(mlx, ctx), meta: mlx };
-  else if (paramsQuant) picked = { reading: readMistralParamsQuantization(paramsQuant, ctx), meta: paramsQuant };
+  else if (paramsQuant)
+    picked = { reading: readMistralParamsQuantization(paramsQuant, ctx), meta: paramsQuant };
   const { reading, meta } = picked;
 
   let r: SchemeReading = reading ?? unquantized(ctx, []);
@@ -153,7 +174,11 @@ export function deriveQuantDefaults(input: QuantInputs): QuantDefaults {
   // Mistral DSA cache flags.
   const flags = mistralCacheFlags(input.paramsJson);
   if (flags.kv && !r.kvCache) {
-    r = { ...r, kvCache: { dtype: 'fp8_e4m3' }, notes: [...r.notes, 'params.json dsa.fp8_kv_cache: fp8 KV cache'] };
+    r = {
+      ...r,
+      kvCache: { dtype: 'fp8_e4m3' },
+      notes: [...r.notes, 'params.json dsa.fp8_kv_cache: fp8 KV cache'],
+    };
   }
   if (flags.indexer && !r.indexerKeyCache) {
     r = {
@@ -163,7 +188,12 @@ export function deriveQuantDefaults(input: QuantInputs): QuantDefaults {
     };
   }
 
-  const probes = buildProbes(top, text, meta === undefined ? '' : JSON.stringify(meta), input.paramsJson);
+  const probes = buildProbes(
+    top,
+    text,
+    meta === undefined ? '' : JSON.stringify(meta),
+    input.paramsJson,
+  );
   const out = assemble(r, probes, ctx);
   return { ...out, notes: [...new Set(out.notes)] };
 }

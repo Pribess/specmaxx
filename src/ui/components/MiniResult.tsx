@@ -1,4 +1,9 @@
-import { formatContextTokens, formatTokensPerSec, memoryVerdict, type ResultSummary } from '../state';
+import {
+  formatContextTokens,
+  formatTokensPerSec,
+  memoryVerdict,
+  type ResultSummary,
+} from '../state';
 import { Num } from './Num';
 
 /**

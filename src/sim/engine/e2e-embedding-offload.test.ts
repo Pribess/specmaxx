@@ -47,7 +47,11 @@ const QWEN = 'Qwen/Qwen3.8-27B';
 const ROW_BYTES = 5120 * 2;
 const SHARD_BYTES = 248_320 * 5120 * 2;
 
-function qwen(embeddings: EmbeddingRule | undefined, hardware = GPU, extra: Partial<SimInput> = {}): SimResult {
+function qwen(
+  embeddings: EmbeddingRule | undefined,
+  hardware = GPU,
+  extra: Partial<SimInput> = {},
+): SimResult {
   const { model, quant } = hf(QWEN);
   return simulate({
     model,
@@ -93,7 +97,7 @@ describe(`${QWEN} bf16 on one RTX 5090 + DDR5-5600 ×2 + 990 PRO: token embeddin
   it('decode @ 8k changes by less than 1 %: 34.377 → 34.376 (host RAM) / 34.321 (SSD) tok/s @ 8k', () => {
     const b = base.decode.tokensPerSec;
     expectClose(b, 34.3774, 1e-5);
-    expectClose(ram.decode.tokensPerSec, 34.3760, 1e-5);
+    expectClose(ram.decode.tokensPerSec, 34.376, 1e-5);
     expectClose(ssd.decode.tokensPerSec, 34.3207, 1e-5);
     const dRam = Math.abs(ram.decode.tokensPerSec - b) / b;
     const dSsd = Math.abs(ssd.decode.tokensPerSec - b) / b;
@@ -134,18 +138,27 @@ describe(`${QWEN} bf16 on one RTX 5090 + DDR5-5600 ×2 + 990 PRO: token embeddin
 
   it('stage-0 device weights drop by exactly 2,542,796,800 B, and the tier holds the same bytes', () => {
     for (const r of [ram, ssd]) {
-      expect(base.memory.perStage[0].weightBytes - r.memory.perStage[0].weightBytes).toBe(SHARD_BYTES);
+      expect(base.memory.perStage[0].weightBytes - r.memory.perStage[0].weightBytes).toBe(
+        SHARD_BYTES,
+      );
     }
     expect(ram.memory.tiers).toEqual([
       {
         tier: 'host_ram',
         bytes: SHARD_BYTES,
-        breakdown: { lookupTables: 0, routedExperts: 0, draftExperts: 0, tokenEmbeddings: SHARD_BYTES },
+        breakdown: {
+          lookupTables: 0,
+          routedExperts: 0,
+          draftExperts: 0,
+          tokenEmbeddings: SHARD_BYTES,
+        },
         capacityBytes: DDR5_5600_2CH.capacityBytes,
         fits: true,
       },
     ]);
-    expect(ssd.memory.tiers.map((t) => [t.tier, t.breakdown.tokenEmbeddings])).toEqual([['nvme', SHARD_BYTES]]);
+    expect(ssd.memory.tiers.map((t) => [t.tier, t.breakdown.tokenEmbeddings])).toEqual([
+      ['nvme', SHARD_BYTES],
+    ]);
   });
 
   it('staging is the prefill chunk double-buffered: 2·8192·10,240 B, also for a 32k prompt (not 2·32768·…)', () => {
@@ -176,7 +189,9 @@ describe('unified memory (M5 Ultra): host RAM is the device pool', () => {
   });
   it("an 'nvme' embedding moves the shard to the SSD tier", () => {
     const ssd = qwen({ tier: 'nvme' }, M5);
-    expect(base.memory.perStage[0].weightBytes - ssd.memory.perStage[0].weightBytes).toBe(SHARD_BYTES);
+    expect(base.memory.perStage[0].weightBytes - ssd.memory.perStage[0].weightBytes).toBe(
+      SHARD_BYTES,
+    );
     expect(ssd.memory.tiers.map((t) => [t.tier, t.bytes])).toEqual([['nvme', SHARD_BYTES]]);
   });
 });
@@ -191,22 +206,41 @@ describe('a tied model keeps its embedding on the device', () => {
     hardware: GPU,
     deployment: { offload: { embeddings: { tier } } },
   });
-  it.each(['host_ram', 'nvme'] as const)('%s is rejected with the tied-embeddings reason', (tier) => {
-    expect(() => simulate(input(tier))).toThrow(TIED_EMBEDDINGS_OFFLOAD_ERROR);
-  });
+  it.each(['host_ram', 'nvme'] as const)(
+    '%s is rejected with the tied-embeddings reason',
+    (tier) => {
+      expect(() => simulate(input(tier))).toThrow(TIED_EMBEDDINGS_OFFLOAD_ERROR);
+    },
+  );
   it("'device' is accepted", () => {
     expect(() => simulate(input('device'))).not.toThrow();
   });
 });
 
 describe('MTP spec-dec: the drafter gathers from the same off-device table', () => {
-  const spec = { deployment: { offload: { embeddings: { tier: 'host_ram' as const } }, speculative: { method: 'mtp' as const, draftLength: 1, acceptance: { kind: 'iid' as const, alpha: 0.8 } } } };
+  const spec = {
+    deployment: {
+      offload: { embeddings: { tier: 'host_ram' as const } },
+      speculative: {
+        method: 'mtp' as const,
+        draftLength: 1,
+        acceptance: { kind: 'iid' as const, alpha: 0.8 },
+      },
+    },
+  };
   const r = qwen(undefined, GPU, spec);
   it('decode: draft.embed.row_fetch with q = 0; prefill: q = 1', () => {
     const draftDecode = transfers(r, 'decode').filter((op) => op.name === 'draft.embed.row_fetch');
     expect(draftDecode.length).toBeGreaterThan(0);
-    for (const op of draftDecode) expect(op).toMatchObject({ group: 'token_embedding', source: 'host_ram', prefetchedFraction: 0 });
-    const draftPrefill = transfers(r, 'prefill').filter((op) => op.name === 'draft.embed.row_fetch');
+    for (const op of draftDecode)
+      expect(op).toMatchObject({
+        group: 'token_embedding',
+        source: 'host_ram',
+        prefetchedFraction: 0,
+      });
+    const draftPrefill = transfers(r, 'prefill').filter(
+      (op) => op.name === 'draft.embed.row_fetch',
+    );
     expect(draftPrefill).toHaveLength(1);
     expect(draftPrefill[0].prefetchedFraction).toBe(1);
   });
@@ -241,7 +275,9 @@ describe('Qwen/Qwen3.8-Flash-Next fp8, experts on the SSD + token embedding in h
   const ssdOnly = run(undefined);
   const both = run({ tier: 'host_ram' });
   const embedOp = (r: SimResult, phase: 'prefill' | 'decode') => {
-    const ops = r[phase].stages[0].layers.flatMap((l) => l.ops).filter((o) => o.op.name === 'embed.row_fetch');
+    const ops = r[phase].stages[0].layers
+      .flatMap((l) => l.ops)
+      .filter((o) => o.op.name === 'embed.row_fetch');
     expect(ops).toHaveLength(1);
     return ops[0];
   };
@@ -249,8 +285,13 @@ describe('Qwen/Qwen3.8-Flash-Next fp8, experts on the SSD + token embedding in h
   it('decode stays serial: transfer = SSD-only transfer + the row (q = 0)', () => {
     const row = embedOp(both, 'decode');
     expect(row.op.kind === 'transfer' && row.op.prefetchedFraction).toBe(0);
-    expectClose(both.decode.transfer?.sec ?? 0, (ssdOnly.decode.transfer?.sec ?? 0) + row.sec, 1e-12);
-    const dDecode = (ssdOnly.decode.tokensPerSec - both.decode.tokensPerSec) / ssdOnly.decode.tokensPerSec;
+    expectClose(
+      both.decode.transfer?.sec ?? 0,
+      (ssdOnly.decode.transfer?.sec ?? 0) + row.sec,
+      1e-12,
+    );
+    const dDecode =
+      (ssdOnly.decode.tokensPerSec - both.decode.tokensPerSec) / ssdOnly.decode.tokensPerSec;
     expect(dDecode).toBeGreaterThan(0);
     expect(dDecode).toBeLessThan(1e-4);
   });
@@ -260,12 +301,16 @@ describe('Qwen/Qwen3.8-Flash-Next fp8, experts on the SSD + token embedding in h
     expect(row.op.kind === 'transfer' && row.op.prefetchedFraction).toBe(1);
     const serial = (ssdOnly.prefill.transfer?.sec ?? 0) + row.sec;
     expect(both.prefill.transfer?.sec ?? 0).toBeLessThan(serial);
-    expect(both.prefill.transfer?.sec ?? 0).toBeGreaterThanOrEqual(ssdOnly.prefill.transfer?.sec ?? 0);
+    expect(both.prefill.transfer?.sec ?? 0).toBeGreaterThanOrEqual(
+      ssdOnly.prefill.transfer?.sec ?? 0,
+    );
   });
 
   it('staging: max_all + max_ram + max_ssd = the SSD-only 2·max_ssd + the 8192 rows', () => {
     const row = embedOp(both, 'prefill');
     if (row.op.kind !== 'transfer') throw new Error('not a transfer');
-    expect(both.memory.perStage[0].stagingBytes - ssdOnly.memory.perStage[0].stagingBytes).toBe(row.op.usefulBytes);
+    expect(both.memory.perStage[0].stagingBytes - ssdOnly.memory.perStage[0].stagingBytes).toBe(
+      row.op.usefulBytes,
+    );
   });
 });

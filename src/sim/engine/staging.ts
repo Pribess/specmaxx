@@ -23,7 +23,12 @@
  * Single-node topologies have nothing to stage.
  */
 
-import { deviceHostLink, hostPcieLink, HOST_STAGING_STEP_BYTES, SOCKET_COPY_STEP_BYTES } from '../hw/presets/links';
+import {
+  deviceHostLink,
+  hostPcieLink,
+  HOST_STAGING_STEP_BYTES,
+  SOCKET_COPY_STEP_BYTES,
+} from '../hw/presets/links';
 import { defaultHostRamFor } from '../hw/presets/storage';
 import type { DeviceSpec, HardwareStack, LinkSpec, TopologySpec } from '../hw/types';
 import type { ParallelConfig } from '../ir/model';
@@ -151,7 +156,8 @@ export function resolveHostStaging(
   const hostMemBandwidthBytesPerSec =
     device.memory.kind === 'unified'
       ? device.memory.bandwidthBytesPerSec
-      : (hardware.host?.ram ?? defaultHostRamFor(device, topology.devicesPerNode)).bandwidthBytesPerSec;
+      : (hardware.host?.ram ?? defaultHostRamFor(device, topology.devicesPerNode))
+          .bandwidthBytesPerSec;
   const staging: HostStaging = {
     ...(pcie === undefined ? {} : { pcie }),
     socketCopy,

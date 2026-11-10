@@ -142,7 +142,11 @@ export function ppBoundaryIsInterNode(
  * several devices per node). `staging` (the run's inter-node host staging, `staging.ts`) is attached to the
  * inter-node level only (`interStaging`); absent = the path without staging, exactly as before.
  */
-export function collectivePath(span: GroupSpan, topo: TopologySpec, staging?: HostStaging): CollectivePath {
+export function collectivePath(
+  span: GroupSpan,
+  topo: TopologySpec,
+  staging?: HostStaging,
+): CollectivePath {
   if (span.n <= 1) return { kind: 'none' };
   const needIntra = span.devicesPerNodeInGroup > 1;
   const needInter = span.nodesSpanned > 1;
@@ -235,7 +239,13 @@ export function ppSendPath(
       : {};
   const interStaging = inter && staging !== undefined ? { interStaging: staging } : {};
   if (!inter || isNonBlockingSwitched(fabric) || fabric === undefined)
-    return { kind: 'flat', level: inter ? 'inter' : 'intra', link, ...hostSharing, ...interStaging };
+    return {
+      kind: 'flat',
+      level: inter ? 'inter' : 'intra',
+      link,
+      ...hostSharing,
+      ...interStaging,
+    };
   const sendHops = ppSendHops(par, topo, stage, destinationStage);
   return {
     kind: 'flat',
@@ -254,7 +264,8 @@ export function ppSendPath(
  * staging only for runs that have inter-node messages. Assumes {@link checkPlacement} found no errors.
  */
 export function hasInterNodeTraffic(par: ParallelConfig, topo: TopologySpec): boolean {
-  if (groupSpan(par.tp, topo).nodesSpanned > 1 || groupSpan(par.ep, topo).nodesSpanned > 1) return true;
+  if (groupSpan(par.tp, topo).nodesSpanned > 1 || groupSpan(par.ep, topo).nodesSpanned > 1)
+    return true;
   for (let stage = 0; stage + 1 < par.pp; stage++) {
     if (ppBoundaryIsInterNode(par, topo, stage)) return true;
   }

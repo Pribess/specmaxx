@@ -15,7 +15,16 @@
 import type { Dtype } from '../../../ir/dtype';
 import type { ModuleQuant } from '../../../ir/model';
 import type { Probe, SchemeContext, SchemeReading } from './common';
-import { describeFormat, groupScaleBits, intDtypeFor, moduleFormat, numAt, objAt, strAt, strListAt } from './common';
+import {
+  describeFormat,
+  groupScaleBits,
+  intDtypeFor,
+  moduleFormat,
+  numAt,
+  objAt,
+  strAt,
+  strListAt,
+} from './common';
 import { anyMatch, compilePatterns, dottedContains, firstMatch } from './patterns';
 import { isJsonObject } from '../reader';
 import type { JsonObject, QuantDefaults } from '../types';
@@ -30,10 +39,17 @@ function groupFormat(
 ): ModuleQuant {
   const dt = dataType.toLowerCase();
   const act: Dtype | undefined =
-    actBits !== undefined && actBits < 16 ? (actBits <= 4 ? (dt.startsWith('nv') ? 'nvfp4' : 'mxfp4') : 'fp8_e4m3') : undefined;
+    actBits !== undefined && actBits < 16
+      ? actBits <= 4
+        ? dt.startsWith('nv')
+          ? 'nvfp4'
+          : 'mxfp4'
+        : 'fp8_e4m3'
+      : undefined;
   if (dt.startsWith('mx') && bits === 4) return moduleFormat('mxfp4', 0, act);
   if (dt.startsWith('nv') && bits === 4) return moduleFormat('nvfp4', 0, act);
-  if ((dt === 'fp' || dt === 'float' || dt.startsWith('fp8')) && bits === 8) return moduleFormat('fp8_e4m3', 0, act);
+  if ((dt === 'fp' || dt === 'float' || dt.startsWith('fp8')) && bits === 8)
+    return moduleFormat('fp8_e4m3', 0, act);
   const { dtype, approx } = intDtypeFor(bits);
   if (approx) notes.push(`int${bits} weights stored as ${dtype} (no ${bits}-bit dtype)`);
   if (group <= 0) {
@@ -44,7 +60,11 @@ function groupFormat(
 }
 
 /** Read a GPTQ `quantization_config` (also `dynamic` per-module overrides of gptqmodel). */
-export function readGptq(qc: JsonObject, ctx: SchemeContext, source: QuantDefaults['source'] = 'quantization_config'): SchemeReading {
+export function readGptq(
+  qc: JsonObject,
+  ctx: SchemeContext,
+  source: QuantDefaults['source'] = 'quantization_config',
+): SchemeReading {
   const notes: string[] = [];
   const bits = numAt(qc, 'bits') ?? 4;
   const group = numAt(qc, 'group_size') ?? 128;
@@ -64,7 +84,13 @@ export function readGptq(qc: JsonObject, ctx: SchemeContext, source: QuantDefaul
       rules.push({
         re: new RegExp(src),
         skip: neg,
-        format: groupFormat('int', numAt(o, 'bits') ?? bits, numAt(o, 'group_size') ?? group, undefined, notes),
+        format: groupFormat(
+          'int',
+          numAt(o, 'bits') ?? bits,
+          numAt(o, 'group_size') ?? group,
+          undefined,
+          notes,
+        ),
       });
     } catch {
       notes.push(`gptq dynamic key '${key}' is not a valid regex; ignored`);
@@ -120,7 +146,9 @@ export function readAutoRound(qc: JsonObject, ctx: SchemeContext): SchemeReading
   const actBits = numAt(qc, 'act_bits');
   const base = groupFormat(dataType, bits, group, actBits, notes);
   const blocksRaw = qc.block_name_to_quantize ?? qc.to_quant_block_names;
-  const blocks = (Array.isArray(blocksRaw) ? blocksRaw : typeof blocksRaw === 'string' ? blocksRaw.split(',') : [])
+  const blocks = (
+    Array.isArray(blocksRaw) ? blocksRaw : typeof blocksRaw === 'string' ? blocksRaw.split(',') : []
+  )
     .filter((b): b is string => typeof b === 'string')
     .map((b) => b.trim())
     .filter((b) => b.length > 0);
@@ -133,11 +161,24 @@ export function readAutoRound(qc: JsonObject, ctx: SchemeContext): SchemeReading
     const o = extra[k];
     if (!isJsonObject(o)) continue;
     const b = numAt(o, 'bits') ?? bits;
-    formats.set(k, b >= 16 ? 'native' : groupFormat(strAt(o, 'data_type') ?? dataType, b, numAt(o, 'group_size') ?? group, numAt(o, 'act_bits') ?? actBits, notes));
+    formats.set(
+      k,
+      b >= 16
+        ? 'native'
+        : groupFormat(
+            strAt(o, 'data_type') ?? dataType,
+            b,
+            numAt(o, 'group_size') ?? group,
+            numAt(o, 'act_bits') ?? actBits,
+            notes,
+          ),
+    );
   }
 
   const inBlocks = (p: Probe): boolean =>
-    blocks.length === 0 ? p.layer !== null : blocks.some((b) => p.name.startsWith(`${b}.`) || dottedContains(p.name, b));
+    blocks.length === 0
+      ? p.layer !== null
+      : blocks.some((b) => p.name.startsWith(`${b}.`) || dottedContains(p.name, b));
   const resolve = (p: Probe): ModuleQuant => {
     if (p.kind !== 'linear' || !inBlocks(p)) return ctx.native;
     const i = firstMatch(list, p);
@@ -149,13 +190,17 @@ export function readAutoRound(qc: JsonObject, ctx: SchemeContext): SchemeReading
   };
   const packing = strAt(qc, 'packing_format') ?? 'auto_round';
   if (base.weights.dtype === 'int4' || base.weights.dtype === 'int8') {
-    notes.push(`auto-round (${packing}): fp16 scale + ${bits}-bit packed zero point per group of ${group}`);
+    notes.push(
+      `auto-round (${packing}): fp16 scale + ${bits}-bit packed zero point per group of ${group}`,
+    );
   }
   return {
     label: `auto-round ${describeFormat(base)} (${dataType} ${bits}-bit g${group}${qc.sym === false ? ' asym' : ' sym'})`,
     source: 'quantization_config',
     resolve,
-    ignoreLists: [{ label: 'extra_config', patterns: keys.filter((k) => formats.get(k) === 'native') }],
+    ignoreLists: [
+      { label: 'extra_config', patterns: keys.filter((k) => formats.get(k) === 'native') },
+    ],
     notes,
   };
 }

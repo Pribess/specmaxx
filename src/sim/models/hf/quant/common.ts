@@ -124,7 +124,11 @@ export function blockScaleBits(scaleBits: number, rows: number, cols: number): n
  * per `groupSize` elements. Unit: bits/element. Example: int4 asym g32 with a bf16 scale and an int8 zero
  * point = (16 + 8) / 32 = 0.75.
  */
-export function groupScaleBits(scaleBits: number, zeroPointBits: number, groupSize: number): number {
+export function groupScaleBits(
+  scaleBits: number,
+  zeroPointBits: number,
+  groupSize: number,
+): number {
   // Formula: extra = (scaleBits + zeroPointBits) / groupSize
   // See docs/simulation-model.md §2 (quant overheads)
   return groupSize > 0 ? (scaleBits + zeroPointBits) / groupSize : 0;
@@ -175,7 +179,8 @@ export function formatKey(mq: ModuleQuant): string {
 /** Short human-readable form of a module format, e.g. `'fp8_e4m3 +0.0020 bit/elem, fp8_e4m3 GEMM input'`. */
 export function describeFormat(mq: ModuleQuant): string {
   const extra = mq.weights.extraBitsPerElem ?? 0;
-  const value = mq.weights.valueBitsPerElem !== undefined ? ` ${mq.weights.valueBitsPerElem} bpw` : '';
+  const value =
+    mq.weights.valueBitsPerElem !== undefined ? ` ${mq.weights.valueBitsPerElem} bpw` : '';
   const scale = value + (extra > 0 ? ` +${extra.toFixed(4)} bit/elem` : '');
   const input = mq.gemmInput === undefined ? '' : `, ${mq.gemmInput} GEMM input`;
   return `${mq.weights.dtype}${scale}${input}`;
@@ -217,7 +222,8 @@ export function strListAt(o: unknown, key: string): string[] {
 export function numListAt(o: unknown, key: string): number[] | undefined {
   if (!isJsonObject(o)) return undefined;
   const v = o[key];
-  if (!Array.isArray(v) || !v.every((x) => typeof x === 'number' && Number.isFinite(x))) return undefined;
+  if (!Array.isArray(v) || !v.every((x) => typeof x === 'number' && Number.isFinite(x)))
+    return undefined;
   return v as number[];
 }
 

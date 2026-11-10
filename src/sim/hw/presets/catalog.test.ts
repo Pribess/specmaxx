@@ -14,17 +14,52 @@ import type { DeviceSpec, HostInterfaceSpec } from '../types';
 import { allUnlockSelections, resolveUnlocks } from '../unlocks';
 import { validateTopology } from '../validate';
 import {
-  CABLING_IDS, POPULAR_SETUPS, allowedCablings, allowedLocalLinks, cablingLabel, cablingOf, catalogDeviceIds, composeTopology,
-  defaultCabling, fabricOf, linkById, networkOf, popularSetupById, resolveNetwork, setupErrors, setupLabel, setupOptionsFor,
-  type CablingId, type SetupChoice,
+  CABLING_IDS,
+  POPULAR_SETUPS,
+  allowedCablings,
+  allowedLocalLinks,
+  cablingLabel,
+  cablingOf,
+  catalogDeviceIds,
+  composeTopology,
+  defaultCabling,
+  fabricOf,
+  linkById,
+  networkOf,
+  popularSetupById,
+  resolveNetwork,
+  setupErrors,
+  setupLabel,
+  setupOptionsFor,
+  type CablingId,
+  type SetupChoice,
 } from './catalog';
 import { DEVICE_PRESETS, deviceUnlocks } from './index';
 import {
-  ETHERNET_10G_TCP, IB_NDR_400, IB_XDR_800, NVLINK_4, NVLINK_5, PCIE_1_X16, PCIE_1_X4, PCIE_2_X16, PCIE_2_X4, PCIE_4_X16,
-  PCIE_5_X16, PCIE_5_X16_DIRECT,
-  PCIE_4_X8, PCIE_4_X8_DIRECT, PCIE_5_X8, PCIE_5_X8_DIRECT, RTX_3090_NVLINK, SPARK_CONNECTX_7, TB4_TCP, TB4_TCP_20G, TB5_RDMA,
+  ETHERNET_10G_TCP,
+  IB_NDR_400,
+  IB_XDR_800,
+  NVLINK_4,
+  NVLINK_5,
+  PCIE_1_X16,
+  PCIE_1_X4,
+  PCIE_2_X16,
+  PCIE_2_X4,
+  PCIE_4_X16,
+  PCIE_5_X16,
+  PCIE_5_X16_DIRECT,
+  PCIE_4_X8,
+  PCIE_4_X8_DIRECT,
+  PCIE_5_X8,
+  PCIE_5_X8_DIRECT,
+  RTX_3090_NVLINK,
+  SPARK_CONNECTX_7,
+  TB4_TCP,
+  TB4_TCP_20G,
+  TB5_RDMA,
   TB5_TCP,
-  USB4_HALO_RDMA, XGMI_MI300X_8_GPU,
+  USB4_HALO_RDMA,
+  XGMI_MI300X_8_GPU,
   XGMI_MI325X_8_GPU,
   XGMI_MI355X_8_GPU,
   UALOE_MI455X,
@@ -54,7 +89,10 @@ describe('setup catalog: every device', () => {
       expect(n.portsPerNode).toBeGreaterThanOrEqual(1);
       expect(n.maxCablesPerPair).toBeGreaterThanOrEqual(1);
       expect(n.sources.length).toBeGreaterThan(0);
-      expect(n.sources.some((s) => s.fields.includes('portsPerNode')), `${id} ${n.shortName} cites its port count`).toBe(true);
+      expect(
+        n.sources.some((s) => s.fields.includes('portsPerNode')),
+        `${id} ${n.shortName} cites its port count`,
+      ).toBe(true);
       for (const s of n.sources) expect(s.url.startsWith('https://')).toBe(true);
     }
     // No two networks or local links share a link.
@@ -65,37 +103,49 @@ describe('setup catalog: every device', () => {
     else expect(o.devicesPerNodeCounts).toContain(2);
   });
 
-  it.each(DEVICE_PRESETS.map((d) => [d.id] as const))('%s: every offered machine count has a cabling on every network, and the composed topology validates', (id) => {
-    const o = setupOptionsFor(id);
-    for (const net of o.networks) {
-      for (const nodes of o.nodeCounts) {
-        if (nodes === 1) {
-          expect(allowedCablings(net, 1, 1)).toEqual([]);
-          expect(defaultCabling(net, 1, 1)).toBeUndefined();
-          continue;
+  it.each(DEVICE_PRESETS.map((d) => [d.id] as const))(
+    '%s: every offered machine count has a cabling on every network, and the composed topology validates',
+    (id) => {
+      const o = setupOptionsFor(id);
+      for (const net of o.networks) {
+        for (const nodes of o.nodeCounts) {
+          if (nodes === 1) {
+            expect(allowedCablings(net, 1, 1)).toEqual([]);
+            expect(defaultCabling(net, 1, 1)).toBeUndefined();
+            continue;
+          }
+          const allowed = allowedCablings(net, nodes, 1);
+          expect(allowed.length, `${id} ×${nodes} over ${net.shortName}`).toBeGreaterThan(0);
+          const d = defaultCabling(net, nodes, 1);
+          expect(d).toBeDefined();
+          expect(allowed).toContain(d);
+          for (const cabling of allowed) {
+            const choice = soc(id, nodes, { networkLinkId: linkPresetId(net.link), cabling });
+            expect(setupErrors(choice), setupLabel(choice)).toEqual([]);
+            expect(validateTopology(composeTopology(choice))).toEqual([]);
+          }
         }
-        const allowed = allowedCablings(net, nodes, 1);
-        expect(allowed.length, `${id} ×${nodes} over ${net.shortName}`).toBeGreaterThan(0);
-        const d = defaultCabling(net, nodes, 1);
-        expect(d).toBeDefined();
-        expect(allowed).toContain(d);
-        for (const cabling of allowed) {
-          const choice = soc(id, nodes, { networkLinkId: linkPresetId(net.link), cabling });
-          expect(setupErrors(choice), setupLabel(choice)).toEqual([]);
+      }
+      for (const devicesPerNode of o.devicesPerNodeCounts) {
+        // Every offered count has at least one local link (SoCs have none and offer only 1 device per machine).
+        if (devicesPerNode > 1)
+          expect(
+            allowedLocalLinks(o, devicesPerNode).length,
+            `${id} ×${devicesPerNode}`,
+          ).toBeGreaterThan(0);
+        for (const local of allowedLocalLinks(o, devicesPerNode)) {
+          const choice: SetupChoice = {
+            deviceId: id,
+            devicesPerNode,
+            nodes: 1,
+            localLinkId: linkPresetId(local.link),
+          };
+          expect(setupErrors(choice)).toEqual([]);
           expect(validateTopology(composeTopology(choice))).toEqual([]);
         }
       }
-    }
-    for (const devicesPerNode of o.devicesPerNodeCounts) {
-      // Every offered count has at least one local link (SoCs have none and offer only 1 device per machine).
-      if (devicesPerNode > 1) expect(allowedLocalLinks(o, devicesPerNode).length, `${id} ×${devicesPerNode}`).toBeGreaterThan(0);
-      for (const local of allowedLocalLinks(o, devicesPerNode)) {
-        const choice: SetupChoice = { deviceId: id, devicesPerNode, nodes: 1, localLinkId: linkPresetId(local.link) };
-        expect(setupErrors(choice)).toEqual([]);
-        expect(validateTopology(composeTopology(choice))).toEqual([]);
-      }
-    }
-  });
+    },
+  );
 
   /**
    * The defaults the UI used before the catalog (`defaultLinks` in `src/ui/state/hardware.ts`, by device id), which
@@ -135,11 +185,16 @@ describe('setup catalog: every device', () => {
     ['instinct-mi300x', linkPresetId(XGMI_MI300X_8_GPU), linkPresetId(IB_NDR_400)],
   ];
 
-  it.each(OLD_DEFAULTS)('%s: the default links equal the pre-catalog UI defaults', (id, intra, inter) => {
-    const o = setupOptionsFor(id);
-    expect(o.localLinks[0] === undefined ? undefined : linkPresetId(o.localLinks[0].link)).toBe(intra);
-    expect(linkPresetId(o.networks[0].link)).toBe(inter);
-  });
+  it.each(OLD_DEFAULTS)(
+    '%s: the default links equal the pre-catalog UI defaults',
+    (id, intra, inter) => {
+      const o = setupOptionsFor(id);
+      expect(o.localLinks[0] === undefined ? undefined : linkPresetId(o.localLinks[0].link)).toBe(
+        intra,
+      );
+      expect(linkPresetId(o.networks[0].link)).toBe(inter);
+    },
+  );
 
   it('covers every pre-catalog device in the defaults table (new since: the M3 Max, Thunderbolt 4 TCP only; the CMP 170HX)', () => {
     const covered = new Set(OLD_DEFAULTS.map(([id]) => id));
@@ -150,10 +205,15 @@ describe('setup catalog: every device', () => {
     // The CMP 170HX (added after the catalog) defaults to its stock PCIe 1.0 x4 (the only link its stock interface runs)
     // and 10GbE.
     expect(resolveLocalLink(setupOptionsFor('cmp-170hx'), undefined, 2)).toBe(PCIE_1_X4);
-    expect(linkPresetId(setupOptionsFor('cmp-170hx').networks[0].link)).toBe(linkPresetId(ETHERNET_10G_TCP));
+    expect(linkPresetId(setupOptionsFor('cmp-170hx').networks[0].link)).toBe(
+      linkPresetId(ETHERNET_10G_TCP),
+    );
     for (const id of uncovered) {
       const o = setupOptionsFor(id);
-      expect(o.networks.map((n) => linkPresetId(n.link))).toEqual([linkPresetId(TB4_TCP), linkPresetId(TB4_TCP_20G)]);
+      expect(o.networks.map((n) => linkPresetId(n.link))).toEqual([
+        linkPresetId(TB4_TCP),
+        linkPresetId(TB4_TCP_20G),
+      ]);
       expect(o.localLinks).toEqual([]);
     }
   });
@@ -195,11 +255,14 @@ describe('setup catalog: PCIe links never exceed the card', () => {
   const NO_HOST_INTERFACE_PCIE: string[] = [];
 
   /** Every unlock selection of a device with its effective host interface (stock included: the empty selection). */
-  function unlockStates(device: DeviceSpec): { selection: Record<string, string>; iface: HostInterfaceSpec | undefined }[] {
+  function unlockStates(
+    device: DeviceSpec,
+  ): { selection: Record<string, string>; iface: HostInterfaceSpec | undefined }[] {
     const axes = deviceUnlocks(device);
     return allUnlockSelections(axes).map((selection) => ({
       selection,
-      iface: applyDeviceModifiers(device, resolveUnlocks(axes, selection).deviceModifiers).hostInterface,
+      iface: applyDeviceModifiers(device, resolveUnlocks(axes, selection).deviceModifiers)
+        .hostInterface,
     }));
   }
 
@@ -210,26 +273,38 @@ describe('setup catalog: PCIe links never exceed the card', () => {
       const options = setupOptionsFor(id);
       const pcie = options.localLinks.filter((l) => l.link.kind === 'pcie');
       // Every PCIe option states its generation and lanes, matching its link's name.
-      for (const opt of pcie) expect(opt.pcie, `${id}: ${opt.link.name}`).toEqual(pcieGenLanes(opt.link.name));
+      for (const opt of pcie)
+        expect(opt.pcie, `${id}: ${opt.link.name}`).toEqual(pcieGenLanes(opt.link.name));
       if (device.hostInterface === undefined) {
-        expect(pcie.length === 0 || NO_HOST_INTERFACE_PCIE.includes(id), `${id} offers PCIe without a hostInterface`).toBe(true);
+        expect(
+          pcie.length === 0 || NO_HOST_INTERFACE_PCIE.includes(id),
+          `${id} offers PCIe without a hostInterface`,
+        ).toBe(true);
         return;
       }
       for (const { selection, iface } of unlockStates(device)) {
         for (const n of options.devicesPerNodeCounts) {
-          const offered = allowedLocalLinks(options, n, iface).filter((l) => l.link.kind === 'pcie');
+          const offered = allowedLocalLinks(options, n, iface).filter(
+            (l) => l.link.kind === 'pcie',
+          );
           for (const opt of offered) {
             const link = pcieGenLanes(opt.link.name);
             const label = `${id} ${JSON.stringify(selection)} ×${n}: ${opt.link.name} vs Gen${iface!.generation} x${iface!.lanes}`;
             expect(link.generation, label).toBeLessThanOrEqual(iface!.generation);
             expect(link.lanes, label).toBeLessThanOrEqual(iface!.lanes);
           }
-          if (n > 1) expect(allowedLocalLinks(options, n, iface).length, `${id} ×${n}: some local link`).toBeGreaterThan(0);
+          if (n > 1)
+            expect(
+              allowedLocalLinks(options, n, iface).length,
+              `${id} ×${n}: some local link`,
+            ).toBeGreaterThan(0);
         }
       }
       // A device without PCIe unlocks hides nothing: its stock interface runs every PCIe link it lists.
       if (deviceUnlocks(device).length === 0) {
-        expect(allowedLocalLinks(options, 2).filter((l) => l.link.kind === 'pcie')).toEqual(pcie.filter((l) => localLinkAllows(l, 2)));
+        expect(allowedLocalLinks(options, 2).filter((l) => l.link.kind === 'pcie')).toEqual(
+          pcie.filter((l) => localLinkAllows(l, 2)),
+        );
       }
     },
   );
@@ -239,23 +314,42 @@ describe('setup catalog: PCIe links never exceed the card', () => {
     const options = setupOptionsFor('cmp-170hx');
     const axes = deviceUnlocks(cmp);
     const offered = (s: Record<string, string>) =>
-      allowedLocalLinks(options, 2, applyDeviceModifiers(cmp, resolveUnlocks(axes, s).deviceModifiers).hostInterface).map((l) => l.link);
+      allowedLocalLinks(
+        options,
+        2,
+        applyDeviceModifiers(cmp, resolveUnlocks(axes, s).deviceModifiers).hostInterface,
+      ).map((l) => l.link);
     expect(offered({})).toEqual([PCIE_1_X4]);
     expect(offered({ 'compute-path': 'locked-workarounds' })).toEqual([PCIE_1_X4]);
     expect(offered({ 'pcie-capacitor-mod': 'x16' })).toEqual([PCIE_1_X16, PCIE_1_X4]);
     expect(offered({ 'compute-path': 'cmpunlocker' })).toEqual([PCIE_2_X4, PCIE_1_X4]);
-    expect(offered({ 'compute-path': 'cmpunlocker-hbm-1890', 'pcie-capacitor-mod': 'x16' })).toEqual([PCIE_2_X16, PCIE_1_X16, PCIE_2_X4, PCIE_1_X4]);
+    expect(
+      offered({ 'compute-path': 'cmpunlocker-hbm-1890', 'pcie-capacitor-mod': 'x16' }),
+    ).toEqual([PCIE_2_X16, PCIE_1_X16, PCIE_2_X4, PCIE_1_X4]);
     // The stock default and composeTopology / setupErrors use the stock interface unless told the unlocked one.
     expect(resolveLocalLink(options, undefined, 2)).toBe(PCIE_1_X4);
     expect(resolveLocalLink(options, undefined, 2, { generation: 2, lanes: 16 })).toBe(PCIE_2_X16);
-    const stock2x16: SetupChoice = { deviceId: 'cmp-170hx', devicesPerNode: 2, nodes: 1, localLinkId: linkPresetId(PCIE_2_X16) };
-    expect(setupErrors(stock2x16)).toEqual(["PCIe 2.0 x16 exceeds the card's PCIe 1.0 x4 host interface"]);
+    const stock2x16: SetupChoice = {
+      deviceId: 'cmp-170hx',
+      devicesPerNode: 2,
+      nodes: 1,
+      localLinkId: linkPresetId(PCIE_2_X16),
+    };
+    expect(setupErrors(stock2x16)).toEqual([
+      "PCIe 2.0 x16 exceeds the card's PCIe 1.0 x4 host interface",
+    ]);
     expect(setupErrors({ ...stock2x16, hostInterface: { generation: 2, lanes: 16 } })).toEqual([]);
   });
 
   it('Arc B580 (PCIe 4.0 x8): Gen4 x8 host bounce by default, Gen4 x8 direct as the option; Arc Pro B60 (Gen5 x8): x8 only', () => {
-    expect(setupOptionsFor('arc-b580').localLinks.map((l) => l.link)).toEqual([PCIE_4_X8, PCIE_4_X8_DIRECT]);
-    expect(setupOptionsFor('arc-pro-b60').localLinks.map((l) => l.link)).toEqual([PCIE_5_X8_DIRECT, PCIE_5_X8]);
+    expect(setupOptionsFor('arc-b580').localLinks.map((l) => l.link)).toEqual([
+      PCIE_4_X8,
+      PCIE_4_X8_DIRECT,
+    ]);
+    expect(setupOptionsFor('arc-pro-b60').localLinks.map((l) => l.link)).toEqual([
+      PCIE_5_X8_DIRECT,
+      PCIE_5_X8,
+    ]);
   });
 });
 
@@ -270,7 +364,13 @@ describe('cablings', () => {
   });
 
   it('labels', () => {
-    expect(CABLING_IDS.map((c) => cablingLabel(c, 4))).toEqual(['switch', 'mesh', 'mesh, 2 cables per pair', 'ring', 'chain']);
+    expect(CABLING_IDS.map((c) => cablingLabel(c, 4))).toEqual([
+      'switch',
+      'mesh',
+      'mesh, 2 cables per pair',
+      'ring',
+      'chain',
+    ]);
     expect(cablingLabel('mesh2', 2)).toBe('mesh, 2 cables');
   });
 
@@ -280,13 +380,20 @@ describe('cablings', () => {
 
   it('port counts: M3 Ultra 5 (RDMA) of 6, M4 Max 3 of 4, M5 Max 3, M5 Ultra 6, M3 Max 3 TB4, Spark 2, Halo 2', () => {
     expect(tb5('apple-m3-ultra-80c')?.portsPerNode).toBe(5);
-    expect(networkOf(setupOptionsFor('apple-m3-ultra-80c'), linkPresetId(TB5_TCP))?.portsPerNode).toBe(6);
+    expect(
+      networkOf(setupOptionsFor('apple-m3-ultra-80c'), linkPresetId(TB5_TCP))?.portsPerNode,
+    ).toBe(6);
     expect(tb5('apple-m4-max-40c')?.portsPerNode).toBe(3);
     expect(tb5('apple-m5-max-40c')?.portsPerNode).toBe(3);
     expect(tb5('apple-m5-ultra-80c')?.portsPerNode).toBe(6);
     expect(tb5('apple-m3-max-40c')).toBeUndefined();
     expect(networkOf(setupOptionsFor('apple-m3-max-40c'), undefined)?.portsPerNode).toBe(3);
-    expect(cx7).toMatchObject({ portsPerNode: 2, switchable: true, maxCablesPerPair: 1, maxSwitchlessNodes: 4 });
+    expect(cx7).toMatchObject({
+      portsPerNode: 2,
+      switchable: true,
+      maxCablesPerPair: 1,
+      maxSwitchlessNodes: 4,
+    });
     expect(usb4).toMatchObject({ portsPerNode: 2, switchable: false, maxCablesPerPair: 1 });
     expect(tb5('apple-m3-ultra-80c')).toMatchObject({ switchable: false, maxCablesPerPair: 2 });
   });
@@ -338,24 +445,36 @@ describe('setupErrors', () => {
   const TB5 = linkPresetId(TB5_RDMA);
 
   it('rejects a mesh beyond the ports: 5 Macs on the M4 Max (3 ports), 7 on the M3 Ultra (5 ports)', () => {
-    expect(setupErrors(soc('apple-m4-max-40c', 5, { networkLinkId: TB5, cabling: 'mesh' }))).toEqual([
-      'a full mesh of 5 needs 4 ports per node; this machine has 3 usable',
-    ]);
-    expect(setupErrors(soc('apple-m3-ultra-80c', 7, { networkLinkId: TB5, cabling: 'mesh' }))).toHaveLength(1);
-    expect(setupErrors(soc('apple-m3-ultra-80c', 6, { networkLinkId: TB5, cabling: 'mesh' }))).toEqual([]);
+    expect(
+      setupErrors(soc('apple-m4-max-40c', 5, { networkLinkId: TB5, cabling: 'mesh' })),
+    ).toEqual(['a full mesh of 5 needs 4 ports per node; this machine has 3 usable']);
+    expect(
+      setupErrors(soc('apple-m3-ultra-80c', 7, { networkLinkId: TB5, cabling: 'mesh' })),
+    ).toHaveLength(1);
+    expect(
+      setupErrors(soc('apple-m3-ultra-80c', 6, { networkLinkId: TB5, cabling: 'mesh' })),
+    ).toEqual([]);
   });
 
   it('two cables per pair: rejected on the M3 Ultra at 4 (6 > 5 ports), accepted on the M5 Ultra', () => {
-    expect(setupErrors(soc('apple-m3-ultra-80c', 4, { networkLinkId: TB5, cabling: 'mesh2' }))).toEqual([
-      'a full mesh of 4 needs 6 ports per node; this machine has 5 usable',
+    expect(
+      setupErrors(soc('apple-m3-ultra-80c', 4, { networkLinkId: TB5, cabling: 'mesh2' })),
+    ).toEqual(['a full mesh of 4 needs 6 ports per node; this machine has 5 usable']);
+    expect(
+      setupErrors(soc('apple-m5-ultra-80c', 4, { networkLinkId: TB5, cabling: 'mesh2' })),
+    ).toEqual([]);
+    expect(setupErrors(soc('dgx-spark', 2, { cabling: 'mesh2' }))).toEqual([
+      'ConnectX-7 does not stripe two cables between a pair',
     ]);
-    expect(setupErrors(soc('apple-m5-ultra-80c', 4, { networkLinkId: TB5, cabling: 'mesh2' }))).toEqual([]);
-    expect(setupErrors(soc('dgx-spark', 2, { cabling: 'mesh2' }))).toEqual(['ConnectX-7 does not stripe two cables between a pair']);
   });
 
   it('no switch for Thunderbolt or USB4; a ring needs 3+ machines; Spark direct cabling stops at 4', () => {
-    expect(setupErrors(soc('apple-m3-ultra-80c', 4, { cabling: 'switched' }))).toEqual(['no switch exists for this link']);
-    expect(setupErrors(soc('ryzen-ai-max-plus-395', 2, { cabling: 'ring' }))).toEqual(['a ring needs at least 3 nodes (got 2); two nodes are a full mesh']);
+    expect(setupErrors(soc('apple-m3-ultra-80c', 4, { cabling: 'switched' }))).toEqual([
+      'no switch exists for this link',
+    ]);
+    expect(setupErrors(soc('ryzen-ai-max-plus-395', 2, { cabling: 'ring' }))).toEqual([
+      'a ring needs at least 3 nodes (got 2); two nodes are a full mesh',
+    ]);
     expect(setupErrors(soc('dgx-spark', 8, { cabling: 'ring' }))).toEqual([
       'ConnectX-7: direct cabling is supported for up to 4 machines (got 8); more go through a switch',
     ]);
@@ -366,19 +485,28 @@ describe('setupErrors', () => {
     const o = setupOptionsFor('rtx-3090');
     const bridge = linkPresetId(RTX_3090_NVLINK);
     expect(allowedLocalLinks(o, 2).map((l) => linkPresetId(l.link))).toContain(bridge);
-    for (const n of [1, 4, 8]) expect(allowedLocalLinks(o, n).map((l) => linkPresetId(l.link))).not.toContain(bridge);
+    for (const n of [1, 4, 8])
+      expect(allowedLocalLinks(o, n).map((l) => linkPresetId(l.link))).not.toContain(bridge);
     expect(allowedLocalLinks(o, 4)[0].link).toBe(PCIE_4_X16);
-    expect(setupErrors({ deviceId: 'rtx-3090', devicesPerNode: 2, nodes: 1, localLinkId: bridge })).toEqual([]);
-    expect(setupErrors({ deviceId: 'rtx-3090', devicesPerNode: 4, nodes: 1, localLinkId: bridge })).toEqual([
-      'NVLink bridge joins exactly 2 devices per machine (got 4)',
-    ]);
-    expect(setupErrors({ deviceId: 'rtx-3090', devicesPerNode: 8, nodes: 1, localLinkId: bridge })).toHaveLength(1);
+    expect(
+      setupErrors({ deviceId: 'rtx-3090', devicesPerNode: 2, nodes: 1, localLinkId: bridge }),
+    ).toEqual([]);
+    expect(
+      setupErrors({ deviceId: 'rtx-3090', devicesPerNode: 4, nodes: 1, localLinkId: bridge }),
+    ).toEqual(['NVLink bridge joins exactly 2 devices per machine (got 4)']);
+    expect(
+      setupErrors({ deviceId: 'rtx-3090', devicesPerNode: 8, nodes: 1, localLinkId: bridge }),
+    ).toHaveLength(1);
     // The RTX 3090 exception above predates the count-restricted A100/V100 links tested separately below. No
     // host-interface limit here: the CMP's PCIe filter is tested above.
-    for (const id of DEVICE_PRESETS.map((d) => d.id).filter((id) => !/^(a100-|v100-|gb200$)/.test(id))) {
+    for (const id of DEVICE_PRESETS.map((d) => d.id).filter(
+      (id) => !/^(a100-|v100-|gb200$)/.test(id),
+    )) {
       const opts = setupOptionsFor(id);
       for (const n of opts.devicesPerNodeCounts.filter((x) => x > 1)) {
-        expect(opts.localLinks.filter((l) => localLinkAllows(l, n)).length, `${id} ×${n}`).toBe(opts.localLinks.length - (id === 'rtx-3090' && n !== 2 ? 1 : 0));
+        expect(opts.localLinks.filter((l) => localLinkAllows(l, n)).length, `${id} ×${n}`).toBe(
+          opts.localLinks.length - (id === 'rtx-3090' && n !== 2 ? 1 : 0),
+        );
       }
     }
   });
@@ -386,7 +514,16 @@ describe('setupErrors', () => {
   it('Thunderbolt TCP: TB5 Macs get the 80 Gb/s TB5 bridge, the M3 Max the TB4 bridge; old TB4 URLs on a TB5 Mac still resolve', () => {
     const tb5Id = linkPresetId(TB5_TCP);
     const tb4Id = linkPresetId(TB4_TCP);
-    for (const id of ['apple-m5-ultra-80c', 'apple-m5-ultra-64c', 'apple-m5-max-40c', 'apple-m5-max-32c', 'apple-m4-max-40c', 'apple-m4-max-32c', 'apple-m3-ultra-80c', 'apple-m3-ultra-60c']) {
+    for (const id of [
+      'apple-m5-ultra-80c',
+      'apple-m5-ultra-64c',
+      'apple-m5-max-40c',
+      'apple-m5-max-32c',
+      'apple-m4-max-40c',
+      'apple-m4-max-32c',
+      'apple-m3-ultra-80c',
+      'apple-m3-ultra-60c',
+    ]) {
       const o = setupOptionsFor(id);
       const tcp = networkOf(o, tb5Id);
       expect(tcp?.link, id).toBe(TB5_TCP);
@@ -416,7 +553,9 @@ describe('setupErrors', () => {
   });
 
   it('several GPUs per machine network through a switch only', () => {
-    expect(setupErrors({ deviceId: 'rtx-5090', devicesPerNode: 2, nodes: 2, cabling: 'mesh' })).toEqual([
+    expect(
+      setupErrors({ deviceId: 'rtx-5090', devicesPerNode: 2, nodes: 2, cabling: 'mesh' }),
+    ).toEqual([
       'a full mesh needs one device per node (got 2); nodes with several devices network through a switch',
     ]);
     expect(setupErrors({ deviceId: 'h100-sxm', devicesPerNode: 8, nodes: 2 })).toEqual([]);
@@ -424,11 +563,17 @@ describe('setupErrors', () => {
 
   it('device, memory, counts and link ids', () => {
     expect(setupErrors(soc('no-such-device', 2))).toEqual(["unknown device 'no-such-device'"]);
-    expect(setupErrors(soc('apple-m5-ultra-80c', 2, { memCapacityBytes: 128e9 }))).toEqual(['128000000000 B is not a memory option of apple-m5-ultra-80c']);
+    expect(setupErrors(soc('apple-m5-ultra-80c', 2, { memCapacityBytes: 128e9 }))).toEqual([
+      '128000000000 B is not a memory option of apple-m5-ultra-80c',
+    ]);
     expect(setupErrors(soc('apple-m5-ultra-80c', 2, { memCapacityBytes: 256e9 }))).toEqual([]);
     expect(setupErrors(soc('dgx-spark', 0))).toEqual(['nodes must be an integer ≥ 1 (got 0)']);
-    expect(setupErrors({ deviceId: 'rtx-5090', devicesPerNode: 1.5, nodes: 1 })).toEqual(['devicesPerNode must be an integer ≥ 1 (got 1.5)']);
-    expect(setupErrors(soc('dgx-spark', 2, { networkLinkId: 'no-such-link' }))).toEqual(["unknown link 'no-such-link'"]);
+    expect(setupErrors({ deviceId: 'rtx-5090', devicesPerNode: 1.5, nodes: 1 })).toEqual([
+      'devicesPerNode must be an integer ≥ 1 (got 1.5)',
+    ]);
+    expect(setupErrors(soc('dgx-spark', 2, { networkLinkId: 'no-such-link' }))).toEqual([
+      "unknown link 'no-such-link'",
+    ]);
     // A link preset the device does not list (an old URL): allowed as a switch, nothing else.
     const foreign = soc('apple-m3-ultra-80c', 3, { networkLinkId: linkPresetId(SPARK_CONNECTX_7) });
     expect(setupErrors(foreign)).toEqual([]);
@@ -441,7 +586,12 @@ describe('setupErrors', () => {
 describe('composeTopology', () => {
   it('builds the counts, the chosen or default links, and the fabric (omitted for a switch)', () => {
     const ring = composeTopology(soc('dgx-spark', 4, { cabling: 'ring' }));
-    expect(ring).toMatchObject({ devicesPerNode: 1, nodes: 4, interNode: SPARK_CONNECTX_7, interNodeFabric: { kind: 'ring' } });
+    expect(ring).toMatchObject({
+      devicesPerNode: 1,
+      nodes: 4,
+      interNode: SPARK_CONNECTX_7,
+      interNodeFabric: { kind: 'ring' },
+    });
     expect(ring.intraNode).toBeUndefined();
     expect(ring.id).toBe('node-1x4-dgx-spark-inter-dgx-spark-connectx-7-200gbe-roce-ring');
     const switched = composeTopology(soc('dgx-spark', 4));
@@ -459,9 +609,21 @@ describe('composeTopology', () => {
     expect(box.interNode).toBeUndefined();
     expect(box.interNodeFabric).toBeUndefined();
     // A chosen local link; an unknown id falls back to the default.
-    expect(composeTopology({ deviceId: 'rtx-5090', devicesPerNode: 2, nodes: 1, localLinkId: linkPresetId(PCIE_5_X16_DIRECT) }).intraNode).toBe(PCIE_5_X16_DIRECT);
-    expect(composeTopology({ deviceId: 'rtx-5090', devicesPerNode: 2, nodes: 1, localLinkId: 'nope' }).intraNode).toBe(PCIE_5_X16);
-    expect(composeTopology(soc('dgx-spark', 2, { networkLinkId: 'nope' })).interNode).toBe(SPARK_CONNECTX_7);
+    expect(
+      composeTopology({
+        deviceId: 'rtx-5090',
+        devicesPerNode: 2,
+        nodes: 1,
+        localLinkId: linkPresetId(PCIE_5_X16_DIRECT),
+      }).intraNode,
+    ).toBe(PCIE_5_X16_DIRECT);
+    expect(
+      composeTopology({ deviceId: 'rtx-5090', devicesPerNode: 2, nodes: 1, localLinkId: 'nope' })
+        .intraNode,
+    ).toBe(PCIE_5_X16);
+    expect(composeTopology(soc('dgx-spark', 2, { networkLinkId: 'nope' })).interNode).toBe(
+      SPARK_CONNECTX_7,
+    );
     // One device: no links at all.
     const one = composeTopology(soc('apple-m3-max-30c', 1));
     expect(one.interNode).toBeUndefined();
@@ -472,21 +634,37 @@ describe('composeTopology', () => {
 
 describe('setupLabel', () => {
   it('names the exact SKU: chip, GPU-core binning, memory, count, link and cabling', () => {
-    expect(setupLabel(soc('apple-m5-ultra-80c', 2, { memCapacityBytes: 256e9, cabling: 'mesh' }))).toBe('M5 Ultra 80-core GPU, 256GB ×2 · TB5 mesh');
-    expect(setupLabel(soc('apple-m5-ultra-64c', 2))).toBe('M5 Ultra 64-core GPU, 96GB ×2 · TB5 mesh');
-    expect(setupLabel(soc('apple-m3-ultra-80c', 4, { memCapacityBytes: 512e9 }))).toBe('M3 Ultra 80-core GPU, 512GB ×4 · TB5 mesh');
-    expect(setupLabel(soc('apple-m5-ultra-80c', 4, { memCapacityBytes: 512e9, cabling: 'mesh2' }))).toBe('M5 Ultra 80-core GPU, 512GB ×4 · TB5 mesh, 2 cables per pair');
-    expect(setupLabel(soc('apple-m3-max-40c', 3))).toBe('M3 Max 40-core GPU, 48GB ×3 · TB TCP mesh');
-    expect(setupLabel(soc('dgx-spark', 4, { cabling: 'ring' }))).toBe('DGX Spark 128GB ×4 · ConnectX-7 ring');
+    expect(
+      setupLabel(soc('apple-m5-ultra-80c', 2, { memCapacityBytes: 256e9, cabling: 'mesh' })),
+    ).toBe('M5 Ultra 80-core GPU, 256GB ×2 · TB5 mesh');
+    expect(setupLabel(soc('apple-m5-ultra-64c', 2))).toBe(
+      'M5 Ultra 64-core GPU, 96GB ×2 · TB5 mesh',
+    );
+    expect(setupLabel(soc('apple-m3-ultra-80c', 4, { memCapacityBytes: 512e9 }))).toBe(
+      'M3 Ultra 80-core GPU, 512GB ×4 · TB5 mesh',
+    );
+    expect(
+      setupLabel(soc('apple-m5-ultra-80c', 4, { memCapacityBytes: 512e9, cabling: 'mesh2' })),
+    ).toBe('M5 Ultra 80-core GPU, 512GB ×4 · TB5 mesh, 2 cables per pair');
+    expect(setupLabel(soc('apple-m3-max-40c', 3))).toBe(
+      'M3 Max 40-core GPU, 48GB ×3 · TB TCP mesh',
+    );
+    expect(setupLabel(soc('dgx-spark', 4, { cabling: 'ring' }))).toBe(
+      'DGX Spark 128GB ×4 · ConnectX-7 ring',
+    );
     expect(setupLabel(soc('dgx-spark', 4))).toBe('DGX Spark 128GB ×4 · ConnectX-7 switch');
     expect(setupLabel(soc('ryzen-ai-max-plus-395', 4))).toBe('Strix Halo 395 128GB ×4 · USB4 ring');
-    expect(setupLabel({ deviceId: 'rtx-5090', devicesPerNode: 2, nodes: 1 })).toBe('RTX 5090 32GB ×2 · PCIe 5.0 x16');
-    expect(setupLabel({ deviceId: 'rtx-5090', devicesPerNode: 1, nodes: 1 })).toBe('RTX 5090 32GB');
-    expect(setupLabel({ deviceId: 'h100-sxm', devicesPerNode: 8, nodes: 2 })).toBe('H100 SXM 80GB ×8 × 2 machines · NVLink 4 / IB NDR');
-    // A link the device does not list is named by its preset name.
-    expect(setupLabel(soc('apple-m3-ultra-80c', 3, { networkLinkId: linkPresetId(SPARK_CONNECTX_7) }))).toBe(
-      'M3 Ultra 80-core GPU, 96GB ×3 · DGX Spark ConnectX-7 200GbE RoCE switch',
+    expect(setupLabel({ deviceId: 'rtx-5090', devicesPerNode: 2, nodes: 1 })).toBe(
+      'RTX 5090 32GB ×2 · PCIe 5.0 x16',
     );
+    expect(setupLabel({ deviceId: 'rtx-5090', devicesPerNode: 1, nodes: 1 })).toBe('RTX 5090 32GB');
+    expect(setupLabel({ deviceId: 'h100-sxm', devicesPerNode: 8, nodes: 2 })).toBe(
+      'H100 SXM 80GB ×8 × 2 machines · NVLink 4 / IB NDR',
+    );
+    // A link the device does not list is named by its preset name.
+    expect(
+      setupLabel(soc('apple-m3-ultra-80c', 3, { networkLinkId: linkPresetId(SPARK_CONNECTX_7) })),
+    ).toBe('M3 Ultra 80-core GPU, 96GB ×3 · DGX Spark ConnectX-7 200GbE RoCE switch');
   });
 });
 
@@ -527,22 +705,25 @@ describe('POPULAR_SETUPS', () => {
     ]);
   });
 
-  it.each(POPULAR_SETUPS.map((p) => [p.id, p] as const))('%s: valid, multi-device, cited, and its topology validates', (_id, p) => {
-    expect(setupErrors(p.choice)).toEqual([]);
-    expect(p.choice.devicesPerNode * p.choice.nodes).toBeGreaterThan(1);
-    expect(p.sources.length).toBeGreaterThan(0);
-    for (const s of p.sources) expect(s.url.startsWith('https://')).toBe(true);
-    const t = composeTopology(p.choice);
-    expect(validateTopology(t)).toEqual([]);
-    expect(t.devicesPerNode).toBe(p.choice.devicesPerNode);
-    expect(t.nodes).toBe(p.choice.nodes);
-    // Every popular setup names its links and cabling explicitly (no reliance on defaults).
-    if (p.choice.nodes > 1) {
-      expect(p.choice.networkLinkId).toBeDefined();
-      expect(p.choice.cabling).toBeDefined();
-    } else expect(p.choice.localLinkId).toBeDefined();
-    expect(popularSetupById(p.id)).toBe(p);
-  });
+  it.each(POPULAR_SETUPS.map((p) => [p.id, p] as const))(
+    '%s: valid, multi-device, cited, and its topology validates',
+    (_id, p) => {
+      expect(setupErrors(p.choice)).toEqual([]);
+      expect(p.choice.devicesPerNode * p.choice.nodes).toBeGreaterThan(1);
+      expect(p.sources.length).toBeGreaterThan(0);
+      for (const s of p.sources) expect(s.url.startsWith('https://')).toBe(true);
+      const t = composeTopology(p.choice);
+      expect(validateTopology(t)).toEqual([]);
+      expect(t.devicesPerNode).toBe(p.choice.devicesPerNode);
+      expect(t.nodes).toBe(p.choice.nodes);
+      // Every popular setup names its links and cabling explicitly (no reliance on defaults).
+      if (p.choice.nodes > 1) {
+        expect(p.choice.networkLinkId).toBeDefined();
+        expect(p.choice.cabling).toBeDefined();
+      } else expect(p.choice.localLinkId).toBeDefined();
+      expect(popularSetupById(p.id)).toBe(p);
+    },
+  );
 
   it('the Spark ring and switch differ only in cabling, and the ring topology carries the ring fabric', () => {
     const ring = popularSetupById('dgx-spark-x4-ring')!;
@@ -550,8 +731,12 @@ describe('POPULAR_SETUPS', () => {
     expect({ ...ring.choice, cabling: undefined }).toEqual({ ...sw.choice, cabling: undefined });
     expect(composeTopology(ring.choice).interNodeFabric).toEqual({ kind: 'ring' });
     expect(composeTopology(sw.choice).interNodeFabric).toBeUndefined();
-    expect(composeTopology(popularSetupById('strix-halo-128gb-x4-usb4-ring')!.choice).interNodeFabric).toEqual({ kind: 'ring' });
-    expect(composeTopology(popularSetupById('m5-ultra-80c-512gb-x4-tb5-mesh2')!.choice).interNodeFabric).toEqual({ kind: 'full_mesh', cablesPerPair: 2 });
+    expect(
+      composeTopology(popularSetupById('strix-halo-128gb-x4-usb4-ring')!.choice).interNodeFabric,
+    ).toEqual({ kind: 'ring' });
+    expect(
+      composeTopology(popularSetupById('m5-ultra-80c-512gb-x4-tb5-mesh2')!.choice).interNodeFabric,
+    ).toEqual({ kind: 'full_mesh', cablesPerPair: 2 });
   });
 });
 

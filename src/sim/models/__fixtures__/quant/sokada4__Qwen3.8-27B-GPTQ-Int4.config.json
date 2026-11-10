@@ -1,7 +1,5 @@
 {
-  "architectures": [
-    "Qwen3_5ForConditionalGeneration"
-  ],
+  "architectures": ["Qwen3_5ForConditionalGeneration"],
   "dtype": "bfloat16",
   "image_token_id": 248056,
   "language_model_only": false,
@@ -19,9 +17,7 @@
       "damp_auto_increment": 0.01,
       "damp_percent": 0.05,
       "dense_vram_strategy": "exclusive",
-      "dense_vram_strategy_devices": [
-        "cuda:0"
-      ],
+      "dense_vram_strategy_devices": ["cuda:0"],
       "fallback": {
         "smooth": null,
         "strategy": "rtn",
@@ -42,9 +38,7 @@
       "offload_to_disk": true,
       "offload_to_disk_path": null,
       "pack_impl": "cpu",
-      "quantizer": [
-        "gptqmodel:7.3.4"
-      ],
+      "quantizer": ["gptqmodel:7.3.4"],
       "static_groups": false,
       "true_sequential": true,
       "uri": "https://github.com/modelcloud/gptqmodel",
@@ -154,14 +148,10 @@
     "output_gate_type": "swish",
     "pad_token_id": 248044,
     "partial_rotary_factor": 0.25,
-    "rms_norm_eps": 1e-06,
+    "rms_norm_eps": 1e-6,
     "rope_parameters": {
       "mrope_interleaved": true,
-      "mrope_section": [
-        11,
-        11,
-        10
-      ],
+      "mrope_section": [11, 11, 10],
       "partial_rotary_factor": 0.25,
       "rope_theta": 10000000,
       "rope_type": "default"

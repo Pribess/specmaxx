@@ -3,13 +3,30 @@ import type { BlockSpec, QuantConfig } from '../ir/model';
 import type { GemmOp, Op } from '../ir/ops';
 import { linearGemm, moduleQuant } from './common';
 import { blockParams } from '../ir/params';
-import { blockResidentWeightBytes, blockSequenceStateBytes, lowerBlock, lowerModel, type LoweringContext } from './lower';
+import {
+  blockResidentWeightBytes,
+  blockSequenceStateBytes,
+  lowerBlock,
+  lowerModel,
+  type LoweringContext,
+} from './lower';
 import { TINY_HYBRID, TINY_MLA_SPARSE } from '../models/reference';
 
-const BF16: QuantConfig = { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } };
+const BF16: QuantConfig = {
+  weights: { dtype: 'bf16' },
+  activations: 'bf16',
+  kvCache: { dtype: 'bf16' },
+};
 
 function ctx(quant: QuantConfig): LoweringContext {
-  return { phase: 'decode', seqs: 4, qLen: 1, kvLen: 128, quant, parallel: { tp: 1, pp: 1, dp: 1, ep: 1 } };
+  return {
+    phase: 'decode',
+    seqs: 4,
+    qLen: 1,
+    kvLen: 128,
+    quant,
+    parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
+  };
 }
 
 const gemms = (ops: Op[]): GemmOp[] => ops.filter((o): o is GemmOp => o.kind === 'gemm');
@@ -32,7 +49,10 @@ describe('module formats', () => {
   });
 
   it('routed experts in NVFP4 W4A4: only the expert GEMMs change (format, input, math)', () => {
-    const quant: QuantConfig = { ...BF16, modules: { routed_experts: { weights: { dtype: 'nvfp4' }, gemmInput: 'nvfp4' } } };
+    const quant: QuantConfig = {
+      ...BF16,
+      modules: { routed_experts: { weights: { dtype: 'nvfp4' }, gemmInput: 'nvfp4' } },
+    };
     const changed = gemms(allOps(quant));
     const base = gemms(allOps(BF16));
     changed.forEach((g, i) => {
@@ -49,22 +69,40 @@ describe('module formats', () => {
     const moe = TINY_HYBRID.layers[1].blocks.find((b) => b.kind === 'moe');
     if (moe === undefined) throw new Error('expected a MoE block');
     // experts 8·3·256·128 = 786,432 params: bf16 2 B → nvfp4 0.5625 B (4 bit + 8-bit scale per 16)
-    expect(blockResidentWeightBytes(moe, ctx(BF16)) - blockResidentWeightBytes(moe, ctx(quant))).toBe(
-      786_432 * (2 - 0.5625),
-    );
+    expect(
+      blockResidentWeightBytes(moe, ctx(BF16)) - blockResidentWeightBytes(moe, ctx(quant)),
+    ).toBe(786_432 * (2 - 0.5625));
   });
 
   it('residual_mixer defaults to highPrecision and is never 2:4 sparse; other modules take weightSparsity', () => {
-    const quant: QuantConfig = { ...BF16, weights: { dtype: 'fp8_e4m3' }, weightSparsity: '2:4', highPrecision: 'fp32' };
+    const quant: QuantConfig = {
+      ...BF16,
+      weights: { dtype: 'fp8_e4m3' },
+      weightSparsity: '2:4',
+      highPrecision: 'fp32',
+    };
     expect(moduleQuant(ctx(quant), 'residual_mixer')).toEqual({
       weights: { dtype: 'fp32' },
       gemmInput: 'bf16',
       sparsity: 'dense',
     });
-    expect(moduleQuant(ctx(quant), 'ngram')).toEqual({ weights: { dtype: 'fp8_e4m3' }, gemmInput: 'bf16', sparsity: '2:4' });
+    expect(moduleQuant(ctx(quant), 'ngram')).toEqual({
+      weights: { dtype: 'fp8_e4m3' },
+      gemmInput: 'bf16',
+      sparsity: '2:4',
+    });
     // an explicit non-module weight (router, LM head) stays dense
-    expect(linearGemm('router', { m: 1, n: 8, k: 8 }, ctx(quant), { format: { weights: { dtype: 'bf16' } } }).sparsity).toBe('dense');
-    expect(() => linearGemm('x', { m: 1, n: 1, k: 1 }, ctx(quant), { module: 'attention', format: { weights: { dtype: 'bf16' } } })).toThrow();
+    expect(
+      linearGemm('router', { m: 1, n: 8, k: 8 }, ctx(quant), {
+        format: { weights: { dtype: 'bf16' } },
+      }).sparsity,
+    ).toBe('dense');
+    expect(() =>
+      linearGemm('x', { m: 1, n: 1, k: 1 }, ctx(quant), {
+        module: 'attention',
+        format: { weights: { dtype: 'bf16' } },
+      }),
+    ).toThrow();
   });
 
   it('MLA latent projections and indexer keys/weights get their own formats, falling back to the parent', () => {
@@ -75,7 +113,10 @@ describe('module formats', () => {
       return Object.fromEntries(gemms(ops).map((g) => [g.name, g.weight.dtype]));
     };
     // GLM-5.3-Flash FP8: q_a/q_b/kv_a/o FP8, kv_b (and its absorbed slices) BF16
-    const glm: QuantConfig = { ...BF16, modules: { attention: fp8, attention_kv_up: { weights: { dtype: 'bf16' } } } };
+    const glm: QuantConfig = {
+      ...BF16,
+      modules: { attention: fp8, attention_kv_up: { weights: { dtype: 'bf16' } } },
+    };
     expect(byName(glm, 'decode')).toMatchObject({
       'mla.q_a': 'fp8_e4m3',
       'mla.q_b': 'fp8_e4m3',
@@ -91,11 +132,17 @@ describe('module formats', () => {
     // a sub-class override without gemmInput stays weight-only under a W8A8 parent
     const w8a8: QuantConfig = {
       ...BF16,
-      modules: { attention: { weights: { dtype: 'fp8_e4m3' }, gemmInput: 'fp8_e4m3' }, attention_kv_up: { weights: { dtype: 'bf16' } } },
+      modules: {
+        attention: { weights: { dtype: 'fp8_e4m3' }, gemmInput: 'fp8_e4m3' },
+        attention_kv_up: { weights: { dtype: 'bf16' } },
+      },
     };
     const w8a8Ops = gemms(lowerModel(TINY_MLA_SPARSE, ctx(w8a8)).stages[0].layers[1].ops);
     expect(w8a8Ops.find((g) => g.name === 'mla.q_a')?.inputDtype).toBe('fp8_e4m3');
-    expect(w8a8Ops.find((g) => g.name === 'mla.q_absorb')).toMatchObject({ inputDtype: 'bf16', math: 'bf16' });
+    expect(w8a8Ops.find((g) => g.name === 'mla.q_absorb')).toMatchObject({
+      inputDtype: 'bf16',
+      math: 'bf16',
+    });
     // Mistral Large 4 FP8: kv_a and kv_b BF16; indexer query FP8, wk and weights_proj BF16
     const mistral: QuantConfig = {
       ...BF16,
@@ -117,16 +164,28 @@ describe('module formats', () => {
     });
     // unset sub-classes take the parent's entry
     const parentsOnly: QuantConfig = { ...BF16, modules: { attention: fp8, indexer: fp8 } };
-    expect(byName(parentsOnly, 'decode')).toMatchObject({ 'mla.kv_a': 'fp8_e4m3', 'mla.v_absorb': 'fp8_e4m3', 'idx.k': 'fp8_e4m3', 'idx.w': 'fp8_e4m3' });
+    expect(byName(parentsOnly, 'decode')).toMatchObject({
+      'mla.kv_a': 'fp8_e4m3',
+      'mla.v_absorb': 'fp8_e4m3',
+      'idx.k': 'fp8_e4m3',
+      'idx.w': 'fp8_e4m3',
+    });
     expect(moduleQuant(ctx(parentsOnly), 'attention_kv_up').weights).toEqual(fp8.weights);
   });
 
   it('LM head W4A4: lmHeadGemmInput sets the input dtype and the math', () => {
     const quant: QuantConfig = { ...BF16, lmHead: { dtype: 'nvfp4' }, lmHeadGemmInput: 'nvfp4' };
     const head = gemms(allOps(quant)).find((g) => g.name === 'lm_head');
-    expect(head).toMatchObject({ weight: { dtype: 'nvfp4' }, inputDtype: 'nvfp4', math: 'fp4', sparsity: 'dense' });
+    expect(head).toMatchObject({
+      weight: { dtype: 'nvfp4' },
+      inputDtype: 'nvfp4',
+      math: 'fp4',
+      sparsity: 'dense',
+    });
     // default: weight-only (bf16 input, bf16 math)
-    const weightOnly = gemms(allOps({ ...BF16, lmHead: { dtype: 'nvfp4' } })).find((g) => g.name === 'lm_head');
+    const weightOnly = gemms(allOps({ ...BF16, lmHead: { dtype: 'nvfp4' } })).find(
+      (g) => g.name === 'lm_head',
+    );
     expect(weightOnly).toMatchObject({ inputDtype: 'bf16', math: 'bf16' });
   });
 });
@@ -144,9 +203,24 @@ describe('resident weights of every new block kind equal its params · 2 B (bf16
       outGroups: 2,
       outLoraRank: 8,
       windowTokens: 8,
-      global: { compressRatio: 2, selection: { kind: 'indexer', indexer: { heads: 2, headDim: 8, topK: 4, keyPoolTokens: 2, keyInputDim: 32 } } },
+      global: {
+        compressRatio: 2,
+        selection: {
+          kind: 'indexer',
+          indexer: { heads: 2, headDim: 8, topK: 4, keyPoolTokens: 2, keyInputDim: 32 },
+        },
+      },
     },
-    { kind: 'hc_pre', name: 'hc_pre', streams: 2, dim: 64, normGamma: true, projections: [{ name: 'p', inputDim: 128, outputDim: 6 }], sinkhornIters: 3, vectorParams: 9 },
+    {
+      kind: 'hc_pre',
+      name: 'hc_pre',
+      streams: 2,
+      dim: 64,
+      normGamma: true,
+      projections: [{ name: 'p', inputDim: 128, outputDim: 6 }],
+      sinkhornIters: 3,
+      vectorParams: 9,
+    },
     { kind: 'hc_post', name: 'hc_post', streams: 2, dim: 64, mixesStreams: true },
     {
       kind: 'ngram_embedding',
@@ -171,7 +245,10 @@ describe('resident weights of every new block kind equal its params · 2 B (bf16
       qkRopeDim: 0,
       vHeadDim: 8,
       kvCacheFromLayer: 0,
-      sparse: { kind: 'indexer', indexer: { heads: 2, headDim: 8, topK: 8, keyPoolTokens: 4, keyPoolGate: true } },
+      sparse: {
+        kind: 'indexer',
+        indexer: { heads: 2, headDim: 8, topK: 8, keyPoolTokens: 4, keyPoolGate: true },
+      },
     },
   ];
   it.each(blocks.map((b) => [b.name, b] as const))('%s', (_name, block) => {
@@ -202,7 +279,9 @@ describe('top-k reuse', () => {
     const reuse = { ...block, sparse: { kind: 'reuse', topK: 64 } } as const;
     const ops = lowerBlock(reuse, ctx(BF16));
     expect(ops.some((o) => o.kind === 'indexer' || o.name.startsWith('idx.'))).toBe(false);
-    expect(ops.find((o) => o.kind === 'attention')).toMatchObject({ kvSelection: { kind: 'topk', topK: 64 } });
+    expect(ops.find((o) => o.kind === 'attention')).toMatchObject({
+      kvSelection: { kind: 'topk', topK: 64 },
+    });
     // latent only: 100·(64 + 16)·2 B
     expect(blockSequenceStateBytes(reuse, ctx(BF16), 100)).toBe(16_000);
   });

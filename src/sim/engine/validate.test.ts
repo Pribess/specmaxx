@@ -11,7 +11,13 @@ import type { BlockDraftSpec, ModelSpec, ParallelConfig, QuantConfig } from '../
 import { REF_DENSE_8B, TINY_HC_NGRAM, TINY_HYBRID } from '../models/reference';
 import { singleDevice } from '../hw/presets';
 import type { TopologySpec } from '../hw/types';
-import type { DeploymentConfig, OffloadConfig, RoutedExpertRule, SimInput, SpecDecodeConfig } from './types';
+import type {
+  DeploymentConfig,
+  OffloadConfig,
+  RoutedExpertRule,
+  SimInput,
+  SpecDecodeConfig,
+} from './types';
 import {
   blockShardingErrors,
   deploymentErrors,
@@ -23,7 +29,11 @@ import { simulate } from './simulate';
 import { countParams } from '../ir/params';
 import { modelSpecErrors } from '../ir/validateModel';
 
-const BF16: QuantConfig = { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } };
+const BF16: QuantConfig = {
+  weights: { dtype: 'bf16' },
+  activations: 'bf16',
+  kvCache: { dtype: 'bf16' },
+};
 
 function input(parallel: Partial<ParallelConfig> = {}, over: Partial<SimInput> = {}): SimInput {
   return {
@@ -39,7 +49,10 @@ function input(parallel: Partial<ParallelConfig> = {}, over: Partial<SimInput> =
 /** Asserts exactly that some error line matches `pattern`. */
 function expectError(i: SimInput, pattern: RegExp): void {
   const errors = validateInput(i);
-  expect(errors.some((e) => pattern.test(e)), `errors: ${errors.join(' | ')}`).toBe(true);
+  expect(
+    errors.some((e) => pattern.test(e)),
+    `errors: ${errors.join(' | ')}`,
+  ).toBe(true);
 }
 
 describe('T17 input errors', () => {
@@ -54,12 +67,18 @@ describe('T17 input errors', () => {
   });
 
   it('batch % dp', () => {
-    expectError(input({ dp: 2 }, { workload: { batch: 3, promptLen: 128, decodeContextLen: 256 } }), /batch \(3\) must be divisible by dp \(2\)/);
+    expectError(
+      input({ dp: 2 }, { workload: { batch: 3, promptLen: 128, decodeContextLen: 256 } }),
+      /batch \(3\) must be divisible by dp \(2\)/,
+    );
   });
 
   it('pp > layers', () => {
     const topo: TopologySpec = { ...SYNTH_CLUSTER, nodes: 8 }; // 64 devices, so only the layer rule fails
-    expectError(input({ pp: 37 }, { hardware: { device: SYNTH_GPU, topology: topo } }), /pp \(37\) must not exceed the number of layers \(36\)/);
+    expectError(
+      input({ pp: 37 }, { hardware: { device: SYNTH_GPU, topology: topo } }),
+      /pp \(37\) must not exceed the number of layers \(36\)/,
+    );
   });
 
   it('world > devices', () => {
@@ -68,21 +87,32 @@ describe('T17 input errors', () => {
 
   it('missing interNode link', () => {
     const noInter: TopologySpec = { ...SYNTH_CLUSTER, interNode: undefined };
-    expectError(input({ tp: 16 }, { hardware: { device: SYNTH_GPU, topology: noInter } }), /no interNode link/);
+    expectError(
+      input({ tp: 16 }, { hardware: { device: SYNTH_GPU, topology: noInter } }),
+      /no interNode link/,
+    );
   });
 
   it('invalid ep (MoE: 8 experts, ep 3) and ep on a dense model', () => {
-    expectError(input({ ep: 3 }, { model: TINY_HYBRID }), /experts \(8\) must be divisible by ep \(3\)/);
+    expectError(
+      input({ ep: 3 }, { model: TINY_HYBRID }),
+      /experts \(8\) must be divisible by ep \(3\)/,
+    );
     expectError(input({ ep: 2 }), /model has no MoE block/);
   });
 
   it('epImbalance is a finite number ≥ 1 (max/mean load); 1 and above are valid', () => {
     for (const bad of [0.9, 0, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expectError(input({ ep: 2, dp: 2, epImbalance: bad }, { model: TINY_HYBRID }), /parallel\.epImbalance must be a finite number ≥ 1/);
+      expectError(
+        input({ ep: 2, dp: 2, epImbalance: bad }, { model: TINY_HYBRID }),
+        /parallel\.epImbalance must be a finite number ≥ 1/,
+      );
     }
     for (const ok of [1, 1.2, 2.56]) {
       const workload = { batch: 2, promptLen: 128, decodeContextLen: 256 };
-      expect(validateInput(input({ ep: 2, dp: 2, epImbalance: ok }, { model: TINY_HYBRID, workload }))).toEqual([]);
+      expect(
+        validateInput(input({ ep: 2, dp: 2, epImbalance: ok }, { model: TINY_HYBRID, workload })),
+      ).toEqual([]);
     }
   });
 
@@ -95,40 +125,81 @@ describe('T17 input errors', () => {
     }
     for (const ok of [0, 1, 32]) {
       const workload = { batch: 2, promptLen: 128, decodeContextLen: 256 };
-      expect(validateInput(input({ ep: 2, dp: 2, redundantExpertsPerRank: ok }, { model: TINY_HYBRID, workload }))).toEqual([]);
+      expect(
+        validateInput(
+          input({ ep: 2, dp: 2, redundantExpertsPerRank: ok }, { model: TINY_HYBRID, workload }),
+        ),
+      ).toEqual([]);
     }
   });
 
   it('epImbalanceScalesAllToAll is a boolean', () => {
-    const bad = input({ ep: 2, dp: 2, epImbalanceScalesAllToAll: 1 as unknown as boolean }, { model: TINY_HYBRID });
+    const bad = input(
+      { ep: 2, dp: 2, epImbalanceScalesAllToAll: 1 as unknown as boolean },
+      { model: TINY_HYBRID },
+    );
     expectError(bad, /parallel\.epImbalanceScalesAllToAll must be true or false/);
     for (const ok of [true, false]) {
       const workload = { batch: 2, promptLen: 128, decodeContextLen: 256 };
-      expect(validateInput(input({ ep: 2, dp: 2, epImbalanceScalesAllToAll: ok }, { model: TINY_HYBRID, workload }))).toEqual([]);
+      expect(
+        validateInput(
+          input({ ep: 2, dp: 2, epImbalanceScalesAllToAll: ok }, { model: TINY_HYBRID, workload }),
+        ),
+      ).toEqual([]);
     }
   });
 
   it('unknown engineId', () => {
-    expectError(input({}, { hardware: { device: SYNTH_GPU, topology: singleDevice(SYNTH_GPU), engineId: 'npu' } }), /engineId 'npu'/);
+    expectError(
+      input(
+        {},
+        { hardware: { device: SYNTH_GPU, topology: singleDevice(SYNTH_GPU), engineId: 'npu' } },
+      ),
+      /engineId 'npu'/,
+    );
   });
 
   it('non-integer degrees and empty workloads', () => {
     expectError(input({ tp: 0 }), /parallel\.tp must be an integer ≥ 1/);
-    expectError(input({}, { workload: { batch: 1, promptLen: 0, decodeContextLen: 256 } }), /promptLen must be an integer ≥ 1/);
+    expectError(
+      input({}, { workload: { batch: 1, promptLen: 0, decodeContextLen: 256 } }),
+      /promptLen must be an integer ≥ 1/,
+    );
   });
 
   it('an unmodified device is validated too (review P2): zero memory bandwidth, zero peak, no engines, unsourced', () => {
-    const on = (device: SimInput['hardware']['device']): SimInput => input({}, { hardware: { device, topology: singleDevice(device) } });
-    expectError(on({ ...SYNTH_GPU, memory: { ...SYNTH_GPU.memory, bandwidthBytesPerSec: 0 } }), /memory\.bandwidthBytesPerSec must be > 0/);
-    const zeroPeak = { ...SYNTH_GPU.engines[0], matmulPeaks: SYNTH_GPU.engines[0].matmulPeaks.map((p) => ({ ...p, flopsPerSec: 0 })) };
-    expectError(on({ ...SYNTH_GPU, engines: [zeroPeak] }), /matmulPeaks\.0\.flopsPerSec must be > 0/);
+    const on = (device: SimInput['hardware']['device']): SimInput =>
+      input({}, { hardware: { device, topology: singleDevice(device) } });
+    expectError(
+      on({ ...SYNTH_GPU, memory: { ...SYNTH_GPU.memory, bandwidthBytesPerSec: 0 } }),
+      /memory\.bandwidthBytesPerSec must be > 0/,
+    );
+    const zeroPeak = {
+      ...SYNTH_GPU.engines[0],
+      matmulPeaks: SYNTH_GPU.engines[0].matmulPeaks.map((p) => ({ ...p, flopsPerSec: 0 })),
+    };
+    expectError(
+      on({ ...SYNTH_GPU, engines: [zeroPeak] }),
+      /matmulPeaks\.0\.flopsPerSec must be > 0/,
+    );
     expectError(on({ ...SYNTH_GPU, engines: [] }), /no engines/);
     expectError(on({ ...SYNTH_GPU, sources: [] }), /is not covered by any sources/);
   });
 
   it('a host-bounce link with zero host bandwidth is rejected', () => {
-    const link = { ...SYNTH_PCIE_HOSTBOUNCE_LINK, hostBounce: { hostMemBandwidthBytesPerSec: 0, extraLatencySec: 5e-6 } };
-    expectError(input({ tp: 2 }, { hardware: { device: SYNTH_GPU, topology: { ...SYNTH_PCIE_HOSTBOUNCE, intraNode: link } } }), /hostMemBandwidthBytesPerSec must be > 0/);
+    const link = {
+      ...SYNTH_PCIE_HOSTBOUNCE_LINK,
+      hostBounce: { hostMemBandwidthBytesPerSec: 0, extraLatencySec: 5e-6 },
+    };
+    expectError(
+      input(
+        { tp: 2 },
+        {
+          hardware: { device: SYNTH_GPU, topology: { ...SYNTH_PCIE_HOSTBOUNCE, intraNode: link } },
+        },
+      ),
+      /hostMemBandwidthBytesPerSec must be > 0/,
+    );
   });
 
   it('value heads must divide tp (review P2): GDN vHeads 2 at tp 4', () => {
@@ -140,7 +211,15 @@ describe('T17 input errors', () => {
       layers: [
         decoderLayer({
           hidden: 256,
-          mixer: { kind: 'linear', variant: 'gated_delta_net', qkHeads: 1, vHeads: 2, keyDim: 64, valueDim: 64, outputGate: true },
+          mixer: {
+            kind: 'linear',
+            variant: 'gated_delta_net',
+            qkHeads: 1,
+            vHeads: 2,
+            keyDim: 64,
+            valueDim: 64,
+            outputGate: true,
+          },
           ffn: { kind: 'dense', intermediate: 512 },
         }),
       ],
@@ -150,11 +229,41 @@ describe('T17 input errors', () => {
   });
   it('invalid modifiers', () => {
     expectError(
-      input({}, { hardware: { device: SYNTH_GPU, topology: SYNTH_CLUSTER, deviceModifiers: [{ kind: 'clockScale', factor: 0, note: 'x', sources: [], estimatedReason: 'test' }] } }),
+      input(
+        {},
+        {
+          hardware: {
+            device: SYNTH_GPU,
+            topology: SYNTH_CLUSTER,
+            deviceModifiers: [
+              { kind: 'clockScale', factor: 0, note: 'x', sources: [], estimatedReason: 'test' },
+            ],
+          },
+        },
+      ),
       /factor must be a finite number > 0/,
     );
     expectError(
-      input({}, { hardware: { device: SYNTH_GPU, topology: singleDevice(SYNTH_GPU), linkModifiers: { intraNode: [{ kind: 'linkBandwidth', bandwidthPerDirectionBytesPerSec: 1e9, note: 'x', sources: [], estimatedReason: 'test' }] } } }),
+      input(
+        {},
+        {
+          hardware: {
+            device: SYNTH_GPU,
+            topology: singleDevice(SYNTH_GPU),
+            linkModifiers: {
+              intraNode: [
+                {
+                  kind: 'linkBandwidth',
+                  bandwidthPerDirectionBytesPerSec: 1e9,
+                  note: 'x',
+                  sources: [],
+                  estimatedReason: 'test',
+                },
+              ],
+            },
+          },
+        },
+      ),
       /has no intraNode link/,
     );
   });
@@ -162,14 +271,28 @@ describe('T17 input errors', () => {
 
 describe('blockShardingErrors', () => {
   it('reports sharding errors from model, quant and parallel alone, prefixed with the layer name', () => {
-    const errors = blockShardingErrors({ model: REF_DENSE_8B, quant: BF16, parallel: { tp: 3, pp: 1, dp: 1, ep: 1 } });
+    const errors = blockShardingErrors({
+      model: REF_DENSE_8B,
+      quant: BF16,
+      parallel: { tp: 3, pp: 1, dp: 1, ep: 1 },
+    });
     expect(errors.length).toBeGreaterThan(0);
     expect(errors[0]).toMatch(/^layer\.0: .*must be divisible by tp \(3\)/);
-    expect(blockShardingErrors({ model: REF_DENSE_8B, quant: BF16, parallel: { tp: 8, pp: 1, dp: 1, ep: 1 } })).toEqual([]);
+    expect(
+      blockShardingErrors({
+        model: REF_DENSE_8B,
+        quant: BF16,
+        parallel: { tp: 8, pp: 1, dp: 1, ep: 1 },
+      }),
+    ).toEqual([]);
   });
 
   it('is part of validateInput', () => {
-    const sharding = blockShardingErrors({ model: REF_DENSE_8B, quant: BF16, parallel: { tp: 3, pp: 1, dp: 1, ep: 1 } });
+    const sharding = blockShardingErrors({
+      model: REF_DENSE_8B,
+      quant: BF16,
+      parallel: { tp: 3, pp: 1, dp: 1, ep: 1 },
+    });
     const all = validateInput(input({ tp: 3 }));
     for (const e of sharding) expect(all).toContain(e);
   });
@@ -194,7 +317,10 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
     blockSize: 8,
     source: 'hypothetical',
   };
-  const WITH_MTP: ModelSpec = { ...REF_DENSE_8B, draft: { kind: 'mtp', layers: [REF_DENSE_8B.layers[0]], hiddenProj: true } };
+  const WITH_MTP: ModelSpec = {
+    ...REF_DENSE_8B,
+    draft: { kind: 'mtp', layers: [REF_DENSE_8B.layers[0]], hiddenProj: true },
+  };
   const spec = (over: Partial<SpecDecodeConfig> = {}): SpecDecodeConfig => ({
     method: 'dflash2',
     drafter: { kind: 'hypothetical', spec: DRAFTER },
@@ -206,9 +332,7 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
   const withHost = { device: SYNTH_GPU, topology: SYNTH_CLUSTER, host: { link: SYNTH_NVLINK } };
   const offload = (o: OffloadConfig, model: ModelSpec = TINY_HYBRID): SimInput =>
     input({}, { model, hardware: withHost, deployment: { offload: o } });
-  const experts = (
-    over: Partial<RoutedExpertRule> = {},
-  ): RoutedExpertRule => ({
+  const experts = (over: Partial<RoutedExpertRule> = {}): RoutedExpertRule => ({
     tier: 'host_ram',
     residentFraction: 0.5,
     hitRatio: { kind: 'uniform' },
@@ -217,10 +341,12 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
   const errorsOf = (i: SimInput) => deploymentErrors(i);
 
   it('absent or {} deployment: no errors, and validateInput is unchanged', () => {
-    for (const deployment of [undefined, {}, { offload: {} }, { offload: { lookupTables: { tier: 'device' } } }] as (
-      | DeploymentConfig
-      | undefined
-    )[]) {
+    for (const deployment of [
+      undefined,
+      {},
+      { offload: {} },
+      { offload: { lookupTables: { tier: 'device' } } },
+    ] as (DeploymentConfig | undefined)[]) {
       expect(validateInput(input({}, { deployment }))).toEqual([]);
     }
   });
@@ -240,7 +366,9 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
   });
 
   it('U-13: k + 1 > blockSize is rejected (blockSize 8: k 7 ok, k 8 not)', () => {
-    expect(errorsOf(input({}, { deployment: { speculative: spec({ draftLength: 7 }) } }))).toEqual([]);
+    expect(errorsOf(input({}, { deployment: { speculative: spec({ draftLength: 7 }) } }))).toEqual(
+      [],
+    );
     expect(errorsOf(input({}, { deployment: { speculative: spec({ draftLength: 8 }) } }))).toEqual([
       "deployment.speculative.draftLength 8: k + 1 must not exceed the drafter's blockSize (8)",
     ]);
@@ -248,22 +376,32 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
 
   it('draftLength is an integer in 1..16', () => {
     const mtp = (draftLength: number) =>
-      errorsOf(input({}, { model: WITH_MTP, deployment: { speculative: spec({ method: 'mtp', draftLength }) } }));
+      errorsOf(
+        input(
+          {},
+          { model: WITH_MTP, deployment: { speculative: spec({ method: 'mtp', draftLength }) } },
+        ),
+      );
     expect(mtp(1)).toEqual([]);
     expect(mtp(16)).toEqual([]);
-    for (const k of [0, 17, 1.5]) expect(mtp(k)).toEqual([`deployment.speculative.draftLength must be an integer in 1..16 (got ${k})`]);
+    for (const k of [0, 17, 1.5])
+      expect(mtp(k)).toEqual([
+        `deployment.speculative.draftLength must be an integer in 1..16 (got ${k})`,
+      ]);
   });
 
   it("'mtp' needs the model's MTP head; block methods need a drafter of their own method", () => {
-    expect(errorsOf(input({}, { deployment: { speculative: spec({ method: 'mtp', draftLength: 1 }) } }))).toEqual([
+    expect(
+      errorsOf(input({}, { deployment: { speculative: spec({ method: 'mtp', draftLength: 1 }) } })),
+    ).toEqual([
       "deployment.speculative.method 'mtp' needs a model with an MTP draft head (model.draft.kind 'mtp')",
     ]);
-    expect(errorsOf(input({}, { deployment: { speculative: spec({ drafter: undefined }) } }))).toEqual([
-      "deployment.speculative.method 'dflash2' needs a drafter",
-    ]);
-    expect(errorsOf(input({}, { deployment: { speculative: spec({ method: 'dspark' }) } }))).toEqual([
-      'deployment.speculative.drafter is a dflash2 drafter, not dspark',
-    ]);
+    expect(
+      errorsOf(input({}, { deployment: { speculative: spec({ drafter: undefined }) } })),
+    ).toEqual(["deployment.speculative.method 'dflash2' needs a drafter"]);
+    expect(
+      errorsOf(input({}, { deployment: { speculative: spec({ method: 'dspark' }) } })),
+    ).toEqual(['deployment.speculative.drafter is a dflash2 drafter, not dspark']);
   });
 
   it('acceptance ranges: i.i.d. α in [0, 1); per-position α_j in [0, 1], non-empty', () => {
@@ -271,34 +409,60 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
       errorsOf(input({}, { deployment: { speculative: spec({ acceptance }) } }));
     expect(acc({ kind: 'iid', alpha: 0 })).toEqual([]);
     expect(acc({ kind: 'iid', alpha: 0.999 })).toEqual([]);
-    expect(acc({ kind: 'iid', alpha: 1 })).toEqual(['deployment.speculative.acceptance.alpha must be in [0, 1) (got 1)']);
+    expect(acc({ kind: 'iid', alpha: 1 })).toEqual([
+      'deployment.speculative.acceptance.alpha must be in [0, 1) (got 1)',
+    ]);
     expect(acc({ kind: 'iid', alpha: -0.1 })).toHaveLength(1);
     expect(acc({ kind: 'iid', alpha: Number.NaN })).toHaveLength(1);
     expect(acc({ kind: 'per_position', alphas: [1] })).toEqual([]); // E[τ] = k + 1 is legal
     expect(acc({ kind: 'per_position', alphas: [0.854, 0.803, 0] })).toEqual([]);
     expect(acc({ kind: 'per_position', alphas: [0.9, 1.1] })).toHaveLength(1);
-    expect(acc({ kind: 'per_position', alphas: [] })).toEqual(['deployment.speculative.acceptance.alphas must not be empty']);
+    expect(acc({ kind: 'per_position', alphas: [] })).toEqual([
+      'deployment.speculative.acceptance.alphas must not be empty',
+    ]);
   });
 
   it('U-3: residentFraction in [0, 1]; custom h in [0, 1] and h > 0 with f = 0 rejected; f = 1 accepts any h', () => {
     expect(errorsOf(offload({ routedExperts: experts({ residentFraction: 1.2 }) }))).toEqual([
       'deployment.offload.routedExperts.residentFraction must be in [0, 1] (got 1.2)',
     ]);
-    expect(errorsOf(offload({ routedExperts: experts({ residentFraction: 0, hitRatio: { kind: 'custom', h: 0.2 } }) }))).toEqual([
-      'deployment.offload.routedExperts.hitRatio: no experts are resident, h must be 0',
-    ]);
-    expect(errorsOf(offload({ routedExperts: experts({ residentFraction: 0, hitRatio: { kind: 'custom', h: 0 } }) }))).toEqual([]);
+    expect(
+      errorsOf(
+        offload({
+          routedExperts: experts({ residentFraction: 0, hitRatio: { kind: 'custom', h: 0.2 } }),
+        }),
+      ),
+    ).toEqual(['deployment.offload.routedExperts.hitRatio: no experts are resident, h must be 0']);
+    expect(
+      errorsOf(
+        offload({
+          routedExperts: experts({ residentFraction: 0, hitRatio: { kind: 'custom', h: 0 } }),
+        }),
+      ),
+    ).toEqual([]);
     expect(errorsOf(offload({ routedExperts: experts({ residentFraction: 0 }) }))).toEqual([]); // uniform: h(0) = 0
-    expect(errorsOf(offload({ routedExperts: experts({ residentFraction: 1, hitRatio: { kind: 'custom', h: 0.3 } }) }))).toEqual([]);
-    expect(errorsOf(offload({ routedExperts: experts({ hitRatio: { kind: 'custom', h: 1.5 } }) }))).toEqual([
-      'deployment.offload.routedExperts.hitRatio.h must be in [0, 1] (got 1.5)',
-    ]);
+    expect(
+      errorsOf(
+        offload({
+          routedExperts: experts({ residentFraction: 1, hitRatio: { kind: 'custom', h: 0.3 } }),
+        }),
+      ),
+    ).toEqual([]);
+    expect(
+      errorsOf(offload({ routedExperts: experts({ hitRatio: { kind: 'custom', h: 1.5 } }) })),
+    ).toEqual(['deployment.offload.routedExperts.hitRatio.h must be in [0, 1] (got 1.5)']);
   });
 
   it('layer ranges are non-empty, integer and inside [0, L); queueDepth is an integer ≥ 1', () => {
     const L = TINY_HYBRID.layers.length;
-    expect(errorsOf(offload({ routedExperts: experts({ layers: { from: 0, to: L } }) }))).toEqual([]);
-    expect(errorsOf(offload({ lookupTables: { tier: 'nvme', layers: { from: 1, to: 2 } } }, TINY_HC_NGRAM))).toEqual([]);
+    expect(errorsOf(offload({ routedExperts: experts({ layers: { from: 0, to: L } }) }))).toEqual(
+      [],
+    );
+    expect(
+      errorsOf(
+        offload({ lookupTables: { tier: 'nvme', layers: { from: 1, to: 2 } } }, TINY_HC_NGRAM),
+      ),
+    ).toEqual([]);
     for (const layers of [
       { from: 0, to: 0 },
       { from: -1, to: 2 },
@@ -306,7 +470,9 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
       { from: 2, to: 1 },
       { from: 0.5, to: 2 },
     ]) {
-      expect(errorsOf(offload({ lookupTables: { tier: 'host_ram', layers } }, TINY_HC_NGRAM))).toHaveLength(1);
+      expect(
+        errorsOf(offload({ lookupTables: { tier: 'host_ram', layers } }, TINY_HC_NGRAM)),
+      ).toHaveLength(1);
       expect(errorsOf(offload({ routedExperts: experts({ layers }) }))).toHaveLength(1);
     }
     expect(errorsOf(offload({ queueDepth: 1, routedExperts: experts() }))).toEqual([]);
@@ -326,21 +492,36 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
     ]);
     expect(errorsOf(offload({ lookupTables: { tier: 'device' } }, REF_DENSE_8B))).toEqual([]);
     expect(errorsOf(offload({ lookupTables: { tier: 'host_ram' } }, TINY_HC_NGRAM))).toEqual([]);
-    expect(errorsOf(offload({ lookupTables: { tier: 'nvme', scaleLayout: 'pinned_host' } }, TINY_HC_NGRAM))).toEqual([]);
-    expect(errorsOf(offload({ lookupTables: { tier: 'host_ram', scaleLayout: 'pinned_host' } }, TINY_HC_NGRAM))).toEqual([
-      "deployment.offload.lookupTables.scaleLayout 'pinned_host' needs tier 'nvme'",
-    ]);
+    expect(
+      errorsOf(
+        offload({ lookupTables: { tier: 'nvme', scaleLayout: 'pinned_host' } }, TINY_HC_NGRAM),
+      ),
+    ).toEqual([]);
+    expect(
+      errorsOf(
+        offload({ lookupTables: { tier: 'host_ram', scaleLayout: 'pinned_host' } }, TINY_HC_NGRAM),
+      ),
+    ).toEqual(["deployment.offload.lookupTables.scaleLayout 'pinned_host' needs tier 'nvme'"]);
   });
 
   it('an off-device group on a dedicated device without a host link (no host.link, no hostInterface) is rejected', () => {
-    const noHost = input({}, { model: TINY_HYBRID, deployment: { offload: { routedExperts: experts() } } });
+    const noHost = input(
+      {},
+      { model: TINY_HYBRID, deployment: { offload: { routedExperts: experts() } } },
+    );
     expect(SYNTH_GPU.hostInterface).toBeUndefined();
-    expect(errorsOf(noHost)).toEqual(['deployment.offload: no host link known for synth-gpu; set hardware.host.link']);
+    expect(errorsOf(noHost)).toEqual([
+      'deployment.offload: no host link known for synth-gpu; set hardware.host.link',
+    ]);
     // Nothing off-device: no link needed.
-    expect(errorsOf(input({}, { deployment: { offload: { lookupTables: { tier: 'device' } } } }))).toEqual([]);
+    expect(
+      errorsOf(input({}, { deployment: { offload: { lookupTables: { tier: 'device' } } } })),
+    ).toEqual([]);
     // A cited edge connector is enough.
     const withInterface = { ...SYNTH_GPU, hostInterface: { generation: 5, lanes: 16 } as const };
-    expect(errorsOf({ ...noHost, hardware: { device: withInterface, topology: SYNTH_CLUSTER } })).toEqual([]);
+    expect(
+      errorsOf({ ...noHost, hardware: { device: withInterface, topology: SYNTH_CLUSTER } }),
+    ).toEqual([]);
   });
 
   it('token embedding off-device: rejected on a tied model, any tier on an untied one; a bad tier is an error', () => {
@@ -349,7 +530,9 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
       'deployment.offload.embeddings: the model ties its token embedding to the LM head (tie_word_embeddings), so the table stays on the device',
     );
     for (const tier of ['host_ram', 'nvme'] as const) {
-      expect(errorsOf(offload({ embeddings: { tier } }, tied))).toEqual([TIED_EMBEDDINGS_OFFLOAD_ERROR]);
+      expect(errorsOf(offload({ embeddings: { tier } }, tied))).toEqual([
+        TIED_EMBEDDINGS_OFFLOAD_ERROR,
+      ]);
       expect(errorsOf(offload({ embeddings: { tier } }, REF_DENSE_8B))).toEqual([]);
     }
     expect(errorsOf(offload({ embeddings: { tier: 'device' } }, tied))).toEqual([]);
@@ -359,7 +542,9 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
     ]);
     // An off-device embedding alone needs a host link on a dedicated device too.
     const noHost = input({}, { deployment: { offload: { embeddings: { tier: 'host_ram' } } } });
-    expect(errorsOf(noHost)).toEqual(['deployment.offload: no host link known for synth-gpu; set hardware.host.link']);
+    expect(errorsOf(noHost)).toEqual([
+      'deployment.offload: no host link known for synth-gpu; set hardware.host.link',
+    ]);
   });
 
   describe('placement rule lists (mixed host RAM + SSD by layer range)', () => {
@@ -372,7 +557,10 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
       expect(errorsOf(offload({ routedExperts: [ram(0, 1), ssd(3, 4)] }))).toEqual([]);
       expect(errorsOf(offload({ routedExperts: [] }, REF_DENSE_8B))).toEqual([]);
       expect(errorsOf(offload({ lookupTables: [] }, REF_DENSE_8B))).toEqual([]);
-      const noHost = input({}, { model: TINY_HYBRID, deployment: { offload: { routedExperts: [], lookupTables: [] } } });
+      const noHost = input(
+        {},
+        { model: TINY_HYBRID, deployment: { offload: { routedExperts: [], lookupTables: [] } } },
+      );
       expect(errorsOf(noHost)).toEqual([]);
     });
 
@@ -399,7 +587,9 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
             TINY_HC_NGRAM,
           ),
         ),
-      ).toEqual(['deployment.offload.lookupTables[0].layers [0, 2) overlaps deployment.offload.lookupTables[1].layers [1, 2)']);
+      ).toEqual([
+        'deployment.offload.lookupTables[0].layers [0, 2) overlaps deployment.offload.lookupTables[1].layers [1, 2)',
+      ]);
     });
 
     it('a rule without layers in a list of two or more is rejected', () => {
@@ -407,42 +597,83 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
         'deployment.offload.routedExperts[0].layers is required when there is more than one rule',
       ]);
       expect(
-        errorsOf(offload({ lookupTables: [{ tier: 'host_ram' }, { tier: 'nvme', layers: { from: 1, to: 2 } }] }, TINY_HC_NGRAM)),
-      ).toEqual(['deployment.offload.lookupTables[0].layers is required when there is more than one rule']);
+        errorsOf(
+          offload(
+            { lookupTables: [{ tier: 'host_ram' }, { tier: 'nvme', layers: { from: 1, to: 2 } }] },
+            TINY_HC_NGRAM,
+          ),
+        ),
+      ).toEqual([
+        'deployment.offload.lookupTables[0].layers is required when there is more than one rule',
+      ]);
     });
 
     it('includeDraft on more than one rule is rejected; on one rule it is valid', () => {
-      expect(errorsOf(offload({ routedExperts: [{ ...ram(0, 2), includeDraft: true }, ssd(2, 4)] }))).toEqual([]);
       expect(
-        errorsOf(offload({ routedExperts: [{ ...ram(0, 2), includeDraft: true }, { ...ssd(2, 4), includeDraft: true }] })),
-      ).toEqual(['deployment.offload.routedExperts: includeDraft may be set on one rule only (rules 0, 1)']);
+        errorsOf(offload({ routedExperts: [{ ...ram(0, 2), includeDraft: true }, ssd(2, 4)] })),
+      ).toEqual([]);
+      expect(
+        errorsOf(
+          offload({
+            routedExperts: [
+              { ...ram(0, 2), includeDraft: true },
+              { ...ssd(2, 4), includeDraft: true },
+            ],
+          }),
+        ),
+      ).toEqual([
+        'deployment.offload.routedExperts: includeDraft may be set on one rule only (rules 0, 1)',
+      ]);
     });
 
     it('per-rule field errors name the rule index; the object form keeps its original paths', () => {
-      expect(errorsOf(offload({ routedExperts: [ram(0, 2), { ...ssd(2, 4), residentFraction: 1.2 }] }))).toEqual([
+      expect(
+        errorsOf(offload({ routedExperts: [ram(0, 2), { ...ssd(2, 4), residentFraction: 1.2 }] })),
+      ).toEqual([
         'deployment.offload.routedExperts[1].residentFraction must be in [0, 1] (got 1.2)',
       ]);
       expect(errorsOf(offload({ routedExperts: [ram(0, 2), ssd(2, 5)] }))).toEqual([
         'deployment.offload.routedExperts[1].layers [2, 5) must be a non-empty range inside [0, 4)',
       ]);
-      expect(errorsOf(offload({ lookupTables: [{ tier: 'nvme', layers: { from: 2, to: 2 } }] }, TINY_HC_NGRAM))).toEqual([
+      expect(
+        errorsOf(
+          offload({ lookupTables: [{ tier: 'nvme', layers: { from: 2, to: 2 } }] }, TINY_HC_NGRAM),
+        ),
+      ).toEqual([
         'deployment.offload.lookupTables[0].layers [2, 2) must be a non-empty range inside [0, 2)',
       ]);
       expect(
-        errorsOf(offload({ lookupTables: [{ tier: 'host_ram', layers: { from: 1, to: 2 }, scaleLayout: 'pinned_host' }] }, TINY_HC_NGRAM)),
+        errorsOf(
+          offload(
+            {
+              lookupTables: [
+                { tier: 'host_ram', layers: { from: 1, to: 2 }, scaleLayout: 'pinned_host' },
+              ],
+            },
+            TINY_HC_NGRAM,
+          ),
+        ),
       ).toEqual(["deployment.offload.lookupTables[0].scaleLayout 'pinned_host' needs tier 'nvme'"]);
       // A table list on a model without tables: one error for the group; device rules alone are fine.
-      expect(errorsOf(offload({ lookupTables: [{ tier: 'nvme', layers: { from: 0, to: 1 } }] }, REF_DENSE_8B))).toEqual([
-        'deployment.offload.lookupTables: the model has no n-gram lookup table',
-      ]);
-      expect(errorsOf(offload({ lookupTables: [{ tier: 'device', layers: { from: 0, to: 1 } }] }, REF_DENSE_8B))).toEqual([]);
-      expect(errorsOf(offload({ routedExperts: { ...ram(0, 2), residentFraction: 1.2 } }))).toEqual([
-        'deployment.offload.routedExperts.residentFraction must be in [0, 1] (got 1.2)',
-      ]);
+      expect(
+        errorsOf(
+          offload({ lookupTables: [{ tier: 'nvme', layers: { from: 0, to: 1 } }] }, REF_DENSE_8B),
+        ),
+      ).toEqual(['deployment.offload.lookupTables: the model has no n-gram lookup table']);
+      expect(
+        errorsOf(
+          offload({ lookupTables: [{ tier: 'device', layers: { from: 0, to: 1 } }] }, REF_DENSE_8B),
+        ),
+      ).toEqual([]);
+      expect(errorsOf(offload({ routedExperts: { ...ram(0, 2), residentFraction: 1.2 } }))).toEqual(
+        ['deployment.offload.routedExperts.residentFraction must be in [0, 1] (got 1.2)'],
+      );
     });
 
     it('the removed whole-layer placement (denseLayers) is rejected, not silently ignored', () => {
-      const old = { denseLayers: { tier: 'host_ram', layers: { from: 0, to: 2 } } } as unknown as OffloadConfig;
+      const old = {
+        denseLayers: { tier: 'host_ram', layers: { from: 0, to: 2 } },
+      } as unknown as OffloadConfig;
       expect(errorsOf(offload(old))).toEqual([
         'deployment.offload.denseLayers was removed: whole-layer streaming is no longer modeled (offload MoE experts instead)',
       ]);
@@ -459,7 +690,12 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
 
   it('an invalid hardware.host is reported with its path (validateHost)', () => {
     const badLink = { ...SYNTH_NVLINK, bandwidthPerDirectionBytesPerSec: 0 };
-    const errors = errorsOf(input({}, { hardware: { device: SYNTH_GPU, topology: SYNTH_CLUSTER, host: { link: badLink } } }));
+    const errors = errorsOf(
+      input(
+        {},
+        { hardware: { device: SYNTH_GPU, topology: SYNTH_CLUSTER, host: { link: badLink } } },
+      ),
+    );
     expect(errors.some((e) => e.startsWith('hardware.host.link'))).toBe(true);
   });
 });

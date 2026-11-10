@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { activeBlockParams, activeParamsPerToken, blockParams, countParams } from './params';
-import { decoderLayer, decoderModel, hyperCollapse, singleBlockLayer, type HcPreParams } from './builders';
+import {
+  decoderLayer,
+  decoderModel,
+  hyperCollapse,
+  singleBlockLayer,
+  type HcPreParams,
+} from './builders';
 import type {
   CsaAttentionBlock,
   GqaAttentionBlock,
@@ -11,7 +17,13 @@ import type {
   MoeBlock,
   NgramEmbeddingBlock,
 } from './model';
-import { REF_DENSE_8B, TINY_DENSE, TINY_HYBRID, TINY_HYBRID_DENSE_FIRST, TINY_MLA_SPARSE } from '../models/reference';
+import {
+  REF_DENSE_8B,
+  TINY_DENSE,
+  TINY_HYBRID,
+  TINY_HYBRID_DENSE_FIRST,
+  TINY_MLA_SPARSE,
+} from '../models/reference';
 
 describe('T3 countParams', () => {
   it('REF_DENSE_8B matches Qwen3-8B', () => {
@@ -106,7 +118,9 @@ describe('activeParamsPerToken', () => {
     // active: 2·2·32·16 = 2048 + 512 + 4096 + 8192
     expect(activeBlockParams(plain)).toBe(14_848);
     // latentDim = h still adds the two projections (they exist in the checkpoint)
-    expect(blockParams({ ...moe, latentDim: 64 })).toBe(8 * 3 * 64 * 16 + 512 + 2 * 64 * 64 + 12_288);
+    expect(blockParams({ ...moe, latentDim: 64 })).toBe(
+      8 * 3 * 64 * 16 + 512 + 2 * 64 * 64 + 12_288,
+    );
   });
   it('dense model: active = total', () => {
     expect(activeParamsPerToken(REF_DENSE_8B)).toBe(countParams(REF_DENSE_8B));
@@ -157,7 +171,9 @@ describe('Nemotron-H blocks (Nemotron-3.5-Super-VL-120B-A12B, checked against th
     expect(blockParams(mamba)).toBe(109_635_968);
     // without the conv bias: 10,240 fewer; a GDN block with the same dims keeps 2 gates per head, 2 vectors, γ dv
     expect(blockParams({ ...mamba, convBias: false })).toBe(109_625_728);
-    expect(blockParams({ ...mamba, variant: 'gated_delta_net' })).toBe(109_635_968 + 4096 * 128 - 128 - 8192 + 64);
+    expect(blockParams({ ...mamba, variant: 'gated_delta_net' })).toBe(
+      109_635_968 + 4096 * 128 - 128 - 8192 + 64,
+    );
   });
 });
 
@@ -166,20 +182,50 @@ describe('singleBlockLayer (one sublayer per layer, Nemotron-H)', () => {
     const layer = singleBlockLayer({
       hidden: 64,
       name: 'layer.0',
-      mixer: { kind: 'linear', variant: 'mamba2', qkHeads: 1, vHeads: 2, keyDim: 16, valueDim: 8, outputGate: true, convBias: true, chunkTokens: 128 },
+      mixer: {
+        kind: 'linear',
+        variant: 'mamba2',
+        qkHeads: 1,
+        vHeads: 2,
+        keyDim: 16,
+        valueDim: 8,
+        outputGate: true,
+        convBias: true,
+        chunkTokens: 128,
+      },
     });
     expect(layer.name).toBe('layer.0');
-    expect(layer.blocks.map((b) => `${b.kind}:${b.name}`)).toEqual(['norm:input_norm', 'linear_attention:linear_attn', 'residual:mixer_residual']);
+    expect(layer.blocks.map((b) => `${b.kind}:${b.name}`)).toEqual([
+      'norm:input_norm',
+      'linear_attention:linear_attn',
+      'residual:mixer_residual',
+    ]);
     const mixer = layer.blocks[1];
-    expect(mixer.kind === 'linear_attention' && [mixer.convBias, mixer.chunkTokens, mixer.convKernel]).toEqual([true, 128, 4]);
+    expect(
+      mixer.kind === 'linear_attention' && [mixer.convBias, mixer.chunkTokens, mixer.convKernel],
+    ).toEqual([true, 128, 4]);
   });
   it('ffn layer: ffn_norm → moe → residual; optional fields absent when not given', () => {
     const layer = singleBlockLayer({
       hidden: 64,
-      ffn: { kind: 'moe', experts: 4, topK: 2, expertIntermediate: 32, gated: false, activation: 'relu2' },
+      ffn: {
+        kind: 'moe',
+        experts: 4,
+        topK: 2,
+        expertIntermediate: 32,
+        gated: false,
+        activation: 'relu2',
+      },
     });
-    expect(layer.blocks.map((b) => `${b.kind}:${b.name}`)).toEqual(['norm:ffn_norm', 'moe:moe', 'residual:ffn_residual']);
-    const plain = singleBlockLayer({ hidden: 64, mixer: { kind: 'linear', variant: 'mamba2', qkHeads: 1, vHeads: 2, keyDim: 16, valueDim: 8 } });
+    expect(layer.blocks.map((b) => `${b.kind}:${b.name}`)).toEqual([
+      'norm:ffn_norm',
+      'moe:moe',
+      'residual:ffn_residual',
+    ]);
+    const plain = singleBlockLayer({
+      hidden: 64,
+      mixer: { kind: 'linear', variant: 'mamba2', qkHeads: 1, vHeads: 2, keyDim: 16, valueDim: 8 },
+    });
     expect(Object.keys(plain.blocks[1])).not.toContain('convBias');
     expect(Object.keys(plain.blocks[1])).not.toContain('chunkTokens');
   });
@@ -208,7 +254,14 @@ describe('builders', () => {
     expect(() =>
       decoderLayer({
         hidden: 64,
-        mixer: { kind: 'gqa', heads: 2, kvHeads: 1, headDim: 32, slidingWindow: 8, sparse: { kind: 'indexer', indexer: { heads: 1, headDim: 8, topK: 4 } } },
+        mixer: {
+          kind: 'gqa',
+          heads: 2,
+          kvHeads: 1,
+          headDim: 32,
+          slidingWindow: 8,
+          sparse: { kind: 'indexer', indexer: { heads: 1, headDim: 8, topK: 4 } },
+        },
         ffn: { kind: 'dense', intermediate: 128 },
       }),
     ).toThrow();
@@ -249,7 +302,13 @@ const DS_CSA_SWA: CsaAttentionBlock = {
 };
 
 /** DeepSeek-V4.1 layer-2 indexer: 32 heads × 128, top-512 entries, keys from the 512-wide latent pooled by r = 2. */
-const DS_INDEXER: IndexerSpec = { heads: 32, headDim: 128, topK: 512, keyPoolTokens: 2, keyInputDim: 512 };
+const DS_INDEXER: IndexerSpec = {
+  heads: 32,
+  headDim: 128,
+  topK: 512,
+  keyPoolTokens: 2,
+  keyInputDim: 512,
+};
 
 describe('new block parameter counts', () => {
   it('KDA (GLM-5.3-Flash): q,k,v,f,g,b projections 104,071,168', () => {
@@ -288,7 +347,10 @@ describe('new block parameter counts', () => {
       global: {
         compressRatio: 1,
         kvCacheFromLayer: 20,
-        selection: { kind: 'indexer', indexer: { ...DS_INDEXER, keyPoolTokens: 1, ownsKeys: false, maxScoredKeys: 16384 } },
+        selection: {
+          kind: 'indexer',
+          indexer: { ...DS_INDEXER, keyPoolTokens: 1, ownsKeys: false, maxScoredKeys: 16384 },
+        },
       },
     };
     expect(blockParams(reindex)).toBe(126_617_344 + 5_242_880 + 163_840);
@@ -307,10 +369,18 @@ describe('new block parameter counts', () => {
       vHeadDim: 256,
       ...(sparse !== undefined ? { sparse } : {}),
     });
-    const glmIndexer: IndexerSpec = { heads: 32, headDim: 128, topK: 2048, keyPoolTokens: 4, keyPoolGate: true };
+    const glmIndexer: IndexerSpec = {
+      heads: 32,
+      headDim: 128,
+      topK: 2048,
+      keyPoolTokens: 4,
+      keyPoolGate: true,
+    };
     // wq_b 1536·32·128 = 6,291,456; wk 4096·128 + k_norm 256 = 524,544; gate 4096·128 + APE 4·128 = 524,800;
     // weights_proj 4096·32 = 131,072 → 7,471,872 (R3 §5 "indexer 7.4 M")
-    expect(blockParams(mla({ kind: 'indexer', indexer: glmIndexer })) - blockParams(mla(undefined))).toBe(7_471_872);
+    expect(
+      blockParams(mla({ kind: 'indexer', indexer: glmIndexer })) - blockParams(mla(undefined)),
+    ).toBe(7_471_872);
     expect(blockParams(mla({ kind: 'reuse', topK: 2048 }))).toBe(blockParams(mla(undefined)));
 
     const qwenAttn: GqaAttentionBlock = {
@@ -327,7 +397,13 @@ describe('new block parameter counts', () => {
       causal: true,
       outputGate: true,
     };
-    const qsa: IndexerSpec = { heads: 4, headDim: 128, topK: 2048, keyPoolTokens: 4, headWeights: false };
+    const qsa: IndexerSpec = {
+      heads: 4,
+      headDim: 128,
+      topK: 2048,
+      keyPoolTokens: 4,
+      headWeights: false,
+    };
     // index_qk_proj 640·2560 = 1,638,400 = q 2560·4·128 + k 2560·128; q/k layernorm 2·128 = 256
     const withQsa = blockParams({ ...qwenAttn, sparse: { kind: 'indexer', indexer: qsa } });
     expect(withQsa - blockParams(qwenAttn)).toBe(1_638_400 + 256);
@@ -386,7 +462,11 @@ describe('new block parameter counts', () => {
     // hc_norm 10240 + down 3,276,800 + up 3,276,800 + inject 40,960 (R1 tensors) → ×2·48 = 634,060,800
     expect(blockParams(qwen)).toBe(6_604_800);
     // final hyper_connection_mixer: hc_norm + down + up, no inject
-    const final = hyperCollapse({ streams: 4, dim: 2560, pre: { ...qwenPre, projections: qwenPre.projections.slice(0, 2) } });
+    const final = hyperCollapse({
+      streams: 4,
+      dim: 2560,
+      pre: { ...qwenPre, projections: qwenPre.projections.slice(0, 2) },
+    });
     expect(blockParams(final)).toBe(6_563_840);
 
     const mhc = (dim: number): HcPreBlock => ({
@@ -404,7 +484,9 @@ describe('new block parameter counts', () => {
     expect(40 * 2 * blockParams(mhc(5120))).toBe(39_323_760);
     // GLM hc_attn_fn [24, 16384] + 27; two per layer = 786,486 ("0.79 M")
     expect(2 * blockParams(mhc(4096))).toBe(786_486);
-    expect(blockParams({ kind: 'hc_post', name: 'p', streams: 4, dim: 4096, mixesStreams: true })).toBe(0);
+    expect(
+      blockParams({ kind: 'hc_post', name: 'p', streams: 4, dim: 4096, mixesStreams: true }),
+    ).toBe(0);
   });
 
   it('ngram: Qwen PLE table counts in total, only the gathered rows in active', () => {
@@ -449,7 +531,14 @@ describe('new block parameter counts', () => {
 
   it("finalNorm 'none' has no final-norm params", () => {
     const layers = TINY_DENSE.layers;
-    const none = decoderModel({ name: 'n', hidden: 256, vocab: 1000, tieEmbeddings: false, layers, finalNorm: 'none' });
+    const none = decoderModel({
+      name: 'n',
+      hidden: 256,
+      vocab: 1000,
+      tieEmbeddings: false,
+      layers,
+      finalNorm: 'none',
+    });
     expect(countParams(TINY_DENSE) - countParams(none)).toBe(256);
   });
 });
@@ -467,10 +556,32 @@ describe('builders: hyper-connections, n-gram, short conv, beforeHead', () => {
       mixer: { kind: 'gqa', heads: 2, kvHeads: 1, headDim: 32 },
       ffn: { kind: 'dense', intermediate: 128 },
     } as const;
-    const ds = decoderLayer({ ...p, residual: { kind: 'hyper', streams: 4, pre, mixesStreams: true, subNorms: true } });
-    expect(ds.blocks.map((b) => b.kind)).toEqual(['hc_pre', 'norm', 'gqa_attention', 'hc_post', 'hc_pre', 'norm', 'mlp', 'hc_post']);
-    const qwen = decoderLayer({ ...p, residual: { kind: 'hyper', streams: 4, pre, mixesStreams: false, subNorms: false } });
-    expect(qwen.blocks.map((b) => b.kind)).toEqual(['hc_pre', 'gqa_attention', 'hc_post', 'hc_pre', 'mlp', 'hc_post']);
+    const ds = decoderLayer({
+      ...p,
+      residual: { kind: 'hyper', streams: 4, pre, mixesStreams: true, subNorms: true },
+    });
+    expect(ds.blocks.map((b) => b.kind)).toEqual([
+      'hc_pre',
+      'norm',
+      'gqa_attention',
+      'hc_post',
+      'hc_pre',
+      'norm',
+      'mlp',
+      'hc_post',
+    ]);
+    const qwen = decoderLayer({
+      ...p,
+      residual: { kind: 'hyper', streams: 4, pre, mixesStreams: false, subNorms: false },
+    });
+    expect(qwen.blocks.map((b) => b.kind)).toEqual([
+      'hc_pre',
+      'gqa_attention',
+      'hc_post',
+      'hc_pre',
+      'mlp',
+      'hc_post',
+    ]);
   });
   it('ngram goes first; short convs follow each branch (Inkling)', () => {
     const layer = decoderLayer({
@@ -478,7 +589,14 @@ describe('builders: hyper-connections, n-gram, short conv, beforeHead', () => {
       mixer: { kind: 'gqa', heads: 2, kvHeads: 1, headDim: 32 },
       ffn: { kind: 'dense', intermediate: 128 },
       shortConv: { kernel: 4 },
-      ngram: { tableRows: 100, rowDim: 8, rowsPerToken: 2, projections: [], outputDim: 64, vectorParams: 0 },
+      ngram: {
+        tableRows: 100,
+        rowDim: 8,
+        rowsPerToken: 2,
+        projections: [],
+        outputDim: 64,
+        vectorParams: 0,
+      },
     });
     expect(layer.blocks.map((b) => b.kind)).toEqual([
       'ngram_embedding',
@@ -494,7 +612,12 @@ describe('builders: hyper-connections, n-gram, short conv, beforeHead', () => {
   });
   it('beforeHead blocks are appended to the last layer', () => {
     const layer = (name: string) =>
-      decoderLayer({ name, hidden: 64, mixer: { kind: 'gqa', heads: 2, kvHeads: 1, headDim: 32 }, ffn: { kind: 'dense', intermediate: 128 } });
+      decoderLayer({
+        name,
+        hidden: 64,
+        mixer: { kind: 'gqa', heads: 2, kvHeads: 1, headDim: 32 },
+        ffn: { kind: 'dense', intermediate: 128 },
+      });
     const model = decoderModel({
       name: 'm',
       hidden: 64,

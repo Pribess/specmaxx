@@ -165,7 +165,10 @@ export type FfnParams =
     };
 
 /** The mixing parameters of one {@link HcPreBlock} (the same for every hyper-connection of a model). */
-export type HcPreParams = Pick<HcPreBlock, 'normGamma' | 'projections' | 'sinkhornIters' | 'vectorParams'>;
+export type HcPreParams = Pick<
+  HcPreBlock,
+  'normGamma' | 'projections' | 'sinkhornIters' | 'vectorParams'
+>;
 
 /** How the sublayers of a decoder layer write back into the residual stream. */
 export type ResidualParams =
@@ -366,7 +369,13 @@ function sublayerBlocks(
   const preNormName = prefix === 'mixer' ? 'input_norm' : 'ffn_norm';
   const blocks: BlockSpec[] = [];
   if (residual.kind === 'hyper') {
-    blocks.push({ kind: 'hc_pre', name: `${prefix}_hc_pre`, streams: residual.streams, dim: h, ...residual.pre });
+    blocks.push({
+      kind: 'hc_pre',
+      name: `${prefix}_hc_pre`,
+      streams: residual.streams,
+      dim: h,
+      ...residual.pre,
+    });
     if (residual.subNorms) blocks.push({ kind: 'norm', name: preNormName, norm, dim: h });
   } else {
     if (residual.kind === 'attn_res') {
@@ -390,9 +399,15 @@ function sublayerBlocks(
   }
   blocks.push(branch);
   if (p.shortConv !== undefined) {
-    blocks.push({ kind: 'short_conv', name: `${prefix}_short_conv`, dim: h, kernel: p.shortConv.kernel });
+    blocks.push({
+      kind: 'short_conv',
+      name: `${prefix}_short_conv`,
+      dim: h,
+      kernel: p.shortConv.kernel,
+    });
   }
-  if (p.postNorms === true) blocks.push({ kind: 'norm', name: `${prefix}_post_norm`, norm, dim: h });
+  if (p.postNorms === true)
+    blocks.push({ kind: 'norm', name: `${prefix}_post_norm`, norm, dim: h });
   if (residual.kind === 'hyper') {
     blocks.push({
       kind: 'hc_post',
@@ -413,7 +428,11 @@ export function decoderLayer(p: DecoderLayerParams): LayerSpec {
   const blocks: BlockSpec[] = [];
   if (p.ngram !== undefined) {
     const { name, ...fields } = p.ngram;
-    const ngram: NgramEmbeddingBlock = { kind: 'ngram_embedding', name: name ?? 'ngram', ...fields };
+    const ngram: NgramEmbeddingBlock = {
+      kind: 'ngram_embedding',
+      name: name ?? 'ngram',
+      ...fields,
+    };
     blocks.push(ngram);
   }
   blocks.push(...sublayerBlocks(p, 'mixer', mixerBlock(h, p.mixer)));

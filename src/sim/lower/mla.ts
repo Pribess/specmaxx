@@ -27,7 +27,15 @@ import {
   stepTokens,
   tpAllReduce,
 } from './common';
-import { dcpActive, dcpDegree, dcpGatherQ, dcpKvTokens, dcpReduceOut, dcpShardAttention, dcpShardsBlock } from './dcp';
+import {
+  dcpActive,
+  dcpDegree,
+  dcpGatherQ,
+  dcpKvTokens,
+  dcpReduceOut,
+  dcpShardAttention,
+  dcpShardsBlock,
+} from './dcp';
 import { indexerSelection, lowerSparseSelection, sparseSelectionStateBytes } from './indexer';
 import type { LoweringContext } from './lower';
 
@@ -65,7 +73,9 @@ export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
   if (rq > 0) {
     ops.push(linearGemm('mla.q_a', { m: T, n: rq, k: h }, ctx, { module: 'attention' }));
     ops.push(normOp('mla.q_a_norm', 'rmsnorm', T, rq, ctx));
-    ops.push(linearGemm('mla.q_b', { m: T, n: Hl * (dn + dr), k: rq }, ctx, { module: 'attention' }));
+    ops.push(
+      linearGemm('mla.q_b', { m: T, n: Hl * (dn + dr), k: rq }, ctx, { module: 'attention' }),
+    );
   } else {
     ops.push(linearGemm('mla.q', { m: T, n: Hl * (dn + dr), k: h }, ctx, { module: 'attention' }));
   }
@@ -80,7 +90,9 @@ export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
   // See docs/simulation-model.md §5 "KV sharing"
   const ownsLatent = block.kvCacheFromLayer === undefined;
   if (ownsLatent) {
-    ops.push(linearGemm('mla.kv_a', { m: T, n: rkv + dr, k: h }, ctx, { module: 'attention_kv_down' }));
+    ops.push(
+      linearGemm('mla.kv_a', { m: T, n: rkv + dr, k: h }, ctx, { module: 'attention_kv_down' }),
+    );
     ops.push(normOp('mla.kv_a_norm', 'rmsnorm', T, rkv, ctx));
   }
   const ropeElems = T * (Hl * dr + (ownsLatent ? dr : 0));
@@ -89,7 +101,11 @@ export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
       elementwise(
         'mla.rope',
         'rope',
-        { elems: ropeElems, activationReadBytes: ropeElems * act, activationWriteBytes: ropeElems * act },
+        {
+          elems: ropeElems,
+          activationReadBytes: ropeElems * act,
+          activationWriteBytes: ropeElems * act,
+        },
         ctx,
       ),
     );
@@ -134,7 +150,13 @@ export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
           sideVectorElems: Hl * dn + rkv,
         }),
       );
-      const attention: AttentionOp = { ...common, kvHeads: 1, qkHeadDim: rkv + dr, vHeadDim: rkv, kvRead: latent };
+      const attention: AttentionOp = {
+        ...common,
+        kvHeads: 1,
+        qkHeadDim: rkv + dr,
+        vHeadDim: rkv,
+        kvRead: latent,
+      };
       if (dcpSharded) {
         // Formula: S_q = T·(Hl·d)·(rkv + dr)·bpe(act); attention heads Hl·d over 1/d of the latent tokens;
         //          S_o = T·(Hl·d)·(rkv·reduceBpe + 4)   (the output is still latent; v_absorb runs after the merge)
@@ -146,7 +168,11 @@ export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
         ops.push(attention);
       }
       ops.push(
-        linearGemm('mla.v_absorb', { m: T, n: dv, k: rkv }, ctx, { module: 'attention_kv_up', batch: Hl, sideVectorElems: Hl * dv }),
+        linearGemm('mla.v_absorb', { m: T, n: dv, k: rkv }, ctx, {
+          module: 'attention_kv_up',
+          batch: Hl,
+          sideVectorElems: Hl * dv,
+        }),
       );
       break;
     }
@@ -160,8 +186,17 @@ export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
           inputDtype: ctx.quant.kvCache.dtype,
         }),
       );
-      const decompressed = { format: { dtype: ctx.quant.activations }, elemsPerToken: Hl * (dn + dv) + dr };
-      const attention: AttentionOp = { ...common, kvHeads: Hl, qkHeadDim: dn + dr, vHeadDim: dv, kvRead: decompressed };
+      const decompressed = {
+        format: { dtype: ctx.quant.activations },
+        elemsPerToken: Hl * (dn + dv) + dr,
+      };
+      const attention: AttentionOp = {
+        ...common,
+        kvHeads: Hl,
+        qkHeadDim: dn + dr,
+        vHeadDim: dv,
+        kvRead: decompressed,
+      };
       ops.push(attention);
       break;
     }
@@ -200,13 +235,20 @@ export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
  * with decode context parallelism d > 1 this rank's `ceil(ctx/d)` tokens of it). A layer reading another layer's
  * latent (`kvCacheFromLayer`) holds none of it. Unit: bytes.
  */
-export function mlaSequenceStateBytes(block: MlaAttentionBlock, ctx: LoweringContext, contextTokens: number): number {
+export function mlaSequenceStateBytes(
+  block: MlaAttentionBlock,
+  ctx: LoweringContext,
+  contextTokens: number,
+): number {
   // Formula: S = [own latent] N_rank·(rkv + dr)·bpe(kv) [+ ceil(ctx/p)·hd_I·bpe(key) if it owns indexer keys],
   //          N_rank = ceil(ctx/d)   (= ctx without DCP)
   // See docs/simulation-model.md §8 "Memory fit", §5 "Decode context parallelism (DCP)"
-  const latentTokens = dcpShardsBlock(block, ctx) ? dcpKvTokens(contextTokens, dcpDegree(ctx)) : contextTokens;
+  const latentTokens = dcpShardsBlock(block, ctx)
+    ? dcpKvTokens(contextTokens, dcpDegree(ctx))
+    : contextTokens;
   const latentElems = block.kvCacheFromLayer === undefined ? block.kvLoraRank + block.qkRopeDim : 0;
   const latentBytes = latentTokens * latentElems * bytesPerElement(ctx.quant.kvCache);
-  const indexerBytes = block.sparse === undefined ? 0 : sparseSelectionStateBytes(block.sparse, ctx, contextTokens);
+  const indexerBytes =
+    block.sparse === undefined ? 0 : sparseSelectionStateBytes(block.sparse, ctx, contextTokens);
   return latentBytes + indexerBytes;
 }

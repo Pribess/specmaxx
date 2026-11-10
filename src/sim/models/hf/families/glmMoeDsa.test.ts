@@ -37,16 +37,36 @@ describe('glm_moe_dsa: GLM-5.3', () => {
 
   it('reads MLA from qk_nope/qk_rope/v_head_dim (not head_dim 192) and 78 layers', () => {
     expect(m.layers).toHaveLength(78);
-    expect(mlaOf(m.layers[0])).toMatchObject({ heads: 64, qLoraRank: 2048, kvLoraRank: 512, qkNopeDim: 192, qkRopeDim: 64, vHeadDim: 256 });
+    expect(mlaOf(m.layers[0])).toMatchObject({
+      heads: 64,
+      qLoraRank: 2048,
+      kvLoraRank: 512,
+      qkNopeDim: 192,
+      qkRopeDim: 64,
+      vHeadDim: 256,
+    });
   });
 
   it('runs 21 indexers and reuses the top-k in 57 layers; 3 dense + 75 MoE layers', () => {
     const sel = m.layers.map((l) => mlaOf(l).sparse?.kind);
     expect(sel.filter((k) => k === 'indexer')).toHaveLength(21);
     expect(sel.filter((k) => k === 'reuse')).toHaveLength(57);
-    expect(sel.slice(0, 7)).toEqual(['indexer', 'indexer', 'indexer', 'reuse', 'reuse', 'reuse', 'indexer']);
-    expect(mlaOf(m.layers[0]).sparse).toEqual({ kind: 'indexer', indexer: { heads: 32, headDim: 128, topK: 2048 } });
-    const ffn = m.layers.map((l) => l.blocks.find((x) => x.kind === 'mlp' || x.kind === 'moe')?.kind);
+    expect(sel.slice(0, 7)).toEqual([
+      'indexer',
+      'indexer',
+      'indexer',
+      'reuse',
+      'reuse',
+      'reuse',
+      'indexer',
+    ]);
+    expect(mlaOf(m.layers[0]).sparse).toEqual({
+      kind: 'indexer',
+      indexer: { heads: 32, headDim: 128, topK: 2048 },
+    });
+    const ffn = m.layers.map(
+      (l) => l.blocks.find((x) => x.kind === 'mlp' || x.kind === 'moe')?.kind,
+    );
     expect(ffn.filter((k) => k === 'mlp')).toHaveLength(3);
     expect(ffn.filter((k) => k === 'moe')).toHaveLength(75);
   });
@@ -94,6 +114,9 @@ describe('glm_moe_dsa: GLM-5.3', () => {
 
   it('reports missing fields path-qualified', () => {
     const r = buildResult(ID, { kv_lora_rank: null });
-    expect(r).toEqual({ kind: 'invalid_config', errors: ['kv_lora_rank: missing non-negative integer'] });
+    expect(r).toEqual({
+      kind: 'invalid_config',
+      errors: ['kv_lora_rank: missing non-negative integer'],
+    });
   });
 });

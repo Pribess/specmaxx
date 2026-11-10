@@ -38,11 +38,14 @@ export function sanityRepoFiles(repoId: string, opts: { dir?: string } = {}): Hf
 }
 
 /** Raw drafter configs by path, e.g. `'../models/hf/__fixtures__/incoai__Qwen3.8-27B-DFlash2.config.json'`. */
-const DRAFTER_RAW: Record<string, string> = import.meta.glob<string>('../models/hf/__fixtures__/*.config.json', {
-  query: '?raw',
-  import: 'default',
-  eager: true,
-});
+const DRAFTER_RAW: Record<string, string> = import.meta.glob<string>(
+  '../models/hf/__fixtures__/*.config.json',
+  {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  },
+);
 
 /**
  * The block drafter of `repoId` (a separate drafter repo, e.g. `'incoai/Qwen3.8-27B-DFlash2'`), parsed by

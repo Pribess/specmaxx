@@ -31,13 +31,23 @@ const PCIE5 = hostPcieLink(5, 16);
 const B_LINK = 57_614_065_934.06594;
 /** The design doc's 990 PRO numbers (QD1 latency rounded to 45 µs; the preset carries 1/22,000 s). */
 const SSD_45US: NvmeSpec = { ...NVME_990_PRO_2TB, randomReadLatencySec: 45e-6 };
-const LINK = { latencySec: PCIE5.latencySec, bandwidthPerDirectionBytesPerSec: PCIE5.bandwidthPerDirectionBytesPerSec };
+const LINK = {
+  latencySec: PCIE5.latencySec,
+  bandwidthPerDirectionBytesPerSec: PCIE5.bandwidthPerDirectionBytesPerSec,
+};
 
 function ramPath(over: Partial<TransferPath> = {}): TransferPath {
   return { tier: DDR5_6000_2CH, link: LINK, queueDepth: 64, nStream: 1, ...over };
 }
 function ssdPath(over: Partial<TransferPath> = {}): TransferPath {
-  return { tier: SSD_45US, link: LINK, hostStagingBandwidthBytesPerSec: 96e9, queueDepth: 512, nStream: 1, ...over };
+  return {
+    tier: SSD_45US,
+    link: LINK,
+    hostStagingBandwidthBytesPerSec: 96e9,
+    queueDepth: 512,
+    nStream: 1,
+    ...over,
+  };
 }
 
 describe('U-1 uniqueExperts U(T) = E·(1 − (1 − k/E)^T)', () => {
@@ -86,10 +96,18 @@ describe('U-3 hit-ratio models and their validation', () => {
     parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
     workload: { batch: 1, promptLen: 128, decodeContextLen: 128 },
     hardware: { device: RTX_5090, topology: { ...SYNTH_CLUSTER, devicesPerNode: 1, nodes: 1 } },
-    deployment: { offload: { routedExperts: { tier: 'host_ram', residentFraction: f, hitRatio: { kind: 'custom', h } } } },
+    deployment: {
+      offload: {
+        routedExperts: { tier: 'host_ram', residentFraction: f, hitRatio: { kind: 'custom', h } },
+      },
+    },
   });
   it('f 0 with custom h .2 is rejected ("no experts are resident, h must be 0")', () => {
-    expect(validateInput(moeInput(0, 0.2)).some((e) => e.includes('no experts are resident, h must be 0'))).toBe(true);
+    expect(
+      validateInput(moeInput(0, 0.2)).some((e) =>
+        e.includes('no experts are resident, h must be 0'),
+      ),
+    ).toBe(true);
     expect(validateInput(moeInput(1, 0.2)).some((e) => e.includes('h must be 0'))).toBe(false);
   });
 });
@@ -120,7 +138,11 @@ describe('U-4 transferTime: t = α_tier + α_link + max(Little, IOPS/n, tier/n, 
     expectClose(t.sec, 46e-6 + 16 / 1.4e6); // 57.429 µs
   });
   it('the real 990 PRO preset (QD1 1/22,000 s = 45.45 µs): α = 1/22,000 + 1 µs', () => {
-    const t = transferTime([{ count: 16, bytesEach: 320 }], 5_120, ssdPath({ tier: NVME_990_PRO_2TB }));
+    const t = transferTime(
+      [{ count: 16, bytesEach: 320 }],
+      5_120,
+      ssdPath({ tier: NVME_990_PRO_2TB }),
+    );
     expectClose(t.latencySec, 1 / 22_000 + 1e-6);
   });
   it('an NvmeSpec without randomRead (Spark-like, maxOutstanding 512, 50 µs): no IOPS term, and resolveHost warns', () => {
@@ -129,12 +151,25 @@ describe('U-4 transferTime: t = α_tier + α_link + max(Little, IOPS/n, tier/n, 
     const t = transferTime([{ count: 16, bytesEach: 320 }], 5_120, ssdPath({ tier: ssd }));
     expect(t.iopsSec).toBeUndefined();
     expectClose(t.littleSec, (15 * 50e-6) / 512);
-    expectClose(t.serviceSec, Math.max((15 * 50e-6) / 512, 65_536 / 12.2e9, 65_536 / 48e9, 5_120 / B_LINK));
-    const host = resolveHost({ device: SYNTH_GPU, topology: SYNTH_CLUSTER, host: { link: PCIE5, ssd } }, SYNTH_GPU, new Set(['nvme']));
-    expect(host.warnings).toContain(`offload: no random-read IOPS for ${ssd.id}; request rate from latency × queue depth`);
+    expectClose(
+      t.serviceSec,
+      Math.max((15 * 50e-6) / 512, 65_536 / 12.2e9, 65_536 / 48e9, 5_120 / B_LINK),
+    );
+    const host = resolveHost(
+      { device: SYNTH_GPU, topology: SYNTH_CLUSTER, host: { link: PCIE5, ssd } },
+      SYNTH_GPU,
+      new Set(['nvme']),
+    );
+    expect(host.warnings).toContain(
+      `offload: no random-read IOPS for ${ssd.id}; request rate from latency × queue depth`,
+    );
   });
   it('NVMe on unified memory: no link (α_link 0, no link term), no host staging', () => {
-    const t = transferTime([{ count: 16, bytesEach: 320 }], 5_120, { tier: SSD_45US, queueDepth: 512, nStream: 1 });
+    const t = transferTime([{ count: 16, bytesEach: 320 }], 5_120, {
+      tier: SSD_45US,
+      queueDepth: 512,
+      nStream: 1,
+    });
     expectClose(t.latencySec, 45e-6);
     expect(t.linkSec).toBe(0);
     expect(t.hostSec).toBeUndefined();
@@ -158,16 +193,25 @@ describe('transferTime resource use (link bytes, host RAM bytes and time) for th
     expectClose(t.hostRamSec, 65_536 / 48e9);
   });
   it('NVMe on unified memory (no link, no staging): no link and no host RAM use', () => {
-    const t = transferTime([{ count: 16, bytesEach: 320 }], 5_120, { tier: SSD_45US, queueDepth: 512, nStream: 1 });
+    const t = transferTime([{ count: 16, bytesEach: 320 }], 5_120, {
+      tier: SSD_45US,
+      queueDepth: 512,
+      nStream: 1,
+    });
     expect([t.linkBytes, t.hostRamBytes, t.hostRamSec]).toEqual([0, 0, 0]);
   });
 });
 
 describe('prefetchesFromBothTiers: some host_ram op and some nvme op with q > 0', () => {
-  const op = (source: 'host_ram' | 'nvme', prefetchedFraction: number) => ({ source, prefetchedFraction });
+  const op = (source: 'host_ram' | 'nvme', prefetchedFraction: number) => ({
+    source,
+    prefetchedFraction,
+  });
   it('both tiers with q > 0 ⇒ true', () => {
     expect(prefetchesFromBothTiers([op('host_ram', 0.8), op('nvme', 1)])).toBe(true);
-    expect(prefetchesFromBothTiers([op('nvme', 0), op('nvme', 0.3), op('host_ram', 0.8)])).toBe(true);
+    expect(prefetchesFromBothTiers([op('nvme', 0), op('nvme', 0.3), op('host_ram', 0.8)])).toBe(
+      true,
+    );
   });
   it('one tier, any q ⇒ false', () => {
     expect(prefetchesFromBothTiers([op('host_ram', 0.8), op('host_ram', 1)])).toBe(false);
@@ -200,7 +244,10 @@ describe('U-12 a shared SSD: four genuine consumers (tp 4, one node, every stage
   it('experts [{8, 2,654,208}] from the SSD: alone 46 µs + 2.8502 ms, with n 4 46 µs + 11.4006 ms', () => {
     const reads = [{ count: 8, bytesEach: 2_654_208 }];
     expectClose(transferTime(reads, 21_233_664, ssdPath()).sec, 46e-6 + 21_233_664 / 7.45e9);
-    expectClose(transferTime(reads, 21_233_664, ssdPath({ nStream: 4 })).sec, 46e-6 + 21_233_664 / (7.45e9 / 4));
+    expectClose(
+      transferTime(reads, 21_233_664, ssdPath({ nStream: 4 })).sec,
+      46e-6 + 21_233_664 / (7.45e9 / 4),
+    );
     expectClose(21_233_664 / 7.45e9, 2.8502e-3, 1e-4);
   });
 });
@@ -233,7 +280,11 @@ describe('U-17 n_stream (one node, tp = dp = 1 unless said)', () => {
         quant: { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } },
         parallel: { tp: 1, pp: 4, dp: 1, ep: 1 },
         workload: { batch: 2, promptLen: 128, decodeContextLen: 128 },
-        hardware: { device: SYNTH_GPU, topology: SYNTH_CLUSTER, host: { link: PCIE5, ssd: SSD_45US, ram: DDR5_6000_2CH } },
+        hardware: {
+          device: SYNTH_GPU,
+          topology: SYNTH_CLUSTER,
+          host: { link: PCIE5, ssd: SSD_45US, ram: DDR5_6000_2CH },
+        },
         deployment: {
           offload: {
             prefetchAccuracy: prefetch === 'ideal' ? 1 : 0,
@@ -241,7 +292,10 @@ describe('U-17 n_stream (one node, tp = dp = 1 unless said)', () => {
           },
         },
       });
-    for (const [overlap, n] of [['none', 2], ['ideal', 4]] as const) {
+    for (const [overlap, n] of [
+      ['none', 2],
+      ['ideal', 4],
+    ] as const) {
       const fetch = run(overlap)
         .decode.stages[1].layers.flatMap((l) => l.ops)
         .find((o) => o.op.kind === 'transfer');
@@ -249,7 +303,10 @@ describe('U-17 n_stream (one node, tp = dp = 1 unless said)', () => {
       if (fetch === undefined || fetch.op.kind !== 'transfer') continue;
       // m = 2 microbatches of one sequence: M = U = k = 8 experts of 9.44 MB; the drive's term dominates
       // (staging 75.5 MB/(96e9/(2n)) and the link stay below it).
-      const tierBytes = fetch.op.reads.reduce((s, r) => s + r.count * Math.ceil(r.bytesEach / 4096) * 4096, 0);
+      const tierBytes = fetch.op.reads.reduce(
+        (s, r) => s + r.count * Math.ceil(r.bytesEach / 4096) * 4096,
+        0,
+      );
       expectClose(fetch.transferBandwidthSec, tierBytes / (7.45e9 / n));
       expectClose(fetch.transferLatencySec, 46e-6);
       expect(fetch.bound).toBe('transfer');
@@ -279,20 +336,34 @@ describe('n_host: host RAM shared by host-RAM reads and NVMe staging (tables in 
       ...qwen,
       parallel: { ...parallel, dp: 1, ep: 1 },
       workload: { batch: 1, promptLen: 128, decodeContextLen: 128 },
-      hardware: { device: SYNTH_GPU, topology: SYNTH_CLUSTER, host: { link: PCIE5, ssd: FAST_SSD, ram: DDR5_6000_2CH } },
+      hardware: {
+        device: SYNTH_GPU,
+        topology: SYNTH_CLUSTER,
+        host: { link: PCIE5, ssd: FAST_SSD, ram: DDR5_6000_2CH },
+      },
       deployment: {
         offload: {
           prefetchAccuracy: prefetch,
           lookupTables: { tier: 'host_ram' },
-          routedExperts: { tier: 'nvme', layers: { from: 24, to: 48 }, residentFraction: 0, hitRatio: { kind: 'uniform' } },
+          routedExperts: {
+            tier: 'nvme',
+            layers: { from: 24, to: 48 },
+            residentFraction: 0,
+            hitRatio: { kind: 'uniform' },
+          },
         },
       },
     });
   /** The transfer op of `group` in decoder layer `i`, with its result. */
-  const fetchOf = (r: ReturnType<typeof run>, i: number, group: 'lookup_table' | 'routed_experts') => {
+  const fetchOf = (
+    r: ReturnType<typeof run>,
+    i: number,
+    group: 'lookup_table' | 'routed_experts',
+  ) => {
     const layer = r.decode.stages.flatMap((s) => s.layers).find((l) => l.layerIndex === i);
     const fetch = layer?.ops.find((o) => o.op.kind === 'transfer' && o.op.group === group);
-    if (fetch === undefined || fetch.op.kind !== 'transfer') throw new Error(`layer ${i}: no ${group} op`);
+    if (fetch === undefined || fetch.op.kind !== 'transfer')
+      throw new Error(`layer ${i}: no ${group} op`);
     return { fetch, op: fetch.op };
   };
   const ramBytes = (op: { reads: { count: number; bytesEach: number }[] }) =>
@@ -300,7 +371,7 @@ describe('n_host: host RAM shared by host-RAM reads and NVMe staging (tables in 
   const ssdBytes = (op: { reads: { count: number; bytesEach: number }[] }) =>
     op.reads.reduce((s, r) => s + r.count * Math.ceil(r.bytesEach / 4096) * 4096, 0);
 
-  it('each op reads from its rule\'s tier', () => {
+  it("each op reads from its rule's tier", () => {
     const r = run({ tp: 1, pp: 2 }, 1);
     expect(fetchOf(r, 1, 'lookup_table').op.source).toBe('host_ram');
     for (const i of [24, 47]) expect(fetchOf(r, i, 'routed_experts').op.source).toBe('nvme');

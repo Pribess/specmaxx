@@ -36,7 +36,10 @@ describe('EXL3 quantization_config detection (real repos)', () => {
 
   it('a config without a bits key falls back to 4 bpw with a note', () => {
     const files = fixtureRepoFiles('turboderp/Qwen3.8-27B-exl3', { dir: 'quant' });
-    const config = JSON.parse(JSON.stringify(files.config)) as Record<string, Record<string, unknown>>;
+    const config = JSON.parse(JSON.stringify(files.config)) as Record<
+      string,
+      Record<string, unknown>
+    >;
     config.quantization_config = { quant_method: 'exl3' };
     const r = mapHfModel({ ...files, config });
     if (r.kind !== 'ok') throw new Error(r.kind);

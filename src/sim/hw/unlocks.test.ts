@@ -8,10 +8,25 @@ function mod(note: string): DeviceModifier {
   return { kind: 'clockScale', factor: 0.9, note, sources: [], estimatedReason: 'test' };
 }
 
-const P2P: LinkModifier = { kind: 'p2p', p2p: 'direct', note: 'p2p', sources: [], estimatedReason: 'test' };
+const P2P: LinkModifier = {
+  kind: 'p2p',
+  p2p: 'direct',
+  note: 'p2p',
+  sources: [],
+  estimatedReason: 'test',
+};
 
-function option(id: string, deviceModifiers: DeviceModifier[], intraNodeLinkModifiers?: LinkModifier[]): UnlockOption {
-  return { id, name: id, deviceModifiers, ...(intraNodeLinkModifiers !== undefined ? { intraNodeLinkModifiers } : {}) };
+function option(
+  id: string,
+  deviceModifiers: DeviceModifier[],
+  intraNodeLinkModifiers?: LinkModifier[],
+): UnlockOption {
+  return {
+    id,
+    name: id,
+    deviceModifiers,
+    ...(intraNodeLinkModifiers !== undefined ? { intraNodeLinkModifiers } : {}),
+  };
 }
 
 function axis(id: string, options: UnlockOption[]): UnlockAxis {

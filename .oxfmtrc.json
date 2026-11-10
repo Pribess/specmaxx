@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "singleQuote": true,
+  "printWidth": 100,
+  "trailingComma": "all",
+  "ignorePatterns": [
+    "dist",
+    "coverage",
+    "deploy",
+    ".wrangler",
+    "bun.lock",
+    "*.tsbuildinfo",
+    "test-results",
+    "playwright-report",
+    "blob-report"
+  ]
+}

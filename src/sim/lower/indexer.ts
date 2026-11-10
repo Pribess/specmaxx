@@ -7,7 +7,12 @@
  * Notation: H_I indexer heads, hd_I indexer head dim, p = keyPoolTokens, T = seqs·qLen.
  */
 
-import { bytesPerElement, resolveAccumulate, resolveGemmMath, type TensorFormat } from '../ir/dtype';
+import {
+  bytesPerElement,
+  resolveAccumulate,
+  resolveGemmMath,
+  type TensorFormat,
+} from '../ir/dtype';
 import type { IndexerSpec, SparseSelection } from '../ir/model';
 import type { IndexerOp, KvSelection, Op } from '../ir/ops';
 import { actBpe, elementwise, hpBpe, linearGemm, stepTokens } from './common';
@@ -61,10 +66,16 @@ export function lowerSparseSelection(
 
   // Formula: idx.q: n = H_I·hd_I, k = qIn
   // See docs/simulation-model.md §5 "Sparse attention indexer"
-  ops.push(linearGemm('idx.q', { m: T, n: spec.heads * hdI, k: qInputDim }, ctx, { module: 'indexer' }));
+  ops.push(
+    linearGemm('idx.q', { m: T, n: spec.heads * hdI, k: qInputDim }, ctx, { module: 'indexer' }),
+  );
   if (ownsKeys) {
     // Formula: idx.k: n = coff·hd_I, k = kIn; key LayerNorm over T·hd_I
-    ops.push(linearGemm('idx.k', { m: T, n: keyProjDim, k: spec.keyInputDim ?? hidden }, ctx, { module: 'indexer_key' }));
+    ops.push(
+      linearGemm('idx.k', { m: T, n: keyProjDim, k: spec.keyInputDim ?? hidden }, ctx, {
+        module: 'indexer_key',
+      }),
+    );
     const kNormElems = T * hdI;
     ops.push(
       elementwise(
@@ -82,7 +93,11 @@ export function lowerSparseSelection(
     if (spec.keyPoolGate === true) {
       // Formula: idx.pool_gate: n = coff·hd_I, k = h; kv_pool over T·coff·hd_I: read 2·T·coff·hd_I (keys, gate
       //          logits), write T·hd_I/p, APE p·coff·hd_I·bpe(hp)
-      ops.push(linearGemm('idx.pool_gate', { m: T, n: keyProjDim, k: hidden }, ctx, { module: 'indexer_key' }));
+      ops.push(
+        linearGemm('idx.pool_gate', { m: T, n: keyProjDim, k: hidden }, ctx, {
+          module: 'indexer_key',
+        }),
+      );
       const poolElems = T * keyProjDim;
       const keyElems = T * hdI;
       ops.push(
@@ -102,12 +117,19 @@ export function lowerSparseSelection(
   }
   if (spec.headWeights !== false) {
     // Formula: idx.w: n = H_I, k = h
-    ops.push(linearGemm('idx.w', { m: T, n: spec.heads, k: hidden }, ctx, { module: 'indexer_head_weights' }));
+    ops.push(
+      linearGemm('idx.w', { m: T, n: spec.heads, k: hidden }, ctx, {
+        module: 'indexer_head_weights',
+      }),
+    );
   }
 
   const keyCache = indexerKeyFormat(ctx);
   // The scoring math runs in the wider of the key-cache and attention-math formats (same rule as GEMMs).
-  const scoreMath = resolveGemmMath(keyCache.dtype, ctx.quant.attentionMath ?? ctx.quant.activations);
+  const scoreMath = resolveGemmMath(
+    keyCache.dtype,
+    ctx.quant.attentionMath ?? ctx.quant.activations,
+  );
   // Formula: topK_I = ceil(topK·attentionKeyTokens/p)   (indexer keys kept per query)
   const indexer: IndexerOp = {
     kind: 'indexer',
@@ -138,15 +160,27 @@ export function lowerSparseSelection(
  * this layer owns, `ceil(ctx/p)` of them; 0 for a `'reuse'` selection or an indexer reading another layer's keys.
  * Unit: bytes.
  */
-export function sparseSelectionStateBytes(sel: SparseSelection, ctx: LoweringContext, contextTokens: number): number {
+export function sparseSelectionStateBytes(
+  sel: SparseSelection,
+  ctx: LoweringContext,
+  contextTokens: number,
+): number {
   if (sel.kind === 'reuse') return 0;
   return indexerKeyStateBytes(sel.indexer, ctx, contextTokens);
 }
 
 /** Owned indexer key-cache bytes per sequence: `ceil(ctx/p)·hd_I·bpe(key)`, 0 if `ownsKeys` is false. Unit: bytes. */
-export function indexerKeyStateBytes(spec: IndexerSpec, ctx: LoweringContext, contextTokens: number): number {
+export function indexerKeyStateBytes(
+  spec: IndexerSpec,
+  ctx: LoweringContext,
+  contextTokens: number,
+): number {
   if (spec.ownsKeys === false) return 0;
   // Formula: S_idx = ceil(ctx/p)·hd_I·bpe(key)
   // See docs/simulation-model.md §8 "Memory fit"
-  return Math.ceil(contextTokens / (spec.keyPoolTokens ?? 1)) * spec.headDim * bytesPerElement(indexerKeyFormat(ctx));
+  return (
+    Math.ceil(contextTokens / (spec.keyPoolTokens ?? 1)) *
+    spec.headDim *
+    bytesPerElement(indexerKeyFormat(ctx))
+  );
 }

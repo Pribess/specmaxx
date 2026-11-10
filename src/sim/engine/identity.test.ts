@@ -547,7 +547,9 @@ describe('deployment identity, knobs absent (after latency audit G1–G8, G6 exc
       expect(
         simulate({
           ...value,
-          deployment: { offload: { routedExperts: [], lookupTables: [], embeddings: { tier: 'device' } } },
+          deployment: {
+            offload: { routedExperts: [], lookupTables: [], embeddings: { tier: 'device' } },
+          },
         }),
       ).toEqual(absent);
     },

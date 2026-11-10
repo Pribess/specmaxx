@@ -40,13 +40,19 @@ describe('loadHfModel through a gated mirror', () => {
 
   /** The Hub as seen without a token: the official repo answers 401, the mirror serves its checked-in fixtures. */
   const gatedHub = (async (url: string, init?: RequestInit) => {
-    if ((init?.headers as Record<string, string> | undefined)?.Authorization) return new Response('', { status: 500 });
+    if ((init?.headers as Record<string, string> | undefined)?.Authorization)
+      return new Response('', { status: 500 });
     if (url.includes(official)) return new Response('', { status: 401 });
-    const kind = url === apiUrl(mirror) ? 'api' : url === resolveUrl(mirror, 'config.json') ? 'config' : null;
+    const kind =
+      url === apiUrl(mirror) ? 'api' : url === resolveUrl(mirror, 'config.json') ? 'config' : null;
     const body = kind && readFixtureJson(`${fixtureStem(mirror)}.${kind}.json`);
     return body ? new Response(JSON.stringify(body)) : new Response('', { status: 404 });
   }) as unknown as typeof fetch;
-  const opts = () => ({ fetchImpl: gatedHub, cache: createCache(memoryStorage(), new Map()), tokenStorage: memoryStorage() });
+  const opts = () => ({
+    fetchImpl: gatedHub,
+    cache: createCache(memoryStorage(), new Map()),
+    tokenStorage: memoryStorage(),
+  });
 
   /** Mentions of the mirror a user could see; none may appear (the user's instruction). */
   const MIRROR_TEXT = /read from|unsloth\//i;

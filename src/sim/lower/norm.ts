@@ -23,7 +23,11 @@ export function lowerResidual(block: ResidualBlock, ctx: LoweringContext): Op[] 
     elementwise(
       block.name,
       'residual_add',
-      { elems, activationReadBytes: 2 * elems * actBpe(ctx), activationWriteBytes: elems * actBpe(ctx) },
+      {
+        elems,
+        activationReadBytes: 2 * elems * actBpe(ctx),
+        activationWriteBytes: elems * actBpe(ctx),
+      },
       ctx,
     ),
   ];

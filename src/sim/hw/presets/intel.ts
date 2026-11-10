@@ -31,7 +31,14 @@
  * - Arc B580: PCIe 4.0 x8.
  */
 
-import type { ComputeEngine, DeviceSpec, EstimatedField, GemmTiling, MatmulPeak, SourceRef } from '../types';
+import type {
+  ComputeEngine,
+  DeviceSpec,
+  EstimatedField,
+  GemmTiling,
+  MatmulPeak,
+  SourceRef,
+} from '../types';
 import { gb, gbPerSec, tflops } from '../units';
 import { engineSfu, INTEL_XE2_SFU, type EngineSfu } from './sfu';
 import { NO_RDMA_SOURCE_ESTIMATE } from './gpudirect';
@@ -47,19 +54,24 @@ const XE2_TECH_TOUR_URL =
 const SYCL_JOINT_MATRIX_URL =
   'https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/experimental/sycl_ext_matrix/sycl_ext_oneapi_matrix.asciidoc';
 /** IGC vISA documentation of the DPAS (XMX) instruction: M = repeat count, N = exec size, K = depth × ops/chan. */
-const IGC_DPAS_URL = 'https://github.com/intel/intel-graphics-compiler/blob/master/documentation/visa/instructions/DPAS.md';
+const IGC_DPAS_URL =
+  'https://github.com/intel/intel-graphics-compiler/blob/master/documentation/visa/instructions/DPAS.md';
 /** PCGH launch article for Arc Pro B70 / B65 with a spec table also covering Arc Pro B60 and Arc B580. */
 const PCGH_B70_B65_URL =
   'https://www.pcgameshardware.de/Grafikkarten-Grafikkarte-97980/Specials/Arc-Pro-B70-B65-Preis-Gaming-Specs-Release-1523369/';
 
-const B70_ARK_URL = 'https://www.intel.com/content/www/us/en/products/sku/245797/intel-arc-pro-b70-graphics/specifications.html';
+const B70_ARK_URL =
+  'https://www.intel.com/content/www/us/en/products/sku/245797/intel-arc-pro-b70-graphics/specifications.html';
 const B70_DATASHEET_URL =
   'https://www.intel.com/content/dam/www/central-libraries/us/en/documents/2026-03/datasheet-b70-gpu.pdf';
-const B65_ARK_URL = 'https://www.intel.com/content/www/us/en/products/sku/245796/intel-arc-pro-b65-graphics/specifications.html';
-const B60_ARK_URL = 'https://www.intel.com/content/www/us/en/products/sku/243916/intel-arc-pro-b60-graphics/specifications.html';
+const B65_ARK_URL =
+  'https://www.intel.com/content/www/us/en/products/sku/245796/intel-arc-pro-b65-graphics/specifications.html';
+const B60_ARK_URL =
+  'https://www.intel.com/content/www/us/en/products/sku/243916/intel-arc-pro-b60-graphics/specifications.html';
 const B60_DATASHEET_URL =
   'https://www.intel.com/content/dam/www/central-libraries/us/en/documents/2026-03/datasheet-b60-gpu.pdf';
-const B580_ARK_URL = 'https://www.intel.com/content/www/us/en/products/sku/241598/intel-arc-b580-graphics/specifications.html';
+const B580_ARK_URL =
+  'https://www.intel.com/content/www/us/en/products/sku/241598/intel-arc-b580-graphics/specifications.html';
 /** Intel oneAPI GPU optimization guide 2025-2, "Intel Xe GPU architecture" table (B580 column). */
 const ONEAPI_XE_ARCH_URL =
   'https://www.intel.com/content/www/us/en/docs/oneapi/optimization-guide-gpu/2025-2/intel-xe-gpu-architecture.html';
@@ -105,7 +117,13 @@ const XE2_WORKGROUP_TILES: { m: number; n: number }[] = [
  * 2 / 4 / 8). One workgroup per Xe core: a 256×256 tile fills the core's register file and SLM (estimate).
  */
 function xe2Tiling(mmaK: number): GemmTiling {
-  return { mmaM: 8, mmaN: 16, mmaK, ctaTiles: XE2_WORKGROUP_TILES.map((t) => ({ ...t })), ctasPerUnit: 1 };
+  return {
+    mmaM: 8,
+    mmaN: 16,
+    mmaK,
+    ctaTiles: XE2_WORKGROUP_TILES.map((t) => ({ ...t })),
+    ctasPerUnit: 1,
+  };
 }
 
 /** The tiling keys each Xe2 engine lists (used to write the source/estimate field paths below). */
@@ -235,11 +253,13 @@ function xe2Estimates(d: Xe2Derivation): EstimatedField[] {
     ...XE2_TILING_KEYS.flatMap((k) => [
       {
         field: `engines.0.gemmTiling.${k}.ctaTiles`,
-        reason: 'Representative oneDNN / XeTLA workgroup tiles (multiples of the DPAS 8×16 shape); not a vendor spec.',
+        reason:
+          'Representative oneDNN / XeTLA workgroup tiles (multiples of the DPAS 8×16 shape); not a vendor spec.',
       },
       {
         field: `engines.0.gemmTiling.${k}.ctasPerUnit`,
-        reason: 'One resident large workgroup per Xe core (register file / SLM bound); kernel-dependent estimate.',
+        reason:
+          'One resident large workgroup per Xe core (register file / SLM bound); kernel-dependent estimate.',
       },
     ]),
   ];
@@ -249,7 +269,8 @@ function xe2Estimates(d: Xe2Derivation): EstimatedField[] {
 function pcghSource(fields: string[], note: string): SourceRef {
   return {
     url: PCGH_B70_B65_URL,
-    title: 'PCGH: Intel launcht Arc Pro B70 & B65 (spec table, also lists Arc Pro B60 and Arc B580)',
+    title:
+      'PCGH: Intel launcht Arc Pro B70 & B65 (spec table, also lists Arc Pro B60 and Arc B580)',
     kind: 'review',
     fields,
     note,
@@ -300,7 +321,13 @@ export const ARC_PRO_B70: DeviceSpec = {
     {
       url: B70_ARK_URL,
       title: 'Intel ark: Intel Arc Pro B70 Graphics specifications',
-      fields: ['engines.0.computeUnits', `engines.0.matmulPeaks.${PEAK_INDEX.int8}`, 'engines.0.vectorFlopsPerSec.fp32', 'memory', 'hostInterface'],
+      fields: [
+        'engines.0.computeUnits',
+        `engines.0.matmulPeaks.${PEAK_INDEX.int8}`,
+        'engines.0.vectorFlopsPerSec.fp32',
+        'memory',
+        'hostInterface',
+      ],
       note:
         'Xe-cores 32; XMX Engines 256; Graphics Max Dynamic Clock 2800 MHz (Graphics Clock 2280 MHz); ' +
         'GPU Peak TOPS (Int8) 367; GPU TFLOPS (FP32) 22.94; 32 GB GDDR6, 256 bit, 608 GB/s, ECC; PCI Express 5.0 x16.',
@@ -313,7 +340,10 @@ export const ARC_PRO_B70: DeviceSpec = {
         '"367 AI TOPS Int8 Dense"; footnote: "peak throughput when running XMX workloads with INT8 datatype and dense ' +
         'models"; "32 GB VRAM"; "608 GB/s"; "PCIe Support Gen 5 x16 Native"; TBP 230 W (Intel card), 160–290 W partner.',
     },
-    pcghSource(['l2Bytes'], 'B70 column: BMG-G31 WKSTN, 368 mm², 27.7 B transistors; Level-2-Cache (MiB) 24; boost 2800 MHz; FP32 22.9 TFLOPS.'),
+    pcghSource(
+      ['l2Bytes'],
+      'B70 column: BMG-G31 WKSTN, 368 mm², 27.7 B transistors; Level-2-Cache (MiB) 24; boost 2800 MHz; FP32 22.9 TFLOPS.',
+    ),
     XE2_DPAS_SHAPE_SOURCE,
     ...xe2Sfu(32, B70_MAX_CLOCK_HZ).sources,
   ],
@@ -362,10 +392,19 @@ export const ARC_PRO_B65: DeviceSpec = {
     {
       url: B65_ARK_URL,
       title: 'Intel ark: Intel Arc Pro B65 Graphics specifications',
-      fields: ['engines.0.computeUnits', `engines.0.matmulPeaks.${PEAK_INDEX.int8}`, 'engines.0.vectorFlopsPerSec.fp32', 'memory', 'hostInterface'],
+      fields: [
+        'engines.0.computeUnits',
+        `engines.0.matmulPeaks.${PEAK_INDEX.int8}`,
+        'engines.0.vectorFlopsPerSec.fp32',
+        'memory',
+        'hostInterface',
+      ],
       note: 'Xe-cores 20; XMX Engines 160; 2400 MHz; GPU Peak TOPS (Int8) 197; FP32 12.28 TFLOPS; 32 GB GDDR6, 256 bit, 608 GB/s; PCI Express 5.0 x16; TBP 200 W.',
     },
-    pcghSource(['l2Bytes'], 'B65 column: BMG-G31 WKSTN (cut down), 2560 FP32 ALUs, 160 matrix units; Level-2-Cache (MiB) 18; boost 2400 MHz.'),
+    pcghSource(
+      ['l2Bytes'],
+      'B65 column: BMG-G31 WKSTN (cut down), 2560 FP32 ALUs, 160 matrix units; Level-2-Cache (MiB) 18; boost 2400 MHz.',
+    ),
     XE2_DPAS_SHAPE_SOURCE,
     ...xe2Sfu(20, B60_B65_MAX_CLOCK_HZ).sources,
   ],
@@ -413,7 +452,13 @@ export const ARC_PRO_B60: DeviceSpec = {
     {
       url: B60_DATASHEET_URL,
       title: 'Intel Arc Pro B60 datasheet (2026-03)',
-      fields: ['engines.0.computeUnits', `engines.0.matmulPeaks.${PEAK_INDEX.int8}`, 'engines.0.vectorFlopsPerSec.fp32', 'memory', 'hostInterface'],
+      fields: [
+        'engines.0.computeUnits',
+        `engines.0.matmulPeaks.${PEAK_INDEX.int8}`,
+        'engines.0.vectorFlopsPerSec.fp32',
+        'memory',
+        'hostInterface',
+      ],
       note:
         '20 Xe2-HPG cores, 160 XMX engines; "197 AI TOPS Int 8 Dense" (footnote: "INT8 datatype and dense models"); ' +
         '"Up to 12.28 TFLOPS (Single Precision)" (footnote: "As defined by maximum clock frequency"); 24GB GDDR6; ' +
@@ -425,7 +470,10 @@ export const ARC_PRO_B60: DeviceSpec = {
       fields: ['engines.0.computeUnits', 'memory', 'hostInterface'],
       note: 'Xe-cores 20; Graphics Clock 2400 MHz (LP 2000 MHz); 24 GB GDDR6, 192 bit, 19 Gbps, 456 GB/s; PCI Express 5.0 x8.',
     },
-    pcghSource(['l2Bytes'], 'B60 column: BMG-G21 WKSTN, 272 mm²; Level-2-Cache (MiB) 18; boost 2400 MHz; FP32 12.3 TFLOPS.'),
+    pcghSource(
+      ['l2Bytes'],
+      'B60 column: BMG-G21 WKSTN, 272 mm²; Level-2-Cache (MiB) 18; boost 2400 MHz; FP32 12.3 TFLOPS.',
+    ),
     XE2_DPAS_SHAPE_SOURCE,
     ...xe2Sfu(20, B60_B65_MAX_CLOCK_HZ).sources,
   ],
@@ -480,12 +528,18 @@ export const ARC_B580: DeviceSpec = {
     {
       url: B580_ARK_URL,
       title: 'Intel ark: Intel Arc B580 Graphics specifications',
-      fields: ['engines.0.computeUnits', `engines.0.matmulPeaks.${PEAK_INDEX.int8}`, 'memory', 'hostInterface'],
+      fields: [
+        'engines.0.computeUnits',
+        `engines.0.matmulPeaks.${PEAK_INDEX.int8}`,
+        'memory',
+        'hostInterface',
+      ],
       note: 'Xe-cores 20; XMX 160; Graphics Clock 2670 MHz; GPU Peak TOPS (Int8) 233; 12 GB GDDR6, 192 bit, 19 Gbps, 456 GB/s; PCI Express 4.0 x8; TBP 190 W.',
     },
     {
       url: ONEAPI_XE_ARCH_URL,
-      title: 'Intel oneAPI GPU optimization guide 2025-2: Intel Xe GPU architecture table (B580 column)',
+      title:
+        'Intel oneAPI GPU optimization guide 2025-2: Intel Xe GPU architecture table (B580 column)',
       fields: ['l2Bytes'],
       note: '"L3 cache size 18 MB" (Chips and Cheese: "The entire GPU shares an 18 MB L2 cache"); 256 KB L1 / 128 KB SLM per Xe core.',
     },

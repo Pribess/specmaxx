@@ -1,11 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { attendedPairs, attentionPairs, attentionScores, indexerPairs, kvTokensRead, opBytes, opFlops } from './metrics';
+import {
+  attendedPairs,
+  attentionPairs,
+  attentionScores,
+  indexerPairs,
+  kvTokensRead,
+  opBytes,
+  opFlops,
+} from './metrics';
 import type { AttentionOp, ElementwiseOp, GemmOp, IndexerOp, RecurrentOp, TransferOp } from './ops';
 import { lowerBlock, type LoweringContext } from '../lower/lower';
 import { REF_DENSE_8B } from '../models/reference';
 import type { QuantConfig } from './model';
 
-const BF16: QuantConfig = { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } };
+const BF16: QuantConfig = {
+  weights: { dtype: 'bf16' },
+  activations: 'bf16',
+  kvCache: { dtype: 'bf16' },
+};
 
 const gemm = (sparsity: 'dense' | '2:4'): GemmOp => ({
   kind: 'gemm',
@@ -136,7 +148,11 @@ describe('T2d indexer', () => {
 
 describe('pooled / compressed keys (r tokens per key)', () => {
   it('r = 1 reproduces the token formulas exactly', () => {
-    for (const sel of [{ kind: 'full' } as const, { kind: 'topk', topK: 64 } as const, { kind: 'window', windowTokens: 32 } as const]) {
+    for (const sel of [
+      { kind: 'full' } as const,
+      { kind: 'topk', topK: 64 } as const,
+      { kind: 'window', windowTokens: 32 } as const,
+    ]) {
       expect(attendedPairs(100, 300, true, sel, 1)).toBe(attendedPairs(100, 300, true, sel));
       expect(kvTokensRead(100, 300, sel, 1)).toBe(kvTokensRead(100, 300, sel));
     }
@@ -312,7 +328,14 @@ describe('recurrent Mamba2 (Nemotron-3.5-Lightning layer, tp 1: H 64, G 8, N 128
     expect(b.activationWriteBytes).toBe(8192); // y 64·64·2
   });
   it('prefill chunked SSD: C·Bᵀ once per group, F = T·(H·4·N·P + (Q+1)·(G·N + H·P))', () => {
-    const op: RecurrentOp = { ...step, qLen: 4096, mode: 'chunked', chunkLen: 128, stateFlopsPerElemPerToken: 4, hasPriorState: false };
+    const op: RecurrentOp = {
+      ...step,
+      qLen: 4096,
+      mode: 'chunked',
+      chunkLen: 128,
+      stateFlopsPerElemPerToken: 4,
+      hasPriorState: false,
+    };
     // 4096·(64·4·8192 + 129·(8·128 + 64·64)) = 4096·(2,097,152 + 660,480) = 4096·2,757,632
     expect(opFlops(op)).toBe(11_295_260_672);
     // The per-head form of the other variants would count C·Bᵀ for all 64 heads: 4096·64·(4·8192 + 129·192)
@@ -465,10 +488,17 @@ describe('attentionScores: softmax scores the kernel computes (docs §7 "Attenti
     const w = { ...base, kvSelection: { kind: 'window', windowTokens: 128 } } as const;
     expect(attentionScores(w)).toBe(32 * ((128 * 129) / 2 + (4096 - 128) * 128));
     // W = 8192 > P: identical to full causal.
-    expect(attentionScores({ ...base, kvSelection: { kind: 'window', windowTokens: 8192 } })).toBe(attentionScores(base));
+    expect(attentionScores({ ...base, kvSelection: { kind: 'window', windowTokens: 8192 } })).toBe(
+      attentionScores(base),
+    );
   });
   it('top-k (DSA): each query scores at most k keys', () => {
-    const decode = { ...base, qLen: 1, kvLen: 100_001, kvSelection: { kind: 'topk', topK: 2048 } } as const;
+    const decode = {
+      ...base,
+      qLen: 1,
+      kvLen: 100_001,
+      kvSelection: { kind: 'topk', topK: 2048 },
+    } as const;
     expect(attentionScores(decode)).toBe(32 * 2048);
   });
   it('CSA secondary entries share the softmax and add their pairs', () => {

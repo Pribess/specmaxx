@@ -36,7 +36,11 @@ import { simulate } from './simulate';
 import type { DeploymentConfig, SimInput, SimResult } from './types';
 import { validateInput } from './validate';
 
-const BF16: QuantConfig = { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } };
+const BF16: QuantConfig = {
+  weights: { dtype: 'bf16' },
+  activations: 'bf16',
+  kvCache: { dtype: 'bf16' },
+};
 const DENSE = { model: REF_DENSE_8B, quant: BF16 };
 
 function load(repo: string): { model: ModelSpec; quant: QuantConfig } {
@@ -50,7 +54,12 @@ const FLASH_NEXT = load('Qwen/Qwen3.8-Flash-Next');
 function box(n: number): SimInput['hardware'] {
   return {
     device: RTX_5090,
-    topology: nodeTopology({ devicesPerNode: n, nodes: 1, intraNode: PCIE_5_X16_DIRECT, device: RTX_5090 }),
+    topology: nodeTopology({
+      devicesPerNode: n,
+      nodes: 1,
+      intraNode: PCIE_5_X16_DIRECT,
+      device: RTX_5090,
+    }),
   };
 }
 
@@ -58,7 +67,12 @@ function box(n: number): SimInput['hardware'] {
 function overEthernet(n: number): SimInput['hardware'] {
   return {
     device: RTX_5090,
-    topology: nodeTopology({ devicesPerNode: 1, nodes: n, interNode: ETHERNET_10G_TCP, device: RTX_5090 }),
+    topology: nodeTopology({
+      devicesPerNode: 1,
+      nodes: n,
+      interNode: ETHERNET_10G_TCP,
+      device: RTX_5090,
+    }),
   };
 }
 
@@ -82,26 +96,40 @@ function run(
 }
 
 describe('DP 2 on 2 GPUs: two independent replicas', () => {
-  it.each([2, 8, 32])('batch %i: aggregate = 2 × one GPU at batch/2; per sequence the same', (batch) => {
-    const dp = run(DENSE, { dp: 2 }, batch, box(2));
-    const one = run(DENSE, {}, batch / 2, box(1));
-    expect(dp.devicesUsed).toBe(2);
-    for (const phase of ['prefill', 'decode'] as const) {
-      expect(dp[phase].tokensPerSec).toBeCloseTo(2 * one[phase].tokensPerSec, 6);
-      expect(dp[phase].perSequenceTokensPerSec).toBeCloseTo(one[phase].perSequenceTokensPerSec, 9);
-      // No collective: the replicas never talk.
-      expect(dp[phase].stages.flatMap((s) => s.layers.flatMap((l) => l.ops)).some((o) => o.op.kind === 'collective')).toBe(false);
-    }
-  });
+  it.each([2, 8, 32])(
+    'batch %i: aggregate = 2 × one GPU at batch/2; per sequence the same',
+    (batch) => {
+      const dp = run(DENSE, { dp: 2 }, batch, box(2));
+      const one = run(DENSE, {}, batch / 2, box(1));
+      expect(dp.devicesUsed).toBe(2);
+      for (const phase of ['prefill', 'decode'] as const) {
+        expect(dp[phase].tokensPerSec).toBeCloseTo(2 * one[phase].tokensPerSec, 6);
+        expect(dp[phase].perSequenceTokensPerSec).toBeCloseTo(
+          one[phase].perSequenceTokensPerSec,
+          9,
+        );
+        // No collective: the replicas never talk.
+        expect(
+          dp[phase].stages
+            .flatMap((s) => s.layers.flatMap((l) => l.ops))
+            .some((o) => o.op.kind === 'collective'),
+        ).toBe(false);
+      }
+    },
+  );
 
   it('the memory fit is per replica: each GPU holds the whole model under DP, half under TP', () => {
     const dp = run(DENSE, { dp: 2 }, 2, box(2));
     const tp = run(DENSE, { tp: 2 }, 2, box(2));
     const one = run(DENSE, {}, 1, box(1));
     expect(dp.memory.perStage[0].weightBytes).toBe(one.memory.perStage[0].weightBytes);
-    expect(tp.memory.perStage[0].weightBytes).toBeLessThan(0.51 * dp.memory.perStage[0].weightBytes);
+    expect(tp.memory.perStage[0].weightBytes).toBeLessThan(
+      0.51 * dp.memory.perStage[0].weightBytes,
+    );
     // Each replica holds B_r = batch / dp sequences; the most it could hold is the single GPU's.
-    expect(dp.memory.perStage[0].sequenceStateBytes).toBe(one.memory.perStage[0].sequenceStateBytes);
+    expect(dp.memory.perStage[0].sequenceStateBytes).toBe(
+      one.memory.perStage[0].sequenceStateBytes,
+    );
     expect(dp.memory.maxSequencesPerReplica).toBe(one.memory.maxSequencesPerReplica);
   });
 
@@ -165,7 +193,9 @@ describe('DP with speculative decoding, offload and MoE', () => {
 
   it('routed experts in host RAM at DP 2: the node holds both replicas\u2019 offloaded experts', () => {
     const offload: DeploymentConfig = {
-      offload: { routedExperts: { tier: 'host_ram', residentFraction: 0.5, hitRatio: { kind: 'uniform' } } },
+      offload: {
+        routedExperts: { tier: 'host_ram', residentFraction: 0.5, hitRatio: { kind: 'uniform' } },
+      },
     };
     const host = { ram: DDR5_6000_2CH };
     const dp = run(FLASH_NEXT, { dp: 2 }, 2, { ...box(2), host }, offload);
@@ -179,7 +209,9 @@ describe('DP with speculative decoding, offload and MoE', () => {
   it('MoE mode B: EP 2 at TP 1, DP 2 spans both replicas, with an all-to-all of tokens', () => {
     const r = run(FLASH_NEXT, { dp: 2, ep: 2 }, 2, box(2));
     const ops = r.decode.stages.flatMap((s) => s.layers.flatMap((l) => l.ops));
-    expect(ops.some((o) => o.op.kind === 'collective' && o.op.collective === 'all_to_all')).toBe(true);
+    expect(ops.some((o) => o.op.kind === 'collective' && o.op.collective === 'all_to_all')).toBe(
+      true,
+    );
     expect(r.devicesUsed).toBe(2);
   });
 });

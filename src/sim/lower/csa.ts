@@ -13,7 +13,16 @@
 import { bytesPerElement, type TensorFormat } from '../ir/dtype';
 import type { CsaAttentionBlock, CsaGlobalSpec, CsaSelection } from '../ir/model';
 import type { AttentionOp, KvSelection, Op } from '../ir/ops';
-import { actBpe, attentionMath, elementwise, linearGemm, normOp, shardHeads, stepTokens, tpAllReduce } from './common';
+import {
+  actBpe,
+  attentionMath,
+  elementwise,
+  linearGemm,
+  normOp,
+  shardHeads,
+  stepTokens,
+  tpAllReduce,
+} from './common';
 import { dcpShardsBlock } from './dcp';
 import { indexerKeyStateBytes, lowerSparseSelection, sparseTopK } from './indexer';
 import type { LoweringContext } from './lower';
@@ -43,7 +52,12 @@ export function csaEntrySelection(sel: CsaSelection): KvSelection {
 /** A rope op over `elems` activations (read and written once). */
 function ropeOp(name: string, elems: number, ctx: LoweringContext): Op {
   const act = actBpe(ctx);
-  return elementwise(name, 'rope', { elems, activationReadBytes: elems * act, activationWriteBytes: elems * act }, ctx);
+  return elementwise(
+    name,
+    'rope',
+    { elems, activationReadBytes: elems * act, activationWriteBytes: elems * act },
+    ctx,
+  );
 }
 
 /**
@@ -52,13 +66,19 @@ function ropeOp(name: string, elems: number, ctx: LoweringContext): Op {
  * r = 1: one `csa.wkv_c` GEMM → rmsnorm → rope. coff = {@link compressorCoff}. T/r is continuous (decode pools
  * once every r steps; amortized).
  */
-function compressorOps(block: CsaAttentionBlock, r: number, coff: number, ctx: LoweringContext): Op[] {
+function compressorOps(
+  block: CsaAttentionBlock,
+  r: number,
+  coff: number,
+  ctx: LoweringContext,
+): Op[] {
   const T = stepTokens(ctx);
   const h = block.hidden;
   const hd = block.headDim;
   const act = actBpe(ctx);
   const m = { module: 'attention_kv_down' } as const;
-  if (r <= 1) return [linearGemm('csa.wkv_c', { m: T, n: hd, k: h }, ctx, m), ...compressTail(block, r, ctx)];
+  if (r <= 1)
+    return [linearGemm('csa.wkv_c', { m: T, n: hd, k: h }, ctx, m), ...compressTail(block, r, ctx)];
   // Formula: wkv_c, wgate_c: n = coff·hd, k = h; kv_pool over T·coff·hd: read 2·T·coff·hd, write (T/r)·hd
   // See docs/simulation-model.md §5 "CSA"
   const projectedDim = coff * hd;
@@ -72,7 +92,11 @@ function compressorOps(block: CsaAttentionBlock, r: number, coff: number, ctx: L
     elementwise(
       'csa.kv_pool',
       'kv_pool',
-      { elems: pooledElems, activationReadBytes: 2 * pooledElems * act, activationWriteBytes: entryElems * act },
+      {
+        elems: pooledElems,
+        activationReadBytes: 2 * pooledElems * act,
+        activationWriteBytes: entryElems * act,
+      },
       ctx,
     ),
   );
@@ -83,7 +107,10 @@ function compressorOps(block: CsaAttentionBlock, r: number, coff: number, ctx: L
 /** The compressor's tail on its T/r new entries: rmsnorm over (T/r)·hd, then rope over (T/r)·dr. */
 function compressTail(block: CsaAttentionBlock, r: number, ctx: LoweringContext): Op[] {
   const T = stepTokens(ctx);
-  return [normOp('csa.compress_norm', 'rmsnorm', T / r, block.headDim, ctx), ropeOp('csa.compress_rope', (T / r) * block.ropeDim, ctx)];
+  return [
+    normOp('csa.compress_norm', 'rmsnorm', T / r, block.headDim, ctx),
+    ropeOp('csa.compress_rope', (T / r) * block.ropeDim, ctx),
+  ];
 }
 
 /**
@@ -157,7 +184,14 @@ export function lowerCsa(block: CsaAttentionBlock, ctx: LoweringContext): Op[] {
   ops.push(ropeOp('csa.o_inverse_rope', T * Hl * dr, ctx));
 
   // Formula: wo_a: batch = Gl, m = T, n = R_o, k = H·hd/G; wo_b: m = T, n = h, k = Gl·R_o
-  ops.push(linearGemm('csa.wo_a', { m: T, n: block.outLoraRank, k: (block.heads * hd) / block.outGroups }, ctx, { ...attn, batch: Gl }));
+  ops.push(
+    linearGemm(
+      'csa.wo_a',
+      { m: T, n: block.outLoraRank, k: (block.heads * hd) / block.outGroups },
+      ctx,
+      { ...attn, batch: Gl },
+    ),
+  );
   ops.push(linearGemm('csa.wo_b', { m: T, n: h, k: Gl * block.outLoraRank }, ctx, attn));
   ops.push(...tpAllReduce('attn.tp_all_reduce', T, h, ctx));
   return ops;
@@ -169,14 +203,19 @@ export function lowerCsa(block: CsaAttentionBlock, ctx: LoweringContext): Op[] {
  * coff·r rows of coff·hd, for the pooled values and their gate scores), plus the indexer keys this layer owns
  * (none for an `'all'` selection). Unit: bytes.
  */
-export function csaSequenceStateBytes(block: CsaAttentionBlock, ctx: LoweringContext, contextTokens: number): number {
+export function csaSequenceStateBytes(
+  block: CsaAttentionBlock,
+  ctx: LoweringContext,
+  contextTokens: number,
+): number {
   const hd = block.headDim;
   // CSA with decode context parallelism (parallel.dcp > 1) is not modelled: this throws (lower/dcp.ts).
   dcpShardsBlock(block, ctx);
   // Formula: S = min(ctx, W)·hd·bpe(kv) + [owner] (ceil(ctx/r)·hd·bpe(ckv) + [r > 1] 2·(coff·r)·(coff·hd)·4)
   //            + [owns keys] ceil(ctx/p)·hd_I·bpe(key)
   // See docs/simulation-model.md §8 "Memory fit"
-  const windowBytes = Math.min(contextTokens, block.windowTokens) * hd * bytesPerElement(ctx.quant.kvCache);
+  const windowBytes =
+    Math.min(contextTokens, block.windowTokens) * hd * bytesPerElement(ctx.quant.kvCache);
   const g = block.global;
   if (g === undefined) return windowBytes;
   const r = g.compressRatio;
@@ -185,6 +224,9 @@ export function csaSequenceStateBytes(block: CsaAttentionBlock, ctx: LoweringCon
   const entryBytes = Math.ceil(contextTokens / r) * hd * bytesPerElement(compressedKvFormat(ctx));
   const tailBytes = r > 1 ? 2 * (coff * r) * (coff * hd) * fp32Bytes : 0;
   const ownedBytes = g.kvCacheFromLayer === undefined ? entryBytes + tailBytes : 0;
-  const keyBytes = g.selection.kind === 'indexer' ? indexerKeyStateBytes(g.selection.indexer, ctx, contextTokens) : 0;
+  const keyBytes =
+    g.selection.kind === 'indexer'
+      ? indexerKeyStateBytes(g.selection.indexer, ctx, contextTokens)
+      : 0;
   return windowBytes + ownedBytes + keyBytes;
 }

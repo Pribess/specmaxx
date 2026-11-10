@@ -32,13 +32,18 @@ export function readBitsAndBytes(qc: JsonObject, ctx: SchemeContext): SchemeRead
     // Formula: extra = 8 / 64 + 32 / (64 · 256) with double quant, else 32 / 64
     // See docs/simulation-model.md §2 (quant overheads)
     const extra = double
-      ? groupScaleBits(8, 0, BNB_BLOCK_SIZE) + groupScaleBits(32, 0, BNB_BLOCK_SIZE * BNB_DOUBLE_QUANT_BLOCK)
+      ? groupScaleBits(8, 0, BNB_BLOCK_SIZE) +
+        groupScaleBits(32, 0, BNB_BLOCK_SIZE * BNB_DOUBLE_QUANT_BLOCK)
       : groupScaleBits(32, 0, BNB_BLOCK_SIZE);
     weight = moduleFormat('int4', extra);
-    notes.push(`bitsandbytes ${type}: 4-bit codes stored as int4, dequantized for the GEMM (weight-only)`);
+    notes.push(
+      `bitsandbytes ${type}: 4-bit codes stored as int4, dequantized for the GEMM (weight-only)`,
+    );
   } else {
     weight = moduleFormat('int8');
-    notes.push('bitsandbytes 8-bit: per-row fp32 scales ≈0; LLM.int8() fp16 outlier columns not modeled');
+    notes.push(
+      'bitsandbytes 8-bit: per-row fp32 scales ≈0; LLM.int8() fp16 outlier columns not modeled',
+    );
   }
   const compute = modelDtypeOf(qc.bnb_4bit_compute_dtype, ctx.modelDtype);
   const skipRaw = strListAt(qc, 'llm_int8_skip_modules');
@@ -46,7 +51,9 @@ export function readBitsAndBytes(qc: JsonObject, ctx: SchemeContext): SchemeRead
   const resolve = (p: Probe): ModuleQuant =>
     p.kind !== 'linear' || p.cls === 'lm_head' || anyMatch(skip, p) ? ctx.native : weight;
   return {
-    label: four ? `bitsandbytes ${type}${double ? ' + double quant' : ''} (blocksize ${BNB_BLOCK_SIZE})` : 'bitsandbytes int8',
+    label: four
+      ? `bitsandbytes ${type}${double ? ' + double quant' : ''} (blocksize ${BNB_BLOCK_SIZE})`
+      : 'bitsandbytes int8',
     source: 'quantization_config',
     resolve,
     activations: compute,

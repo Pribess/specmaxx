@@ -21,7 +21,12 @@ import { applyDeviceModifiers } from '../hw/modifiers';
 import { deviceHostLink } from '../hw/presets/links';
 import { modelSpecErrors } from '../ir/validateModel';
 import { lowerBlock, type LoweringContext } from '../lower/lower';
-import { DCP_BLOCK_DRAFTER_ERROR, dcpDivideTpError, dcpHasCandidateBlock, dcpNoBlockError } from '../lower/dcp';
+import {
+  DCP_BLOCK_DRAFTER_ERROR,
+  dcpDivideTpError,
+  dcpHasCandidateBlock,
+  dcpNoBlockError,
+} from '../lower/dcp';
 import { moeParallelErrors } from '../lower/moe';
 import { checkPlacement, expertTpCollectivePath } from './placement';
 import { expertRules, lookupTableRules } from './offloadRules';
@@ -51,7 +56,8 @@ export const DENSE_TP_EP_NEEDS_TP1_ERROR = "parallel.denseTpGroup 'ep' needs tp 
  * The exact error for `denseTpGroup: 'ep'` (ep > 1) with speculative decoding: the draft heads would need the same
  * group-wide sharding, which is not modelled (docs/simulation-model.md §5 "DP attention + EP", §9).
  */
-export const DENSE_TP_EP_SPEC_DEC_ERROR = "parallel.denseTpGroup 'ep' with speculative decoding is not supported yet";
+export const DENSE_TP_EP_SPEC_DEC_ERROR =
+  "parallel.denseTpGroup 'ep' with speculative decoding is not supported yet";
 
 /**
  * Errors of `ParallelConfig.denseTpGroup`: an unknown value, `'ep'` with tp ≠ 1, and `'ep'` over a real group
@@ -64,7 +70,8 @@ export function denseTpGroupErrors(input: Pick<SimInput, 'parallel' | 'deploymen
   if (group !== 'ep') return [`parallel.denseTpGroup must be 'tp' or 'ep' (got ${String(group)})`];
   const errors: string[] = [];
   if (input.parallel.tp !== 1) errors.push(DENSE_TP_EP_NEEDS_TP1_ERROR);
-  if (input.parallel.ep > 1 && input.deployment?.speculative !== undefined) errors.push(DENSE_TP_EP_SPEC_DEC_ERROR);
+  if (input.parallel.ep > 1 && input.deployment?.speculative !== undefined)
+    errors.push(DENSE_TP_EP_SPEC_DEC_ERROR);
   return errors;
 }
 
@@ -91,7 +98,9 @@ export function dcpErrors(input: Pick<SimInput, 'model' | 'parallel' | 'deployme
 
 /** Errors for a field that must be an integer ≥ 1. */
 function positiveIntegerErrors(value: number, label: string): string[] {
-  return Number.isInteger(value) && value >= 1 ? [] : [`${label} must be an integer ≥ 1 (got ${value})`];
+  return Number.isInteger(value) && value >= 1
+    ? []
+    : [`${label} must be an integer ≥ 1 (got ${value})`];
 }
 
 /**
@@ -105,7 +114,9 @@ function positiveIntegerErrors(value: number, label: string): string[] {
  * "MoE modes A/B", and the per-block DCP rules of "Decode context parallelism (DCP)", whose messages contain
  * `dcp (d)`).
  */
-export function blockShardingErrors(input: Pick<SimInput, 'model' | 'quant' | 'parallel'>): string[] {
+export function blockShardingErrors(
+  input: Pick<SimInput, 'model' | 'quant' | 'parallel'>,
+): string[] {
   const ctx: LoweringContext = {
     phase: 'decode',
     seqs: 1,
@@ -136,8 +147,10 @@ export function validateInput(input: SimInput): string[] {
   const errors: string[] = [];
 
   // Parallel degrees and workload.
-  for (const key of ['tp', 'pp', 'dp', 'ep'] as const) errors.push(...positiveIntegerErrors(parallel[key], `parallel.${key}`));
-  if (parallel.dcp !== undefined) errors.push(...positiveIntegerErrors(parallel.dcp, 'parallel.dcp'));
+  for (const key of ['tp', 'pp', 'dp', 'ep'] as const)
+    errors.push(...positiveIntegerErrors(parallel[key], `parallel.${key}`));
+  if (parallel.dcp !== undefined)
+    errors.push(...positiveIntegerErrors(parallel.dcp, 'parallel.dcp'));
   const rho = parallel.epImbalance;
   if (rho !== undefined && !(Number.isFinite(rho) && rho >= 1)) {
     errors.push(`parallel.epImbalance must be a finite number ≥ 1 (got ${rho})`);
@@ -148,13 +161,17 @@ export function validateInput(input: SimInput): string[] {
   }
   const scalesA2a = parallel.epImbalanceScalesAllToAll;
   if (scalesA2a !== undefined && typeof scalesA2a !== 'boolean') {
-    errors.push(`parallel.epImbalanceScalesAllToAll must be true or false (got ${String(scalesA2a)})`);
+    errors.push(
+      `parallel.epImbalanceScalesAllToAll must be true or false (got ${String(scalesA2a)})`,
+    );
   }
   errors.push(...positiveIntegerErrors(workload.batch, 'workload.batch'));
   errors.push(...positiveIntegerErrors(workload.promptLen, 'workload.promptLen'));
   errors.push(...positiveIntegerErrors(workload.decodeContextLen, 'workload.decodeContextLen'));
   if (workload.prefillChunkTokens !== undefined) {
-    errors.push(...positiveIntegerErrors(workload.prefillChunkTokens, 'workload.prefillChunkTokens'));
+    errors.push(
+      ...positiveIntegerErrors(workload.prefillChunkTokens, 'workload.prefillChunkTokens'),
+    );
   }
   const hit = workload.prefixCacheHitRatio;
   if (hit !== undefined && !(Number.isFinite(hit) && hit >= 0 && hit < 1)) {
@@ -174,17 +191,22 @@ export function validateInput(input: SimInput): string[] {
   }
   const dispatchSec = input.overlays?.engineDispatch?.perKernelSec;
   if (dispatchSec !== undefined && !(Number.isFinite(dispatchSec) && dispatchSec >= 0)) {
-    errors.push(`overlays.engineDispatch.perKernelSec (${dispatchSec}) must be a finite number ≥ 0`);
+    errors.push(
+      `overlays.engineDispatch.perKernelSec (${dispatchSec}) must be a finite number ≥ 0`,
+    );
   }
   if (errors.length > 0) return errors;
   if (workload.batch % parallel.dp !== 0) {
     errors.push(`workload.batch (${workload.batch}) must be divisible by dp (${parallel.dp})`);
   }
   if (parallel.pp > model.layers.length) {
-    errors.push(`pp (${parallel.pp}) must not exceed the number of layers (${model.layers.length})`);
+    errors.push(
+      `pp (${parallel.pp}) must not exceed the number of layers (${model.layers.length})`,
+    );
   }
   const hasMoe = model.layers.some((l) => l.blocks.some((b) => b.kind === 'moe'));
-  if (parallel.ep > 1 && !hasMoe) errors.push(`ep (${parallel.ep}) > 1 but the model has no MoE block`);
+  if (parallel.ep > 1 && !hasMoe)
+    errors.push(`ep (${parallel.ep}) > 1 but the model has no MoE block`);
   errors.push(...denseTpGroupErrors(input));
   errors.push(...dcpErrors(input));
   errors.push(...modelSpecErrors(model));
@@ -199,11 +221,22 @@ export function validateInput(input: SimInput): string[] {
       : validateDevice(hardware.device);
   errors.push(...deviceErrors);
   if (deviceErrors.length === 0) {
-    const device = deviceModifiers.length > 0 ? applyDeviceModifiers(hardware.device, deviceModifiers) : hardware.device;
-    if (hardware.engineId !== undefined && !device.engines.some((e) => e.id === hardware.engineId)) {
-      errors.push(`hardware.engineId '${hardware.engineId}' is not an engine of ${device.id} (${device.engines.map((e) => e.id).join(', ')})`);
+    const device =
+      deviceModifiers.length > 0
+        ? applyDeviceModifiers(hardware.device, deviceModifiers)
+        : hardware.device;
+    if (
+      hardware.engineId !== undefined &&
+      !device.engines.some((e) => e.id === hardware.engineId)
+    ) {
+      errors.push(
+        `hardware.engineId '${hardware.engineId}' is not an engine of ${device.id} (${device.engines.map((e) => e.id).join(', ')})`,
+      );
     }
-    if (hardware.memCapacityBytes !== undefined && !device.memory.capacityOptionsBytes.includes(hardware.memCapacityBytes)) {
+    if (
+      hardware.memCapacityBytes !== undefined &&
+      !device.memory.capacityOptionsBytes.includes(hardware.memCapacityBytes)
+    ) {
       errors.push(
         `hardware.memCapacityBytes ${hardware.memCapacityBytes} is not one of ${device.id}'s capacity options ` +
           `(${device.memory.capacityOptionsBytes.join(', ')})`,
@@ -217,7 +250,8 @@ export function validateInput(input: SimInput): string[] {
     const mods = hardware.linkModifiers?.[level] ?? [];
     if (mods.length === 0) continue;
     const link = topology[level];
-    if (link === undefined) errors.push(`hardware.linkModifiers.${level}: topology ${topology.id} has no ${level} link`);
+    if (link === undefined)
+      errors.push(`hardware.linkModifiers.${level}: topology ${topology.id} has no ${level} link`);
     else errors.push(...validateLinkModifiers(link, mods).map((e) => `${level}: ${e}`));
   }
 
@@ -243,7 +277,8 @@ export function validateInput(input: SimInput): string[] {
 /** Errors of a `[from, to)` layer range: integers, non-empty, inside `[0, L)`. */
 function layerRangeErrors(range: LayerRange, layerCount: number, label: string): string[] {
   const { from, to } = range;
-  if (!Number.isInteger(from) || !Number.isInteger(to)) return [`${label} [${from}, ${to}) must be integer layer indices`];
+  if (!Number.isInteger(from) || !Number.isInteger(to))
+    return [`${label} [${from}, ${to}) must be integer layer indices`];
   if (from < 0 || to > layerCount || from >= to) {
     return [`${label} [${from}, ${to}) must be a non-empty range inside [0, ${layerCount})`];
   }
@@ -367,11 +402,14 @@ export function deploymentErrors(input: SimInput): string[] {
     const tables = lookupTableRules(offload);
     // The object form keeps its original message paths; a list names the rule: `lookupTables[i].…`.
     const tableLabel = (i: number): string =>
-      Array.isArray(offload.lookupTables) ? `deployment.offload.lookupTables[${i}]` : 'deployment.offload.lookupTables';
+      Array.isArray(offload.lookupTables)
+        ? `deployment.offload.lookupTables[${i}]`
+        : 'deployment.offload.lookupTables';
     const offDeviceTables = tables.some((rule) => rule.tier !== 'device');
     if (offDeviceTables) {
       const hasNgram = model.layers.some((l) => l.blocks.some((b) => b.kind === 'ngram_embedding'));
-      if (!hasNgram) errors.push('deployment.offload.lookupTables: the model has no n-gram lookup table');
+      if (!hasNgram)
+        errors.push('deployment.offload.lookupTables: the model has no n-gram lookup table');
     }
     tables.forEach((rule, i) => {
       const label = tableLabel(i);
@@ -410,7 +448,9 @@ export function deploymentErrors(input: SimInput): string[] {
       hardware.host?.link === undefined &&
       deviceHostLink(device) === undefined
     ) {
-      errors.push(`deployment.offload: no host link known for ${device.id}; set hardware.host.link`);
+      errors.push(
+        `deployment.offload: no host link known for ${device.id}; set hardware.host.link`,
+      );
     }
   }
   const spec = input.deployment?.speculative;
@@ -418,18 +458,24 @@ export function deploymentErrors(input: SimInput): string[] {
     if (parallel.pp > 1) errors.push(SPEC_DEC_PP_ERROR);
     const k = spec.draftLength;
     if (!Number.isInteger(k) || k < 1 || k > MAX_DRAFT_LENGTH) {
-      errors.push(`deployment.speculative.draftLength must be an integer in 1..${MAX_DRAFT_LENGTH} (got ${k})`);
+      errors.push(
+        `deployment.speculative.draftLength must be an integer in 1..${MAX_DRAFT_LENGTH} (got ${k})`,
+      );
     }
     if (spec.method === 'mtp') {
       if (model.draft?.kind !== 'mtp') {
-        errors.push("deployment.speculative.method 'mtp' needs a model with an MTP draft head (model.draft.kind 'mtp')");
+        errors.push(
+          "deployment.speculative.method 'mtp' needs a model with an MTP draft head (model.draft.kind 'mtp')",
+        );
       }
     } else if (spec.drafter === undefined) {
       errors.push(`deployment.speculative.method '${spec.method}' needs a drafter`);
     } else {
       const drafter = spec.drafter.spec;
       if (drafter.method !== spec.method) {
-        errors.push(`deployment.speculative.drafter is a ${drafter.method} drafter, not ${spec.method}`);
+        errors.push(
+          `deployment.speculative.drafter is a ${drafter.method} drafter, not ${spec.method}`,
+        );
       }
       if (k + 1 > drafter.blockSize) {
         errors.push(
@@ -441,12 +487,15 @@ export function deploymentErrors(input: SimInput): string[] {
     // and tp % ep == 0 or the mode-B rule), else simulate would throw while lowering the draft layers.
     const draftLayers =
       spec.method === 'mtp'
-        ? model.draft?.kind === 'mtp' ? model.draft.layers : []
-        : spec.drafter?.spec.moeLayers ?? [];
+        ? model.draft?.kind === 'mtp'
+          ? model.draft.layers
+          : []
+        : (spec.drafter?.spec.moeLayers ?? []);
     for (const layer of draftLayers) {
       for (const block of layer.blocks) {
         if (block.kind !== 'moe') continue;
-        for (const e of moeParallelErrors(block, parallel)) errors.push(`deployment.speculative drafter ${layer.name}: ${e}`);
+        for (const e of moeParallelErrors(block, parallel))
+          errors.push(`deployment.speculative drafter ${layer.name}: ${e}`);
       }
     }
     const acc = spec.acceptance;
@@ -457,7 +506,9 @@ export function deploymentErrors(input: SimInput): string[] {
     } else if (acc.alphas.length === 0) {
       errors.push('deployment.speculative.acceptance.alphas must not be empty');
     } else if (!acc.alphas.every((a) => inRange(a, 0, 1))) {
-      errors.push(`deployment.speculative.acceptance.alphas must each be in [0, 1] (got ${acc.alphas.join(', ')})`);
+      errors.push(
+        `deployment.speculative.acceptance.alphas must each be in [0, 1] (got ${acc.alphas.join(', ')})`,
+      );
     }
   }
   return errors;

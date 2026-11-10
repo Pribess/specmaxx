@@ -28,7 +28,10 @@ function ruleAt<R extends { layers: { from: number; to: number } }>(
  * The routed-expert placement of layer `i`, or undefined when its experts are on the device (no offload, layer outside
  * every rule's range, or `i` is unknown: a draft layer).
  */
-export function expertPlacementAt(ctx: LoweringContext, i: number | undefined): ExpertPlacement | undefined {
+export function expertPlacementAt(
+  ctx: LoweringContext,
+  i: number | undefined,
+): ExpertPlacement | undefined {
   return ruleAt(ctx.offload?.routedExperts, i);
 }
 
@@ -36,7 +39,9 @@ export function expertPlacementAt(ctx: LoweringContext, i: number | undefined): 
  * The routed-expert placement that also offloads the speculative drafter's own MoE experts (`includeDraft`), or
  * undefined. Validation allows `includeDraft` on at most one rule, so the first match is the only one.
  */
-export function draftExpertPlacement(offload: OffloadLowering | undefined): ExpertPlacement | undefined {
+export function draftExpertPlacement(
+  offload: OffloadLowering | undefined,
+): ExpertPlacement | undefined {
   return offload?.routedExperts?.find((r) => r.includeDraft);
 }
 
@@ -44,7 +49,10 @@ export function draftExpertPlacement(offload: OffloadLowering | undefined): Expe
  * The lookup-table placement of the n-gram blocks of layer `i` (the rule whose range contains it), or undefined when
  * its tables are on the device (no rule covers it, or `i` is unknown).
  */
-export function tablePlacementAt(ctx: LoweringContext, i: number | undefined): TablePlacement | undefined {
+export function tablePlacementAt(
+  ctx: LoweringContext,
+  i: number | undefined,
+): TablePlacement | undefined {
   return ruleAt(ctx.offload?.lookupTables, i);
 }
 

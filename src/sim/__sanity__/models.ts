@@ -91,7 +91,14 @@ export const GLM_4_5_AIR = simpleDecoder({
   ffn: (i) =>
     i === 0
       ? { kind: 'dense', intermediate: 10944 }
-      : { kind: 'moe', experts: 128, topK: 8, expertIntermediate: 1408, sharedExperts: 1, sharedIntermediate: 1408 },
+      : {
+          kind: 'moe',
+          experts: 128,
+          topK: 8,
+          expertIntermediate: 1408,
+          sharedExperts: 1,
+          sharedIntermediate: 1408,
+        },
 });
 
 /**
@@ -169,7 +176,14 @@ export const QWEN3_NEXT_80B_A3B: ModelSpec = decoderModel({
               convKernel: 4,
               outputGate: true,
             },
-      ffn: { kind: 'moe', experts: 512, topK: 10, expertIntermediate: 512, sharedExperts: 1, sharedIntermediate: 512 },
+      ffn: {
+        kind: 'moe',
+        experts: 512,
+        topK: 10,
+        expertIntermediate: 512,
+        sharedExperts: 1,
+        sharedIntermediate: 512,
+      },
     }),
   ),
 });

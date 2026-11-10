@@ -120,14 +120,19 @@ describe('decode attention stays KV-bandwidth-bound on every preset engine', () 
    * peak is the unthrottled FADD / FMUL path the softmax uses (max, subtract, sum: no FMA). CMP 170HX: FMA fused to
    * 1/32 (0.39 TFLOP/s), FADD / FMUL not (6.32 TFLOP/s, the `locked-workarounds` unlock).
    */
-  const SOFTMAX_VARIANT: Record<string, Record<string, string>> = { 'cmp-170hx': { 'compute-path': 'locked-workarounds' } };
+  const SOFTMAX_VARIANT: Record<string, Record<string, string>> = {
+    'cmp-170hx': { 'compute-path': 'locked-workarounds' },
+  };
   for (const preset of DEVICE_PRESETS) {
     it(preset.id, () => {
       const selection = SOFTMAX_VARIANT[preset.id];
       const device =
         selection === undefined
           ? preset
-          : applyDeviceModifiers(preset, resolveUnlocks(deviceUnlocks(preset), selection).deviceModifiers);
+          : applyDeviceModifiers(
+              preset,
+              resolveUnlocks(deviceUnlocks(preset), selection).deviceModifiers,
+            );
       const stripped = withoutSfu(device);
       device.engines.forEach((engine, i) => {
         for (const [name, shape] of Object.entries(shapes)) {

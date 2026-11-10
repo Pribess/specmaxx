@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PREFETCH_ACCURACY, uniqueExperts } from '../engine/transfer';
 import type { ExpertPlacement, LoweringContext, OffloadLowering, TablePlacement } from './lower';
-import { draftExpertPlacement, expertPlacementAt, prefetchedFraction, tablePlacementAt } from './offload';
+import {
+  draftExpertPlacement,
+  expertPlacementAt,
+  prefetchedFraction,
+  tablePlacementAt,
+} from './offload';
 
 /** A decode lowering context with the given resolved placement. */
 function ctxWith(offload: OffloadLowering): LoweringContext {
@@ -18,17 +23,37 @@ function ctxWith(offload: OffloadLowering): LoweringContext {
 
 /** Mixed placement over 8 layers: experts of 0–3 in host RAM, 4–5 on the SSD, 6–7 on the device; tables of 1 in RAM, 5 on the SSD. */
 describe('per-layer rule lookup (mixed placement by layer range)', () => {
-  const ram: ExpertPlacement = { tier: 'host_ram', layers: { from: 0, to: 4 }, residentFraction: 0.25, hitRatio: 0.25, includeDraft: false };
-  const ssd: ExpertPlacement = { tier: 'nvme', layers: { from: 4, to: 6 }, residentFraction: 0.5, hitRatio: 0.5, includeDraft: true };
-  const tableRam: TablePlacement = { tier: 'host_ram', layers: { from: 1, to: 2 }, scaleLayout: 'separate' };
-  const tableSsd: TablePlacement = { tier: 'nvme', layers: { from: 5, to: 6 }, scaleLayout: 'pinned_host' };
+  const ram: ExpertPlacement = {
+    tier: 'host_ram',
+    layers: { from: 0, to: 4 },
+    residentFraction: 0.25,
+    hitRatio: 0.25,
+    includeDraft: false,
+  };
+  const ssd: ExpertPlacement = {
+    tier: 'nvme',
+    layers: { from: 4, to: 6 },
+    residentFraction: 0.5,
+    hitRatio: 0.5,
+    includeDraft: true,
+  };
+  const tableRam: TablePlacement = {
+    tier: 'host_ram',
+    layers: { from: 1, to: 2 },
+    scaleLayout: 'separate',
+  };
+  const tableSsd: TablePlacement = {
+    tier: 'nvme',
+    layers: { from: 5, to: 6 },
+    scaleLayout: 'pinned_host',
+  };
   const ctx = ctxWith({
     prefetchAccuracy: 0.8,
     routedExperts: [ram, ssd],
     lookupTables: [tableRam, tableSsd],
   });
 
-  it('each layer takes the rule whose range contains it, with that rule\'s f and h', () => {
+  it("each layer takes the rule whose range contains it, with that rule's f and h", () => {
     for (const i of [0, 1, 2, 3]) expect(expertPlacementAt(ctx, i)).toBe(ram);
     for (const i of [4, 5]) expect(expertPlacementAt(ctx, i)).toBe(ssd);
   });
@@ -46,7 +71,7 @@ describe('per-layer rule lookup (mixed placement by layer range)', () => {
     expect(tablePlacementAt(ctx, undefined)).toBeUndefined();
   });
 
-  it('the drafter\'s experts follow the one rule with includeDraft', () => {
+  it("the drafter's experts follow the one rule with includeDraft", () => {
     expect(draftExpertPlacement(ctx.offload)).toBe(ssd);
     expect(draftExpertPlacement({ prefetchAccuracy: 0, routedExperts: [ram] })).toBeUndefined();
     expect(draftExpertPlacement(undefined)).toBeUndefined();

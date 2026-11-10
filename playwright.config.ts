@@ -28,7 +28,8 @@ export default defineConfig({
   projects: [
     {
       name: 'smoke',
-      testMatch: /(smoke|fabric|rack-scale|dp-attention|dcp|deployment|layout|help|gated-mirror)\.spec\.ts/,
+      testMatch:
+        /(smoke|fabric|rack-scale|dp-attention|dcp|deployment|layout|help|gated-mirror)\.spec\.ts/,
     },
     { name: 'screenshots', testMatch: /screenshots\.spec\.ts/ },
     { name: 'redesign', testMatch: /redesign\.spec\.ts/ },

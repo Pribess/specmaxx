@@ -72,7 +72,8 @@ export function specDecChipText(
   if (!speculative) return 'spec-dec: off';
   const parts = [`${METHOD_NAMES[speculative.method]}, k=${speculative.draftLength}`];
   // MTP keeps its compact form; a block method names its preset (prose when none is chosen), not a custom α.
-  if (speculative.method !== 'mtp' && choice && choice.alpha === undefined) parts.push(choice.useCase ?? 'prose');
+  if (speculative.method !== 'mtp' && choice && choice.alpha === undefined)
+    parts.push(choice.useCase ?? 'prose');
   if (speculative.hypothetical) parts.push('hypothetical drafter');
   return `spec-dec: ${parts.join(' · ')}`;
 }

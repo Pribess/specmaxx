@@ -5,7 +5,11 @@ import { App, type ModelLoader } from './App';
 import { inlineRunner } from './sim/runner';
 import { FAMILIES, mapHfModel, type FamilyEntry } from '../sim/models/hf';
 import { REF_DENSE_8B } from '../sim/models/reference';
-import { fixtureRepoFiles, fixtureStem, readFixtureJson } from '../sim/models/__fixtures__/fixtures.testutil';
+import {
+  fixtureRepoFiles,
+  fixtureStem,
+  readFixtureJson,
+} from '../sim/models/__fixtures__/fixtures.testutil';
 import { createCache } from '../hf/cache';
 import { isHfError } from '../hf/errors';
 import { fetchHfRepoFiles } from '../hf/fetch';
@@ -50,7 +54,9 @@ describe('quant picker defaults', () => {
       ),
     );
     fireEvent.click(screen.getByRole('combobox', { name: 'Weights' }));
-    expect(await screen.findByRole('option', { name: 'EXL3 2.52bpw (model default)' })).toBeTruthy();
+    expect(
+      await screen.findByRole('option', { name: 'EXL3 2.52bpw (model default)' }),
+    ).toBeTruthy();
   });
 });
 
@@ -87,8 +93,12 @@ describe('estimator inputs', () => {
     expect(screen.getByLabelText(/^DP/)).toBeTruthy();
     expect(screen.queryByLabelText(/^EP/)).toBeNull();
     fireEvent.change(screen.getByLabelText(/^TP/), { target: { value: '2' } });
-    expect(screen.getByRole('radiogroup', { name: 'Machines' }).getAttribute('aria-invalid')).toBe('true');
-    expect(screen.getAllByText(/TP × PP × DP = 2, but the rig has 1 device/).length).toBeGreaterThan(0);
+    expect(screen.getByRole('radiogroup', { name: 'Machines' }).getAttribute('aria-invalid')).toBe(
+      'true',
+    );
+    expect(
+      screen.getAllByText(/TP × PP × DP = 2, but the rig has 1 device/).length,
+    ).toBeGreaterThan(0);
   });
   it('DP counts devices, validates the batch, enables mode-B EP values, and shows in the rig line', async () => {
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-Flash-Next&n=4&tp=4');
@@ -102,11 +112,17 @@ describe('estimator inputs', () => {
     // Exactly "DP": a MoE model also has the "DP attention + EP" layout radio.
     fireEvent.change(screen.getByLabelText(/^DP$/), { target: { value: '2' } });
     await waitFor(() => expect(screen.queryByTestId('prefill-tps')).toBeNull());
-    expect(screen.getAllByText(/TP × PP × DP = 8, but the rig has 4 devices/).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/TP × PP × DP = 8, but the rig has 4 devices/).length,
+    ).toBeGreaterThan(0);
     fireEvent.change(screen.getByLabelText(/^TP/), { target: { value: '2' } });
     // TP 2 × DP 2: batch 1 cannot split over 2 replicas.
-    await waitFor(() => expect(screen.getByLabelText(/^Batch/).getAttribute('aria-invalid')).toBe('true'));
-    expect(screen.getAllByText('Batch 1 does not split evenly over DP 2. Use a multiple of 2.').length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(screen.getByLabelText(/^Batch/).getAttribute('aria-invalid')).toBe('true'),
+    );
+    expect(
+      screen.getAllByText('Batch 1 does not split evenly over DP 2. Use a multiple of 2.').length,
+    ).toBeGreaterThan(0);
     fireEvent.change(screen.getByLabelText(/^Batch/), { target: { value: '2' } });
     await screen.findByTestId('prefill-tps');
     // EP 4 spans both replicas (a multiple of TP 2 that divides TP × DP = 4).
@@ -132,7 +148,9 @@ describe('estimator inputs', () => {
     await screen.findByTestId('prefill-tps');
     // TP 1 with EP 2: the error is on EP, not TP.
     fireEvent.change(screen.getByLabelText(/^TP/), { target: { value: '1' } });
-    await waitFor(() => expect(screen.getByLabelText(/^EP$/).getAttribute('aria-invalid')).toBe('true'));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/^EP$/).getAttribute('aria-invalid')).toBe('true'),
+    );
     expect(screen.getAllByText('EP 2 must divide TP 1.').length).toBeGreaterThan(0);
     expect(screen.getByLabelText(/^TP/).getAttribute('aria-invalid')).not.toBe('true');
   });
@@ -277,7 +295,9 @@ describe('estimator inputs', () => {
       target: { value: 'Qwen/Qwen3.8-Flash-Next' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Load' }));
-    pending.get('Qwen/Qwen3.8-Flash-Next')?.(mapHfModel(fixtureRepoFiles('Qwen/Qwen3.8-Flash-Next')));
+    pending.get('Qwen/Qwen3.8-Flash-Next')?.(
+      mapHfModel(fixtureRepoFiles('Qwen/Qwen3.8-Flash-Next')),
+    );
     await screen.findByTestId('decode-tps');
     pending.get('zai-org/GLM-5.3')?.(mapHfModel(fixtureRepoFiles('zai-org/GLM-5.3')));
     await new Promise((r) => setTimeout(r, 300));
@@ -310,7 +330,9 @@ describe('estimator inputs', () => {
     mount(loader);
     expect((screen.getByLabelText(/^Prefill length/) as HTMLInputElement).value).toBe('8192');
     expect((screen.getByLabelText(/^Decode context/) as HTMLInputElement).value).toBe('8192');
-    expect(screen.getByTestId('model-facts').textContent).toMatch(/\d+(\.\d+)?B total, \d+(\.\d+)?B active, \d+ layers/);
+    expect(screen.getByTestId('model-facts').textContent).toMatch(
+      /\d+(\.\d+)?B total, \d+(\.\d+)?B active, \d+ layers/,
+    );
     expect((await screen.findByTestId('decode-tps')).textContent).toMatch(/[1-9]/);
     expect(screen.queryByRole('alert')).toBeNull();
     await waitFor(() => expect(document.title).toMatch(/@ 8k/));
@@ -320,7 +342,9 @@ describe('estimator inputs', () => {
     fireEvent.click(screen.getByRole('combobox', { name: 'Device' }));
     expect(await screen.findByRole('group', { name: 'Popular setups' })).toBeTruthy();
     fireEvent.click(await screen.findByRole('option', { name: /RTX 5090 32GB ×2/ }));
-    expect(screen.getByRole('combobox', { name: 'Device' }).textContent).toMatch(/RTX 5090 32GB ×2/);
+    expect(screen.getByRole('combobox', { name: 'Device' }).textContent).toMatch(
+      /RTX 5090 32GB ×2/,
+    );
     await waitFor(() => expect(new URLSearchParams(location.search).get('n')).toBe('2'));
     expect(new URLSearchParams(location.search).get('il')).toBeTruthy();
   });
@@ -332,12 +356,18 @@ describe('estimator inputs', () => {
     fireEvent.click(await screen.findByRole('option', { name: /DGX Spark.*×4 · ConnectX-7 ring/ }));
     await waitFor(() => expect(new URLSearchParams(location.search).get('fab')).toBe('ring'));
     expect(screen.getByRole('combobox', { name: 'Cabling' }).textContent).toBe('Ring');
-    await waitFor(() => expect(document.querySelector('.rig')?.textContent).toMatch(/on 4 × NVIDIA DGX Spark \(GB10, 128GB memory\) over ConnectX-7 \(ring\), with/));
+    await waitFor(() =>
+      expect(document.querySelector('.rig')?.textContent).toMatch(
+        /on 4 × NVIDIA DGX Spark \(GB10, 128GB memory\) over ConnectX-7 \(ring\), with/,
+      ),
+    );
     // Changing the cabling leaves the setup: the trigger shows the device again.
     fireEvent.click(screen.getByRole('combobox', { name: 'Cabling' }));
     fireEvent.click(await screen.findByRole('option', { name: 'Switch' }));
     await waitFor(() => expect(new URLSearchParams(location.search).get('fab')).toBeNull());
-    expect(screen.getByRole('combobox', { name: 'Device' }).textContent).toMatch(/×4 · ConnectX-7 switch/);
+    expect(screen.getByRole('combobox', { name: 'Device' }).textContent).toMatch(
+      /×4 · ConnectX-7 switch/,
+    );
     expect(document.querySelector('.rig')?.textContent).not.toMatch(/\(ring\)/);
   });
   it('offers only the cablings the ports allow, and one as plain text', async () => {
@@ -345,7 +375,9 @@ describe('estimator inputs', () => {
     mount();
     await screen.findByTestId('setup-row');
     fireEvent.click(screen.getByRole('combobox', { name: 'Cabling' }));
-    const names = (await screen.findAllByRole('option')).map((o) => o.textContent?.replace('✓', ''));
+    const names = (await screen.findAllByRole('option')).map((o) =>
+      o.textContent?.replace('✓', ''),
+    );
     expect(names).toEqual(['Full mesh', 'Daisy chain']);
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'Cabling' }), { key: 'Escape' });
     cleanup();
@@ -365,7 +397,9 @@ describe('estimator inputs', () => {
     mount();
     await screen.findByTestId('setup-row');
     fireEvent.click(screen.getByRole('combobox', { name: 'Local link' }));
-    expect((await screen.findAllByRole('option')).some((o) => /NVLink bridge/.test(o.textContent ?? ''))).toBe(true);
+    expect(
+      (await screen.findAllByRole('option')).some((o) => /NVLink bridge/.test(o.textContent ?? '')),
+    ).toBe(true);
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'Local link' }), { key: 'Escape' });
     const perMachine = screen.getByRole('radiogroup', { name: 'GPUs in one machine' });
     fireEvent.click(within(perMachine).getByRole('radio', { name: '4' }));
@@ -376,22 +410,23 @@ describe('estimator inputs', () => {
     expect(options.length).toBeGreaterThan(0);
     expect(options.some((o) => /NVLink bridge/.test(o.textContent ?? ''))).toBe(false);
   });
-  it.each([['×4 · ConnectX-7 switch', ''], ['×4 · USB4 ring', '?n=2&tp=2'], ['×4 · ConnectX-7 ring', '?n=3&pp=3']])(
-    'picking %s from %j chooses TP and PP that use all 4 devices',
-    async (name, query) => {
-      history.replaceState(null, '', `/${query}${query ? '&' : '?'}m=Qwen/Qwen3.8-27B`);
-      mount();
-      await screen.findByTestId('prefill-tps');
-      fireEvent.click(screen.getByRole('combobox', { name: 'Device' }));
-      fireEvent.click(await screen.findByRole('option', { name: new RegExp(name) }));
-      await waitFor(() => expect(screen.getByTestId('device-total').textContent).toMatch(/= 4 /));
-      const tp = Number((screen.getByLabelText(/^TP/) as HTMLInputElement).value);
-      const pp = Number((screen.getByLabelText(/^PP/) as HTMLInputElement).value);
-      expect(tp * pp).toBe(4);
-      expect(await screen.findByTestId('prefill-tps')).toBeTruthy();
-      expect(screen.queryByText(/unused|must be equal/)).toBeNull();
-    },
-  );
+  it.each([
+    ['×4 · ConnectX-7 switch', ''],
+    ['×4 · USB4 ring', '?n=2&tp=2'],
+    ['×4 · ConnectX-7 ring', '?n=3&pp=3'],
+  ])('picking %s from %j chooses TP and PP that use all 4 devices', async (name, query) => {
+    history.replaceState(null, '', `/${query}${query ? '&' : '?'}m=Qwen/Qwen3.8-27B`);
+    mount();
+    await screen.findByTestId('prefill-tps');
+    fireEvent.click(screen.getByRole('combobox', { name: 'Device' }));
+    fireEvent.click(await screen.findByRole('option', { name: new RegExp(name) }));
+    await waitFor(() => expect(screen.getByTestId('device-total').textContent).toMatch(/= 4 /));
+    const tp = Number((screen.getByLabelText(/^TP/) as HTMLInputElement).value);
+    const pp = Number((screen.getByLabelText(/^PP/) as HTMLInputElement).value);
+    expect(tp * pp).toBe(4);
+    expect(await screen.findByTestId('prefill-tps')).toBeTruthy();
+    expect(screen.queryByText(/unused|must be equal/)).toBeNull();
+  });
   it('a huge device count shows validation errors instead of hanging', async () => {
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B&n=1024');
     mount();
@@ -402,7 +437,9 @@ describe('estimator inputs', () => {
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B&n=4&tp=2');
     mount();
     await screen.findByText(/qwen:/);
-    expect(await screen.findAllByText(/TP × PP × DP = 2, but the rig has 4 devices/)).not.toHaveLength(0);
+    expect(
+      await screen.findAllByText(/TP × PP × DP = 2, but the rig has 4 devices/),
+    ).not.toHaveLength(0);
     expect(screen.queryByTestId('prefill-tps')).toBeNull();
   });
   it('filters the device list by search and selects with the keyboard', async () => {
@@ -415,7 +452,9 @@ describe('estimator inputs', () => {
     expect(options.every((o) => /4090/.test(o.textContent ?? ''))).toBe(true);
     fireEvent.keyDown(search, { key: 'ArrowDown' });
     fireEvent.keyDown(search, { key: 'Enter' });
-    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Device' }).textContent).toMatch(/4090/));
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Device' }).textContent).toMatch(/4090/),
+    );
   });
   it('shows the prefetch accuracy only with offload, 80 by default, and writes opf', async () => {
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-Flash-Next');
@@ -497,9 +536,9 @@ describe('estimator inputs', () => {
       'Interleaved rows',
     ];
     fireEvent.click(layout());
-    expect((await screen.findAllByRole('option')).map((o) => o.textContent?.replace('✓', ''))).toEqual(
-      names,
-    );
+    expect(
+      (await screen.findAllByRole('option')).map((o) => o.textContent?.replace('✓', '')),
+    ).toEqual(names);
     fireEvent.click(screen.getByRole('option', { name: names[0] }));
     for (const name of [...names.slice(1), names[0]]) {
       fireEvent.click(layout());
@@ -539,8 +578,16 @@ describe('estimator inputs', () => {
   });
   it.each([
     { name: 'offload off', query: '?m=Qwen/Qwen3.8-27B', offload: ['Token embeddings'] },
-    { name: 'an old whole-layer offload URL (ignored)', query: '?m=Qwen/Qwen3.8-27B&odl=32', offload: ['Token embeddings'] },
-    { name: 'a lookup-table model', query: '?m=Qwen/Qwen3.8-Flash-Next', offload: ['Token embeddings', 'Lookup tables'] },
+    {
+      name: 'an old whole-layer offload URL (ignored)',
+      query: '?m=Qwen/Qwen3.8-27B&odl=32',
+      offload: ['Token embeddings'],
+    },
+    {
+      name: 'a lookup-table model',
+      query: '?m=Qwen/Qwen3.8-Flash-Next',
+      offload: ['Token embeddings', 'Lookup tables'],
+    },
     {
       name: 'expert offload on a lookup-table model',
       query: '?m=Qwen/Qwen3.8-Flash-Next&ox=ram',
@@ -549,52 +596,70 @@ describe('estimator inputs', () => {
     {
       name: 'a lookup-table split',
       query: '?m=deepseek-ai/DeepSeek-V4.1-Flash&olt=split',
-      offload: ['Token embeddings', 'Lookup tables', 'Layers in host RAM', 'Host RAM holds', 'Scale layout', 'Queue depth', 'SSD read rate', 'Prefetch accuracy %'],
+      offload: [
+        'Token embeddings',
+        'Lookup tables',
+        'Layers in host RAM',
+        'Host RAM holds',
+        'Scale layout',
+        'Queue depth',
+        'SSD read rate',
+        'Prefetch accuracy %',
+      ],
     },
-  ])('shows one Advanced in Hardware, with an Offload subsection for every model ($name)', async ({ query, offload }) => {
-    history.replaceState(null, '', `/${query}`);
-    const { container } = mount();
-    await screen.findByTestId('decode-tps');
-    const panel = (title: string) =>
-      [...container.querySelectorAll('details.panel')].find(
-        (p) => p.querySelector(':scope > summary strong')?.textContent === title,
-      )!;
-    const advancedOf = (title: string) =>
-      [...panel(title).querySelectorAll('summary')].filter((s) => s.textContent === 'Advanced');
-    const summaries = advancedOf('Hardware');
-    expect(summaries).toHaveLength(1);
-    // The Parallelism panel has its own Advanced (DCP), and no other panel has one.
-    expect(advancedOf('Parallelism')).toHaveLength(1);
-    expect([...container.querySelectorAll('summary')].filter((s) => s.textContent === 'Advanced')).toHaveLength(2);
-    expect(within(advancedOf('Parallelism')[0].parentElement!).getByTestId('parallel-advanced')).toBeTruthy();
-    const advanced = summaries[0].parentElement as HTMLDetailsElement;
-    expect(advanced.open).toBe(false);
-    expect(within(screen.getByTestId('offload-section')).queryByText('Advanced')).toBeNull();
-    const section = screen.queryByTestId('offload-advanced');
-    expect(section).not.toBeNull();
-    expect(advanced.contains(section)).toBe(true);
-    // The subsection comes first, before the device unlocks and the spec editor.
-    expect(section!.compareDocumentPosition(advanced.querySelector('details.spec-editor')!)).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
-    expect(section!.querySelector('legend')!.textContent).toBe('Offload');
-    const labels = [...section!.querySelectorAll('.field-label')].map((l) => l.textContent?.trim());
-    expect(labels).toEqual(offload);
-  });
+  ])(
+    'shows one Advanced in Hardware, with an Offload subsection for every model ($name)',
+    async ({ query, offload }) => {
+      history.replaceState(null, '', `/${query}`);
+      const { container } = mount();
+      await screen.findByTestId('decode-tps');
+      const panel = (title: string) =>
+        [...container.querySelectorAll('details.panel')].find(
+          (p) => p.querySelector(':scope > summary strong')?.textContent === title,
+        )!;
+      const advancedOf = (title: string) =>
+        [...panel(title).querySelectorAll('summary')].filter((s) => s.textContent === 'Advanced');
+      const summaries = advancedOf('Hardware');
+      expect(summaries).toHaveLength(1);
+      // The Parallelism panel has its own Advanced (DCP), and no other panel has one.
+      expect(advancedOf('Parallelism')).toHaveLength(1);
+      expect(
+        [...container.querySelectorAll('summary')].filter((s) => s.textContent === 'Advanced'),
+      ).toHaveLength(2);
+      expect(
+        within(advancedOf('Parallelism')[0].parentElement!).getByTestId('parallel-advanced'),
+      ).toBeTruthy();
+      const advanced = summaries[0].parentElement as HTMLDetailsElement;
+      expect(advanced.open).toBe(false);
+      expect(within(screen.getByTestId('offload-section')).queryByText('Advanced')).toBeNull();
+      const section = screen.queryByTestId('offload-advanced');
+      expect(section).not.toBeNull();
+      expect(advanced.contains(section)).toBe(true);
+      // The subsection comes first, before the device unlocks and the spec editor.
+      expect(section!.compareDocumentPosition(advanced.querySelector('details.spec-editor')!)).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+      expect(section!.querySelector('legend')!.textContent).toBe('Offload');
+      const labels = [...section!.querySelectorAll('.field-label')].map((l) =>
+        l.textContent?.trim(),
+      );
+      expect(labels).toEqual(offload);
+    },
+  );
   it('token embeddings: Host RAM writes oet=ram and brings in the host controls; On GPU removes it', async () => {
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B');
     mount();
     await screen.findByTestId('decode-tps');
     const picker = () =>
-      within(screen.getByTestId('offload-advanced')).getByRole('combobox', { name: 'Token embeddings' });
+      within(screen.getByTestId('offload-advanced')).getByRole('combobox', {
+        name: 'Token embeddings',
+      });
     expect(picker().textContent).toBe('On GPU');
     expect(screen.queryByRole('combobox', { name: 'Host RAM' })).toBeNull();
     fireEvent.click(picker());
-    expect((await screen.findAllByRole('option')).map((o) => o.textContent?.replace('✓', ''))).toEqual([
-      'On GPU',
-      'Host RAM',
-      'SSD',
-    ]);
+    expect(
+      (await screen.findAllByRole('option')).map((o) => o.textContent?.replace('✓', '')),
+    ).toEqual(['On GPU', 'Host RAM', 'SSD']);
     fireEvent.click(screen.getByRole('option', { name: 'Host RAM' }));
     await waitFor(() => expect(location.search).toContain('oet=ram'));
     expect(screen.getByRole('combobox', { name: 'Host RAM' })).toBeTruthy();
@@ -608,13 +673,14 @@ describe('estimator inputs', () => {
     mount();
     await screen.findByTestId('decode-tps');
     const picker = () =>
-      within(screen.getByTestId('offload-advanced')).getByRole('combobox', { name: 'Token embeddings' });
+      within(screen.getByTestId('offload-advanced')).getByRole('combobox', {
+        name: 'Token embeddings',
+      });
     expect(picker().textContent).toBe('In memory');
     fireEvent.click(picker());
-    expect((await screen.findAllByRole('option')).map((o) => o.textContent?.replace('✓', ''))).toEqual([
-      'In memory',
-      'SSD',
-    ]);
+    expect(
+      (await screen.findAllByRole('option')).map((o) => o.textContent?.replace('✓', '')),
+    ).toEqual(['In memory', 'SSD']);
     cleanup();
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B&d=apple-m3-ultra-80c&oet=ram');
     mount();
@@ -638,7 +704,9 @@ describe('estimator inputs', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     fireEvent.focus(screen.getByRole('button', { name: 'About Token embeddings' }));
     expect(
-      await screen.findByText('This model reuses this table for its output, so it stays on the GPU.'),
+      await screen.findByText(
+        'This model reuses this table for its output, so it stays on the GPU.',
+      ),
     ).toBeTruthy();
     expect(screen.getByTestId('decode-tps').textContent).toMatch(/[1-9]/);
   });
@@ -646,7 +714,13 @@ describe('estimator inputs', () => {
     history.replaceState(null, '', '/?n=4');
     mount();
     expect(screen.getByRole('radiogroup', { name: 'GPUs in one machine' })).toBeTruthy();
-    expect((within(screen.getByRole('radiogroup', { name: 'GPUs in one machine' })).getByRole('radio', { name: '4' }) as HTMLInputElement).checked).toBe(true);
+    expect(
+      (
+        within(screen.getByRole('radiogroup', { name: 'GPUs in one machine' })).getByRole('radio', {
+          name: '4',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
     expect(screen.getByRole('radiogroup', { name: 'Machines' })).toBeTruthy();
     expect(screen.getByTestId('device-total').textContent).toMatch(/= 4 GPUs total/);
   });
@@ -656,7 +730,9 @@ describe('estimator inputs', () => {
     const input = screen.getByRole('combobox', { name: 'Hugging Face model ID' });
     fireEvent.change(input, { target: { value: 'zai-org/GLM-5.3-Flash' } });
     fireEvent.keyDown(input, { key: 'Enter' });
-    await waitFor(() => expect(loader.mock.calls.some((c) => c[0] === 'zai-org/GLM-5.3-Flash')).toBe(true));
+    await waitFor(() =>
+      expect(loader.mock.calls.some((c) => c[0] === 'zai-org/GLM-5.3-Flash')).toBe(true),
+    );
   });
 });
 
@@ -672,7 +748,8 @@ describe('config read from another repo', () => {
   /** The Hub without a token: the official repo answers 401, the mirror serves its checked-in fixtures. */
   const gatedHub = (async (url: string) => {
     if (url.includes(official)) return new Response('', { status: 401 });
-    const kind = url === apiUrl(mirror) ? 'api' : url === resolveUrl(mirror, 'config.json') ? 'config' : null;
+    const kind =
+      url === apiUrl(mirror) ? 'api' : url === resolveUrl(mirror, 'config.json') ? 'config' : null;
     const body = kind && readFixtureJson(`${fixtureStem(mirror)}.${kind}.json`);
     return body ? new Response(JSON.stringify(body)) : new Response('', { status: 404 });
   }) as unknown as typeof fetch;
@@ -705,7 +782,9 @@ describe('config read from another repo', () => {
   it('loads a gated model from its mirror without a token prompt or any mention of the mirror', async () => {
     history.replaceState(null, '', `/?m=${official}`);
     mount(gatedLoader);
-    await waitFor(() => expect(screen.getByTestId('model-facts').textContent).toMatch(/muse_spark/));
+    await waitFor(() =>
+      expect(screen.getByTestId('model-facts').textContent).toMatch(/muse_spark/),
+    );
     expect((await screen.findByTestId('decode-tps')).textContent).toMatch(/[1-9]/);
     expect(screen.queryByLabelText('Hugging Face token')).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
@@ -717,7 +796,9 @@ describe('config read from another repo', () => {
     history.replaceState(null, '', `/?m=${id}`);
     mount(async (requested) =>
       requested === id
-        ? mapHfModel(fixtureRepoFiles(id, { dir: 'quant', configFrom: 'mistralai/Mistral-Large-4-1T-A52B' }))
+        ? mapHfModel(
+            fixtureRepoFiles(id, { dir: 'quant', configFrom: 'mistralai/Mistral-Large-4-1T-A52B' }),
+          )
         : fixtureLoader(requested),
     );
     await waitFor(() => expect(screen.getByTestId('model-facts').textContent).toMatch(/mistral/i));

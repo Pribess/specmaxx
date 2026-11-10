@@ -3,26 +3,51 @@ import type { AccumulateType, MathFormat } from '../../ir/dtype';
 import { applyDeviceModifiers, applyLinkModifiers } from '../modifiers';
 import type { DeviceSpec, LinkSpec } from '../types';
 import { allUnlockSelections, resolveUnlocks, unlockAxesErrors } from '../unlocks';
-import { validateDevice, validateDeviceModifiers, validateLink, validateLinkModifiers } from '../validate';
+import {
+  validateDevice,
+  validateDeviceModifiers,
+  validateLink,
+  validateLinkModifiers,
+} from '../validate';
 import {
   NVIDIA_CONSUMER_DEVICE_PRESETS,
-  RTX_3090, RTX_3090_UNLOCKS,
-  RTX_4090, RTX_4090_UNLOCKS,
-  RTX_5090, RTX_5090_UNLOCKS,
+  RTX_3090,
+  RTX_3090_UNLOCKS,
+  RTX_4090,
+  RTX_4090_UNLOCKS,
+  RTX_5090,
+  RTX_5090_UNLOCKS,
 } from './nvidia';
 
-function peak(device: DeviceSpec, input: MathFormat, accumulate: AccumulateType, sparsity: 'dense' | '2:4' = 'dense'): number {
-  const value = device.engines[0].matmulPeaks.find((p) => p.input === input && p.accumulate === accumulate && p.sparsity === sparsity);
-  if (value === undefined) throw new Error(`Missing ${device.id} ${input}/${accumulate}/${sparsity}`);
+function peak(
+  device: DeviceSpec,
+  input: MathFormat,
+  accumulate: AccumulateType,
+  sparsity: 'dense' | '2:4' = 'dense',
+): number {
+  const value = device.engines[0].matmulPeaks.find(
+    (p) => p.input === input && p.accumulate === accumulate && p.sparsity === sparsity,
+  );
+  if (value === undefined)
+    throw new Error(`Missing ${device.id} ${input}/${accumulate}/${sparsity}`);
   return value.flopsPerSec;
 }
 
 // Synthetic local fixture: validation tests must not depend on a sibling's topology implementation.
 const HOST_BOUNCE_PCIE: LinkSpec = {
-  kind: 'pcie', name: 'Synthetic host-bounce PCIe fixture',
-  bandwidthPerDirectionBytesPerSec: 32e9, latencySec: 2e-6, p2p: 'host_bounce',
+  kind: 'pcie',
+  name: 'Synthetic host-bounce PCIe fixture',
+  bandwidthPerDirectionBytesPerSec: 32e9,
+  latencySec: 2e-6,
+  p2p: 'host_bounce',
   hostBounce: { hostMemBandwidthBytesPerSec: 100e9, extraLatencySec: 5e-6 },
-  sources: [{ url: 'synthetic://pcie-fixture', title: 'Synthetic test values, not product specs', fields: ['bandwidthPerDirectionBytesPerSec', 'latencySec', 'hostBounce'] }],
+  sources: [
+    {
+      url: 'synthetic://pcie-fixture',
+      title: 'Synthetic test values, not product specs',
+      fields: ['bandwidthPerDirectionBytesPerSec', 'latencySec', 'hostBounce'],
+    },
+  ],
   estimated: [],
 };
 
@@ -46,7 +71,8 @@ describe('NVIDIA consumer vendor tables', () => {
         expect(Math.abs(sparse.flopsPerSec / expected - 1)).toBeLessThan(0.003);
       }
       for (const sparsity of ['dense', '2:4'] as const) {
-        const ratio = peak(device, 'fp16', 'fp16', sparsity) / peak(device, 'fp16', 'fp32', sparsity);
+        const ratio =
+          peak(device, 'fp16', 'fp16', sparsity) / peak(device, 'fp16', 'fp32', sparsity);
         // Ada table's 330.3 vs 2×165.2 differs by 0.1 TFLOPS, deliberately not silently corrected.
         expect(Math.abs(ratio / 2 - 1)).toBeLessThan(0.001);
       }
@@ -79,7 +105,9 @@ describe('NVIDIA consumer vendor tables', () => {
     expect(peak(RTX_5090, 'fp4', 'fp32', '2:4')).toBe(3352e12);
     expect(RTX_5090.memory.bandwidthBytesPerSec).toBe(1792e9);
     expect(RTX_5090.l2Bytes).toBe(96 * 1024 ** 2);
-    expect(RTX_5090.engines[0].matmulPeaks.some((p) => p.input === 'int4' || p.input === 'fp6')).toBe(false);
+    expect(
+      RTX_5090.engines[0].matmulPeaks.some((p) => p.input === 'int4' || p.input === 'fp6'),
+    ).toBe(false);
     expect(RTX_5090.engines[0].gemmTiling.fp4?.mmaK).toBe(64);
   });
 });
@@ -94,9 +122,13 @@ describe('independent NVIDIA consumer unlock axes', () => {
       for (const selection of combinations) {
         const resolved = resolveUnlocks(axes, selection);
         expect(validateDeviceModifiers(device, resolved.deviceModifiers)).toEqual([]);
-        expect(validateLinkModifiers(HOST_BOUNCE_PCIE, resolved.intraNodeLinkModifiers)).toEqual([]);
+        expect(validateLinkModifiers(HOST_BOUNCE_PCIE, resolved.intraNodeLinkModifiers)).toEqual(
+          [],
+        );
         expect(validateDevice(applyDeviceModifiers(device, resolved.deviceModifiers))).toEqual([]);
-        expect(validateLink(applyLinkModifiers(HOST_BOUNCE_PCIE, resolved.intraNodeLinkModifiers))).toEqual([]);
+        expect(
+          validateLink(applyLinkModifiers(HOST_BOUNCE_PCIE, resolved.intraNodeLinkModifiers)),
+        ).toEqual([]);
       }
     }
   });
@@ -106,8 +138,11 @@ describe('independent NVIDIA consumer unlock axes', () => {
       const mods = resolveUnlocks(axes, { 'tensor-rate': 'full-rate' }).deviceModifiers;
       const unlocked = applyDeviceModifiers(device, mods);
       for (const base of device.engines[0].matmulPeaks) {
-        const scale = base.accumulate === 'fp32' && ['fp16', 'bf16', 'tf32'].includes(base.input) ? 2 : 1;
-        expect(peak(unlocked, base.input, base.accumulate, base.sparsity)).toBe(scale * base.flopsPerSec);
+        const scale =
+          base.accumulate === 'fp32' && ['fp16', 'bf16', 'tf32'].includes(base.input) ? 2 : 1;
+        expect(peak(unlocked, base.input, base.accumulate, base.sparsity)).toBe(
+          scale * base.flopsPerSec,
+        );
       }
       expect(unlocked.memory).toEqual(device.memory);
       expect(unlocked.engines[0].vectorFlopsPerSec).toEqual(device.engines[0].vectorFlopsPerSec);
@@ -116,22 +151,34 @@ describe('independent NVIDIA consumer unlock axes', () => {
   });
 
   it('capacity and sample memory overclock are independent; P2P drops host staging without altering link peak', () => {
-    const vram = applyDeviceModifiers(RTX_4090, resolveUnlocks(RTX_4090_UNLOCKS, { 'vram-mod': '48gb' }).deviceModifiers);
+    const vram = applyDeviceModifiers(
+      RTX_4090,
+      resolveUnlocks(RTX_4090_UNLOCKS, { 'vram-mod': '48gb' }).deviceModifiers,
+    );
     expect(vram.memory.capacityOptionsBytes).toEqual([48e9]);
     expect(vram.memory.bandwidthBytesPerSec).toBe(1008e9);
-    const combined = resolveUnlocks(RTX_4090_UNLOCKS, { 'vram-mod': '48gb', 'memory-overclock': '1545mhz', 'pcie-p2p': 'direct' });
+    const combined = resolveUnlocks(RTX_4090_UNLOCKS, {
+      'vram-mod': '48gb',
+      'memory-overclock': '1545mhz',
+      'pcie-p2p': 'direct',
+    });
     const modified = applyDeviceModifiers(RTX_4090, combined.deviceModifiers);
     expect(modified.memory.capacityOptionsBytes).toEqual([48e9]);
     expect(modified.memory.bandwidthBytesPerSec).toBeCloseTo(1186.56e9, -2);
     const direct = applyLinkModifiers(HOST_BOUNCE_PCIE, combined.intraNodeLinkModifiers);
     expect(direct.p2p).toBe('direct');
     expect(direct.hostBounce).toBeUndefined();
-    expect(direct.bandwidthPerDirectionBytesPerSec).toBe(HOST_BOUNCE_PCIE.bandwidthPerDirectionBytesPerSec);
+    expect(direct.bandwidthPerDirectionBytesPerSec).toBe(
+      HOST_BOUNCE_PCIE.bandwidthPerDirectionBytesPerSec,
+    );
     expect(direct.latencySec).toBe(HOST_BOUNCE_PCIE.latencySec);
   });
 
   it('measured sustained clocks scale vendor peaks from their 2407 MHz boost baseline', () => {
-    for (const [option, measuredClockMhz] of [['575w', 2768], ['400w', 2465]] as const) {
+    for (const [option, measuredClockMhz] of [
+      ['575w', 2768],
+      ['400w', 2465],
+    ] as const) {
       const mods = resolveUnlocks(RTX_5090_UNLOCKS, { 'power-clock': option }).deviceModifiers;
       const measured = applyDeviceModifiers(RTX_5090, mods);
       const factor = measuredClockMhz / 2407;
@@ -143,16 +190,21 @@ describe('independent NVIDIA consumer unlock axes', () => {
   });
 
   it('all options retain UI notes and non-vendor evidence classes', () => {
-    for (const { axes } of CASES) for (const axis of axes) {
-      expect(axis.description.length).toBeGreaterThan(50);
-      for (const option of axis.options) for (const modifier of [...option.deviceModifiers, ...(option.intraNodeLinkModifiers ?? [])]) {
-        expect(modifier.note.length).toBeGreaterThan(20);
-        expect(modifier.sources.length).toBeGreaterThan(0);
-        for (const source of modifier.sources) {
-          expect(['community', 'review']).toContain(source.kind);
-          expect(source.note?.length).toBeGreaterThan(20);
-        }
+    for (const { axes } of CASES)
+      for (const axis of axes) {
+        expect(axis.description.length).toBeGreaterThan(50);
+        for (const option of axis.options)
+          for (const modifier of [
+            ...option.deviceModifiers,
+            ...(option.intraNodeLinkModifiers ?? []),
+          ]) {
+            expect(modifier.note.length).toBeGreaterThan(20);
+            expect(modifier.sources.length).toBeGreaterThan(0);
+            for (const source of modifier.sources) {
+              expect(['community', 'review']).toContain(source.kind);
+              expect(source.note?.length).toBeGreaterThan(20);
+            }
+          }
       }
-    }
   });
 });

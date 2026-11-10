@@ -14,20 +14,35 @@ const FIXTURE_DIRS = ['src/sim/models/__fixtures__', 'src/sim/models/hf/__fixtur
  * (`GATED_MIRRORS`) are gated like on the Hub: 401 without an `Authorization` header.
  */
 export async function mockHf(page: Page) {
-  await page.route('https://huggingface.co/**', async route => {
+  await page.route('https://huggingface.co/**', async (route) => {
     const path = decodeURIComponent(new URL(route.request().url()).pathname);
     const api = path.match(/^\/api\/models\/([^/]+\/[^/]+)(?:\/revision\/[^/]+)?$/);
     const config = path.match(/^\/([^/]+\/[^/]+)\/resolve\/[^/]+\/config.json$/);
     const id = api?.[1] ?? config?.[1];
-    if (id && Object.hasOwn(GATED_MIRRORS, id) && !(await route.request().headerValue('authorization'))) {
-      await route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"gated"}' }); return;
+    if (
+      id &&
+      Object.hasOwn(GATED_MIRRORS, id) &&
+      !(await route.request().headerValue('authorization'))
+    ) {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: '{"error":"gated"}',
+      });
+      return;
     }
     if (id && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(id)) {
       for (const dir of FIXTURE_DIRS) {
         try {
-          const body = await readFile(resolve(dir, `${id.replace('/', '__')}.${api ? 'api' : 'config'}.json`), 'utf8');
-          await route.fulfill({ status: 200, contentType: 'application/json', body }); return;
-        } catch { /* not in this directory: try the next, never the real Hub */ }
+          const body = await readFile(
+            resolve(dir, `${id.replace('/', '__')}.${api ? 'api' : 'config'}.json`),
+            'utf8',
+          );
+          await route.fulfill({ status: 200, contentType: 'application/json', body });
+          return;
+        } catch {
+          /* not in this directory: try the next, never the real Hub */
+        }
       }
     }
     await route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });

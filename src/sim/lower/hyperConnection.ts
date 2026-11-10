@@ -45,7 +45,11 @@ export function lowerHcPre(block: HcPreBlock, ctx: LoweringContext): Op[] {
   );
   // Formula: projections: m = T, n = out, k = in (module residual_mixer)
   for (const p of block.projections) {
-    ops.push(linearGemm(`${block.name}.${p.name}`, { m: T, n: p.outputDim, k: p.inputDim }, ctx, { module: 'residual_mixer' }));
+    ops.push(
+      linearGemm(`${block.name}.${p.name}`, { m: T, n: p.outputDim, k: p.inputDim }, ctx, {
+        module: 'residual_mixer',
+      }),
+    );
   }
   if (block.sinkhornIters > 0) {
     // Formula: sinkhorn: elems = T·N², flopsPerElem = 4·iters; read = write = T·N²·bpe(act)

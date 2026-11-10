@@ -40,7 +40,8 @@ export function readFp8(qc: JsonObject, ctx: SchemeContext, opts: Fp8Options = {
   const block = numListAt(qc, 'weight_block_size');
   const paramsUe8m0 = opts.paramsQuantization?.use_ue8m0_for_qscales === true;
   const ue8m0 = strAt(qc, 'scale_fmt') === 'ue8m0' || paramsUe8m0;
-  if (paramsUe8m0 && strAt(qc, 'scale_fmt') !== 'ue8m0') notes.push('fp8 scales are ue8m0 (from params.json)');
+  if (paramsUe8m0 && strAt(qc, 'scale_fmt') !== 'ue8m0')
+    notes.push('fp8 scales are ue8m0 (from params.json)');
   const isMx = method === 'mxfp8' || (block?.[0] === 1 && block[1] === 32 && ue8m0);
   const fp8: Dtype = strAt(qc, 'fmt') === 'e5m2' ? 'fp8_e5m2' : 'fp8_e4m3';
   const actScheme = strAt(qc, 'activation_scheme') ?? 'dynamic';
@@ -53,7 +54,11 @@ export function readFp8(qc: JsonObject, ctx: SchemeContext, opts: Fp8Options = {
     shape = 'mxfp8 (block 1×32, e8m0 scales)';
   } else if (block && block.length === 2) {
     const scaleBits = ue8m0 ? 8 : 32;
-    weight = moduleFormat(fp8, blockScaleBits(scaleBits, block[0], block[1]), actQuantized ? fp8 : undefined);
+    weight = moduleFormat(
+      fp8,
+      blockScaleBits(scaleBits, block[0], block[1]),
+      actQuantized ? fp8 : undefined,
+    );
     shape = `${fp8.slice(4)} fp8, block ${block[0]}×${block[1]} ${ue8m0 ? 'ue8m0' : 'fp32'} scales`;
   } else {
     weight = moduleFormat(fp8, 0, actQuantized ? fp8 : undefined);
@@ -65,7 +70,8 @@ export function readFp8(qc: JsonObject, ctx: SchemeContext, opts: Fp8Options = {
   let experts: ModuleQuant | undefined;
   let expertsLabel = '';
   // DeepSeek-V4.1 puts expert_dtype inside quantization_config; DeepSeek-V4 next to it, at the top level.
-  const expertDtype = strAt(qc, 'expert_dtype') ?? strAt(ctx.top, 'expert_dtype') ?? strAt(ctx.text, 'expert_dtype');
+  const expertDtype =
+    strAt(qc, 'expert_dtype') ?? strAt(ctx.top, 'expert_dtype') ?? strAt(ctx.text, 'expert_dtype');
   if (expertDtype === 'fp4') {
     experts = moduleFormat('mxfp4', 0, actQuantized ? fp8 : undefined);
     expertsLabel = ', routed experts fp4 (mxfp4: e2m1 + ue8m0 per 32)';
@@ -86,13 +92,21 @@ export function readFp8(qc: JsonObject, ctx: SchemeContext, opts: Fp8Options = {
     notes.push('Engram table: fp8 with a ue8m0 scale per 32 elements (checkpoint layout) → mxfp8');
   }
   if (convert.entries.length > 0) {
-    notes.push('modules_to_convert (lookup tables) converted with the linear-weight format and scale layout');
+    notes.push(
+      'modules_to_convert (lookup tables) converted with the linear-weight format and scale layout',
+    );
   }
 
-  const notConvertRaw = [...strListAt(qc, 'modules_to_not_convert'), ...strListAt(qc, 'ignored_layers')];
+  const notConvertRaw = [
+    ...strListAt(qc, 'modules_to_not_convert'),
+    ...strListAt(qc, 'ignored_layers'),
+  ];
   // params.json `quantize_kv_a: false` keeps the MLA kv_a projection native (both namings). These synthetic
   // entries are matched but not reported as an ignore list (only one naming exists in a given checkpoint).
-  const kvA = opts.paramsQuantization?.quantize_kv_a === false ? ['wkv_a_with_mqa', 'kv_a_proj_with_mqa'] : [];
+  const kvA =
+    opts.paramsQuantization?.quantize_kv_a === false
+      ? ['wkv_a_with_mqa', 'kv_a_proj_with_mqa']
+      : [];
   const notConvert = compilePatterns([...notConvertRaw, ...kvA]);
 
   const resolve = (p: Probe): ModuleQuant => {

@@ -15,8 +15,15 @@ import {
 } from './amd';
 
 /** Engine-0 peak for an exact key, in FLOP/s; throws if the preset does not list it. */
-function peak(device: DeviceSpec, input: MathFormat, accumulate: AccumulateType, sparsity: 'dense' | '2:4' = 'dense'): number {
-  const p = device.engines[0].matmulPeaks.find((x) => x.input === input && x.accumulate === accumulate && x.sparsity === sparsity);
+function peak(
+  device: DeviceSpec,
+  input: MathFormat,
+  accumulate: AccumulateType,
+  sparsity: 'dense' | '2:4' = 'dense',
+): number {
+  const p = device.engines[0].matmulPeaks.find(
+    (x) => x.input === input && x.accumulate === accumulate && x.sparsity === sparsity,
+  );
   if (p === undefined) throw new Error(`missing ${device.id} ${input}/${accumulate}/${sparsity}`);
   return p.flopsPerSec;
 }
@@ -60,7 +67,13 @@ describe('AMD presets', () => {
 
   it('fp16-accumulate requests fall back to the fp32-accumulate rate (AMD: same rate)', () => {
     const warnings: string[] = [];
-    const hit = matmulPeakFlopsPerSec(RADEON_AI_PRO_R9700.engines[0], 'fp16', 'fp16', 'dense', warnings);
+    const hit = matmulPeakFlopsPerSec(
+      RADEON_AI_PRO_R9700.engines[0],
+      'fp16',
+      'fp16',
+      'dense',
+      warnings,
+    );
     expect(hit.flopsPerSec).toBe(peak(RADEON_AI_PRO_R9700, 'fp16', 'fp32'));
     expect(warnings).toHaveLength(1);
   });
@@ -159,7 +172,11 @@ describe('AMD presets', () => {
     // MXFP4 / MXFP6 dense 256 × 16384 × 2.4e9 = 10066.3 → "10.1 PF" (whitepaper typo "16834" would give 10340).
     expectQuoted(peak(d, 'fp4', 'fp32'), 10100, 100);
     expect(peak(d, 'fp6', 'fp32')).toBe(peak(d, 'fp4', 'fp32'));
-    expect(d.engines[0].matmulPeaks.some((p) => (p.input === 'fp4' || p.input === 'fp6') && p.sparsity === '2:4')).toBe(false);
+    expect(
+      d.engines[0].matmulPeaks.some(
+        (p) => (p.input === 'fp4' || p.input === 'fp6') && p.sparsity === '2:4',
+      ),
+    ).toBe(false);
     // Vendor ratios: FP8 = 2 × FP16, FP4 = 4 × FP16; 2× the MI300X's per-CU FP16 rate.
     expect(peak(d, 'fp8', 'fp32')).toBe(2 * peak(d, 'fp16', 'fp32'));
     expect(peak(d, 'fp4', 'fp32')).toBe(4 * peak(d, 'fp16', 'fp32'));
@@ -172,7 +189,13 @@ describe('AMD presets', () => {
   it('MI355X has no TF32 hardware: a tf32 request falls back to the fp32 matrix rate', () => {
     expect(lists(INSTINCT_MI355X, 'tf32')).toBe(false);
     const warnings: string[] = [];
-    const hit = matmulPeakFlopsPerSec(INSTINCT_MI355X.engines[0], 'tf32', 'fp32', 'dense', warnings);
+    const hit = matmulPeakFlopsPerSec(
+      INSTINCT_MI355X.engines[0],
+      'tf32',
+      'fp32',
+      'dense',
+      warnings,
+    );
     expect(hit.usedInput).toBe('fp32');
     expect(hit.flopsPerSec).toBe(peak(INSTINCT_MI355X, 'fp32', 'fp32'));
   });
@@ -188,7 +211,9 @@ describe('AMD presets', () => {
     expect(peak(d, 'fp6', 'fp32')).toBe(20133e12);
     expect(peak(d, 'fp4', 'fp32')).toBe(40265e12);
     for (const input of ['fp8', 'fp6', 'fp4'] as const) {
-      expect(d.engines[0].matmulPeaks.some((p) => p.input === input && p.sparsity === '2:4')).toBe(false);
+      expect(d.engines[0].matmulPeaks.some((p) => p.input === input && p.sparsity === '2:4')).toBe(
+        false,
+      );
     }
     expect(peak(d, 'fp32', 'fp32')).toBe(315e12);
     expect(d.engines[0].vectorFlopsPerSec).toEqual({ fp64: 5e12, fp32: 315e12, fp16: 315e12 });

@@ -221,7 +221,9 @@ export function stagedStageRates(netBytesPerSec: number, staging: HostStaging): 
   const hostBytesPerSec = staging.hostMemBandwidthBytesPerSec;
   return {
     pcieBytesPerSec:
-      staging.pcie === undefined ? Infinity : Math.min(staging.pcie.bandwidthBytesPerSec, hostBytesPerSec / n),
+      staging.pcie === undefined
+        ? Infinity
+        : Math.min(staging.pcie.bandwidthBytesPerSec, hostBytesPerSec / n),
     sockBytesPerSec: staging.socketCopy ? hostBytesPerSec / (2 * n) : Infinity,
     netBytesPerSec: Math.min(netBytesPerSec, hostBytesPerSec / (2 * n)),
     hostJointBytesPerSec: hostJointBytesPerSec(staging),
@@ -248,7 +250,11 @@ export function stagedStageRates(netBytesPerSec: number, staging: HostStaging): 
  * PCIe staging only, the operations are exactly those of the formula before the socket copy (bit-identical).
  * `stepMessageBytes` = m (bytes); returns B_eff (B/s) and α_eff (seconds).
  */
-export function stagedLink(unstaged: EffectiveLink, staging: HostStaging, stepMessageBytes: number): EffectiveLink {
+export function stagedLink(
+  unstaged: EffectiveLink,
+  staging: HostStaging,
+  stepMessageBytes: number,
+): EffectiveLink {
   // Formula: B_eff = min(r_pcie, r_sock, r_net, B_host/((2·a + 2)·n_stg))
   //          s = min(m, c)
   //          α_eff = α + 2·α_pcie + (2·s/r_pcie + 2·s/r_sock + s/r_net − s/B_eff)
@@ -543,7 +549,15 @@ export function collectiveTime(
   switch (kind) {
     case 'all_reduce':
       // Formula: inter-phase tree step m = S/n1 (the whole node shard)
-      return hierarchicalAllReduceSec(messageBytes, n1, n2, intra, inter, algorithm, interFor(messageBytes / n1));
+      return hierarchicalAllReduceSec(
+        messageBytes,
+        n1,
+        n2,
+        intra,
+        inter,
+        algorithm,
+        interFor(messageBytes / n1),
+      );
     case 'all_gather':
       return hierarchicalAllGatherSec(messageBytes, n1, n2, intra, inter);
     case 'reduce_scatter':

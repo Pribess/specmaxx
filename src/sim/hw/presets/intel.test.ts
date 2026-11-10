@@ -4,12 +4,20 @@ import type { DeviceSpec } from '../types';
 import { gb, gbPerSec, tflops } from '../units';
 import { validateDevice } from '../validate';
 import {
-  ARC_B580, ARC_PRO_B60, ARC_PRO_B65, ARC_PRO_B70, INTEL_DEVICE_PRESETS,
-  XE2_XMX_FP16_FLOP_PER_CLOCK_PER_CORE, XE2_XMX_INT4_OP_PER_CLOCK_PER_CORE, XE2_XMX_INT8_OP_PER_CLOCK_PER_CORE,
+  ARC_B580,
+  ARC_PRO_B60,
+  ARC_PRO_B65,
+  ARC_PRO_B70,
+  INTEL_DEVICE_PRESETS,
+  XE2_XMX_FP16_FLOP_PER_CLOCK_PER_CORE,
+  XE2_XMX_INT4_OP_PER_CLOCK_PER_CORE,
+  XE2_XMX_INT8_OP_PER_CLOCK_PER_CORE,
 } from './intel';
 
 function peak(device: DeviceSpec, input: MathFormat, accumulate: AccumulateType): number {
-  const p = device.engines[0].matmulPeaks.find((x) => x.input === input && x.accumulate === accumulate && x.sparsity === 'dense');
+  const p = device.engines[0].matmulPeaks.find(
+    (x) => x.input === input && x.accumulate === accumulate && x.sparsity === 'dense',
+  );
   if (p === undefined) throw new Error(`Missing ${device.id} ${input}/${accumulate}`);
   return p.flopsPerSec;
 }
@@ -29,25 +37,31 @@ describe('Intel Battlemage presets', () => {
     for (const d of INTEL_DEVICE_PRESETS) expect(validateDevice(d)).toEqual([]);
   });
 
-  it.each(CARDS)('%#: Xe cores × 4096 × max clock reproduces the vendor INT8 TOPS', (d, cores, clockHz, int8Tops) => {
-    expect(d.engines[0].computeUnits).toBe(cores);
-    // Vendor INT8 is stored as quoted; the formula must match it to 3 significant digits (< 0.5 %).
-    expect(peak(d, 'int8', 'int32')).toBe(tflops(int8Tops));
-    const derived = cores * XE2_XMX_INT8_OP_PER_CLOCK_PER_CORE * clockHz;
-    expect(Math.abs(derived / tflops(int8Tops) - 1)).toBeLessThan(0.005);
-  });
+  it.each(CARDS)(
+    '%#: Xe cores × 4096 × max clock reproduces the vendor INT8 TOPS',
+    (d, cores, clockHz, int8Tops) => {
+      expect(d.engines[0].computeUnits).toBe(cores);
+      // Vendor INT8 is stored as quoted; the formula must match it to 3 significant digits (< 0.5 %).
+      expect(peak(d, 'int8', 'int32')).toBe(tflops(int8Tops));
+      const derived = cores * XE2_XMX_INT8_OP_PER_CLOCK_PER_CORE * clockHz;
+      expect(Math.abs(derived / tflops(int8Tops) - 1)).toBeLessThan(0.005);
+    },
+  );
 
-  it.each(CARDS)('%#: FP16/BF16 = INT8 / 2 and INT4 = INT8 × 2 (Xe2 per-core rates 2048 / 4096 / 8192)', (d, cores, clockHz) => {
-    const fp16 = cores * XE2_XMX_FP16_FLOP_PER_CLOCK_PER_CORE * clockHz;
-    expect(peak(d, 'fp16', 'fp32')).toBe(fp16);
-    expect(peak(d, 'bf16', 'fp32')).toBe(fp16);
-    expect(peak(d, 'int4', 'int32')).toBe(cores * XE2_XMX_INT4_OP_PER_CLOCK_PER_CORE * clockHz);
-    expect(peak(d, 'int4', 'int32') / peak(d, 'fp16', 'fp32')).toBe(4);
-    // Vector FP16 = 2 × FP32 (deck p. 9: 512 vs 256 FLOP/clk/core). B60/B65 FP32 is Intel's rounded 12.28.
-    const v = d.engines[0].vectorFlopsPerSec;
-    expect(v.fp16).toBe(cores * 512 * clockHz);
-    expect(Math.abs((v.fp16 ?? 0) / (2 * (v.fp32 ?? 0)) - 1)).toBeLessThan(0.005);
-  });
+  it.each(CARDS)(
+    '%#: FP16/BF16 = INT8 / 2 and INT4 = INT8 × 2 (Xe2 per-core rates 2048 / 4096 / 8192)',
+    (d, cores, clockHz) => {
+      const fp16 = cores * XE2_XMX_FP16_FLOP_PER_CLOCK_PER_CORE * clockHz;
+      expect(peak(d, 'fp16', 'fp32')).toBe(fp16);
+      expect(peak(d, 'bf16', 'fp32')).toBe(fp16);
+      expect(peak(d, 'int4', 'int32')).toBe(cores * XE2_XMX_INT4_OP_PER_CLOCK_PER_CORE * clockHz);
+      expect(peak(d, 'int4', 'int32') / peak(d, 'fp16', 'fp32')).toBe(4);
+      // Vector FP16 = 2 × FP32 (deck p. 9: 512 vs 256 FLOP/clk/core). B60/B65 FP32 is Intel's rounded 12.28.
+      const v = d.engines[0].vectorFlopsPerSec;
+      expect(v.fp16).toBe(cores * 512 * clockHz);
+      expect(Math.abs((v.fp16 ?? 0) / (2 * (v.fp32 ?? 0)) - 1)).toBeLessThan(0.005);
+    },
+  );
 
   it.each(CARDS)('%#: memory as Intel quotes it', (d, _c, _h, _t, capacityGb, bandwidthGbps) => {
     expect(d.memory.kind).toBe('dedicated');

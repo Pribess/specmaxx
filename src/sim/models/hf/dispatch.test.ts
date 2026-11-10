@@ -47,7 +47,9 @@ describe('dispatchFamily', () => {
     for (const f of FAMILIES) {
       for (const t of f.modelTypes) {
         expect(dispatchFamily(view({ model_type: t }))?.entry.family).toBe(f.family);
-        const nested = dispatchFamily(view({ model_type: 'wrapper_x', text_config: { model_type: t } }));
+        const nested = dispatchFamily(
+          view({ model_type: 'wrapper_x', text_config: { model_type: t } }),
+        );
         expect(nested?.entry.family).toBe(f.family);
         expect(nested?.key).toBe('text_config.model_type');
       }
@@ -55,22 +57,34 @@ describe('dispatchFamily', () => {
   });
 
   it('falls back from an unknown architecture to the model type, then to text_config', () => {
-    const byType = dispatchFamily(view({ architectures: ['UnknownForCausalLM'], model_type: 'glm_moe_dsa' }));
+    const byType = dispatchFamily(
+      view({ architectures: ['UnknownForCausalLM'], model_type: 'glm_moe_dsa' }),
+    );
     expect(byType).toMatchObject({ key: 'model_type', value: 'glm_moe_dsa' });
     const byTextArch = dispatchFamily(
-      view({ model_type: 'wrapper_x', text_config: { architectures: ['MiniMaxM3SparseForCausalLM'] } }),
+      view({
+        model_type: 'wrapper_x',
+        text_config: { architectures: ['MiniMaxM3SparseForCausalLM'] },
+      }),
     );
-    expect(byTextArch).toMatchObject({ key: 'text_config.architecture', entry: { family: 'minimax' } });
+    expect(byTextArch).toMatchObject({
+      key: 'text_config.architecture',
+      entry: { family: 'minimax' },
+    });
   });
 
   it('returns null for unknown types (e.g. llama_9, a DSpark draft on qwen3)', () => {
     expect(dispatchFamily(view({ model_type: 'llama_9' }))).toBeNull();
-    expect(dispatchFamily(view({ architectures: ['DSparkDraftModel'], model_type: 'qwen3' }))).toBeNull();
+    expect(
+      dispatchFamily(view({ architectures: ['DSparkDraftModel'], model_type: 'qwen3' })),
+    ).toBeNull();
     expect(dispatchFamily(view({}))).toBeNull();
   });
 
   it('never uses vision_config.model_type', () => {
-    expect(dispatchFamily(view({ model_type: 'llama_9', vision_config: { model_type: 'qwen4_exp' } }))).toBeNull();
+    expect(
+      dispatchFamily(view({ model_type: 'llama_9', vision_config: { model_type: 'qwen4_exp' } })),
+    ).toBeNull();
   });
 
   it('claims each key in at most one family', () => {
@@ -84,7 +98,14 @@ describe('dispatchFamily', () => {
   });
 
   it('uses the given table', () => {
-    const only: FamilyEntry[] = [{ family: 'only', modelTypes: ['llama_9'], architectures: [], build: () => ({ kind: 'unsupported', reason: '' }) }];
+    const only: FamilyEntry[] = [
+      {
+        family: 'only',
+        modelTypes: ['llama_9'],
+        architectures: [],
+        build: () => ({ kind: 'unsupported', reason: '' }),
+      },
+    ];
     expect(dispatchFamily(view({ model_type: 'llama_9' }), only)?.entry.family).toBe('only');
     expect(supportedModelTypes(only)).toEqual(['llama_9']);
     expect(supportedModelTypes()).toContain('qwen3_5');

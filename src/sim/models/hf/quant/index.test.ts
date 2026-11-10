@@ -40,11 +40,17 @@ function inputsOf(files: HfRepoFiles): QuantInputs {
 function effective(q: QuantConfig, m: WeightModule): { dtype: Dtype; extra: number; input: Dtype } {
   const parent = WEIGHT_MODULE_FALLBACK[m];
   const o = q.modules?.[m] ?? (parent ? q.modules?.[parent] : undefined);
-  const w = o?.weights ?? (m === 'residual_mixer' ? { dtype: q.highPrecision ?? 'bf16' } : q.weights);
+  const w =
+    o?.weights ?? (m === 'residual_mixer' ? { dtype: q.highPrecision ?? 'bf16' } : q.weights);
   return { dtype: w.dtype, extra: w.extraBitsPerElem ?? 0, input: o?.gemmInput ?? q.activations };
 }
 
-function expectFormat(label: string, got: { dtype: Dtype; extra: number; input: Dtype }, want: F, act: Dtype) {
+function expectFormat(
+  label: string,
+  got: { dtype: Dtype; extra: number; input: Dtype },
+  want: F,
+  act: Dtype,
+) {
   expect(got.dtype, `${label} dtype`).toBe(want[0]);
   expect(got.extra, `${label} extraBitsPerElem`).toBeCloseTo(want[1] ?? 0, 6);
   expect(got.input, `${label} gemmInput`).toBe(want[2] ?? act);
@@ -82,8 +88,21 @@ const BF16_ALL: Partial<Record<WeightModule, F>> = { attention: ['bf16'], dense_
 
 const CASES: Case[] = [
   // --- no quantization ---------------------------------------------------------------------------------------
-  { repo: 'Qwen/Qwen3.8-27B', dir: '', scheme: /^bf16 \(unquantized\)$/, source: 'none', modules: { ...BF16_ALL, linear_attention: ['bf16'] }, explicit: [] },
-  { repo: 'zai-org/GLM-5.3-Flash-BF16', dir: '', scheme: /unquantized/, source: 'none', modules: { routed_experts: ['bf16'], attention_kv_up: ['bf16'] } },
+  {
+    repo: 'Qwen/Qwen3.8-27B',
+    dir: '',
+    scheme: /^bf16 \(unquantized\)$/,
+    source: 'none',
+    modules: { ...BF16_ALL, linear_attention: ['bf16'] },
+    explicit: [],
+  },
+  {
+    repo: 'zai-org/GLM-5.3-Flash-BF16',
+    dir: '',
+    scheme: /unquantized/,
+    source: 'none',
+    modules: { routed_experts: ['bf16'], attention_kv_up: ['bf16'] },
+  },
 
   // --- native fp8 -----------------------------------------------------------------------------------------------
   {
@@ -95,7 +114,10 @@ const CASES: Case[] = [
       linear_attention: ['fp8_e4m3', FP8_128_FP32, 'fp8_e4m3'],
       dense_mlp: ['fp8_e4m3', FP8_128_FP32, 'fp8_e4m3'],
     },
-    notes: [/linear_attention: linear_attn\.in_proj_a, linear_attn\.in_proj_b bf16/, /match no known module .*in_proj_ba/],
+    notes: [
+      /linear_attention: linear_attn\.in_proj_a, linear_attn\.in_proj_b bf16/,
+      /match no known module .*in_proj_ba/,
+    ],
   },
   {
     repo: 'Qwen/Qwen3.8-Flash-Next-FP8',
@@ -136,7 +158,8 @@ const CASES: Case[] = [
     // expert_dtype sits at the top level of config.json, next to quantization_config (V4.1 puts it inside).
     repo: 'deepseek-ai/DeepSeek-V4-Flash-0731',
     dir: '',
-    scheme: /^fp8: e4m3 fp8, block 128×128 ue8m0 scales, dynamic fp8 activations, routed experts fp4/,
+    scheme:
+      /^fp8: e4m3 fp8, block 128×128 ue8m0 scales, dynamic fp8 activations, routed experts fp4/,
     source: 'quantization_config',
     modules: {
       attention: ['fp8_e4m3', FP8_128_UE8M0, 'fp8_e4m3'],
@@ -223,7 +246,12 @@ const CASES: Case[] = [
     repo: 'nvidia/Qwen3.8-Flash-Next-NVFP4',
     scheme: /^modelopt MIXED_PRECISION/,
     source: 'quantization_config',
-    modules: { routed_experts: ['nvfp4', 0, 'nvfp4'], attention: ['bf16'], shared_experts: ['bf16'], linear_attention: ['bf16'] },
+    modules: {
+      routed_experts: ['nvfp4', 0, 'nvfp4'],
+      attention: ['bf16'],
+      shared_experts: ['bf16'],
+      linear_attention: ['bf16'],
+    },
     lookupTables: ['fp8_e4m3'],
   },
   {
@@ -275,7 +303,12 @@ const CASES: Case[] = [
     repo: 'thinkingmachines/Inkling-Small-NVFP4',
     scheme: /^modelopt NVFP4$/,
     source: 'hf_quant_config.json',
-    modules: { routed_experts: ['nvfp4', 0, 'nvfp4'], attention: ['bf16'], shared_experts: ['bf16'], dense_mlp: ['bf16'] },
+    modules: {
+      routed_experts: ['nvfp4', 0, 'nvfp4'],
+      attention: ['bf16'],
+      shared_experts: ['bf16'],
+      dense_mlp: ['bf16'],
+    },
     kvCache: 'bf16',
     notes: [/routed_experts: nvfp4, nvfp4 GEMM input in 39 of 40 layers; layer 2 is bf16/],
   },
@@ -304,7 +337,11 @@ const CASES: Case[] = [
     repo: 'RedHatAI/Qwen3.8-27B-INT4',
     scheme: /^compressed-tensors pack-quantized \(group_0: int4\), fp8_e4m3 KV cache$/,
     source: 'quantization_config',
-    modules: { dense_mlp: ['int4', INT4_SYM_G128], attention: ['int4', INT4_SYM_G128], linear_attention: ['int4', INT4_SYM_G128] },
+    modules: {
+      dense_mlp: ['int4', INT4_SYM_G128],
+      attention: ['int4', INT4_SYM_G128],
+      linear_attention: ['int4', INT4_SYM_G128],
+    },
     kvCache: 'fp8_e4m3',
     explicit: ['kvCache'],
   },
@@ -325,7 +362,10 @@ const CASES: Case[] = [
       indexer: ['bf16'],
       dense_mlp: ['bf16'],
     },
-    notes: [/attention: .* in 57 of 60 layers; layers 0–2 are bf16/, /1 entry matches no known module/],
+    notes: [
+      /attention: .* in 57 of 60 layers; layers 0–2 are bf16/,
+      /1 entry matches no known module/,
+    ],
   },
   {
     repo: 'RedHatAI/Qwen3.8-27B-MXFP4',
@@ -345,13 +385,19 @@ const CASES: Case[] = [
     },
     lmHead: ['fp8_e4m3', 0, 'fp8_e4m3'],
     kvCache: 'fp8_e4m3',
-    notes: [/dense_mlp: nvfp4, nvfp4 GEMM input in 56 of 64 layers; layers 56–63 are fp8_e4m3/, /per-channel/],
+    notes: [
+      /dense_mlp: nvfp4, nvfp4 GEMM input in 56 of 64 layers; layers 56–63 are fp8_e4m3/,
+      /per-channel/,
+    ],
   },
   {
     repo: 'EmbeddedLLM/MiniMax-M3-FP8-dynamic',
     scheme: /float-quantized/,
     source: 'quantization_config',
-    modules: { attention: ['fp8_e4m3', 0, 'fp8_e4m3'], routed_experts: ['fp8_e4m3', 0, 'fp8_e4m3'] },
+    modules: {
+      attention: ['fp8_e4m3', 0, 'fp8_e4m3'],
+      routed_experts: ['fp8_e4m3', 0, 'fp8_e4m3'],
+    },
     notes: [/per-channel weight scales: overhead ≈0/],
   },
   {
@@ -369,27 +415,25 @@ const CASES: Case[] = [
   // Kimi K3: MXFP4 (g32 e8m0, `mxfp4-pack-quantized`) on `Linear` with everything but the experts in `ignore`. K3's
   // ignore list misses the latent-MoE projections (K3.1-Pro's names them); the headers store them BF16, which the
   // `nativeHighPrecision` probes carry. Activations `null`: weight-only (W4A16).
-  ...['moonshotai/Kimi-K3', 'moonshotai/Kimi-K3.1-Pro'].map(
-    (repo): Case => ({
-      repo,
-      dir: '',
-      scheme: /^compressed-tensors mxfp4-pack-quantized \(group_0: mxfp4\)$/,
-      source: 'quantization_config',
-      modules: {
-        routed_experts: ['mxfp4'],
-        moe_latent: ['bf16'],
-        shared_experts: ['bf16'],
-        dense_mlp: ['bf16'],
-        attention: ['bf16'],
-        attention_kv_down: ['bf16'],
-        attention_kv_up: ['bf16'],
-        linear_attention: ['bf16'],
-        indexer: ['bf16'],
-      },
-      explicit: ['modules'],
-      noNotes: [/ignore:/, /moe_latent/],
-    }),
-  ),
+  ...['moonshotai/Kimi-K3', 'moonshotai/Kimi-K3.1-Pro'].map((repo): Case => ({
+    repo,
+    dir: '',
+    scheme: /^compressed-tensors mxfp4-pack-quantized \(group_0: mxfp4\)$/,
+    source: 'quantization_config',
+    modules: {
+      routed_experts: ['mxfp4'],
+      moe_latent: ['bf16'],
+      shared_experts: ['bf16'],
+      dense_mlp: ['bf16'],
+      attention: ['bf16'],
+      attention_kv_down: ['bf16'],
+      attention_kv_up: ['bf16'],
+      linear_attention: ['bf16'],
+      indexer: ['bf16'],
+    },
+    explicit: ['modules'],
+    noNotes: [/ignore:/, /moe_latent/],
+  })),
 
   // --- Quark ----------------------------------------------------------------------------------------------------
   {
@@ -435,7 +479,11 @@ const CASES: Case[] = [
     repo: 'sokada4/Qwen3.8-27B-GPTQ-Int4',
     scheme: /^gptq int4 g128 sym$/,
     source: 'quantization_config',
-    modules: { dense_mlp: ['int4', GPTQ_G128], attention: ['int4', GPTQ_G128], linear_attention: ['int4', GPTQ_G128] },
+    modules: {
+      dense_mlp: ['int4', GPTQ_G128],
+      attention: ['int4', GPTQ_G128],
+      linear_attention: ['int4', GPTQ_G128],
+    },
     notes: [/packed zero point per group of 128/],
   },
   {
@@ -479,7 +527,12 @@ const CASES: Case[] = [
     repo: 'mlx-community/Inkling-Small-mlx-4bit',
     scheme: /^mlx int4 .*experts_only/,
     source: 'quantization (mlx)',
-    modules: { routed_experts: ['int4', MLX_G64], attention: ['bf16'], shared_experts: ['bf16'], dense_mlp: ['bf16'] },
+    modules: {
+      routed_experts: ['int4', MLX_G64],
+      attention: ['bf16'],
+      shared_experts: ['bf16'],
+      dense_mlp: ['bf16'],
+    },
   },
   {
     repo: 'mlx-community/Mistral-Large-4-1T-A52B-Text-4bit',
@@ -503,7 +556,12 @@ const CASES: Case[] = [
     dir: '',
     scheme: /^bf16 \(unquantized\)$/,
     source: 'none',
-    modules: { linear_attention: ['bf16'], attention: ['bf16'], routed_experts: ['bf16'], shared_experts: ['bf16'] },
+    modules: {
+      linear_attention: ['bf16'],
+      attention: ['bf16'],
+      routed_experts: ['bf16'],
+      shared_experts: ['bf16'],
+    },
     explicit: [],
   },
   {
@@ -548,7 +606,10 @@ const CASES: Case[] = [
 describe('deriveQuantDefaults: per-repo defaults from the fixtures', () => {
   for (const c of CASES) {
     it(c.name ?? c.repo, () => {
-      const files = fixtureRepoFiles(c.repo, { dir: c.dir ?? 'quant', ...(c.configFrom ? { configFrom: c.configFrom } : {}) });
+      const files = fixtureRepoFiles(c.repo, {
+        dir: c.dir ?? 'quant',
+        ...(c.configFrom ? { configFrom: c.configFrom } : {}),
+      });
       if (c.stripConfigQuant) {
         const rest = { ...(files.config as Record<string, unknown>) };
         delete rest.quantization_config;
@@ -567,7 +628,11 @@ describe('deriveQuantDefaults: per-repo defaults from the fixtures', () => {
       const head = d.quant.lmHead ?? embeddings;
       expectFormat(
         'lmHead',
-        { dtype: head.dtype, extra: head.extraBitsPerElem ?? 0, input: d.quant.lmHeadGemmInput ?? act },
+        {
+          dtype: head.dtype,
+          extra: head.extraBitsPerElem ?? 0,
+          input: d.quant.lmHeadGemmInput ?? act,
+        },
         c.lmHead ?? [embeddings.dtype, embeddings.extraBitsPerElem ?? 0],
         act,
       );
@@ -581,23 +646,42 @@ describe('deriveQuantDefaults: per-repo defaults from the fixtures', () => {
       expect(d.quant.kvCache.dtype).toBe(c.kvCache ?? act);
       expect(d.quant.indexerKeyCache?.dtype).toBe(c.indexerKeyCache);
       if (c.explicit) expect(d.explicit).toEqual(c.explicit);
-      for (const n of c.notes ?? []) expect(d.notes.some((x) => n.test(x)), `note ${n} in ${JSON.stringify(d.notes)}`).toBe(true);
-      for (const n of c.noNotes ?? []) expect(d.notes.filter((x) => n.test(x)), `no note ${n}`).toEqual([]);
+      for (const n of c.notes ?? [])
+        expect(
+          d.notes.some((x) => n.test(x)),
+          `note ${n} in ${JSON.stringify(d.notes)}`,
+        ).toBe(true);
+      for (const n of c.noNotes ?? [])
+        expect(
+          d.notes.filter((x) => n.test(x)),
+          `no note ${n}`,
+        ).toEqual([]);
     });
   }
 });
 
 describe('deriveQuantDefaults: edge cases', () => {
-  const qwenText = { model_type: 'qwen3_5_text', num_hidden_layers: 2, layer_types: ['linear_attention', 'full_attention'], dtype: 'bfloat16' };
+  const qwenText = {
+    model_type: 'qwen3_5_text',
+    num_hidden_layers: 2,
+    layer_types: ['linear_attention', 'full_attention'],
+    dtype: 'bfloat16',
+  };
   const derive = (qc: unknown, extra: Partial<QuantInputs> = {}) =>
-    deriveQuantDefaults({ top: { model_type: 'qwen3_5', quantization_config: qc }, text: qwenText, ...extra });
+    deriveQuantDefaults({
+      top: { model_type: 'qwen3_5', quantization_config: qc },
+      text: qwenText,
+      ...extra,
+    });
 
   it('unknown quant_method: torch_dtype defaults plus a note, never throws', () => {
     const d = derive({ quant_method: 'exl9', bits: 3 });
     expect(d.quant.weights).toEqual({ dtype: 'bf16' });
     expect(d.quant.modules).toBeUndefined();
     expect(d.source).toBe('none');
-    expect(d.notes).toContain("unrecognised quantization 'exl9' (quantization_config); using torch_dtype");
+    expect(d.notes).toContain(
+      "unrecognised quantization 'exl9' (quantization_config); using torch_dtype",
+    );
   });
 
   it('empty quantization_config is ignored with a note', () => {
@@ -609,15 +693,30 @@ describe('deriveQuantDefaults: edge cases', () => {
   it('malformed fields and unknown ignore patterns become notes', () => {
     const d = derive({
       quant_method: 'compressed-tensors',
-      config_groups: { g: { targets: ['Linear', 're:(['], weights: { num_bits: 4, type: 'int', strategy: 'group', group_size: 64, symmetric: true } } },
+      config_groups: {
+        g: {
+          targets: ['Linear', 're:(['],
+          weights: { num_bits: 4, type: 'int', strategy: 'group', group_size: 64, symmetric: true },
+        },
+      },
       ignore: ['model.layers.0.made_up_proj', 're:[unclosed'],
     });
-    expect(effective(d.quant, 'dense_mlp')).toEqual({ dtype: 'int4', extra: 16 / 64, input: 'bf16' });
+    expect(effective(d.quant, 'dense_mlp')).toEqual({
+      dtype: 'int4',
+      extra: 16 / 64,
+      input: 'bf16',
+    });
     expect(d.notes.some((n) => /ignore: 2 entries match no known module/.test(n))).toBe(true);
   });
 
   it('awq: fp16 scale + packed zero point per group, decoder layers only', () => {
-    const d = derive({ quant_method: 'awq', bits: 4, group_size: 128, zero_point: true, modules_to_not_convert: ['linear_attn'] });
+    const d = derive({
+      quant_method: 'awq',
+      bits: 4,
+      group_size: 128,
+      zero_point: true,
+      modules_to_not_convert: ['linear_attn'],
+    });
     expect(effective(d.quant, 'dense_mlp').extra).toBeCloseTo(20 / 128, 6);
     expect(effective(d.quant, 'linear_attention').dtype).toBe('bf16');
     expect(d.quant.lmHead).toBeUndefined();
@@ -629,18 +728,33 @@ describe('deriveQuantDefaults: edge cases', () => {
   });
 
   it('nf4 without double quant: one fp32 absmax per 64', () => {
-    const d = derive({ quant_method: 'bitsandbytes', load_in_4bit: true, bnb_4bit_quant_type: 'nf4' });
+    const d = derive({
+      quant_method: 'bitsandbytes',
+      load_in_4bit: true,
+      bnb_4bit_quant_type: 'nf4',
+    });
     expect(effective(d.quant, 'dense_mlp').extra).toBeCloseTo(32 / 64, 6);
   });
 
   it('quark int4 asym per_group: scale + 4-bit zero point; fp8 per_channel ≈0 with a note', () => {
     const d = derive({
       quant_method: 'quark',
-      global_quant_config: { weight: { dtype: 'uint4', qscheme: 'per_group', group_size: 128, symmetric: false } },
-      layer_quant_config: { '*self_attn*': { weight: { dtype: 'fp8_e4m3', qscheme: 'per_channel' }, input_tensors: { dtype: 'fp8_e4m3' } } },
+      global_quant_config: {
+        weight: { dtype: 'uint4', qscheme: 'per_group', group_size: 128, symmetric: false },
+      },
+      layer_quant_config: {
+        '*self_attn*': {
+          weight: { dtype: 'fp8_e4m3', qscheme: 'per_channel' },
+          input_tensors: { dtype: 'fp8_e4m3' },
+        },
+      },
     });
     expect(effective(d.quant, 'dense_mlp').extra).toBeCloseTo(20 / 128, 6);
-    expect(effective(d.quant, 'attention')).toEqual({ dtype: 'fp8_e4m3', extra: 0, input: 'fp8_e4m3' });
+    expect(effective(d.quant, 'attention')).toEqual({
+      dtype: 'fp8_e4m3',
+      extra: 0,
+      input: 'fp8_e4m3',
+    });
     expect(d.notes.some((n) => /per-channel/.test(n))).toBe(true);
   });
 
@@ -648,7 +762,9 @@ describe('deriveQuantDefaults: edge cases', () => {
     const d = derive({ quant_method: 'modelopt', quant_algo: 'FP8', kv_cache_quant_algo: 'FP8' });
     expect(d.quant.kvCache).toEqual({ dtype: 'fp8_e4m3' });
     expect(d.explicit).toContain('kvCache');
-    expect(derive({ quant_method: 'modelopt', quant_algo: 'FP8' }).explicit).not.toContain('kvCache');
+    expect(derive({ quant_method: 'modelopt', quant_algo: 'FP8' }).explicit).not.toContain(
+      'kvCache',
+    );
   });
 
   it('params.json quantization alone (no quantization_config): native Mistral fp8', () => {
@@ -656,11 +772,22 @@ describe('deriveQuantDefaults: edge cases', () => {
       top: { model_type: 'mistral_large4' },
       text: { model_type: 'mistral_large4_text', num_hidden_layers: 2 },
       paramsJson: {
-        quantization: { qformat_weight: 'fp8_e4m3', block_size_out: 128, block_size_in: 128, use_ue8m0_for_qscales: true, qdynamic_act: true, quantize_kv_a: false },
+        quantization: {
+          qformat_weight: 'fp8_e4m3',
+          block_size_out: 128,
+          block_size_in: 128,
+          use_ue8m0_for_qscales: true,
+          qdynamic_act: true,
+          quantize_kv_a: false,
+        },
       },
     });
     expect(d.source).toBe('params.json');
-    expect(effective(d.quant, 'attention')).toEqual({ dtype: 'fp8_e4m3', extra: FP8_128_UE8M0, input: 'fp8_e4m3' });
+    expect(effective(d.quant, 'attention')).toEqual({
+      dtype: 'fp8_e4m3',
+      extra: FP8_128_UE8M0,
+      input: 'fp8_e4m3',
+    });
     expect(effective(d.quant, 'attention_kv_down').dtype).toBe('bf16');
   });
 

@@ -16,7 +16,11 @@ import { FAMILIES } from './families';
 import type { FamilyEntry, HfConfigView } from './types';
 
 /** Which key matched, for notes and tests. */
-export type DispatchKey = 'architecture' | 'model_type' | 'text_config.architecture' | 'text_config.model_type';
+export type DispatchKey =
+  | 'architecture'
+  | 'model_type'
+  | 'text_config.architecture'
+  | 'text_config.model_type';
 
 /** A dispatch hit: the family entry and the key that selected it. */
 export interface DispatchHit {
@@ -29,8 +33,15 @@ export interface DispatchHit {
 }
 
 /** The family claiming `view`, or null when none does. `families` defaults to {@link FAMILIES}. */
-export function dispatchFamily(view: HfConfigView, families: readonly FamilyEntry[] = FAMILIES): DispatchHit | null {
-  const candidates: { key: DispatchKey; value: string | null | undefined; field: 'architectures' | 'modelTypes' }[] = [
+export function dispatchFamily(
+  view: HfConfigView,
+  families: readonly FamilyEntry[] = FAMILIES,
+): DispatchHit | null {
+  const candidates: {
+    key: DispatchKey;
+    value: string | null | undefined;
+    field: 'architectures' | 'modelTypes';
+  }[] = [
     { key: 'architecture', value: view.topArchitectures[0], field: 'architectures' },
     { key: 'model_type', value: view.topModelType, field: 'modelTypes' },
     { key: 'text_config.architecture', value: view.textArchitectures[0], field: 'architectures' },

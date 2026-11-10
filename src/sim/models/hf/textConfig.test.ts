@@ -47,7 +47,10 @@ describe('unwrapTextConfig', () => {
   });
 
   it('reads quantization_config from text_config when the top level has none', () => {
-    const v = view({ model_type: 'm', text_config: { model_type: 't', quantization_config: { quant_method: 'fp8' } } });
+    const v = view({
+      model_type: 'm',
+      text_config: { model_type: 't', quantization_config: { quant_method: 'fp8' } },
+    });
     expect(v.quantizationConfig).toEqual({ quant_method: 'fp8' });
   });
 
@@ -63,12 +66,23 @@ describe('unwrapTextConfig', () => {
     expect(v.visionConfig).toBeDefined();
     expect(v.notes).toContain('language model only; vision/audio towers excluded');
     // text_config wins over llm_config; a non-object llm_config is rejected.
-    expect(view({ text_config: { model_type: 'a' }, llm_config: { model_type: 'b' } }).text.model_type).toBe('a');
-    expect(unwrapTextConfig({ llm_config: 3 })).toEqual({ kind: 'invalid_config', errors: ['llm_config: expected object'] });
+    expect(
+      view({ text_config: { model_type: 'a' }, llm_config: { model_type: 'b' } }).text.model_type,
+    ).toBe('a');
+    expect(unwrapTextConfig({ llm_config: 3 })).toEqual({
+      kind: 'invalid_config',
+      errors: ['llm_config: expected object'],
+    });
   });
 
   it('rejects non-object configs and text_configs', () => {
-    expect(unwrapTextConfig(null)).toEqual({ kind: 'invalid_config', errors: ['config.json: expected a JSON object'] });
-    expect(unwrapTextConfig({ text_config: 3 })).toEqual({ kind: 'invalid_config', errors: ['text_config: expected object'] });
+    expect(unwrapTextConfig(null)).toEqual({
+      kind: 'invalid_config',
+      errors: ['config.json: expected a JSON object'],
+    });
+    expect(unwrapTextConfig({ text_config: 3 })).toEqual({
+      kind: 'invalid_config',
+      errors: ['text_config: expected object'],
+    });
   });
 });

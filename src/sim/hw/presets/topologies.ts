@@ -21,7 +21,12 @@ import { ARC_PRO_B60 } from './intel';
 import { RTX_3090, RTX_4090, RTX_5090 } from './nvidia';
 import { A100_PCIE_80GB, DGX_SPARK, V100_PCIE, V100_SXM2 } from './nvidia-datacenter';
 import {
-  ETHERNET_5G_TCP, ETHERNET_10G_TCP, IB_NDR_400, IB_XDR_800, NVLINK_4, NVLINK_5,
+  ETHERNET_5G_TCP,
+  ETHERNET_10G_TCP,
+  IB_NDR_400,
+  IB_XDR_800,
+  NVLINK_4,
+  NVLINK_5,
   NVLINK_5_NVL72,
   NVLINK_5_NVL4,
   XGMI_MI325X_8_GPU,
@@ -33,8 +38,16 @@ import {
   NVLINK_2_HCM_8,
   NVLINK_2_MESH_4,
   PCIE_3_X16_DIRECT,
-  PCIE_4_X16, PCIE_5_X16, PCIE_5_X8_DIRECT, RTX_3090_NVLINK, SPARK_CONNECTX_7,
-  TB4_TCP, TB5_RDMA, USB4_HALO_RDMA, USB4_HALO_TCP, XGMI_MI300X_8_GPU,
+  PCIE_4_X16,
+  PCIE_5_X16,
+  PCIE_5_X8_DIRECT,
+  RTX_3090_NVLINK,
+  SPARK_CONNECTX_7,
+  TB4_TCP,
+  TB5_RDMA,
+  USB4_HALO_RDMA,
+  USB4_HALO_TCP,
+  XGMI_MI300X_8_GPU,
 } from './links';
 
 /**
@@ -44,7 +57,10 @@ import {
  * UI's URL (`LinkSpec` has no id field).
  */
 export function linkPresetId(link: Pick<LinkSpec, 'name'>): string {
-  return link.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return link.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
 }
 
 /**
@@ -73,7 +89,9 @@ export function fabricWord(fabric: FabricShape | undefined): string | undefined 
     case 'switched':
       return `switch, ${fabric.oversubscription}:1 oversubscribed`;
     case 'full_mesh':
-      return (fabric.cablesPerPair ?? 1) > 1 ? `full mesh, ${fabric.cablesPerPair} cables per pair` : 'full mesh';
+      return (fabric.cablesPerPair ?? 1) > 1
+        ? `full mesh, ${fabric.cablesPerPair} cables per pair`
+        : 'full mesh';
     case 'ring':
       return 'ring';
     case 'chain':
@@ -112,7 +130,8 @@ export function nodeTopology(args: NodeTopologyArgs): TopologySpec {
   const { devicesPerNode, nodes } = args;
   const intraNode = devicesPerNode > 1 ? args.intraNode : undefined;
   const interNode = nodes > 1 ? args.interNode : undefined;
-  const fabric = interNode !== undefined && !isNonBlockingSwitched(args.fabric) ? args.fabric : undefined;
+  const fabric =
+    interNode !== undefined && !isNonBlockingSwitched(args.fabric) ? args.fabric : undefined;
   const deviceId = args.device?.id ?? 'device';
   const deviceName = args.device?.name ?? 'device';
   const idParts = [`node-${devicesPerNode}x${nodes}`, deviceId];
@@ -120,7 +139,10 @@ export function nodeTopology(args: NodeTopologyArgs): TopologySpec {
   if (interNode !== undefined) idParts.push(`inter-${linkPresetId(interNode)}`);
   const inNode = `${devicesPerNode} × ${deviceName}${intraNode !== undefined ? ` / ${intraNode.name}` : ''}`;
   const shape = fabricWord(fabric);
-  const network = interNode !== undefined ? ` / ${interNode.name}${shape !== undefined ? ` (${shape})` : ''}` : '';
+  const network =
+    interNode !== undefined
+      ? ` / ${interNode.name}${shape !== undefined ? ` (${shape})` : ''}`
+      : '';
   const name = nodes > 1 ? `${nodes} nodes × (${inNode})${network}` : inNode;
   return {
     id: idParts.join('-') + fabricIdSuffix(fabric),
@@ -139,11 +161,18 @@ export function nodeTopology(args: NodeTopologyArgs): TopologySpec {
  * `link` defaults to stock host-bounced Gen5 x16. Use x8 for bifurcated slots; the model does not include
  * shared switch/root-complex uplink contention. Device identity only supplies the display name and id.
  */
-export function pcieBox(device: Pick<DeviceSpec, 'id' | 'name'>, devices: number, link: LinkSpec = PCIE_5_X16): TopologySpec {
+export function pcieBox(
+  device: Pick<DeviceSpec, 'id' | 'name'>,
+  devices: number,
+  link: LinkSpec = PCIE_5_X16,
+): TopologySpec {
   return {
     id: `pcie-${devices}-${device.id}-${linkPresetId(link)}`,
     name: `${devices} × ${device.name} / ${link.name}`,
-    devicesPerNode: devices, nodes: 1, intraNode: link, sources: [],
+    devicesPerNode: devices,
+    nodes: 1,
+    intraNode: link,
+    sources: [],
   };
 }
 
@@ -154,13 +183,20 @@ export function pcieBox(device: Pick<DeviceSpec, 'id' | 'name'>, devices: number
  * `ring` or `chain`; relays on a ring or chain go through the host (see `FabricShape`). Which shapes a machine's
  * port count allows is the catalog's business (`presets/catalog.ts`); `validateTopology` checks only the structure.
  */
-export function socCluster(device: Pick<DeviceSpec, 'id' | 'name'>, nodes: number, link: LinkSpec, fabric?: FabricShape): TopologySpec {
+export function socCluster(
+  device: Pick<DeviceSpec, 'id' | 'name'>,
+  nodes: number,
+  link: LinkSpec,
+  fabric?: FabricShape,
+): TopologySpec {
   const shape = nodes > 1 && !isNonBlockingSwitched(fabric) ? fabric : undefined;
   const word = fabricWord(shape);
   return {
     id: `cluster-${nodes}-${device.id}-${linkPresetId(link)}${fabricIdSuffix(shape)}`,
     name: `${nodes} × ${device.name} / ${link.name}${word !== undefined ? ` (${word})` : ''}`,
-    devicesPerNode: 1, nodes, interNode: link,
+    devicesPerNode: 1,
+    nodes,
+    interNode: link,
     ...(shape !== undefined ? { interNodeFabric: shape } : {}),
     sources: [],
   };
@@ -172,7 +208,9 @@ export function socCluster(device: Pick<DeviceSpec, 'id' | 'name'>, nodes: numbe
  */
 export function hgxCluster(
   generation: 'a100' | 'h100' | 'b200' | 'b300',
-  nodes = 1, interNode?: LinkSpec): TopologySpec {
+  nodes = 1,
+  interNode?: LinkSpec,
+): TopologySpec {
   const intraNode = generation === 'a100' ? NVLINK_3 : generation === 'h100' ? NVLINK_4 : NVLINK_5;
   const network =
     interNode ??
@@ -186,12 +224,18 @@ export function hgxCluster(
   return {
     id: `hgx-${generation}-${nodes}-nodes-${linkPresetId(network)}`,
     name: `${nodes} × HGX ${generation.toUpperCase()} (8 GPUs/node)`,
-    devicesPerNode: 8, nodes, intraNode,
+    devicesPerNode: 8,
+    nodes,
+    intraNode,
     ...(nodes > 1 ? { interNode: network } : {}),
-    sources: [{
-      url: productUrl, title: `NVIDIA DGX ${generation.toUpperCase()} eight-GPU system`,
-      fields: ['devicesPerNode'], note: 'Eight GPUs in an NVSwitch scale-up island; node count is user-selected.',
-    }],
+    sources: [
+      {
+        url: productUrl,
+        title: `NVIDIA DGX ${generation.toUpperCase()} eight-GPU system`,
+        fields: ['devicesPerNode'],
+        note: 'Eight GPUs in an NVSwitch scale-up island; node count is user-selected.',
+      },
+    ],
   };
 }
 
@@ -209,18 +253,33 @@ export const RTX_3090_PCIE_2 = pcieBox(RTX_3090, 2, PCIE_4_X16);
 export const RTX_3090_PCIE_4 = pcieBox(RTX_3090, 4, PCIE_4_X16);
 /** Two RTX 3090s connected by the supported two-card NVLink bridge, 56.25 GB/s per direction. */
 export const RTX_3090_NVLINK_2: TopologySpec = {
-  id: 'rtx-3090-nvlink-2', name: '2 × RTX 3090 / NVLink bridge',
-  devicesPerNode: 2, nodes: 1, intraNode: RTX_3090_NVLINK,
-  sources: [{
-    url: RTX_3090_NVLINK.sources[0]!.url, title: 'GA102 two-GPU NVLink bridge', fields: ['devicesPerNode'],
-    note: 'RTX 3090 NVLink supports a pair, not a four-card NVLink island.',
-  }],
+  id: 'rtx-3090-nvlink-2',
+  name: '2 × RTX 3090 / NVLink bridge',
+  devicesPerNode: 2,
+  nodes: 1,
+  intraNode: RTX_3090_NVLINK,
+  sources: [
+    {
+      url: RTX_3090_NVLINK.sources[0]!.url,
+      title: 'GA102 two-GPU NVLink bridge',
+      fields: ['devicesPerNode'],
+      note: 'RTX 3090 NVLink supports a pair, not a four-card NVLink island.',
+    },
+  ],
 };
 /** The NVIDIA playbook that scripts 2-, 3- and 4-Spark direct cabling (`setup-cluster.sh --topology ring`) and names the 200GbE switches. */
-const SPARK_PLAYBOOK_URL = 'https://github.com/NVIDIA/dgx-spark-playbooks/blob/main/nvidia/playbook-connect-multiple-sparks/README.md';
+const SPARK_PLAYBOOK_URL =
+  'https://github.com/NVIDIA/dgx-spark-playbooks/blob/main/nvidia/playbook-connect-multiple-sparks/README.md';
 /** Cites the cabling of a DGX Spark cluster (the counts are user configuration; the link numbers live on `SPARK_CONNECTX_7`). */
 function sparkCabling(note: string): TopologySpec['sources'] {
-  return [{ url: SPARK_PLAYBOOK_URL, title: 'NVIDIA DGX Spark playbook: connect multiple Sparks', fields: ['interNodeFabric'], note }];
+  return [
+    {
+      url: SPARK_PLAYBOOK_URL,
+      title: 'NVIDIA DGX Spark playbook: connect multiple Sparks',
+      fields: ['interNodeFabric'],
+      note,
+    },
+  ];
 }
 /**
  * Two DGX Sparks, one device per node, one QSFP cable back to back: ConnectX-7 200GbE RoCE at 25 GB/s each
@@ -234,7 +293,9 @@ export const DGX_SPARK_PAIR = socCluster(DGX_SPARK, 2, SPARK_CONNECTX_7);
  */
 export const DGX_SPARK_3: TopologySpec = {
   ...socCluster(DGX_SPARK, 3, SPARK_CONNECTX_7, { kind: 'full_mesh' }),
-  sources: sparkCabling('"Three-device" topology: each Spark cabled to both others (QSFP port 0 and 1), no switch.'),
+  sources: sparkCabling(
+    '"Three-device" topology: each Spark cabled to both others (QSFP port 0 and 1), no switch.',
+  ),
 };
 /**
  * Four DGX Sparks through a 200GbE switch (e.g. MikroTik CRS804 / CRS812, named in the playbook), assumed
@@ -250,33 +311,49 @@ export const DGX_SPARK_4 = socCluster(DGX_SPARK, 4, SPARK_CONNECTX_7);
  */
 export const DGX_SPARK_4_RING: TopologySpec = {
   ...socCluster(DGX_SPARK, 4, SPARK_CONNECTX_7, { kind: 'ring' }),
-  sources: sparkCabling('"Four-device direct ring": `setup-cluster.sh --topology ring`; port 0 to the previous Spark, port 1 to the next.'),
+  sources: sparkCabling(
+    '"Four-device direct ring": `setup-cluster.sh --topology ring`; port 0 to the previous Spark, port 1 to the next.',
+  ),
 };
 
 /** Thunderbolt and USB4 are point-to-point: no switch exists, so N Macs or Halo boxes are a full mesh while the ports allow (`presets/catalog.ts`). */
 const MESH: FabricShape = { kind: 'full_mesh' };
 /** M3 Ultra Mac Studio RDMA cluster, 2/3/4 nodes, full mesh of TB5 cables (5 RDMA-capable ports: up to 6 nodes). */
-export const M3_ULTRA_TB5_CLUSTERS = [2, 3, 4].map((n) => socCluster(M3_ULTRA_80C, n, TB5_RDMA, MESH));
+export const M3_ULTRA_TB5_CLUSTERS = [2, 3, 4].map((n) =>
+  socCluster(M3_ULTRA_80C, n, TB5_RDMA, MESH),
+);
 /** M4 Max Mac Studio RDMA cluster, 2/3/4 nodes, full mesh of TB5 cables (3 RDMA-capable ports: up to 4 nodes). */
 export const M4_MAX_TB5_CLUSTERS = [2, 3, 4].map((n) => socCluster(M4_MAX_40C, n, TB5_RDMA, MESH));
 /** M5 Max RDMA cluster, 2/3/4 nodes, full mesh of TB5 cables (3 RDMA-capable ports assumed: up to 4 nodes). */
 export const M5_MAX_TB5_CLUSTERS = [2, 3, 4].map((n) => socCluster(M5_MAX_40C, n, TB5_RDMA, MESH));
 /** M5 Ultra RDMA cluster, 2/3/4 nodes, full mesh of TB5 cables (6 ports inferred usable: up to 7 nodes, or 4 with two cables per pair). */
-export const M5_ULTRA_TB5_CLUSTERS = [2, 3, 4].map((n) => socCluster(M5_ULTRA_80C, n, TB5_RDMA, MESH));
+export const M5_ULTRA_TB5_CLUSTERS = [2, 3, 4].map((n) =>
+  socCluster(M5_ULTRA_80C, n, TB5_RDMA, MESH),
+);
 /** Mac TCP bridge fallback, 2/3/4 nodes with TB4-compatible cables in a full mesh, nominal 5 GB/s per direction. */
-export const MAC_TB4_TCP_CLUSTERS = [2, 3, 4].map((n) => socCluster(M3_ULTRA_80C, n, TB4_TCP, MESH));
+export const MAC_TB4_TCP_CLUSTERS = [2, 3, 4].map((n) =>
+  socCluster(M3_ULTRA_80C, n, TB4_TCP, MESH),
+);
 /** The shape of N Strix Halo boxes over their two native USB4 ports: 2 direct, 3 a triangle (mesh), 4 a ring (2 hops at most). */
 function haloUsb4Shape(nodes: number): FabricShape {
   return nodes <= 3 ? MESH : { kind: 'ring' };
 }
 /** Strix Halo USB4 TCP clusters, 2/3/4 nodes over the two native USB4 ports (20 Gb/s negotiated); four boxes form a ring. */
-export const STRIX_HALO_USB4_TCP_CLUSTERS = [2, 3, 4].map((n) => socCluster(RYZEN_AI_MAX_PLUS_395, n, USB4_HALO_TCP, haloUsb4Shape(n)));
+export const STRIX_HALO_USB4_TCP_CLUSTERS = [2, 3, 4].map((n) =>
+  socCluster(RYZEN_AI_MAX_PLUS_395, n, USB4_HALO_TCP, haloUsb4Shape(n)),
+);
 /** Strix Halo native USB4 RDMA clusters, 2/3/4 nodes (experimental driver); four boxes form a ring. */
-export const STRIX_HALO_USB4_RDMA_CLUSTERS = [2, 3, 4].map((n) => socCluster(RYZEN_AI_MAX_PLUS_395, n, USB4_HALO_RDMA, haloUsb4Shape(n)));
+export const STRIX_HALO_USB4_RDMA_CLUSTERS = [2, 3, 4].map((n) =>
+  socCluster(RYZEN_AI_MAX_PLUS_395, n, USB4_HALO_RDMA, haloUsb4Shape(n)),
+);
 /** Strix Halo 5GbE clusters, 2/3/4 nodes, non-oversubscribed switch assumed. */
-export const STRIX_HALO_5GBE_CLUSTERS = [2, 3, 4].map((n) => socCluster(RYZEN_AI_MAX_PLUS_395, n, ETHERNET_5G_TCP));
+export const STRIX_HALO_5GBE_CLUSTERS = [2, 3, 4].map((n) =>
+  socCluster(RYZEN_AI_MAX_PLUS_395, n, ETHERNET_5G_TCP),
+);
 /** Strix Halo 10GbE clusters, 2/3/4 nodes; assumes add-in NICs and a non-oversubscribed switch. */
-export const STRIX_HALO_10GBE_CLUSTERS = [2, 3, 4].map((n) => socCluster(RYZEN_AI_MAX_PLUS_395, n, ETHERNET_10G_TCP));
+export const STRIX_HALO_10GBE_CLUSTERS = [2, 3, 4].map((n) =>
+  socCluster(RYZEN_AI_MAX_PLUS_395, n, ETHERNET_10G_TCP),
+);
 
 /** Two Intel Arc Pro B60 GPUs, Gen5 x8 direct P2P on compatible xe driver/host routing. */
 export const ARC_PRO_B60_PCIE_2 = pcieBox(ARC_PRO_B60, 2, PCIE_5_X8_DIRECT);
@@ -293,12 +370,14 @@ const R9700_PRODUCT_URL =
  */
 export const R9700_PCIE_4: TopologySpec = {
   ...pcieBox(RADEON_AI_PRO_R9700, 4, PCIE_5_X16),
-  sources: [{
-    url: R9700_PRODUCT_URL,
-    title: 'AMD Radeon AI PRO R9700 product page',
-    fields: ['intraNode'],
-    note: '"Bus Type PCIe® 5.0 x16": the card\'s link; the count of four is user configuration.',
-  }],
+  sources: [
+    {
+      url: R9700_PRODUCT_URL,
+      title: 'AMD Radeon AI PRO R9700 product page',
+      fields: ['intraNode'],
+      note: '"Bus Type PCIe® 5.0 x16": the card\'s link; the count of four is user configuration.',
+    },
+  ],
 };
 /** Eight A100 SXM4 GPUs on HGX/DGX NVSwitch: 300 GB/s per device per direction. */
 export const HGX_A100_8 = hgxCluster('a100');
@@ -359,13 +438,19 @@ export const HGX_B300_8 = hgxCluster('b300');
 export const HGX_B300_16_XDR = hgxCluster('b300', 2);
 /** Eight MI300X GPUs in a full xGMI mesh; aggregate 448 GB/s per GPU, optimistic for subgroups/point-to-point. */
 export const MI300X_XGMI_8: TopologySpec = {
-  id: 'mi300x-xgmi-8', name: '8 × MI300X / xGMI full mesh',
-  devicesPerNode: 8, nodes: 1, intraNode: XGMI_MI300X_8_GPU,
-  sources: [{
-    url: 'https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/data-sheets/amd-instinct-mi300x-data-sheet.pdf',
-    title: 'AMD Instinct MI300X platform datasheet', fields: ['devicesPerNode'],
-    note: 'Eight GPUs, seven direct peer links per GPU. The engine does not reduce mesh injection for subgroups.',
-  }],
+  id: 'mi300x-xgmi-8',
+  name: '8 × MI300X / xGMI full mesh',
+  devicesPerNode: 8,
+  nodes: 1,
+  intraNode: XGMI_MI300X_8_GPU,
+  sources: [
+    {
+      url: 'https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/data-sheets/amd-instinct-mi300x-data-sheet.pdf',
+      title: 'AMD Instinct MI300X platform datasheet',
+      fields: ['devicesPerNode'],
+      note: 'Eight GPUs, seven direct peer links per GPU. The engine does not reduce mesh injection for subgroups.',
+    },
+  ],
 };
 
 /**
@@ -492,10 +577,34 @@ export const TOPOLOGY_PRESETS: TopologySpec[] = [
   V100_SXM2_NVLINK_8,
   V100_PCIE_2,
   V100_PCIE_4,
-  RTX_5090_PCIE_2, RTX_5090_PCIE_4, RTX_4090_PCIE_2, RTX_4090_PCIE_4, RTX_3090_PCIE_2, RTX_3090_PCIE_4,
-  RTX_3090_NVLINK_2, DGX_SPARK_PAIR, DGX_SPARK_3, DGX_SPARK_4, DGX_SPARK_4_RING, ARC_PRO_B60_PCIE_2, ARC_PRO_B60_PCIE_4, R9700_PCIE_4,
-  ...M3_ULTRA_TB5_CLUSTERS, ...M4_MAX_TB5_CLUSTERS, ...M5_MAX_TB5_CLUSTERS, ...M5_ULTRA_TB5_CLUSTERS,
-  ...MAC_TB4_TCP_CLUSTERS, ...STRIX_HALO_USB4_TCP_CLUSTERS, ...STRIX_HALO_USB4_RDMA_CLUSTERS,
-  ...STRIX_HALO_5GBE_CLUSTERS, ...STRIX_HALO_10GBE_CLUSTERS,
-  HGX_H100_8, HGX_H100_16_NDR, HGX_B200_8, HGX_B200_16_NDR, HGX_B300_8, HGX_B300_16_XDR, MI300X_XGMI_8,
+  RTX_5090_PCIE_2,
+  RTX_5090_PCIE_4,
+  RTX_4090_PCIE_2,
+  RTX_4090_PCIE_4,
+  RTX_3090_PCIE_2,
+  RTX_3090_PCIE_4,
+  RTX_3090_NVLINK_2,
+  DGX_SPARK_PAIR,
+  DGX_SPARK_3,
+  DGX_SPARK_4,
+  DGX_SPARK_4_RING,
+  ARC_PRO_B60_PCIE_2,
+  ARC_PRO_B60_PCIE_4,
+  R9700_PCIE_4,
+  ...M3_ULTRA_TB5_CLUSTERS,
+  ...M4_MAX_TB5_CLUSTERS,
+  ...M5_MAX_TB5_CLUSTERS,
+  ...M5_ULTRA_TB5_CLUSTERS,
+  ...MAC_TB4_TCP_CLUSTERS,
+  ...STRIX_HALO_USB4_TCP_CLUSTERS,
+  ...STRIX_HALO_USB4_RDMA_CLUSTERS,
+  ...STRIX_HALO_5GBE_CLUSTERS,
+  ...STRIX_HALO_10GBE_CLUSTERS,
+  HGX_H100_8,
+  HGX_H100_16_NDR,
+  HGX_B200_8,
+  HGX_B200_16_NDR,
+  HGX_B300_8,
+  HGX_B300_16_XDR,
+  MI300X_XGMI_8,
 ];

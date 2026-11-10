@@ -66,18 +66,18 @@ Keys are tried in this order; the first one a family claims wins: top-level `arc
 `model_type`, `text_config.architectures[0]`, `text_config.model_type`. Architectures come first because they
 name the model class; model types second because text-only extractions often drop `architectures`.
 
-| Family (`families/…`) | `model_type` | `architectures[0]` | Shortlist models |
-|---|---|---|---|
-| `qwen` (`qwen.ts`) | `qwen3_5`, `qwen3_5_text`, `qwen4_exp`, `qwen4_exp_text` | `Qwen3_5ForConditionalGeneration`, `Qwen4ExpForConditionalGeneration` | Qwen3.8-27B, Qwen3.8-Flash-Next |
-| `deepseek_v41` (`deepseekV41.ts`) | `deepseek_v41`, `deepseek_v41_text` | `DeepseekV41ForCausalLM` | DeepSeek-V4.1-Flash (and `-1017`) |
-| `deepseek_v4` (`deepseekV41.ts`, `deepseekV4Family`: same builder, V4 profile) | `deepseek_v4` | `DeepseekV4ForCausalLM` | DeepSeek-V4-Flash-0731 |
-| `glm5_next` (`glm5Next.ts`) | `glm5_next`, `glm5_next_text` | `Glm5NextForConditionalGeneration` | GLM-5.3-Flash |
-| `glm_moe_dsa` (`glmMoeDsa.ts`) | `glm_moe_dsa` | `GlmMoeDsaForCausalLM` | GLM-5.3 (also GLM-5) |
-| `mistral_large4` (`mistralLarge4.ts`) | `mistral_large4`, `mistral_large4_text` | `MistralLarge4ForConditionalGeneration` | Mistral Large 4 |
-| `inkling` (`inkling.ts`) | `inkling_mm_model`, `inkling_text` | `InklingForConditionalGeneration` | Inkling-Small |
-| `minimax` (`minimax.ts`) | `minimax_m3_vl`, `minimax_m3_vl_text` | `MiniMaxM3SparseForConditionalGeneration`, `MiniMaxM3SparseForCausalLM` | MiniMax-M3 (and M3.1-Flash) |
-| `nemotron_h` (`nemotronH.ts`) | `nemotron_h`, `nemotron_h_omni` | `NemotronHForCausalLM`, `NemotronH_Omni_Reasoning_V3` | Nemotron 3.5 Lightning, Nemotron 3.5 Super VL |
-| `muse_spark` (`museSpark.ts`) | `muse_spark`, `muse_spark_text` | `MuseSparkForConditionalGeneration` | Muse Spark (`meta-models/Muse-Spark-Open-816B-A42B`, read through `unsloth/…`) |
+| Family (`families/…`)                                                          | `model_type`                                             | `architectures[0]`                                                      | Shortlist models                                                               |
+| ------------------------------------------------------------------------------ | -------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `qwen` (`qwen.ts`)                                                             | `qwen3_5`, `qwen3_5_text`, `qwen4_exp`, `qwen4_exp_text` | `Qwen3_5ForConditionalGeneration`, `Qwen4ExpForConditionalGeneration`   | Qwen3.8-27B, Qwen3.8-Flash-Next                                                |
+| `deepseek_v41` (`deepseekV41.ts`)                                              | `deepseek_v41`, `deepseek_v41_text`                      | `DeepseekV41ForCausalLM`                                                | DeepSeek-V4.1-Flash (and `-1017`)                                              |
+| `deepseek_v4` (`deepseekV41.ts`, `deepseekV4Family`: same builder, V4 profile) | `deepseek_v4`                                            | `DeepseekV4ForCausalLM`                                                 | DeepSeek-V4-Flash-0731                                                         |
+| `glm5_next` (`glm5Next.ts`)                                                    | `glm5_next`, `glm5_next_text`                            | `Glm5NextForConditionalGeneration`                                      | GLM-5.3-Flash                                                                  |
+| `glm_moe_dsa` (`glmMoeDsa.ts`)                                                 | `glm_moe_dsa`                                            | `GlmMoeDsaForCausalLM`                                                  | GLM-5.3 (also GLM-5)                                                           |
+| `mistral_large4` (`mistralLarge4.ts`)                                          | `mistral_large4`, `mistral_large4_text`                  | `MistralLarge4ForConditionalGeneration`                                 | Mistral Large 4                                                                |
+| `inkling` (`inkling.ts`)                                                       | `inkling_mm_model`, `inkling_text`                       | `InklingForConditionalGeneration`                                       | Inkling-Small                                                                  |
+| `minimax` (`minimax.ts`)                                                       | `minimax_m3_vl`, `minimax_m3_vl_text`                    | `MiniMaxM3SparseForConditionalGeneration`, `MiniMaxM3SparseForCausalLM` | MiniMax-M3 (and M3.1-Flash)                                                    |
+| `nemotron_h` (`nemotronH.ts`)                                                  | `nemotron_h`, `nemotron_h_omni`                          | `NemotronHForCausalLM`, `NemotronH_Omni_Reasoning_V3`                   | Nemotron 3.5 Lightning, Nemotron 3.5 Super VL                                  |
+| `muse_spark` (`museSpark.ts`)                                                  | `muse_spark`, `muse_spark_text`                          | `MuseSparkForConditionalGeneration`                                     | Muse Spark (`meta-models/Muse-Spark-Open-816B-A42B`, read through `unsloth/…`) |
 
 The MLA/DSA families share their readers in `families/mlaCommon.ts` (MLA dims from `qk_nope_head_dim` /
 `qk_rope_head_dim` / `v_head_dim` — never `head_dim` or `num_key_value_heads`, which are traps in GLM and Mistral
@@ -94,6 +94,7 @@ MTP (one attention + MoE module) is the drafter (`mtp_layers_block_type`), coste
 The SSM state format comes from `mamba_ssm_cache_dtype` (fp32; the model card serves fp16).
 
 **Rules every family follows.**
+
 - The mapping reads config fields, never model names, so sibling checkpoints of the same architecture (BF16
   twins, later revisions, fine-tunes) map too. Per-layer roles come from config lists (`layer_types`,
   `mlp_layer_types`, `indexer_types`, `compress_ratios`, `kv_source_layer_ids`, `kv_source_layers`,
@@ -110,6 +111,7 @@ The SSM state format comes from `mamba_ssm_cache_dtype` (fp32; the model card se
   nowhere (e.g. a shared indexer before any full one) is `invalid_config`.
 
 **Adding a family.**
+
 1. Write `src/sim/models/hf/families/<name>.ts` exporting a `FamilyEntry`: its `family` name, the `modelTypes` and
    `architectures` it claims, and `build(text, top, files)`. Read fields with `createReader` (`reader.ts`): it
    never throws, collects path-qualified errors, and the builder returns them all as `invalid_config`.
@@ -186,20 +188,20 @@ Parameters are the IR's (`countParams`, text model incl. n-gram tables, MTP and 
 incl. embedding and head (`activeParamsPerToken`); the param check compares against `safetensors.total` with the
 excluded estimates added.
 
-| Shortlist name | HF ID | Family | IR total / active | Param check | Native format |
-|---|---|---|---|---|---|
-| Qwen3.8-27B | `Qwen/Qwen3.8-27B` | `qwen` | 26.90B / 26.90B | ok | BF16 |
-| Qwen3.8-Flash-Next | `Qwen/Qwen3.8-Flash-Next` | `qwen` | 176.94B / 7.31B | ok | BF16 |
-| DeepSeek-V4.1-Flash | `deepseek-ai/DeepSeek-V4.1-Flash` (`-1017` identical) | `deepseek_v41` | 748.49B / 16.79B | ok | FP8 32×32 ue8m0, experts FP4 |
-| DeepSeek-V4-Flash-0731 | `deepseek-ai/DeepSeek-V4-Flash-0731` | `deepseek_v4` | 284.33B (304.18B incl. MTP) / 13.27B active excl. embedding | ok | FP8 128×128 ue8m0, experts FP4 |
-| GLM-5.3 Flash | `zai-org/GLM-5.3-Flash` (`-BF16` twin) | `glm5_next` | 313.33B / 17.38B | ok | FP8 128×128 |
-| GLM-5.3 | `zai-org/GLM-5.3` (`-BF16` twin) | `glm_moe_dsa` | 743.38B / 41.25B | ok | FP8 128×128 |
-| Mistral Large 4 | `mistralai/Mistral-Large-4-1T-A52B` | `mistral_large4` | 1049.36B / 52.34B | unavailable (no safetensors totals) | FP8 128×128 |
-| Inkling 2 Small (stand-in, below) | `thinkingmachines/Inkling-Small` | `inkling` | 263.65B / 12.00B | ok | BF16 |
-| MiniMax M3 | `MiniMaxAI/MiniMax-M3` (`M3.1-Flash` same text dims) | `minimax` | 426.17B / 25.96B | ok | BF16 |
-| Nemotron 3.5 Lightning | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16` | `nemotron_h` | 31.58B / 3.58B | ok (against the per-dtype sum, §5; −9e-8) | BF16 |
-| Nemotron 3.5 Super VL | `nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4` | `nemotron_h` | 120.67B / 12.77B | packed (U8 words) | FP8 Mamba/attention/head, NVFP4 experts, BF16 latent |
-| Muse Spark | `meta-models/Muse-Spark-Open-816B-A42B` (fixture: the `unsloth/` mirror) | `muse_spark` | 819.99B / 46.09B | ok | BF16 (router F32) |
+| Shortlist name                    | HF ID                                                                    | Family           | IR total / active                                           | Param check                               | Native format                                        |
+| --------------------------------- | ------------------------------------------------------------------------ | ---------------- | ----------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------- |
+| Qwen3.8-27B                       | `Qwen/Qwen3.8-27B`                                                       | `qwen`           | 26.90B / 26.90B                                             | ok                                        | BF16                                                 |
+| Qwen3.8-Flash-Next                | `Qwen/Qwen3.8-Flash-Next`                                                | `qwen`           | 176.94B / 7.31B                                             | ok                                        | BF16                                                 |
+| DeepSeek-V4.1-Flash               | `deepseek-ai/DeepSeek-V4.1-Flash` (`-1017` identical)                    | `deepseek_v41`   | 748.49B / 16.79B                                            | ok                                        | FP8 32×32 ue8m0, experts FP4                         |
+| DeepSeek-V4-Flash-0731            | `deepseek-ai/DeepSeek-V4-Flash-0731`                                     | `deepseek_v4`    | 284.33B (304.18B incl. MTP) / 13.27B active excl. embedding | ok                                        | FP8 128×128 ue8m0, experts FP4                       |
+| GLM-5.3 Flash                     | `zai-org/GLM-5.3-Flash` (`-BF16` twin)                                   | `glm5_next`      | 313.33B / 17.38B                                            | ok                                        | FP8 128×128                                          |
+| GLM-5.3                           | `zai-org/GLM-5.3` (`-BF16` twin)                                         | `glm_moe_dsa`    | 743.38B / 41.25B                                            | ok                                        | FP8 128×128                                          |
+| Mistral Large 4                   | `mistralai/Mistral-Large-4-1T-A52B`                                      | `mistral_large4` | 1049.36B / 52.34B                                           | unavailable (no safetensors totals)       | FP8 128×128                                          |
+| Inkling 2 Small (stand-in, below) | `thinkingmachines/Inkling-Small`                                         | `inkling`        | 263.65B / 12.00B                                            | ok                                        | BF16                                                 |
+| MiniMax M3                        | `MiniMaxAI/MiniMax-M3` (`M3.1-Flash` same text dims)                     | `minimax`        | 426.17B / 25.96B                                            | ok                                        | BF16                                                 |
+| Nemotron 3.5 Lightning            | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16`                      | `nemotron_h`     | 31.58B / 3.58B                                              | ok (against the per-dtype sum, §5; −9e-8) | BF16                                                 |
+| Nemotron 3.5 Super VL             | `nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4`                    | `nemotron_h`     | 120.67B / 12.77B                                            | packed (U8 words)                         | FP8 Mamba/attention/head, NVFP4 experts, BF16 latent |
+| Muse Spark                        | `meta-models/Muse-Spark-Open-816B-A42B` (fixture: the `unsloth/` mirror) | `muse_spark`     | 819.99B / 46.09B                                            | ok                                        | BF16 (router F32)                                    |
 
 **Inkling 2 Small.** No repo of that name exists. Thinking Machines publishes only `thinkingmachines/Inkling` and
 `thinkingmachines/Inkling-Small`; `NarsAI/Inkling-2` is a byte-identical re-upload of the big Inkling. The loader is
@@ -208,23 +210,23 @@ way.
 
 **Feature matrix** (from the fetched configs, reference code and safetensors headers):
 
-| Feature | Q-Flash-Next | Q-27B | DSV4.1-Flash | GLM-5.3-Flash | GLM-5.3 | Mistral L4 | Inkling-Small | MiniMax-M3 | Nemotron-Lightning | Nemotron-Super | Muse Spark |
-|---|---|---|---|---|---|---|---|---| --- | --- | --- |
-| GQA full attention | 1 of 4 layers, gated | 1 of 4 layers, gated | – | – | – | – | ✓ | ✓ | 6 of 52 layers, no RoPE | 8 of 88 layers, no RoPE | 16 of 62, NoPE, gated |
-| Linear attention | GatedDeltaNet, 3 of 4 | GatedDeltaNet, 3 of 4 | – | KDA, 3 of 4 | – | – | – | – | Mamba-2 (SSM), 23 of 52 | Mamba-2 (SSM), 40 of 88 | – |
-| MLA | – | – | CSA (one K=V vector, q-LoRA, grouped low-rank out) | NoPE | ✓ | no q-LoRA, NoPE every 4th | – | – | – | – | – |
-| Sparse top-k (indexer) | QSA, keys pooled 4:1 | – | compressed + hierarchical | DSA, k-pool 4 | DSA | DSA | – | block top-k | – | – | – |
-| Top-k reused across layers | – | – | 30 of 40 | – | 57 of 78 | 28 of 72 | – | – | – | – | – |
-| Cross-layer KV sharing | – | – | 4 source layers | – | – | 9 layers | – | – | – | – | – |
-| Sliding window | – | – | 128 + global top-k | – | – | – | 35 of 42 (512) | – | – | – | 46 of 62 (2048), gated |
-| KV compression | – | – | r = 1 or 2 | – | – | – | – | – | – | – | – |
-| Hyper-connections | 4 streams, low-rank | – | mHC, 4 streams | mHC, 4 streams | – | – | – | – | – | – | – (learned residual gates) |
-| n-gram / Engram tables | 51B, 1 layer | – | 196B, 2 layers | – | – | – | – | – | – | – | – |
-| Relative-position bias, short convs | – | – | – | – | – | – | ✓ | – | – | – | – |
-| MoE experts / top-k / shared | 512 / 10 / 1 | dense | 384 / 6 / 1 | 288 / 8 / 1 | 256 / 8 / 1 | 128 / 4 / 1 | 256 / 6 / 2 | 128 / 4 / 1 | 128 / 6 / 1 (relu², ungated) | 512 / 22 / 1 (relu², latent width 1024) | 256 / 8 / 0, latent 4096 |
-| Dense first layers | – | all | – | 3 | 3 | 1 | 2 | 3 | – | – | – |
-| MTP / draft (`model.draft`, §7) | 1, multi-step | 1, multi-step | DSpark block drafter, 3 MoE layers | 1, single-step | 1, single-step | none (3-layer DSpark in `params.json`, deferred) | 8, single-step | none (config only, no weights) | 1, single-step (attention + MoE) | 1, single-step (attention + MoE) | none |
-| Vision / audio (excluded) | ✓ | ✓ | ✓ | ✓ | – | ✓ | vision + audio | ✓ | – | vision (RADIO ViT + mlp1) | vision + audio |
+| Feature                             | Q-Flash-Next          | Q-27B                 | DSV4.1-Flash                                       | GLM-5.3-Flash  | GLM-5.3        | Mistral L4                                       | Inkling-Small  | MiniMax-M3                     | Nemotron-Lightning               | Nemotron-Super                          | Muse Spark                 |
+| ----------------------------------- | --------------------- | --------------------- | -------------------------------------------------- | -------------- | -------------- | ------------------------------------------------ | -------------- | ------------------------------ | -------------------------------- | --------------------------------------- | -------------------------- |
+| GQA full attention                  | 1 of 4 layers, gated  | 1 of 4 layers, gated  | –                                                  | –              | –              | –                                                | ✓              | ✓                              | 6 of 52 layers, no RoPE          | 8 of 88 layers, no RoPE                 | 16 of 62, NoPE, gated      |
+| Linear attention                    | GatedDeltaNet, 3 of 4 | GatedDeltaNet, 3 of 4 | –                                                  | KDA, 3 of 4    | –              | –                                                | –              | –                              | Mamba-2 (SSM), 23 of 52          | Mamba-2 (SSM), 40 of 88                 | –                          |
+| MLA                                 | –                     | –                     | CSA (one K=V vector, q-LoRA, grouped low-rank out) | NoPE           | ✓              | no q-LoRA, NoPE every 4th                        | –              | –                              | –                                | –                                       | –                          |
+| Sparse top-k (indexer)              | QSA, keys pooled 4:1  | –                     | compressed + hierarchical                          | DSA, k-pool 4  | DSA            | DSA                                              | –              | block top-k                    | –                                | –                                       | –                          |
+| Top-k reused across layers          | –                     | –                     | 30 of 40                                           | –              | 57 of 78       | 28 of 72                                         | –              | –                              | –                                | –                                       | –                          |
+| Cross-layer KV sharing              | –                     | –                     | 4 source layers                                    | –              | –              | 9 layers                                         | –              | –                              | –                                | –                                       | –                          |
+| Sliding window                      | –                     | –                     | 128 + global top-k                                 | –              | –              | –                                                | 35 of 42 (512) | –                              | –                                | –                                       | 46 of 62 (2048), gated     |
+| KV compression                      | –                     | –                     | r = 1 or 2                                         | –              | –              | –                                                | –              | –                              | –                                | –                                       | –                          |
+| Hyper-connections                   | 4 streams, low-rank   | –                     | mHC, 4 streams                                     | mHC, 4 streams | –              | –                                                | –              | –                              | –                                | –                                       | – (learned residual gates) |
+| n-gram / Engram tables              | 51B, 1 layer          | –                     | 196B, 2 layers                                     | –              | –              | –                                                | –              | –                              | –                                | –                                       | –                          |
+| Relative-position bias, short convs | –                     | –                     | –                                                  | –              | –              | –                                                | ✓              | –                              | –                                | –                                       | –                          |
+| MoE experts / top-k / shared        | 512 / 10 / 1          | dense                 | 384 / 6 / 1                                        | 288 / 8 / 1    | 256 / 8 / 1    | 128 / 4 / 1                                      | 256 / 6 / 2    | 128 / 4 / 1                    | 128 / 6 / 1 (relu², ungated)     | 512 / 22 / 1 (relu², latent width 1024) | 256 / 8 / 0, latent 4096   |
+| Dense first layers                  | –                     | all                   | –                                                  | 3              | 3              | 1                                                | 2              | 3                              | –                                | –                                       | –                          |
+| MTP / draft (`model.draft`, §7)     | 1, multi-step         | 1, multi-step         | DSpark block drafter, 3 MoE layers                 | 1, single-step | 1, single-step | none (3-layer DSpark in `params.json`, deferred) | 8, single-step | none (config only, no weights) | 1, single-step (attention + MoE) | 1, single-step (attention + MoE)        | none                       |
+| Vision / audio (excluded)           | ✓                     | ✓                     | ✓                                                  | ✓              | –              | ✓                                                | vision + audio | ✓                              | –                                | vision (RADIO ViT + mlp1)               | vision + audio             |
 
 **DeepSeek-V4.1 prefill.** The reference `inference/model.py` runs all 40 layers on all N prompt tokens, and so does
 the simulator. The tech report's "Decoder SWA Bounded Replay" (the decoder half re-runs only the last window of the
@@ -261,29 +263,29 @@ true }`, one layer per module named `mtp.<j>` (modules run as a chain: pass p us
 `maxReliableDepth` is set for single-step heads (DeepSeek-V3-style `num_nextn_predict_layers` modules, one draft
 position each) and absent for heads trained for several positions (Qwen3.5+/3.8 `mtp_num_hidden_layers`).
 
-| Family | Config field | Draft | Reliable depth |
-|---|---|---|---|
-| `qwen` | `mtp_num_hidden_layers` | MTP, the target's full-attention layer shape | any (multi-step) |
-| `glm_moe_dsa`, `glm5_next` | `num_nextn_predict_layers` | MTP | module count |
-| `inkling` | `mtp_config.num_nextn_predict_layers` (dense MLPs; `local_layer_ids` windowed) | MTP | module count |
-| `deepseek_v41` | `num_nextn_predict_layers` + `dspark_*` | DSpark block drafter (below), the `mtp.*` stages as `moeLayers` | — |
-| `deepseek_v4` | max(`num_nextn_predict_layers`, `len(compress_ratios)` − `num_hidden_layers`) + `dspark_*` (V4-Flash-0731: 1 vs 3 → 3) | DSpark block drafter, as V4.1 (main MoE 256 / top-6 in the stages) | — |
-| `mistral_large4` | `params.json` `mtp` | none: deferred (`params.json` lacks the drafter's head counts and dims; its head type is `rnn`) | — |
-| `minimax` | MTP config fields | none: the released checkpoint has no MTP tensors | — |
-| `muse_spark` | – | none: no MTP fields or tensors | — |
+| Family                     | Config field                                                                                                           | Draft                                                                                           | Reliable depth   |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------- |
+| `qwen`                     | `mtp_num_hidden_layers`                                                                                                | MTP, the target's full-attention layer shape                                                    | any (multi-step) |
+| `glm_moe_dsa`, `glm5_next` | `num_nextn_predict_layers`                                                                                             | MTP                                                                                             | module count     |
+| `inkling`                  | `mtp_config.num_nextn_predict_layers` (dense MLPs; `local_layer_ids` windowed)                                         | MTP                                                                                             | module count     |
+| `deepseek_v41`             | `num_nextn_predict_layers` + `dspark_*`                                                                                | DSpark block drafter (below), the `mtp.*` stages as `moeLayers`                                 | —                |
+| `deepseek_v4`              | max(`num_nextn_predict_layers`, `len(compress_ratios)` − `num_hidden_layers`) + `dspark_*` (V4-Flash-0731: 1 vs 3 → 3) | DSpark block drafter, as V4.1 (main MoE 256 / top-6 in the stages)                              | —                |
+| `mistral_large4`           | `params.json` `mtp`                                                                                                    | none: deferred (`params.json` lacks the drafter's head counts and dims; its head type is `rnn`) | —                |
+| `minimax`                  | MTP config fields                                                                                                      | none: the released checkpoint has no MTP tensors                                                | —                |
+| `muse_spark`               | –                                                                                                                      | none: no MTP fields or tensors                                                                  | —                |
 
 **Block drafters** (DFlash 2, DSpark; `drafter.ts: parseDrafterConfig`; fetched by `src/hf/loadDrafter.ts`). A
 separate repo's `config.json` → `BlockDraftSpec`:
 
-| `BlockDraftSpec` | config.json | Note |
-|---|---|---|
-| `method` | `architectures[0]`: `DFlash2DraftModel` → `dflash2`, `Qwen3DSparkModel` → `dspark` | anything else is `invalid_config` |
-| `hidden`, `vocab`, `layers`, `heads`, `kvHeads`, `headDim`, `intermediate`, `activation` | `hidden_size`, `vocab_size`, `num_hidden_layers`, `num_attention_heads`, `num_key_value_heads`, `head_dim` (default hidden/heads), `intermediate_size`, `hidden_act` | gated MLP |
-| `windowTokens` | `sliding_window` when every `layer_types` entry is `sliding_attention` | mixed layer types are rejected |
-| `targetLayerIds` | `dflash_config.target_layer_ids`, else top-level, else DFlash's `build_target_layer_ids(L, n)` = `round(1 + i·(L − 4)/(n − 1))` (half-to-even) | zero-based target layers |
-| `blockSize` | DFlash: `block_size` (default 16); DSpark: `block_size + 1` | DFlash's block counts the anchor (k ≤ block_size − 1); DeepSpec's counts draft positions (k ≤ block_size). Qwen3-8B DSpark: blockSize 8, k 7 |
-| `conv`, `selector` | DFlash 2 `conv_kernel_size`, `conv_group_size`, `selector_top_k`, `selector_rank` | |
-| `markovRank` | DSpark `markov_rank` | |
+| `BlockDraftSpec`                                                                         | config.json                                                                                                                                                          | Note                                                                                                                                         |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `method`                                                                                 | `architectures[0]`: `DFlash2DraftModel` → `dflash2`, `Qwen3DSparkModel` → `dspark`                                                                                   | anything else is `invalid_config`                                                                                                            |
+| `hidden`, `vocab`, `layers`, `heads`, `kvHeads`, `headDim`, `intermediate`, `activation` | `hidden_size`, `vocab_size`, `num_hidden_layers`, `num_attention_heads`, `num_key_value_heads`, `head_dim` (default hidden/heads), `intermediate_size`, `hidden_act` | gated MLP                                                                                                                                    |
+| `windowTokens`                                                                           | `sliding_window` when every `layer_types` entry is `sliding_attention`                                                                                               | mixed layer types are rejected                                                                                                               |
+| `targetLayerIds`                                                                         | `dflash_config.target_layer_ids`, else top-level, else DFlash's `build_target_layer_ids(L, n)` = `round(1 + i·(L − 4)/(n − 1))` (half-to-even)                       | zero-based target layers                                                                                                                     |
+| `blockSize`                                                                              | DFlash: `block_size` (default 16); DSpark: `block_size + 1`                                                                                                          | DFlash's block counts the anchor (k ≤ block_size − 1); DeepSpec's counts draft positions (k ≤ block_size). Qwen3-8B DSpark: blockSize 8, k 7 |
+| `conv`, `selector`                                                                       | DFlash 2 `conv_kernel_size`, `conv_group_size`, `selector_top_k`, `selector_rank`                                                                                    |                                                                                                                                              |
+| `markovRank`                                                                             | DSpark `markov_rank`                                                                                                                                                 |                                                                                                                                              |
 
 DeepSeek-V4.1-Flash's in-checkpoint DSpark (`deepseekV41.ts: dsparkDraft`) maps the same way from `dspark_block_size`
 (blockSize = it + 1: 6, default k 5), `dspark_target_layer_ids`, `dspark_markov_rank` and the CSA `sliding_window`,

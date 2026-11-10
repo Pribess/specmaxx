@@ -17,7 +17,12 @@ import { deploymentConfig, type DrafterStatus } from './deploymentInput';
 /** The panel an engine validation message belongs to, by its wording (speculative decoding, offloading, else general). */
 function engineIssueField(message: string): FieldIssue['field'] {
   if (/speculative|draft/i.test(message)) return 'specDec';
-  if (/offload|host link|host_ram|nvme|queue depth|resident|hit ratio|lookup|cpu_compute/i.test(message)) return 'offload';
+  if (
+    /offload|host link|host_ram|nvme|queue depth|resident|hit ratio|lookup|cpu_compute/i.test(
+      message,
+    )
+  )
+    return 'offload';
   return 'general';
 }
 
@@ -55,8 +60,18 @@ export const REFERENCE_MODEL: LoadedModel = {
 };
 
 /** Wraps a successful mapping as a {@link LoadedModel} for `choice`. */
-export function loadedFromHf(choice: Extract<ModelChoice, { kind: 'hf' }>, result: HfMapOk): LoadedModel {
-  return { key: modelKey(choice), label: choice.id, model: result.model, quant: result.quant, notes: result.notes, hf: result };
+export function loadedFromHf(
+  choice: Extract<ModelChoice, { kind: 'hf' }>,
+  result: HfMapOk,
+): LoadedModel {
+  return {
+    key: modelKey(choice),
+    label: choice.id,
+    model: result.model,
+    quant: result.quant,
+    notes: result.notes,
+    hf: result,
+  };
 }
 
 /** Result of {@link buildSimInput}. */
@@ -88,21 +103,38 @@ export type BuildResult =
  * deployment issues (errors stop here); then the engine's `validateInput`, whose remaining errors go to the
  * spec-dec / offload field by their wording, else general. `deployment` is in the input only when a knob is on.
  */
-export function buildSimInput(state: AppState, loaded: LoadedModel | null, drafter?: DrafterStatus): BuildResult {
+export function buildSimInput(
+  state: AppState,
+  loaded: LoadedModel | null,
+  drafter?: DrafterStatus,
+): BuildResult {
   if (loaded === null || loaded.key !== modelKey(state.model)) {
-    return { kind: 'issues', issues: [{ field: 'general', level: 'error', message: 'The model is not loaded yet.' }] };
+    return {
+      kind: 'issues',
+      issues: [{ field: 'general', level: 'error', message: 'The model is not loaded yet.' }],
+    };
   }
   const deployment = deploymentConfig(state, loaded.model, drafter);
   let hardware: ResolvedHardware;
   try {
     hardware = resolveHardware(state.hw, deployment.config?.offload !== undefined);
   } catch (e) {
-    return { kind: 'issues', issues: [{ field: 'general', level: 'error', message: (e as Error).message }] };
+    return {
+      kind: 'issues',
+      issues: [{ field: 'general', level: 'error', message: (e as Error).message }],
+    };
   }
   const quant = applyQuantOverride(loaded.quant.quant, state.quant, loaded.quant.exl3);
   const parallel = effectiveParallel(state.parallel, loaded.model, state.parallelLayout);
   const issues = [
-    ...fieldIssues(loaded.model, quant, parallel, state.workload, hardware.topology, state.parallelLayout),
+    ...fieldIssues(
+      loaded.model,
+      quant,
+      parallel,
+      state.workload,
+      hardware.topology,
+      state.parallelLayout,
+    ),
     ...deployment.issues,
   ];
   if (hasErrors(issues)) return { kind: 'issues', issues, hardware };
@@ -121,7 +153,9 @@ export function buildSimInput(state: AppState, loaded: LoadedModel | null, draft
       ...(parallel.denseTpGroup !== undefined ? { denseTpGroup: parallel.denseTpGroup } : {}),
       ...(parallel.epImbalance !== undefined ? { epImbalance: parallel.epImbalance } : {}),
       ...(parallel.epImbalanceScalesAllToAll === true ? { epImbalanceScalesAllToAll: true } : {}),
-      ...(parallel.redundantExpertsPerRank !== undefined ? { redundantExpertsPerRank: parallel.redundantExpertsPerRank } : {}),
+      ...(parallel.redundantExpertsPerRank !== undefined
+        ? { redundantExpertsPerRank: parallel.redundantExpertsPerRank }
+        : {}),
       ...(parallel.dcp !== undefined && parallel.dcp > 1 ? { dcp: parallel.dcp } : {}),
     },
     workload: state.workload,
@@ -134,9 +168,20 @@ export function buildSimInput(state: AppState, loaded: LoadedModel | null, draft
   };
   const engineErrors = validateInput(input);
   if (engineErrors.length > 0) {
-    const general = engineErrors.map((message): FieldIssue => ({ field: engineIssueField(message), level: 'error', message }));
+    const general = engineErrors.map((message): FieldIssue => ({
+      field: engineIssueField(message),
+      level: 'error',
+      message,
+    }));
     return { kind: 'issues', issues: [...issues, ...general], hardware };
   }
-  const drafterNotes = input.deployment?.speculative !== undefined && drafter?.kind === 'ok' ? drafter.notes : [];
-  return { kind: 'ok', input, hardware, issues, notes: [...hardware.notes, ...loaded.notes, ...drafterNotes] };
+  const drafterNotes =
+    input.deployment?.speculative !== undefined && drafter?.kind === 'ok' ? drafter.notes : [];
+  return {
+    kind: 'ok',
+    input,
+    hardware,
+    issues,
+    notes: [...hardware.notes, ...loaded.notes, ...drafterNotes],
+  };
 }

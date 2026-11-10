@@ -1,7 +1,5 @@
 {
-  "architectures": [
-    "InklingForConditionalGeneration"
-  ],
+  "architectures": ["InklingForConditionalGeneration"],
   "model_type": "inkling_mm_model",
   "eos_token_id": 200006,
   "text_config": {
@@ -19,44 +17,11 @@
     "o_bias": false,
     "log_scaling_n_floor": 128000,
     "log_scaling_alpha": 0.1,
-    "rms_norm_eps": 1e-06,
+    "rms_norm_eps": 1e-6,
     "use_embed_norm": true,
     "local_layer_ids": [
-      0,
-      1,
-      2,
-      3,
-      4,
-      6,
-      7,
-      8,
-      9,
-      10,
-      12,
-      13,
-      14,
-      15,
-      16,
-      18,
-      19,
-      20,
-      21,
-      22,
-      24,
-      25,
-      26,
-      27,
-      28,
-      30,
-      31,
-      32,
-      33,
-      34,
-      36,
-      37,
-      38,
-      39,
-      40
+      0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28, 30,
+      31, 32, 33, 34, 36, 37, 38, 39, 40
     ],
     "dense_mlp_idx": 2,
     "use_sconv": true,
@@ -102,14 +67,7 @@
   "mtp_config": {
     "num_nextn_predict_layers": 8,
     "chain_hidden_post_norm": false,
-    "local_layer_ids": [
-      0,
-      2,
-      4,
-      5,
-      6,
-      7
-    ]
+    "local_layer_ids": [0, 2, 4, 5, 6, 7]
   },
   "quantization": {
     "group_size": 64,

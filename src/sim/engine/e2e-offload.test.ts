@@ -80,12 +80,15 @@ describe('W1 experts in DDR5 over PCIe 5.0 x16 (REF_MOE_30B_A3B, int4+0.5 routed
     // Since the PCIe payload efficiency 256/280 (B_link 63.0 → 57.6 GB/s): every transfer-bound rate moves; the ideal
     // prefill rows stay compute bound. Before: 61.63 / 53.5, 122.87 / 94.29, 21,696 / 12,872, 21,696 / 16,157.
     ['decode', 0, 8, 56.364, 49.484],
-    ['decode', 0.5, 4, 112.40, 88.003],
+    ['decode', 0.5, 4, 112.4, 88.003],
     ['prefill', 0, 128, 21_696, 12_399],
     ['prefill', 0.5, 64, 21_696, 15_780],
   ] as const;
   for (const [phase, f, M, idealRate, noneRate] of rows) {
-    for (const [overlap, rate] of [['ideal', idealRate], ['none', noneRate]] as const) {
+    for (const [overlap, rate] of [
+      ['ideal', idealRate],
+      ['none', noneRate],
+    ] as const) {
       it(`${phase} @ 8k, f = h = ${f}, ${overlap}: xfer = 48·(1.07 µs + ${M}·W_expert/B_link), ${rate} tok/s @ 8k`, () => {
         const r = w1(f, overlap)[phase];
         const tPath = 1.07e-6 + (M * W_EXPERT) / B_LINK;
@@ -101,7 +104,9 @@ describe('W1 experts in DDR5 over PCIe 5.0 x16 (REF_MOE_30B_A3B, int4+0.5 routed
         const layerOps = r.stages[0].layers[1].ops;
         const at = layerOps.findIndex((o) => o.op.kind === 'transfer');
         expect(layerOps[at + 1].op.name).toBe('moe.router');
-        expect(r.stages[0].layers.filter((l) => l.ops.some((o) => o.op.kind === 'transfer')).length).toBe(48);
+        expect(
+          r.stages[0].layers.filter((l) => l.ops.some((o) => o.op.kind === 'transfer')).length,
+        ).toBe(48);
         const fetch = layerOps[at];
         expect(fetch.op.name).toBe('moe.expert_fetch');
         expect(fetch.bound).toBe('transfer');
@@ -118,7 +123,15 @@ describe('W1 experts in DDR5 over PCIe 5.0 x16 (REF_MOE_30B_A3B, int4+0.5 routed
     expect(m.perStage[0].sequenceStateBytes).toBe(805_404_672);
     expect(m.perStage[0].activationPeakBytes).toBe(469_762_048);
     expect(m.perStage[0].totalBytes).toBe(5_036_830_720);
-    expect(m.tiers).toEqual([{ tier: 'host_ram', bytes: 16_307_453_952, breakdown: { ...NO_TIER_BYTES, routedExperts: 16_307_453_952 }, capacityBytes: 96e9, fits: true }]);
+    expect(m.tiers).toEqual([
+      {
+        tier: 'host_ram',
+        bytes: 16_307_453_952,
+        breakdown: { ...NO_TIER_BYTES, routedExperts: 16_307_453_952 },
+        capacityBytes: 96e9,
+        fits: true,
+      },
+    ]);
     expect(m.fits).toBe(true);
   });
   it('memory f .5 ideal: W_s 11,235,913,728; staging 2·64·W 339,738,624; none halves the staging', () => {
@@ -135,7 +148,11 @@ describe('W1 experts in DDR5 over PCIe 5.0 x16 (REF_MOE_30B_A3B, int4+0.5 routed
       parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
       workload: { batch: 1, promptLen: 8192, decodeContextLen: 8192 },
       hardware: GPU,
-      deployment: { offload: { routedExperts: { tier: 'host_ram', residentFraction: 0, hitRatio: { kind: 'uniform' } } } },
+      deployment: {
+        offload: {
+          routedExperts: { tier: 'host_ram', residentFraction: 0, hitRatio: { kind: 'uniform' } },
+        },
+      },
     });
     expect(omitted).toEqual(w1(0, DEFAULT_PREFETCH_ACCURACY));
     const r = omitted.decode;
@@ -173,7 +190,15 @@ describe('W1 experts in DDR5 over PCIe 5.0 x16 (REF_MOE_30B_A3B, int4+0.5 routed
       expectClose(d.activationPeakBytes, b.activationPeakBytes);
       expect(d.stagingBytes).toBe(0);
       expect(d.fits).toBe(b.fits);
-      expect(r.memory.tiers).toEqual([{ tier: 'host_ram', bytes: 16_307_453_952, breakdown: { ...NO_TIER_BYTES, routedExperts: 16_307_453_952 }, capacityBytes: 96e9, fits: true }]);
+      expect(r.memory.tiers).toEqual([
+        {
+          tier: 'host_ram',
+          bytes: 16_307_453_952,
+          breakdown: { ...NO_TIER_BYTES, routedExperts: 16_307_453_952 },
+          capacityBytes: 96e9,
+          fits: true,
+        },
+      ]);
       expect(base.memory.tiers).toEqual([]);
       expect(r.warnings).not.toEqual(base.warnings);
     }
@@ -192,14 +217,19 @@ function hf(repo: string): Pick<SimInput, 'model' | 'quant'> {
   return { model: mapped.model, quant: mapped.quant.quant };
 }
 
-function tables(repo: string, lookupTables: OffloadConfig['lookupTables'] | undefined, prefetch: Prefetch = 'none'): SimResult {
+function tables(
+  repo: string,
+  lookupTables: OffloadConfig['lookupTables'] | undefined,
+  prefetch: Prefetch = 'none',
+): SimResult {
   const input: SimInput = {
     ...hf(repo),
     parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
     workload: { batch: 1, promptLen: 8192, decodeContextLen: 8192 },
     hardware: { ...GPU, host: { ssd: SSD_45US } },
   };
-  if (lookupTables !== undefined) input.deployment = { offload: { prefetchAccuracy: prefetchAccuracy(prefetch), lookupTables } };
+  if (lookupTables !== undefined)
+    input.deployment = { offload: { prefetchAccuracy: prefetchAccuracy(prefetch), lookupTables } };
   return simulate(input);
 }
 
@@ -253,21 +283,57 @@ describe('W3/W4 n-gram tables off-device (fixtures, repo quant, RTX 5090, b 1, @
     const ram = tables(PLE, { tier: 'host_ram' }).memory;
     expect(ram.perStage[0].weightBytes).toBe(251_487_054_848);
     expect(ram.perStage[0].lookupTableBytes).toBe(0);
-    expect(ram.tiers).toEqual([{ tier: 'host_ram', bytes: 102_400_000_000, breakdown: { ...NO_TIER_BYTES, lookupTables: 102_400_000_000 }, capacityBytes: 96e9, fits: false }]);
+    expect(ram.tiers).toEqual([
+      {
+        tier: 'host_ram',
+        bytes: 102_400_000_000,
+        breakdown: { ...NO_TIER_BYTES, lookupTables: 102_400_000_000 },
+        capacityBytes: 96e9,
+        fits: false,
+      },
+    ]);
     expect(ram.fits).toBe(false);
     const ssd = tables(PLE, { tier: 'nvme' }).memory;
-    expect(ssd.tiers).toEqual([{ tier: 'nvme', bytes: 102_400_000_000, breakdown: { ...NO_TIER_BYTES, lookupTables: 102_400_000_000 }, capacityBytes: 2e12, fits: true }]);
+    expect(ssd.tiers).toEqual([
+      {
+        tier: 'nvme',
+        bytes: 102_400_000_000,
+        breakdown: { ...NO_TIER_BYTES, lookupTables: 102_400_000_000 },
+        capacityBytes: 2e12,
+        fits: true,
+      },
+    ]);
   });
 
   it('Engram memory: device 501,382,474,992 → 298,624,442,592; separate on RAM 202,758,032,400 B does not fit; pinned_host SSD fits', () => {
     expect(tables(ENGRAM, undefined).memory.perStage[0].weightBytes).toBe(501_382_474_992);
     const ram = tables(ENGRAM, { tier: 'host_ram' }).memory;
     expect(ram.perStage[0].weightBytes).toBe(298_624_442_592);
-    expect(ram.tiers).toEqual([{ tier: 'host_ram', bytes: 202_758_032_400, breakdown: { ...NO_TIER_BYTES, lookupTables: 202_758_032_400 }, capacityBytes: 96e9, fits: false }]);
+    expect(ram.tiers).toEqual([
+      {
+        tier: 'host_ram',
+        bytes: 202_758_032_400,
+        breakdown: { ...NO_TIER_BYTES, lookupTables: 202_758_032_400 },
+        capacityBytes: 96e9,
+        fits: false,
+      },
+    ]);
     const ssd = tables(ENGRAM, { tier: 'nvme' }).memory;
     expect(ssd.tiers).toEqual([
-      { tier: 'host_ram', bytes: 6_144_182_800, breakdown: { ...NO_TIER_BYTES, lookupTables: 6_144_182_800 }, capacityBytes: 96e9, fits: true },
-      { tier: 'nvme', bytes: 196_613_849_600, breakdown: { ...NO_TIER_BYTES, lookupTables: 196_613_849_600 }, capacityBytes: 2e12, fits: true },
+      {
+        tier: 'host_ram',
+        bytes: 6_144_182_800,
+        breakdown: { ...NO_TIER_BYTES, lookupTables: 6_144_182_800 },
+        capacityBytes: 96e9,
+        fits: true,
+      },
+      {
+        tier: 'nvme',
+        bytes: 196_613_849_600,
+        breakdown: { ...NO_TIER_BYTES, lookupTables: 196_613_849_600 },
+        capacityBytes: 2e12,
+        fits: true,
+      },
     ]);
   });
 

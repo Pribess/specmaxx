@@ -23,11 +23,21 @@ import type {
   TopologySpec,
 } from '../../sim/hw/types';
 import type { LinkModifier } from '../../sim/hw/modifiers';
-import { applyDeviceModifiers, applyLinkModifiers, describeDeviceModifier, describeLinkModifier } from '../../sim/hw/modifiers';
+import {
+  applyDeviceModifiers,
+  applyLinkModifiers,
+  describeDeviceModifier,
+  describeLinkModifier,
+} from '../../sim/hw/modifiers';
 import { resolveUnlocks } from '../../sim/hw/unlocks';
 import { numericLeafPaths } from '../../sim/hw/validate';
 import { DEVICE_PRESETS, deviceUnlocks } from '../../sim/hw/presets/index';
-import { LEGACY_LINK_IDS, LINK_PRESETS, deviceHostLink, hostPcieLink } from '../../sim/hw/presets/links';
+import {
+  LEGACY_LINK_IDS,
+  LINK_PRESETS,
+  deviceHostLink,
+  hostPcieLink,
+} from '../../sim/hw/presets/links';
 import {
   APPLE_SSD_M3_M4_MAX_1TB,
   APPLE_SSD_M5_PRO_MAX,
@@ -97,7 +107,9 @@ export function defaultLinks(
   hostInterface: HostInterfaceSpec | undefined = findDevice(device.id)?.hostInterface,
 ): DefaultLinks {
   const options = setupOptionsFor(device.id);
-  const intraNode = (options.localLinks.find((l) => localLinkFits(l, hostInterface)) ?? options.localLinks[0])?.link;
+  const intraNode = (
+    options.localLinks.find((l) => localLinkFits(l, hostInterface)) ?? options.localLinks[0]
+  )?.link;
   return { ...(intraNode !== undefined ? { intraNode } : {}), interNode: options.networks[0].link };
 }
 
@@ -105,7 +117,9 @@ export function defaultLinks(
  * The PCIe host interface of a choice's device after its unlocks (e.g. the CMP 170HX's Gen2 patch and capacitor mod),
  * which bounds the local links offered; undefined for an unknown device or one without a host interface.
  */
-export function effectiveHostInterface(hw: Pick<HardwareChoice, 'deviceId'> & Partial<Pick<HardwareChoice, 'unlocks'>>): HostInterfaceSpec | undefined {
+export function effectiveHostInterface(
+  hw: Pick<HardwareChoice, 'deviceId'> & Partial<Pick<HardwareChoice, 'unlocks'>>,
+): HostInterfaceSpec | undefined {
   const base = findDevice(hw.deviceId);
   if (base === undefined) return undefined;
   const mods = resolveUnlocks(deviceUnlocks(base), hw.unlocks ?? {}).deviceModifiers;
@@ -158,7 +172,13 @@ export function setupOptionsOf(hw: Pick<HardwareChoice, 'deviceId'>): DeviceSetu
 /** The offered count nearest to `n` (the smaller one on a tie); `n` itself when nothing is offered. Count. */
 export function nearestCount(offered: number[], n: number): number {
   let best: number | undefined;
-  for (const c of offered) if (best === undefined || Math.abs(c - n) < Math.abs(best - n) || (Math.abs(c - n) === Math.abs(best - n) && c < best)) best = c;
+  for (const c of offered)
+    if (
+      best === undefined ||
+      Math.abs(c - n) < Math.abs(best - n) ||
+      (Math.abs(c - n) === Math.abs(best - n) && c < best)
+    )
+      best = c;
   return best ?? n;
 }
 
@@ -169,7 +189,12 @@ export function nearestCount(offered: number[], n: number): number {
 export function effectiveLinkIds(hw: HardwareChoice): { intra?: string; inter?: string } {
   const defaults = defaultLinks({ id: hw.deviceId });
   const intra = hw.devicesPerNode > 1 ? intraLinkIdInEffect(hw) : undefined;
-  const inter = hw.nodes > 1 ? (hw.interLinkId !== undefined ? currentLinkId(hw.interLinkId) : linkPresetId(defaults.interNode)) : undefined;
+  const inter =
+    hw.nodes > 1
+      ? hw.interLinkId !== undefined
+        ? currentLinkId(hw.interLinkId)
+        : linkPresetId(defaults.interNode)
+      : undefined;
   return { ...(intra !== undefined ? { intra } : {}), ...(inter !== undefined ? { inter } : {}) };
 }
 
@@ -194,7 +219,8 @@ export function localLinkOptionOf(hw: HardwareChoice): LocalLinkOption | undefin
  * its effective PCIe host interface (the CMP 170HX's PCIe unlocks: stock offers only PCIe 1.0 x4).
  */
 export function localLinkChoices(
-  hw: Pick<HardwareChoice, 'deviceId' | 'devicesPerNode'> & Partial<Pick<HardwareChoice, 'unlocks'>>,
+  hw: Pick<HardwareChoice, 'deviceId' | 'devicesPerNode'> &
+    Partial<Pick<HardwareChoice, 'unlocks'>>,
 ): LocalLinkOption[] {
   return allowedLocalLinks(setupOptionsOf(hw), hw.devicesPerNode, effectiveHostInterface(hw));
 }
@@ -209,7 +235,11 @@ export function normalizeLocalLink(hw: HardwareChoice): HardwareChoice {
   if (hw.intraLinkId === undefined || hw.devicesPerNode <= 1) return hw;
   const id = currentLinkId(hw.intraLinkId);
   const opt = setupOptionsOf(hw).localLinks.find((l) => linkPresetId(l.link) === id);
-  if (opt === undefined || (localLinkAllows(opt, hw.devicesPerNode) && localLinkFits(opt, effectiveHostInterface(hw)))) return hw;
+  if (
+    opt === undefined ||
+    (localLinkAllows(opt, hw.devicesPerNode) && localLinkFits(opt, effectiveHostInterface(hw)))
+  )
+    return hw;
   const { intraLinkId: _i, ...rest } = hw;
   void _i;
   return { ...rest, intraEdits: {} };
@@ -222,7 +252,12 @@ export function normalizeLocalLink(hw: HardwareChoice): HardwareChoice {
 export function devicesPerNodeForLocalLink(hw: HardwareChoice, linkId: string): number {
   const id = currentLinkId(linkId);
   const opt = setupOptionsOf(hw).localLinks.find((l) => linkPresetId(l.link) === id);
-  if (opt === undefined || localLinkAllows(opt, hw.devicesPerNode) || opt.devicesPerNodeCounts === undefined) return hw.devicesPerNode;
+  if (
+    opt === undefined ||
+    localLinkAllows(opt, hw.devicesPerNode) ||
+    opt.devicesPerNodeCounts === undefined
+  )
+    return hw.devicesPerNode;
   return nearestCount(opt.devicesPerNodeCounts, hw.devicesPerNode);
 }
 
@@ -259,7 +294,10 @@ export function normalizeCabling(hw: HardwareChoice): HardwareChoice {
 }
 
 /** True if two host interfaces are the same generation and width (both absent counts as the same). */
-function sameInterface(a: HostInterfaceSpec | undefined, b: HostInterfaceSpec | undefined): boolean {
+function sameInterface(
+  a: HostInterfaceSpec | undefined,
+  b: HostInterfaceSpec | undefined,
+): boolean {
   return a?.generation === b?.generation && a?.lanes === b?.lanes;
 }
 /**
@@ -279,7 +317,9 @@ export function setupChoiceOf(hw: HardwareChoice, memCapacityBytes?: number): Se
     ...(links.intra !== undefined ? { localLinkId: links.intra } : {}),
     ...(links.inter !== undefined ? { networkLinkId: links.inter } : {}),
     ...(cabling !== undefined ? { cabling } : {}),
-    ...(iface !== undefined && !sameInterface(iface, findDevice(hw.deviceId)?.hostInterface) ? { hostInterface: iface } : {}),
+    ...(iface !== undefined && !sameInterface(iface, findDevice(hw.deviceId)?.hostInterface)
+      ? { hostInterface: iface }
+      : {}),
   };
 }
 
@@ -292,8 +332,14 @@ export function popularSetupChoice(p: PopularSetup): HardwareChoice {
   const c = p.choice;
   const device = findDevice(c.deviceId);
   if (device === undefined) throw new Error(`setup '${p.id}': unknown device '${c.deviceId}'`);
-  const capacityIndex = c.memCapacityBytes === undefined ? 0 : device.memory.capacityOptionsBytes.indexOf(c.memCapacityBytes);
-  if (capacityIndex < 0) throw new Error(`setup '${p.id}': ${c.memCapacityBytes} B is not a memory option of ${device.id}`);
+  const capacityIndex =
+    c.memCapacityBytes === undefined
+      ? 0
+      : device.memory.capacityOptionsBytes.indexOf(c.memCapacityBytes);
+  if (capacityIndex < 0)
+    throw new Error(
+      `setup '${p.id}': ${c.memCapacityBytes} B is not a memory option of ${device.id}`,
+    );
   const defaults = defaultLinks(device);
   const intra = c.localLinkId ?? (defaults.intraNode && linkPresetId(defaults.intraNode));
   const inter = c.networkLinkId ?? linkPresetId(defaults.interNode);
@@ -368,7 +414,10 @@ export interface EditedSpec<T> {
  * `estimated` with {@link EDITED_REASON}. Paths that are not numeric leaves are ignored and reported. The
  * caller renames the spec (devices: `<id>-custom`, `<name> (edited)`).
  */
-export function applyEdits<T extends { estimated: EstimatedField[] }>(spec: T, edits: SpecEdits): EditedSpec<T> {
+export function applyEdits<T extends { estimated: EstimatedField[] }>(
+  spec: T,
+  edits: SpecEdits,
+): EditedSpec<T> {
   const leaves = new Set(numericLeafPaths(spec).map((l) => l.path));
   const paths = Object.keys(edits).sort();
   const known = paths.filter((p) => leaves.has(p));
@@ -401,14 +450,19 @@ export interface ResolvedDevice {
  * `applyDeviceModifiers`) → edits. Throws on an unknown device, axis or option id (the URL decoder and the
  * reducer only produce known ids, so this is a UI bug).
  */
-export function resolveDevice(hw: Pick<HardwareChoice, 'deviceId' | 'unlocks' | 'deviceEdits'>): ResolvedDevice {
+export function resolveDevice(
+  hw: Pick<HardwareChoice, 'deviceId' | 'unlocks' | 'deviceEdits'>,
+): ResolvedDevice {
   const base = findDevice(hw.deviceId);
   if (base === undefined) throw new Error(`unknown device '${hw.deviceId}'`);
   const unlocks = resolveUnlocks(deviceUnlocks(base), hw.unlocks);
-  const unlocked = unlocks.deviceModifiers.length > 0 ? applyDeviceModifiers(base, unlocks.deviceModifiers) : base;
+  const unlocked =
+    unlocks.deviceModifiers.length > 0 ? applyDeviceModifiers(base, unlocks.deviceModifiers) : base;
   const { spec } = applyEdits(unlocked, hw.deviceEdits);
   const edited = spec !== unlocked;
-  const device = edited ? { ...spec, id: `${base.id}-custom`, name: `${base.name} (edited)` } : spec;
+  const device = edited
+    ? { ...spec, id: `${base.id}-custom`, name: `${base.name} (edited)` }
+    : spec;
   return {
     base,
     unlocked,
@@ -474,7 +528,8 @@ export function resolveLinks(hw: HardwareChoice, resolved: ResolvedDevice): Reso
     }
   }
   if (hw.nodes > 1) {
-    const preset = (hw.interLinkId !== undefined ? findLink(hw.interLinkId) : undefined) ?? defaults.interNode;
+    const preset =
+      (hw.interLinkId !== undefined ? findLink(hw.interLinkId) : undefined) ?? defaults.interNode;
     out.inter = resolveLink(preset, [], hw.interEdits);
   }
   return out;
@@ -570,13 +625,18 @@ export function resolveHost(
       ? {
           ...preset,
           capacityBytes: host.ramCapacityBytes,
-          estimated: [...preset.estimated.filter((e) => e.field !== 'capacityBytes'), { field: 'capacityBytes', reason: EDITED_REASON }],
+          estimated: [
+            ...preset.estimated.filter((e) => e.field !== 'capacityBytes'),
+            { field: 'capacityBytes', reason: EDITED_REASON },
+          ],
         }
       : preset;
   const ssd = (host.ssdId !== undefined ? findSsd(host.ssdId) : undefined) ?? defaultSsdFor(device);
   const overridden = device.hostLink === undefined && host.link !== undefined;
   const link =
-    overridden && host.link !== undefined ? hostPcieLink(host.link.generation, host.link.lanes) : deviceHostLink(device);
+    overridden && host.link !== undefined
+      ? hostPcieLink(host.link.generation, host.link.lanes)
+      : deviceHostLink(device);
   return {
     ram,
     ramDefault: picked === undefined,
@@ -628,7 +688,9 @@ export function resolveHardware(hw: HardwareChoice, offDevice = false): Resolved
     ...(hw.gpuUsableFraction !== undefined && device.device.memory.kind === 'unified'
       ? { gpuUsableFraction: hw.gpuUsableFraction }
       : {}),
-    ...(hw.runtimeReserveBytes !== undefined ? { runtimeReserveBytes: hw.runtimeReserveBytes } : {}),
+    ...(hw.runtimeReserveBytes !== undefined
+      ? { runtimeReserveBytes: hw.runtimeReserveBytes }
+      : {}),
     ...(offDevice ? { host: hostSpecOf(resolveHost(hw, device.device), device.device) } : {}),
   };
   return {
@@ -725,8 +787,15 @@ export function editableFields(device: DeviceSpec): EditableField[] {
       fields.push({ path, label, group, unit, value, ...(help ? { help } : {}) });
     if (path === 'memory.bandwidthBytesPerSec') field('Memory bandwidth', 'memory', UNITS.gbps);
     else if (parts[0] === 'memory' && parts[1] === 'capacityOptionsBytes') {
-      field(device.memory.capacityOptionsBytes.length > 1 ? `Capacity option ${Number(parts[2]) + 1}` : 'Capacity', 'memory', UNITS.gb);
-    } else if (path === 'l2Bytes') field('Last-level cache (not used by the model)', 'tiling', UNITS.mb);
+      field(
+        device.memory.capacityOptionsBytes.length > 1
+          ? `Capacity option ${Number(parts[2]) + 1}`
+          : 'Capacity',
+        'memory',
+        UNITS.gb,
+      );
+    } else if (path === 'l2Bytes')
+      field('Last-level cache (not used by the model)', 'tiling', UNITS.mb);
     else if (parts[0] === 'engines') {
       const engine = device.engines[Number(parts[1])];
       const prefix = multiEngine ? `${engine.name}: ` : '';
@@ -734,9 +803,15 @@ export function editableFields(device: DeviceSpec): EditableField[] {
       if (rest[0] === 'matmulPeaks') {
         const peak = engine.matmulPeaks[Number(rest[1])];
         const integer = peak.accumulate === 'int32';
-        field(`${prefix}${peak.input}, ${peak.accumulate} accumulate, ${peak.sparsity === 'dense' ? 'dense' : '2:4 sparse'}`, 'matmul', integer ? UNITS.tops : UNITS.tflops);
-      } else if (rest[0] === 'vectorFlopsPerSec') field(`${prefix}vector ${rest[1]}`, 'vector', UNITS.tflops);
-      else if (rest[0] === 'memBandwidthCapBytesPerSec') field(`${prefix}engine memory-bandwidth cap`, 'memory', UNITS.gbps);
+        field(
+          `${prefix}${peak.input}, ${peak.accumulate} accumulate, ${peak.sparsity === 'dense' ? 'dense' : '2:4 sparse'}`,
+          'matmul',
+          integer ? UNITS.tops : UNITS.tflops,
+        );
+      } else if (rest[0] === 'vectorFlopsPerSec')
+        field(`${prefix}vector ${rest[1]}`, 'vector', UNITS.tflops);
+      else if (rest[0] === 'memBandwidthCapBytesPerSec')
+        field(`${prefix}engine memory-bandwidth cap`, 'memory', UNITS.gbps);
       else if (rest[0] === 'sfuOpsPerSec') {
         field(`${prefix}SFU exp rate`, 'vector', UNITS.tOpsPerSec, [
           'Exponentials per second on the special-function units.',
@@ -747,8 +822,7 @@ export function editableFields(device: DeviceSpec): EditableField[] {
           'Up to this many tokens, matrix products run on the plain vector units.',
           'They then skip the padding of the matrix units.',
         ]);
-      }
-      else if (rest[0] === 'computeUnits') field(`${prefix}compute units`, 'tiling', UNITS.count);
+      } else if (rest[0] === 'computeUnits') field(`${prefix}compute units`, 'tiling', UNITS.count);
       else field(`${prefix}${rest.join(' ')}`, 'tiling', UNITS.elements);
     } else field(path, 'tiling', UNITS.count);
   }
@@ -763,7 +837,10 @@ export function editableLinkFields(link: LinkSpec): EditableField[] {
   const labels: Record<string, [string, DisplayUnit]> = {
     bandwidthPerDirectionBytesPerSec: ['Bandwidth per direction, per device', UNITS.gbps],
     latencySec: ['Latency per message', UNITS.us],
-    'hostBounce.hostMemBandwidthBytesPerSec': ['Host memory bandwidth for staging (shared by the node)', UNITS.gbps],
+    'hostBounce.hostMemBandwidthBytesPerSec': [
+      'Host memory bandwidth for staging (shared by the node)',
+      UNITS.gbps,
+    ],
     'hostBounce.extraLatencySec': ['Extra latency of the host copy', UNITS.us],
     allPortsCapPerDirectionBytesPerSec: ['Bandwidth cap, all ports', UNITS.gbps],
     forwardingLatencySec: ['Relay latency per hop', UNITS.us],

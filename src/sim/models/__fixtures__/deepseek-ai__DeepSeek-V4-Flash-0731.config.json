@@ -1,13 +1,11 @@
 {
-  "architectures": [
-    "DeepseekV4ForCausalLM"
-  ],
+  "architectures": ["DeepseekV4ForCausalLM"],
   "attention_bias": false,
   "attention_dropout": 0.0,
   "bos_token_id": 0,
   "eos_token_id": 1,
   "expert_dtype": "fp4",
-  "hc_eps": 1e-06,
+  "hc_eps": 1e-6,
   "hc_mult": 4,
   "hc_sinkhorn_iters": 20,
   "head_dim": 512,
@@ -38,12 +36,9 @@
     "fmt": "e4m3",
     "quant_method": "fp8",
     "scale_fmt": "ue8m0",
-    "weight_block_size": [
-      128,
-      128
-    ]
+    "weight_block_size": [128, 128]
   },
-  "rms_norm_eps": 1e-06,
+  "rms_norm_eps": 1e-6,
   "rope_scaling": {
     "beta_fast": 32,
     "beta_slow": 1,
@@ -63,7 +58,10 @@
   "use_cache": true,
   "vocab_size": 129280,
   "compress_rope_theta": 160000,
-  "compress_ratios": [0, 0, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 0, 0, 0],
+  "compress_ratios": [
+    0, 0, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4,
+    128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 0, 0, 0
+  ],
   "dspark_block_size": 5,
   "dspark_noise_token_id": 128799,
   "dspark_target_layer_ids": [40, 41, 42],

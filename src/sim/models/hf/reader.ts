@@ -72,7 +72,8 @@ export function createReader(value: unknown, path = '', errors: string[] = []): 
   const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
   const isInt = (v: unknown): v is number => isNum(v) && Number.isInteger(v) && v >= 0;
   const isNumArray = (v: unknown): v is number[] => Array.isArray(v) && v.every(isNum);
-  const isStrArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+  const isStrArray = (v: unknown): v is string[] =>
+    Array.isArray(v) && v.every((x) => typeof x === 'string');
 
   /** Optional getter: undefined when absent, error + undefined when of the wrong type. */
   const opt = <T>(key: string, ok: (v: unknown) => v is T, what: string): T | undefined => {

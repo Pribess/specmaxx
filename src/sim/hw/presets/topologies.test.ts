@@ -21,17 +21,52 @@ import { applyLinkModifiers } from '../modifiers';
 import { validateLink, validateLinkModifiers, validateTopology } from '../validate';
 import { allUnlockSelections, resolveUnlocks } from '../unlocks';
 import {
-  ETHERNET_5G_TCP, ETHERNET_10G_TCP, HOST_BOUNCE_PCIE_LINKS, IB_NDR_400, IB_XDR_800,
-  LINK_PRESETS, NVLINK_4, NVLINK_5, PCIE_4_X8, PCIE_4_X16, PCIE_5_X8, PCIE_5_X16,
-  RTX_3090_NVLINK, SPARK_CONNECTX_7, TB4_TCP, TB4_TCP_20G, TB5_RDMA, USB4_HALO_TCP,
-  XGMI_MI300X_PER_PEER, XGMI_MI300X_8_GPU,
+  ETHERNET_5G_TCP,
+  ETHERNET_10G_TCP,
+  HOST_BOUNCE_PCIE_LINKS,
+  IB_NDR_400,
+  IB_XDR_800,
+  LINK_PRESETS,
+  NVLINK_4,
+  NVLINK_5,
+  PCIE_4_X8,
+  PCIE_4_X16,
+  PCIE_5_X8,
+  PCIE_5_X16,
+  RTX_3090_NVLINK,
+  SPARK_CONNECTX_7,
+  TB4_TCP,
+  TB4_TCP_20G,
+  TB5_RDMA,
+  USB4_HALO_TCP,
+  XGMI_MI300X_PER_PEER,
+  XGMI_MI300X_8_GPU,
 } from './links';
 import { RTX_3090, RTX_3090_UNLOCKS, RTX_4090_UNLOCKS, RTX_5090_UNLOCKS } from './nvidia';
 import {
-  ARC_PRO_B60_PCIE_2, DGX_SPARK_3, DGX_SPARK_4, DGX_SPARK_4_RING, DGX_SPARK_PAIR, HGX_B200_16_NDR, HGX_B300_16_XDR,
-  HGX_H100_16_NDR, M3_ULTRA_TB5_CLUSTERS, MAC_TB4_TCP_CLUSTERS, MI300X_XGMI_8, RTX_3090_NVLINK_2,
-  STRIX_HALO_5GBE_CLUSTERS, STRIX_HALO_USB4_RDMA_CLUSTERS, STRIX_HALO_USB4_TCP_CLUSTERS, TOPOLOGY_PRESETS,
-  fabricIdSuffix, fabricWord, hgxCluster, linkPresetId, nodeTopology, pcieBox, socCluster,
+  ARC_PRO_B60_PCIE_2,
+  DGX_SPARK_3,
+  DGX_SPARK_4,
+  DGX_SPARK_4_RING,
+  DGX_SPARK_PAIR,
+  HGX_B200_16_NDR,
+  HGX_B300_16_XDR,
+  HGX_H100_16_NDR,
+  M3_ULTRA_TB5_CLUSTERS,
+  MAC_TB4_TCP_CLUSTERS,
+  MI300X_XGMI_8,
+  RTX_3090_NVLINK_2,
+  STRIX_HALO_5GBE_CLUSTERS,
+  STRIX_HALO_USB4_RDMA_CLUSTERS,
+  STRIX_HALO_USB4_TCP_CLUSTERS,
+  TOPOLOGY_PRESETS,
+  fabricIdSuffix,
+  fabricWord,
+  hgxCluster,
+  linkPresetId,
+  nodeTopology,
+  pcieBox,
+  socCluster,
 } from './topologies';
 import { DGX_SPARK } from './nvidia-datacenter';
 import { RYZEN_AI_MAX_PLUS_395 } from './amd';
@@ -42,16 +77,24 @@ describe('interconnect presets', () => {
     expect(link.sources.length).toBeGreaterThan(0);
   });
 
-  it.each(HOST_BOUNCE_PCIE_LINKS)('$name accepts a direct-P2P unlock without leaving hostBounce behind', (link) => {
-    const mods = [{
-      kind: 'p2p' as const, p2p: 'direct' as const, note: 'Test direct P2P on a compatible platform',
-      sources: [], estimatedReason: 'Test-only compatibility assumption',
-    }];
-    expect(validateLinkModifiers(link, mods)).toEqual([]);
-    expect(applyLinkModifiers(link, mods).hostBounce).toBeUndefined();
-    expect(link.p2p).toBe('host_bounce');
-    expect(link.hostBounce).toBeDefined();
-  });
+  it.each(HOST_BOUNCE_PCIE_LINKS)(
+    '$name accepts a direct-P2P unlock without leaving hostBounce behind',
+    (link) => {
+      const mods = [
+        {
+          kind: 'p2p' as const,
+          p2p: 'direct' as const,
+          note: 'Test direct P2P on a compatible platform',
+          sources: [],
+          estimatedReason: 'Test-only compatibility assumption',
+        },
+      ];
+      expect(validateLinkModifiers(link, mods)).toEqual([]);
+      expect(applyLinkModifiers(link, mods).hostBounce).toBeUndefined();
+      expect(link.p2p).toBe('host_bounce');
+      expect(link.hostBounce).toBeDefined();
+    },
+  );
 
   it('accepts every real GeForce unlock combination on every host-bounce PCIe lane configuration', () => {
     for (const axes of [RTX_3090_UNLOCKS, RTX_4090_UNLOCKS, RTX_5090_UNLOCKS]) {
@@ -66,11 +109,19 @@ describe('interconnect presets', () => {
 
   it('uses the PCIe payload rate: line rate after 128b/130b encoding × 256/280 TLP payload efficiency, B/s per direction', () => {
     // Gen5 32 GT/s/lane × 16 lanes × 128/130 coding efficiency ÷ 8 bits/byte × 256/(256 + 24) payload efficiency.
-    expect(PCIE_5_X16.bandwidthPerDirectionBytesPerSec).toBeCloseTo(32e9 * 16 * 128 / 130 / 8 * 256 / 280);
+    expect(PCIE_5_X16.bandwidthPerDirectionBytesPerSec).toBeCloseTo(
+      (((32e9 * 16 * 128) / 130 / 8) * 256) / 280,
+    );
     expect(PCIE_5_X16.bandwidthPerDirectionBytesPerSec).toBeCloseTo(57.614e9, -6);
-    expect(PCIE_4_X16.bandwidthPerDirectionBytesPerSec).toBe(PCIE_5_X16.bandwidthPerDirectionBytesPerSec / 2);
-    expect(PCIE_5_X8.bandwidthPerDirectionBytesPerSec).toBe(PCIE_4_X16.bandwidthPerDirectionBytesPerSec);
-    expect(PCIE_4_X8.bandwidthPerDirectionBytesPerSec).toBe(PCIE_4_X16.bandwidthPerDirectionBytesPerSec / 2);
+    expect(PCIE_4_X16.bandwidthPerDirectionBytesPerSec).toBe(
+      PCIE_5_X16.bandwidthPerDirectionBytesPerSec / 2,
+    );
+    expect(PCIE_5_X8.bandwidthPerDirectionBytesPerSec).toBe(
+      PCIE_4_X16.bandwidthPerDirectionBytesPerSec,
+    );
+    expect(PCIE_4_X8.bandwidthPerDirectionBytesPerSec).toBe(
+      PCIE_4_X16.bandwidthPerDirectionBytesPerSec / 2,
+    );
   });
 
   it('converts vendor bidirectional NVLink totals to per-direction injection', () => {
@@ -84,10 +135,17 @@ describe('interconnect presets', () => {
 
   it('converts network bit rates to bytes without summing directions', () => {
     for (const [link, gigabits] of [
-      [IB_NDR_400, 400], [IB_XDR_800, 800], [SPARK_CONNECTX_7, 200], [TB5_RDMA, 80],
-      [TB4_TCP, 40], [TB4_TCP_20G, 20], [USB4_HALO_TCP, 20], [ETHERNET_5G_TCP, 5], [ETHERNET_10G_TCP, 10],
+      [IB_NDR_400, 400],
+      [IB_XDR_800, 800],
+      [SPARK_CONNECTX_7, 200],
+      [TB5_RDMA, 80],
+      [TB4_TCP, 40],
+      [TB4_TCP_20G, 20],
+      [USB4_HALO_TCP, 20],
+      [ETHERNET_5G_TCP, 5],
+      [ETHERNET_10G_TCP, 10],
     ] as const) {
-      expect(link.bandwidthPerDirectionBytesPerSec).toBe(gigabits * 1e9 / 8);
+      expect(link.bandwidthPerDirectionBytesPerSec).toBe((gigabits * 1e9) / 8);
     }
   });
 
@@ -98,11 +156,18 @@ describe('interconnect presets', () => {
     expect(effectiveLink(PCIE_5_X16, 2).bandwidthBytesPerSec).toBe(96e9 / (2 * 2));
     expect(effectiveLink(PCIE_5_X16, 4).bandwidthBytesPerSec).toBe(96e9 / (2 * 4));
     expect(effectiveLink(PCIE_5_X16, 2).latencySec).toBeCloseTo(13e-6);
-    const unlocked = applyLinkModifiers(PCIE_5_X16, [{
-      kind: 'p2p', p2p: 'direct', note: 'Test direct path', sources: [], estimatedReason: 'Test assumption',
-    }]);
+    const unlocked = applyLinkModifiers(PCIE_5_X16, [
+      {
+        kind: 'p2p',
+        p2p: 'direct',
+        note: 'Test direct path',
+        sources: [],
+        estimatedReason: 'Test assumption',
+      },
+    ]);
     expect(effectiveLink(unlocked, 4)).toEqual({
-      bandwidthBytesPerSec: PCIE_5_X16.bandwidthPerDirectionBytesPerSec, latencySec: 1e-6,
+      bandwidthBytesPerSec: PCIE_5_X16.bandwidthPerDirectionBytesPerSec,
+      latencySec: 1e-6,
     });
   });
 
@@ -111,7 +176,7 @@ describe('interconnect presets', () => {
     expect(XGMI_MI300X_8_GPU.bandwidthPerDirectionBytesPerSec).toBe(7 * 64e9);
     // Ring AR beta = 2(n−1)/n × S/B; 8 GPUs can stripe over all seven outgoing links.
     const cost = ringAllReduceSec(1e9, 8, effectiveLink(XGMI_MI300X_8_GPU, 8));
-    expect(cost.bandwidthSec).toBe(2 * 7 / 8 * 1e9 / (7 * 64e9));
+    expect(cost.bandwidthSec).toBe((((2 * 7) / 8) * 1e9) / (7 * 64e9));
   });
 });
 
@@ -128,7 +193,11 @@ describe('topology presets and builders', () => {
   });
 
   it('puts SoC clusters on the inter-node path and PCIe boxes on the intra-node path', () => {
-    expect(DGX_SPARK_PAIR).toMatchObject({ devicesPerNode: 1, nodes: 2, interNode: SPARK_CONNECTX_7 });
+    expect(DGX_SPARK_PAIR).toMatchObject({
+      devicesPerNode: 1,
+      nodes: 2,
+      interNode: SPARK_CONNECTX_7,
+    });
     expect(DGX_SPARK_PAIR.intraNode).toBeUndefined();
     expect(ARC_PRO_B60_PCIE_2).toMatchObject({ devicesPerNode: 2, nodes: 1 });
     expect(ARC_PRO_B60_PCIE_2.intraNode?.p2p).toBe('direct');
@@ -137,9 +206,24 @@ describe('topology presets and builders', () => {
   });
 
   it('uses eight-device scale-up nodes and one inter-node NIC budget per GPU', () => {
-    expect(HGX_H100_16_NDR).toMatchObject({ devicesPerNode: 8, nodes: 2, intraNode: NVLINK_4, interNode: IB_NDR_400 });
-    expect(HGX_B200_16_NDR).toMatchObject({ devicesPerNode: 8, nodes: 2, intraNode: NVLINK_5, interNode: IB_NDR_400 });
-    expect(HGX_B300_16_XDR).toMatchObject({ devicesPerNode: 8, nodes: 2, intraNode: NVLINK_5, interNode: IB_XDR_800 });
+    expect(HGX_H100_16_NDR).toMatchObject({
+      devicesPerNode: 8,
+      nodes: 2,
+      intraNode: NVLINK_4,
+      interNode: IB_NDR_400,
+    });
+    expect(HGX_B200_16_NDR).toMatchObject({
+      devicesPerNode: 8,
+      nodes: 2,
+      intraNode: NVLINK_5,
+      interNode: IB_NDR_400,
+    });
+    expect(HGX_B300_16_XDR).toMatchObject({
+      devicesPerNode: 8,
+      nodes: 2,
+      intraNode: NVLINK_5,
+      interNode: IB_XDR_800,
+    });
     expect(MI300X_XGMI_8.intraNode).toBe(XGMI_MI300X_8_GPU);
     expect(hgxCluster('b300').interNode).toBeUndefined();
     expect(hgxCluster('b300', 2, IB_NDR_400).interNode).toBe(IB_NDR_400);
@@ -161,15 +245,31 @@ describe('topology presets and builders', () => {
   });
 
   it('builds general node topologies with links only at the levels that exist', () => {
-    const single = nodeTopology({ devicesPerNode: 1, nodes: 1, intraNode: PCIE_5_X16, interNode: IB_NDR_400 });
+    const single = nodeTopology({
+      devicesPerNode: 1,
+      nodes: 1,
+      intraNode: PCIE_5_X16,
+      interNode: IB_NDR_400,
+    });
     expect(single.intraNode).toBeUndefined();
     expect(single.interNode).toBeUndefined();
-    const box = nodeTopology({ devicesPerNode: 4, nodes: 1, intraNode: PCIE_4_X16, interNode: IB_NDR_400, device: RTX_3090 });
+    const box = nodeTopology({
+      devicesPerNode: 4,
+      nodes: 1,
+      intraNode: PCIE_4_X16,
+      interNode: IB_NDR_400,
+      device: RTX_3090,
+    });
     expect(box).toMatchObject({ devicesPerNode: 4, nodes: 1, intraNode: PCIE_4_X16 });
     expect(box.interNode).toBeUndefined();
     expect(box.id).toBe('node-4x1-rtx-3090-intra-pcie-4-0-x16-host-bounce');
     expect(box.name).toBe(`4 × ${RTX_3090.name} / PCIe 4.0 x16 (host bounce)`);
-    const cluster = nodeTopology({ devicesPerNode: 8, nodes: 2, intraNode: NVLINK_4, interNode: IB_NDR_400 });
+    const cluster = nodeTopology({
+      devicesPerNode: 8,
+      nodes: 2,
+      intraNode: NVLINK_4,
+      interNode: IB_NDR_400,
+    });
     expect(cluster).toMatchObject({ intraNode: NVLINK_4, interNode: IB_NDR_400 });
     for (const t of [single, box, cluster]) expect(validateTopology(t)).toEqual([]);
     expect(new Set([single.id, box.id, cluster.id]).size).toBe(3);
@@ -188,8 +288,12 @@ describe('fabric shapes in the builders', () => {
     expect(fabricIdSuffix({ kind: 'chain' })).toBe('-chain');
     expect(fabricWord(undefined)).toBeUndefined();
     expect(fabricWord({ kind: 'switched' })).toBeUndefined();
-    expect(fabricWord({ kind: 'switched', oversubscription: 2 })).toBe('switch, 2:1 oversubscribed');
-    expect(fabricWord({ kind: 'full_mesh', cablesPerPair: 2 })).toBe('full mesh, 2 cables per pair');
+    expect(fabricWord({ kind: 'switched', oversubscription: 2 })).toBe(
+      'switch, 2:1 oversubscribed',
+    );
+    expect(fabricWord({ kind: 'full_mesh', cablesPerPair: 2 })).toBe(
+      'full mesh, 2 cables per pair',
+    );
     expect(fabricWord({ kind: 'ring' })).toBe('ring');
   });
 
@@ -197,7 +301,9 @@ describe('fabric shapes in the builders', () => {
     const base = { devicesPerNode: 1, nodes: 4, interNode: SPARK_CONNECTX_7, device: DGX_SPARK };
     const plain = nodeTopology(base);
     expect(nodeTopology({ ...base, fabric: { kind: 'switched' } })).toEqual(plain);
-    expect(nodeTopology({ ...base, fabric: { kind: 'switched', oversubscription: 1 } })).toEqual(plain);
+    expect(nodeTopology({ ...base, fabric: { kind: 'switched', oversubscription: 1 } })).toEqual(
+      plain,
+    );
     expect(plain.interNodeFabric).toBeUndefined();
     const ring = nodeTopology({ ...base, fabric: { kind: 'ring' } });
     expect(ring.interNodeFabric).toEqual({ kind: 'ring' });
@@ -205,9 +311,13 @@ describe('fabric shapes in the builders', () => {
     expect(ring.name).toBe(`4 nodes × (1 × ${DGX_SPARK.name}) / ${SPARK_CONNECTX_7.name} (ring)`);
     expect(validateTopology(ring)).toEqual([]);
     // One node: no inter-node link, so no fabric either.
-    expect(nodeTopology({ ...base, nodes: 1, fabric: { kind: 'ring' } }).interNodeFabric).toBeUndefined();
+    expect(
+      nodeTopology({ ...base, nodes: 1, fabric: { kind: 'ring' } }).interNodeFabric,
+    ).toBeUndefined();
     // A fabric without an inter-node link is dropped too.
-    expect(nodeTopology({ devicesPerNode: 1, nodes: 4, fabric: { kind: 'ring' } }).interNodeFabric).toBeUndefined();
+    expect(
+      nodeTopology({ devicesPerNode: 1, nodes: 4, fabric: { kind: 'ring' } }).interNodeFabric,
+    ).toBeUndefined();
   });
 
   it('socCluster: the fabric suffix, word and field, and the pre-fabric id without one', () => {
@@ -215,28 +325,51 @@ describe('fabric shapes in the builders', () => {
     expect(mesh.id).toBe('cluster-3-dgx-spark-dgx-spark-connectx-7-200gbe-roce-mesh');
     expect(mesh.name).toBe(`3 × ${DGX_SPARK.name} / ${SPARK_CONNECTX_7.name} (full mesh)`);
     expect(mesh.interNodeFabric).toEqual({ kind: 'full_mesh' });
-    expect(socCluster(DGX_SPARK, 3, SPARK_CONNECTX_7).id).toBe('cluster-3-dgx-spark-dgx-spark-connectx-7-200gbe-roce');
-    expect(socCluster(DGX_SPARK, 3, SPARK_CONNECTX_7, { kind: 'switched' })).toEqual(socCluster(DGX_SPARK, 3, SPARK_CONNECTX_7));
+    expect(socCluster(DGX_SPARK, 3, SPARK_CONNECTX_7).id).toBe(
+      'cluster-3-dgx-spark-dgx-spark-connectx-7-200gbe-roce',
+    );
+    expect(socCluster(DGX_SPARK, 3, SPARK_CONNECTX_7, { kind: 'switched' })).toEqual(
+      socCluster(DGX_SPARK, 3, SPARK_CONNECTX_7),
+    );
   });
 
   it('DGX Spark: pair and switched four unchanged; triangle is a mesh; the switchless four is a ring, each citing the playbook', () => {
     expect(DGX_SPARK_PAIR.interNodeFabric).toBeUndefined();
     expect(DGX_SPARK_4.interNodeFabric).toBeUndefined();
     expect(DGX_SPARK_4.id).toBe('cluster-4-dgx-spark-dgx-spark-connectx-7-200gbe-roce');
-    expect(DGX_SPARK_3).toMatchObject({ nodes: 3, interNode: SPARK_CONNECTX_7, interNodeFabric: { kind: 'full_mesh' } });
-    expect(DGX_SPARK_4_RING).toMatchObject({ nodes: 4, interNode: SPARK_CONNECTX_7, interNodeFabric: { kind: 'ring' } });
+    expect(DGX_SPARK_3).toMatchObject({
+      nodes: 3,
+      interNode: SPARK_CONNECTX_7,
+      interNodeFabric: { kind: 'full_mesh' },
+    });
+    expect(DGX_SPARK_4_RING).toMatchObject({
+      nodes: 4,
+      interNode: SPARK_CONNECTX_7,
+      interNodeFabric: { kind: 'ring' },
+    });
     expect(DGX_SPARK_4_RING.id).toBe(`${DGX_SPARK_4.id}-ring`);
     for (const t of [DGX_SPARK_3, DGX_SPARK_4_RING]) {
-      expect(t.sources.some((s) => s.url.includes('dgx-spark-playbooks') && s.fields.includes('interNodeFabric'))).toBe(true);
+      expect(
+        t.sources.some(
+          (s) => s.url.includes('dgx-spark-playbooks') && s.fields.includes('interNodeFabric'),
+        ),
+      ).toBe(true);
       expect(validateTopology(t)).toEqual([]);
     }
   });
 
   it('point-to-point clusters: Macs are meshes; Strix Halo over USB4 is a mesh up to 3 and a ring at 4; Ethernet stays switched', () => {
-    for (const t of [...M3_ULTRA_TB5_CLUSTERS, ...MAC_TB4_TCP_CLUSTERS]) expect(t.interNodeFabric).toEqual({ kind: 'full_mesh' });
+    for (const t of [...M3_ULTRA_TB5_CLUSTERS, ...MAC_TB4_TCP_CLUSTERS])
+      expect(t.interNodeFabric).toEqual({ kind: 'full_mesh' });
     for (const clusters of [STRIX_HALO_USB4_RDMA_CLUSTERS, STRIX_HALO_USB4_TCP_CLUSTERS]) {
-      expect(clusters.map((t) => t.interNodeFabric)).toEqual([{ kind: 'full_mesh' }, { kind: 'full_mesh' }, { kind: 'ring' }]);
-      expect(clusters[2].id).toBe(`cluster-4-${RYZEN_AI_MAX_PLUS_395.id}-${linkPresetId(clusters[2].interNode!)}-ring`);
+      expect(clusters.map((t) => t.interNodeFabric)).toEqual([
+        { kind: 'full_mesh' },
+        { kind: 'full_mesh' },
+        { kind: 'ring' },
+      ]);
+      expect(clusters[2].id).toBe(
+        `cluster-4-${RYZEN_AI_MAX_PLUS_395.id}-${linkPresetId(clusters[2].interNode!)}-ring`,
+      );
     }
     for (const t of STRIX_HALO_5GBE_CLUSTERS) expect(t.interNodeFabric).toBeUndefined();
   });

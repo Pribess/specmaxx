@@ -16,20 +16,38 @@ import {
   TINY_MLA_SHARED,
 } from '../models/reference';
 import { crossStageWarnings } from '../engine/simulate';
-import { blockResidentWeightBytes, blockSequenceStateBytes, lowerModel, type LoweringContext } from './lower';
+import {
+  blockResidentWeightBytes,
+  blockSequenceStateBytes,
+  lowerModel,
+  type LoweringContext,
+} from './lower';
 import type { ModelSpec } from '../ir/model';
 
-const BF16: QuantConfig = { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } };
+const BF16: QuantConfig = {
+  weights: { dtype: 'bf16' },
+  activations: 'bf16',
+  kvCache: { dtype: 'bf16' },
+};
 
 /** Prefill: 2 sequences of 64 tokens (T = 128). Decode: 2 sequences at a 256-token context (T = 2). */
 function ctx(phase: 'prefill' | 'decode', tp = 1, pp = 1): LoweringContext {
   const parallel: ParallelConfig = { tp, pp, dp: 1, ep: 1 };
-  return { phase, seqs: 2, qLen: phase === 'prefill' ? 64 : 1, kvLen: phase === 'prefill' ? 64 : 256, quant: BF16, parallel };
+  return {
+    phase,
+    seqs: 2,
+    qLen: phase === 'prefill' ? 64 : 1,
+    kvLen: phase === 'prefill' ? 64 : 256,
+    quant: BF16,
+    parallel,
+  };
 }
 
 /** The ops of layer `i` (with its stage's lowering). */
 function layerOps(model: ModelSpec, i: number, c: LoweringContext): Op[] {
-  const layer = lowerModel(model, c).stages.flatMap((s) => s.layers).find((l) => l.layerIndex === i);
+  const layer = lowerModel(model, c)
+    .stages.flatMap((s) => s.layers)
+    .find((l) => l.layerIndex === i);
   if (layer === undefined) throw new Error(`no layer ${i}`);
   return layer.ops;
 }
@@ -47,8 +65,13 @@ describe('fixtures are valid and their resident weights equal params · 2 B at t
     for (const layer of model.layers) {
       for (const block of layer.blocks) {
         // KDA's A_log (vH) and dt_bias (vH·dk) are not modeled as weight reads (§9).
-        const kdaVectors = block.kind === 'linear_attention' && block.variant === 'kda' ? block.vHeads * (1 + block.keyDim) : 0;
-        expect(blockResidentWeightBytes(block, ctx('decode'))).toBe(2 * (blockParams(block) - kdaVectors));
+        const kdaVectors =
+          block.kind === 'linear_attention' && block.variant === 'kda'
+            ? block.vHeads * (1 + block.keyDim)
+            : 0;
+        expect(blockResidentWeightBytes(block, ctx('decode'))).toBe(
+          2 * (blockParams(block) - kdaVectors),
+        );
       }
     }
   });
@@ -87,8 +110,16 @@ describe('CSA (TINY_CSA: h 128, H 4, hd 32, dr 8, rq 32, G 2 × R_o 16, W 16; r 
       'ffn_residual',
     ]);
     // consumer (reuse): no compressor, no indexer; Reindex: idx.q, idx.w, scoring only
-    expect(names(layerOps(TINY_CSA, 2, ctx('decode'))).filter((n) => n.startsWith('idx') || n.includes('_c'))).toEqual([]);
-    expect(names(layerOps(TINY_CSA, 3, ctx('decode'))).filter((n) => n.startsWith('idx'))).toEqual(['idx.q', 'idx.w', 'idx.score']);
+    expect(
+      names(layerOps(TINY_CSA, 2, ctx('decode'))).filter(
+        (n) => n.startsWith('idx') || n.includes('_c'),
+      ),
+    ).toEqual([]);
+    expect(names(layerOps(TINY_CSA, 3, ctx('decode'))).filter((n) => n.startsWith('idx'))).toEqual([
+      'idx.q',
+      'idx.w',
+      'idx.score',
+    ]);
   });
 
   it('prefill attention: window + compressed entries in one softmax', () => {
@@ -116,7 +147,9 @@ describe('CSA (TINY_CSA: h 128, H 4, hd 32, dr 8, rq 32, G 2 × R_o 16, W 16; r 
     expect(opBytes(idx).kvReadBytes).toBe(8192);
     expect(opBytes(idx).kvWriteBytes).toBe(32);
     // consumer: only the window vector is written
-    expect(opBytes(byName(layerOps(TINY_CSA, 2, ctx('decode')), 'attn.core')).kvWriteBytes).toBe(128);
+    expect(opBytes(byName(layerOps(TINY_CSA, 2, ctx('decode')), 'attn.core')).kvWriteBytes).toBe(
+      128,
+    );
     // Reindex: at most 32 keys scored, nothing written
     const reindex = byName(layerOps(TINY_CSA, 3, ctx('decode')), 'idx.score') as IndexerOp;
     expect(opFlops(reindex)).toBe(4096); // 2·2·2·32·16
@@ -166,7 +199,11 @@ describe('hyper-connections and n-gram (TINY_HC_NGRAM: h 64, N 2, fn 128 → 8, 
     expect(opFlops(byName(ops, 'mixer_hc_pre.sinkhorn'))).toBe(8192);
     // collapse: read T·N·D·2 = 32,768, write T·D·2 = 16,384, FLOP T·D·2N = 32,768; weights 11 vectors · 2 B
     const collapse = opBytes(byName(ops, 'mixer_hc_pre.collapse'));
-    expect([collapse.activationReadBytes, collapse.activationWriteBytes, collapse.weightBytes]).toEqual([32_768, 16_384, 22]);
+    expect([
+      collapse.activationReadBytes,
+      collapse.activationWriteBytes,
+      collapse.weightBytes,
+    ]).toEqual([32_768, 16_384, 22]);
     // expand (mixing): T·N·D·(2N + 2) = 16,384·6 = 98,304 FLOP; read (T·N·D + T·D)·2 = 49,152, write 32,768
     const expand = byName(ops, 'mixer_hc_post.expand');
     expect(opFlops(expand)).toBe(98_304);
@@ -180,11 +217,15 @@ describe('hyper-connections and n-gram (TINY_HC_NGRAM: h 64, N 2, fn 128 → 8, 
     const gather = byName(ops, 'engram.gather');
     if (gather.kind !== 'embedding') throw new Error('expected an embedding op');
     // T·g = 512 rows of 8: 512·8·2 = 8192 B gathered; 500 rows per rank
-    expect([gather.tokens, gather.vocabShard, opBytes(gather).weightBytes]).toEqual([512, 500, 8192]);
+    expect([gather.tokens, gather.vocabShard, opBytes(gather).weightBytes]).toEqual([
+      512, 500, 8192,
+    ]);
     // all-reduce of the gathered rows: T·g·d·2 = 8192 B
     expect((byName(ops, 'engram.tp_all_reduce') as CollectiveOp).messageBytes).toBe(8192);
     // resident at tp 2: table 500·8·2 = 8000 + wkv 32·192·2 = 12,288 + gate vectors 256·2 = 512
-    expect(blockResidentWeightBytes(TINY_HC_NGRAM.layers[1].blocks[0], ctx('decode', 2))).toBe(20_800);
+    expect(blockResidentWeightBytes(TINY_HC_NGRAM.layers[1].blocks[0], ctx('decode', 2))).toBe(
+      20_800,
+    );
   });
 
   it('PP send carries all N streams', () => {
@@ -222,7 +263,15 @@ describe('KDA and NoPE MLA with a k-pool indexer (TINY_KDA)', () => {
   it('NoPE MLA emits no rope; the pooled indexer scores T/4 keys', () => {
     const ops = layerOps(TINY_KDA, 1, ctx('prefill'));
     expect(names(ops).some((n) => n.includes('rope'))).toBe(false);
-    expect(names(ops).filter((n) => n.startsWith('idx'))).toEqual(['idx.q', 'idx.k', 'idx.k_norm', 'idx.pool_gate', 'idx.kv_pool', 'idx.w', 'idx.score']);
+    expect(names(ops).filter((n) => n.startsWith('idx'))).toEqual([
+      'idx.q',
+      'idx.k',
+      'idx.k_norm',
+      'idx.pool_gate',
+      'idx.kv_pool',
+      'idx.w',
+      'idx.score',
+    ]);
     const idx = byName(ops, 'idx.score') as IndexerOp;
     // causal pairs (64·65/2)/4 = 520: F = 2·2·2·520·16 = 66,560; top-16 tokens = 4 pools → indices 2·64·4·4 = 2048
     expect(opFlops(idx)).toBe(66_560);
@@ -238,7 +287,10 @@ describe('cross-layer sharing (TINY_MLA_SHARED: H 4, rkv 32, dn 16, dr 8, dv 16;
   it('reuse emits no indexer ops; a latent consumer has no kv_a and writes no cache', () => {
     const reuse = layerOps(TINY_MLA_SHARED, 1, ctx('decode'));
     expect(names(reuse).some((n) => n.startsWith('idx'))).toBe(false);
-    expect((byName(reuse, 'attn.core') as AttentionOp).kvSelection).toEqual({ kind: 'topk', topK: 16 });
+    expect((byName(reuse, 'attn.core') as AttentionOp).kvSelection).toEqual({
+      kind: 'topk',
+      topK: 16,
+    });
     const consumer = layerOps(TINY_MLA_SHARED, 2, ctx('decode', 2));
     expect(names(consumer).some((n) => n.startsWith('mla.kv_a'))).toBe(false);
     // rope only on q: T·Hl·dr = 2·2·8 = 32 elements
@@ -248,7 +300,8 @@ describe('cross-layer sharing (TINY_MLA_SHARED: H 4, rkv 32, dn 16, dr 8, dv 16;
   });
 
   it('sequence state: owner latent + keys, reuse latent only, consumer nothing', () => {
-    const state = (i: number): number => blockSequenceStateBytes(TINY_MLA_SHARED.layers[i].blocks[1], ctx('decode'), 256);
+    const state = (i: number): number =>
+      blockSequenceStateBytes(TINY_MLA_SHARED.layers[i].blocks[1], ctx('decode'), 256);
     expect(state(0)).toBe(256 * 40 * 2 + 256 * 16 * 2);
     expect(state(1)).toBe(256 * 40 * 2);
     expect(state(2)).toBe(0);
@@ -284,6 +337,8 @@ describe('Inkling relative bias, K/V convs and short convs (TINY_INKLING: H 4, K
     expect(blocks[2].kind).toBe('short_conv');
     expect(blockSequenceStateBytes(blocks[2], ctx('decode'), 256)).toBe(3 * 128 * 2);
     // decode reads the prior conv state
-    expect(opBytes(byName(layerOps(TINY_INKLING, 0, ctx('decode')), 'attn.kv_conv')).stateReadBytes).toBe(2 * 3 * 128 * 2);
+    expect(
+      opBytes(byName(layerOps(TINY_INKLING, 0, ctx('decode')), 'attn.kv_conv')).stateReadBytes,
+    ).toBe(2 * 3 * 128 * 2);
   });
 });

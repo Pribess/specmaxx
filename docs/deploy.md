@@ -40,6 +40,7 @@ Or run the workflow by hand from the Actions tab.
    `CLOUDFLARE_ACCOUNT_ID` is set, Wrangler does not need to look up memberships or user details, so no User or
    Account Settings read permission is required. (Cloudflare's "Edit Cloudflare Workers" template adds those and more;
    it works too but is broader.)
+
 2. In the GitHub repository (Settings → Secrets and variables → Actions), add the secrets `CLOUDFLARE_API_TOKEN` and
    `CLOUDFLARE_ACCOUNT_ID`.
 3. In DNS for `cro.sh`, the record for the root (the CNAME to GitHub Pages) must be **proxied** (orange cloud), or

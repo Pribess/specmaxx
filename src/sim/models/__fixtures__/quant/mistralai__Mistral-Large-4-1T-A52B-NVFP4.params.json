@@ -6,7 +6,7 @@
   "n_heads": 64,
   "n_kv_heads": 64,
   "rope_theta": 10000.0,
-  "norm_eps": 1e-05,
+  "norm_eps": 1e-5,
   "vocab_size": 204800,
   "tied_embeddings": false,
   "max_position_embeddings": 1048576,
@@ -28,7 +28,7 @@
     "rope_head_dim": 64,
     "match_nope": true,
     "ssmax_scaling": true,
-    "norm_eps": 1e-06,
+    "norm_eps": 1e-6,
     "sharing": "full,full,full,full,full,full,full,full,full,full,full,full,full,full,full,full,full,shared,shared,full,full,shared,shared,full,full,shared,shared,full,full,shared,shared,full,full,shared,shared,full,full,shared,shared,full,full,shared,shared,full,full,shared,shared,full,full,shared,shared,full,full,shared,shared,full,full,shared,shared,full,full,shared,shared,full,full,shared,shared,full,full,shared,shared,full",
     "fp8_indexer": true,
     "fp8_kv_cache": true

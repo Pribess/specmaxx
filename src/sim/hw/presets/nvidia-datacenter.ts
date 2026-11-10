@@ -26,26 +26,40 @@
  */
 
 import type { MathFormat } from '../../ir/dtype';
-import type { ComputeEngine, DeviceSpec, EstimatedField, GemmTiling, MatmulPeak, SourceRef } from '../types';
+import type {
+  ComputeEngine,
+  DeviceSpec,
+  EstimatedField,
+  GemmTiling,
+  MatmulPeak,
+  SourceRef,
+} from '../types';
 import { gb, gbPerSec, mb, tbPerSec, tflops } from '../units';
 import { NVIDIA_DC_GPUDIRECT_SOURCE } from './gpudirect';
 import { NVLINK_C2C } from './links';
 import { BLACKWELL_DATASHEET_URL } from './rack-scale-sources';
 import {
   engineSfuAtVectorClock,
-  NVIDIA_BLACKWELL_DC_SFU, NVIDIA_BLACKWELL_ULTRA_SFU, NVIDIA_GB10_SFU, NVIDIA_SM_SFU, nvidiaSfu } from './sfu';
+  NVIDIA_BLACKWELL_DC_SFU,
+  NVIDIA_BLACKWELL_ULTRA_SFU,
+  NVIDIA_GB10_SFU,
+  NVIDIA_SM_SFU,
+  nvidiaSfu,
+} from './sfu';
 
 // ---------------------------------------------------------------------------------------------------------------
 // Shared sources and helpers
 // ---------------------------------------------------------------------------------------------------------------
 
 /** PTX ISA (9.5), warp-level `mma.sync` shapes (sm_80+, the only MMA path on GB10 / sm_121). */
-const PTX_MMA_SYNC_URL = 'https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-shape';
+const PTX_MMA_SYNC_URL =
+  'https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-shape';
 /** PTX ISA (9.5), warpgroup `wgmma.mma_async` shapes (sm_90a: H100 / H200). */
 const PTX_WGMMA_URL =
   'https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#asynchronous-warpgroup-level-matrix-shape';
 /** PTX ISA (9.5), `tcgen05.mma` shapes (sm_100a / sm_103a: B200 / B300), Table 48. */
-const PTX_TCGEN05_URL = 'https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#tcgen05-matrix-shape';
+const PTX_TCGEN05_URL =
+  'https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#tcgen05-matrix-shape';
 /** CUTLASS repository: the source of the "typical CTA tile" estimates. */
 const CUTLASS_URL = 'https://github.com/NVIDIA/cutlass';
 
@@ -68,8 +82,16 @@ function tilingTable(
   ctasPerUnit: number,
   mmaKByKey: Partial<Record<'default' | MathFormat, number>> & { default: number },
 ): { default: GemmTiling } & Partial<Record<MathFormat, GemmTiling>> {
-  const make = (mmaK: number): GemmTiling => ({ mmaM, mmaN, mmaK, ctaTiles: ctaTiles.map((t) => ({ ...t })), ctasPerUnit });
-  const table: { default: GemmTiling } & Partial<Record<MathFormat, GemmTiling>> = { default: make(mmaKByKey.default) };
+  const make = (mmaK: number): GemmTiling => ({
+    mmaM,
+    mmaN,
+    mmaK,
+    ctaTiles: ctaTiles.map((t) => ({ ...t })),
+    ctasPerUnit,
+  });
+  const table: { default: GemmTiling } & Partial<Record<MathFormat, GemmTiling>> = {
+    default: make(mmaKByKey.default),
+  };
   for (const [key, k] of Object.entries(mmaKByKey)) {
     if (key !== 'default' && k !== undefined) table[key as MathFormat] = make(k);
   }
@@ -81,7 +103,11 @@ function tilingShapeSource(url: string, title: string, keys: string[], note: str
   return {
     url,
     title,
-    fields: keys.flatMap((k) => [`engines.0.gemmTiling.${k}.mmaM`, `engines.0.gemmTiling.${k}.mmaN`, `engines.0.gemmTiling.${k}.mmaK`]),
+    fields: keys.flatMap((k) => [
+      `engines.0.gemmTiling.${k}.mmaM`,
+      `engines.0.gemmTiling.${k}.mmaN`,
+      `engines.0.gemmTiling.${k}.mmaK`,
+    ]),
     note,
   };
 }
@@ -89,10 +115,14 @@ function tilingShapeSource(url: string, title: string, keys: string[], note: str
 /** `estimated[]` entries for the CTA tiles and CTAs per SM of every listed tiling key (no vendor publishes them). */
 function tilingEstimates(keys: string[], tilesReason: string): EstimatedField[] {
   return keys.flatMap((k) => [
-    { field: `engines.0.gemmTiling.${k}.ctaTiles`, reason: `${tilesReason} (${CUTLASS_URL}); not a vendor spec.` },
+    {
+      field: `engines.0.gemmTiling.${k}.ctaTiles`,
+      reason: `${tilesReason} (${CUTLASS_URL}); not a vendor spec.`,
+    },
     {
       field: `engines.0.gemmTiling.${k}.ctasPerUnit`,
-      reason: 'One resident CTA per SM for large tiles (register / shared-memory / TMEM bound); not a vendor spec.',
+      reason:
+        'One resident CTA per SM for large tiles (register / shared-memory / TMEM bound); not a vendor spec.',
     },
   ]);
 }
@@ -102,14 +132,16 @@ function tilingEstimates(keys: string[], tilesReason: string): EstimatedField[] 
 // ---------------------------------------------------------------------------------------------------------------
 
 /** NVIDIA GB10 Superchip White Paper WP-12718-001_v02 (April 2026). */
-const GB10_WHITEPAPER_URL = 'https://www.nvidia.com/content/dam/en-zz/Solutions/dgx-spark/nvidia-gb10-superchip-whitepaper.pdf';
+const GB10_WHITEPAPER_URL =
+  'https://www.nvidia.com/content/dam/en-zz/Solutions/dgx-spark/nvidia-gb10-superchip-whitepaper.pdf';
 /** DGX Spark product page (spec table, footnotes). */
 const DGX_SPARK_PRODUCT_URL = 'https://www.nvidia.com/en-us/products/workstations/dgx-spark/';
 /** NVIDIA RTX Blackwell GPU Architecture whitepaper (Appendix C: GB205 / RTX 5070, the same SM generation and SM count). */
 const RTX_BLACKWELL_WHITEPAPER_URL =
   'https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf';
 /** NVIDIA developer forum: mmapeak measurements on DGX Spark. */
-const GB10_MMAPEAK_FORUM_URL = 'https://forums.developer.nvidia.com/t/detailed-compute-performance-metrics-for-dgx-spark/351993';
+const GB10_MMAPEAK_FORUM_URL =
+  'https://forums.developer.nvidia.com/t/detailed-compute-performance-metrics-for-dgx-spark/351993';
 
 /**
  * GB10 dense tensor rates, estimated (NVIDIA publishes only the sparse FP4 headline):
@@ -135,19 +167,74 @@ const GB10_SFU = nvidiaSfu(NVIDIA_GB10_SFU, 48, GB10_VECTOR_FP32_FLOPS);
 
 /** GB10 matmul peaks (all fp32-accumulate; the fp32-acc = fp16-acc rate rests on a community measurement). */
 const GB10_PEAKS: MatmulPeak[] = [
-  { input: 'fp4', accumulate: 'fp32', sparsity: 'dense', flopsPerSec: tflops(GB10_FP4_DENSE_TFLOPS) },
+  {
+    input: 'fp4',
+    accumulate: 'fp32',
+    sparsity: 'dense',
+    flopsPerSec: tflops(GB10_FP4_DENSE_TFLOPS),
+  },
   { input: 'fp4', accumulate: 'fp32', sparsity: '2:4', flopsPerSec: tflops(1000) }, // the "1 PFLOP FP4" headline
-  { input: 'fp8', accumulate: 'fp32', sparsity: 'dense', flopsPerSec: tflops(GB10_FP8_DENSE_TFLOPS) },
-  { input: 'fp8', accumulate: 'fp32', sparsity: '2:4', flopsPerSec: tflops(2 * GB10_FP8_DENSE_TFLOPS) },
-  { input: 'fp16', accumulate: 'fp32', sparsity: 'dense', flopsPerSec: tflops(GB10_FP16_DENSE_TFLOPS) },
-  { input: 'fp16', accumulate: 'fp32', sparsity: '2:4', flopsPerSec: tflops(2 * GB10_FP16_DENSE_TFLOPS) },
-  { input: 'bf16', accumulate: 'fp32', sparsity: 'dense', flopsPerSec: tflops(GB10_FP16_DENSE_TFLOPS) },
-  { input: 'bf16', accumulate: 'fp32', sparsity: '2:4', flopsPerSec: tflops(2 * GB10_FP16_DENSE_TFLOPS) },
-  { input: 'tf32', accumulate: 'fp32', sparsity: 'dense', flopsPerSec: tflops(GB10_TF32_DENSE_TFLOPS) },
-  { input: 'tf32', accumulate: 'fp32', sparsity: '2:4', flopsPerSec: tflops(2 * GB10_TF32_DENSE_TFLOPS) },
+  {
+    input: 'fp8',
+    accumulate: 'fp32',
+    sparsity: 'dense',
+    flopsPerSec: tflops(GB10_FP8_DENSE_TFLOPS),
+  },
+  {
+    input: 'fp8',
+    accumulate: 'fp32',
+    sparsity: '2:4',
+    flopsPerSec: tflops(2 * GB10_FP8_DENSE_TFLOPS),
+  },
+  {
+    input: 'fp16',
+    accumulate: 'fp32',
+    sparsity: 'dense',
+    flopsPerSec: tflops(GB10_FP16_DENSE_TFLOPS),
+  },
+  {
+    input: 'fp16',
+    accumulate: 'fp32',
+    sparsity: '2:4',
+    flopsPerSec: tflops(2 * GB10_FP16_DENSE_TFLOPS),
+  },
+  {
+    input: 'bf16',
+    accumulate: 'fp32',
+    sparsity: 'dense',
+    flopsPerSec: tflops(GB10_FP16_DENSE_TFLOPS),
+  },
+  {
+    input: 'bf16',
+    accumulate: 'fp32',
+    sparsity: '2:4',
+    flopsPerSec: tflops(2 * GB10_FP16_DENSE_TFLOPS),
+  },
+  {
+    input: 'tf32',
+    accumulate: 'fp32',
+    sparsity: 'dense',
+    flopsPerSec: tflops(GB10_TF32_DENSE_TFLOPS),
+  },
+  {
+    input: 'tf32',
+    accumulate: 'fp32',
+    sparsity: '2:4',
+    flopsPerSec: tflops(2 * GB10_TF32_DENSE_TFLOPS),
+  },
   // INT8 = FP8 rate per SM on the RTX Blackwell SM (RTX 5070: INT8 246.9 TOPS = FP8 246.9 TFLOPS).
-  { input: 'int8', accumulate: 'int32', sparsity: 'dense', flopsPerSec: tflops(GB10_FP8_DENSE_TFLOPS) },
-  { input: 'int8', accumulate: 'int32', sparsity: '2:4', flopsPerSec: tflops(2 * GB10_FP8_DENSE_TFLOPS) },
+  {
+    input: 'int8',
+    accumulate: 'int32',
+    sparsity: 'dense',
+    flopsPerSec: tflops(GB10_FP8_DENSE_TFLOPS),
+  },
+  {
+    input: 'int8',
+    accumulate: 'int32',
+    sparsity: '2:4',
+    flopsPerSec: tflops(2 * GB10_FP8_DENSE_TFLOPS),
+  },
 ];
 
 /** Tiling keys of the GB10 engine. */
@@ -219,7 +306,8 @@ export const DGX_SPARK: DeviceSpec = {
   sources: [
     {
       url: GB10_WHITEPAPER_URL,
-      title: 'NVIDIA GB10 Superchip White Paper (WP-12718-001_v02), Table 4 "GB10 GPU Specifications" and Table 2',
+      title:
+        'NVIDIA GB10 Superchip White Paper (WP-12718-001_v02), Table 4 "GB10 GPU Specifications" and Table 2',
       fields: ['engines.0.computeUnits', 'l2Bytes'],
       note:
         'Table 4: "Streaming multiprocessors 48", "NVIDIA CUDA cores 6,144 (128 per SM)", "GPU boost clock 2.4 GHz", ' +
@@ -241,7 +329,8 @@ export const DGX_SPARK: DeviceSpec = {
     },
     {
       url: GB10_MMAPEAK_FORUM_URL,
-      title: 'NVIDIA developer forum: "Detailed compute performance metrics for DGX Spark" (device query)',
+      title:
+        'NVIDIA developer forum: "Detailed compute performance metrics for DGX Spark" (device query)',
       fields: ['memory.gpuUsableFraction'],
       kind: 'community',
       note:
@@ -250,7 +339,8 @@ export const DGX_SPARK: DeviceSpec = {
     },
     {
       url: GB10_MMAPEAK_FORUM_URL,
-      title: 'NVIDIA developer forum: "Detailed compute performance metrics for DGX Spark" (mmapeak)',
+      title:
+        'NVIDIA developer forum: "Detailed compute performance metrics for DGX Spark" (mmapeak)',
       fields: peakPaths(GB10_PEAKS, (p) => p.accumulate === 'fp32' && p.sparsity === 'dense'),
       kind: 'community',
       note:
@@ -262,7 +352,8 @@ export const DGX_SPARK: DeviceSpec = {
     },
     {
       url: RTX_BLACKWELL_WHITEPAPER_URL,
-      title: 'NVIDIA RTX Blackwell GPU Architecture (whitepaper), Appendix C: GB205 (RTX 5070, 48 SMs, 2512 MHz)',
+      title:
+        'NVIDIA RTX Blackwell GPU Architecture (whitepaper), Appendix C: GB205 (RTX 5070, 48 SMs, 2512 MHz)',
       fields: ['engines.0.vectorFlopsPerSec.fp16', 'engines.0.vectorFlopsPerSec.bf16'],
       note:
         'Same SM generation as GB10. Dense/sparse TFLOPS: FP4 with FP32 acc 493.9/987.8; FP8 with FP16 acc ' +
@@ -271,7 +362,7 @@ export const DGX_SPARK: DeviceSpec = {
     },
     {
       url: 'https://chipsandcheese.com/p/analyzing-nvidia-gb10s-gpu',
-      title: 'Chips and Cheese: Analyzing NVIDIA GB10\'s GPU',
+      title: "Chips and Cheese: Analyzing NVIDIA GB10's GPU",
       fields: ['engines.0.vectorFlopsPerSec.fp64'],
       kind: 'review',
       note: '"GB10 has a 1:64 FP64 to FP32 ratio" → 29.49 / 64 = 0.461 TFLOP/s.',
@@ -293,7 +384,7 @@ export const DGX_SPARK: DeviceSpec = {
         '= 125, TF32 = 62.5 (each ½ the previous: RTX Blackwell per-SM ratios, RTX 5070 whitepaper table, and ' +
         'Carmack\'s "1 PF sparse FP4 = 125 TF dense BF16"); INT8 = FP8 rate (RTX 5070: INT8 TOPS = FP8 TFLOPS); ' +
         'fp32 accumulate at the fp16-accumulate rate (forum mmapeak ratio); 2:4 = 2 × dense. TF32 at ½ FP16 is the ' +
-        'RTX PRO / datacenter ratio (forum: TF32 tensor ≈ 2 × FP32 vector), not GeForce\'s ¼.',
+        "RTX PRO / datacenter ratio (forum: TF32 tensor ≈ 2 × FP32 vector), not GeForce's ¼.",
     })),
     {
       field: 'engines.0.vectorFlopsPerSec.fp32',
@@ -309,7 +400,10 @@ export const DGX_SPARK: DeviceSpec = {
       field: 'engines.0.vectorFlopsPerSec.bf16',
       reason: 'Vector BF16 = FP32 rate (RTX Blackwell SM, whitepaper App. C); GB10 publishes none.',
     },
-    ...tilingEstimates(GB10_TILING_KEYS, 'Typical CUTLASS CTA tile shapes for sm_120 mma.sync GEMMs'),
+    ...tilingEstimates(
+      GB10_TILING_KEYS,
+      'Typical CUTLASS CTA tile shapes for sm_120 mma.sync GEMMs',
+    ),
     ...GB10_SFU.estimated,
   ],
 };
@@ -434,7 +528,10 @@ export const H100_SXM: DeviceSpec = {
     ...HOPPER_SFU.sources,
   ],
   estimated: [
-    ...tilingEstimates(HOPPER_TILING_KEYS, 'Typical CUTLASS sm90 warp-specialized CTA tiles (m a multiple of 64)'),
+    ...tilingEstimates(
+      HOPPER_TILING_KEYS,
+      'Typical CUTLASS sm90 warp-specialized CTA tiles (m a multiple of 64)',
+    ),
     ...HOPPER_SFU.estimated,
   ],
 };
@@ -478,10 +575,18 @@ export const H200_SXM: DeviceSpec = {
   estimated: [
     {
       field: 'engines.0.computeUnits',
-      reason: '132 SMs as H100 SXM5 (Hopper blog): same GH100 die, identical published tensor and vector TFLOPS.',
+      reason:
+        '132 SMs as H100 SXM5 (Hopper blog): same GH100 die, identical published tensor and vector TFLOPS.',
     },
-    { field: 'l2Bytes', reason: '50 MB as H100 SXM5 (Hopper blog): same GH100 configuration; the H200 page states no L2.' },
-    ...tilingEstimates(HOPPER_TILING_KEYS, 'Typical CUTLASS sm90 warp-specialized CTA tiles (m a multiple of 64)'),
+    {
+      field: 'l2Bytes',
+      reason:
+        '50 MB as H100 SXM5 (Hopper blog): same GH100 configuration; the H200 page states no L2.',
+    },
+    ...tilingEstimates(
+      HOPPER_TILING_KEYS,
+      'Typical CUTLASS sm90 warp-specialized CTA tiles (m a multiple of 64)',
+    ),
     ...HOPPER_SFU.estimated,
   ],
 };
@@ -491,13 +596,15 @@ export const H200_SXM: DeviceSpec = {
 // ---------------------------------------------------------------------------------------------------------------
 
 /** NVIDIA Blackwell Architecture Technical Brief V2.1, Table 3 "System Specifications for HGX B300 and HGX B200". */
-const BLACKWELL_BRIEF_URL = 'https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf';
+const BLACKWELL_BRIEF_URL =
+  'https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf';
 /** NVIDIA HGX platform page (HGX B300 / B200 8-GPU totals; footnote "Dense is ½ sparse spec shown"). */
 const HGX_PAGE_URL = 'https://www.nvidia.com/en-us/data-center/hgx/';
 /** DGX B200 page (system memory totals). */
 const DGX_B200_URL = 'https://www.nvidia.com/en-us/data-center/dgx-b200/';
 /** NVIDIA Blackwell Ultra Datasheet (OCT25), HGX B300 column. */
-const BLACKWELL_ULTRA_DATASHEET_URL = 'https://dam-cdn.nvd.orangelogic.com/AssetLink/1k0p832eq8r5ca0u5383ie5o4tp3bst1.pdf';
+const BLACKWELL_ULTRA_DATASHEET_URL =
+  'https://dam-cdn.nvd.orangelogic.com/AssetLink/1k0p832eq8r5ca0u5383ie5o4tp3bst1.pdf';
 
 /** Tiling keys of the Blackwell datacenter engines. */
 const BLACKWELL_DC_TILING_KEYS = ['default', 'fp16', 'bf16', 'tf32', 'fp8', 'fp6', 'int8', 'fp4'];
@@ -597,8 +704,13 @@ export const B200: DeviceSpec = {
     NVIDIA_DC_GPUDIRECT_SOURCE,
     {
       url: BLACKWELL_BRIEF_URL,
-      title: 'NVIDIA Blackwell Architecture Technical Brief V2.1, Table 3 (HGX B200 column, "Per GPU Specs")',
-      fields: ['engines.0.matmulPeaks', 'engines.0.vectorFlopsPerSec', 'memory.bandwidthBytesPerSec'],
+      title:
+        'NVIDIA Blackwell Architecture Technical Brief V2.1, Table 3 (HGX B200 column, "Per GPU Specs")',
+      fields: [
+        'engines.0.matmulPeaks',
+        'engines.0.vectorFlopsPerSec',
+        'memory.bandwidthBytesPerSec',
+      ],
       note:
         '"FP4 Tensor Core Dense/Sparse 9/18 petaFLOPS", "FP8/FP6 Tensor Core Dense/Sparse 4.5/9", "INT8 Tensor Core ' +
         'Dense/Sparse 4.5/9 petaOPS", "FP16/BF16 Tensor Core Dense/Sparse 2.2/4.5", "TF32 Tensor Core Dense/Sparse ' +
@@ -622,7 +734,7 @@ export const B200: DeviceSpec = {
     },
     {
       url: 'https://chipsandcheese.com/p/nvidias-b200-keeping-the-cuda-juggernaut',
-      title: 'Chips and Cheese: NVIDIA\'s B200, keeping the CUDA juggernaut rolling',
+      title: "Chips and Cheese: NVIDIA's B200, keeping the CUDA juggernaut rolling",
       fields: ['engines.0.computeUnits', 'l2Bytes'],
       kind: 'review',
       note:
@@ -639,7 +751,10 @@ export const B200: DeviceSpec = {
     ...B200_SFU.sources,
   ],
   estimated: [
-    ...tilingEstimates(BLACKWELL_DC_TILING_KEYS, 'Typical CUTLASS sm100 CTA tiles (m a multiple of 128)'),
+    ...tilingEstimates(
+      BLACKWELL_DC_TILING_KEYS,
+      'Typical CUTLASS sm100 CTA tiles (m a multiple of 128)',
+    ),
     ...B200_SFU.estimated,
   ],
 };
@@ -719,7 +834,8 @@ export const B300: DeviceSpec = {
     },
     {
       url: BLACKWELL_BRIEF_URL,
-      title: 'NVIDIA Blackwell Architecture Technical Brief V2.1, Table 3 (HGX B300 column, "Per GPU Specs")',
+      title:
+        'NVIDIA Blackwell Architecture Technical Brief V2.1, Table 3 (HGX B300 column, "Per GPU Specs")',
       fields: ['engines.0.matmulPeaks'],
       note:
         'Agrees with the datasheet: "FP4 14/18", "FP8/FP6 4.5/9", "INT8 Tensor Core Dense/Sparse 0.15/ 0.30 petaOPS", ' +
@@ -741,7 +857,10 @@ export const B300: DeviceSpec = {
     ...B300_SFU.sources,
   ],
   estimated: [
-    ...tilingEstimates(BLACKWELL_DC_TILING_KEYS, 'Typical CUTLASS sm100 CTA tiles (m a multiple of 128)'),
+    ...tilingEstimates(
+      BLACKWELL_DC_TILING_KEYS,
+      'Typical CUTLASS sm100 CTA tiles (m a multiple of 128)',
+    ),
     ...B300_SFU.estimated,
   ],
 };

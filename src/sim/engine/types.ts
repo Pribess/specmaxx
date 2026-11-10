@@ -51,13 +51,17 @@ export interface Workload {
  * device memory. HOOK for the KV-tiering task (report §G10): a cache held in a lower tier would add a fetch of
  * `cached · kvBytesPerToken` bytes here. Unit: tokens.
  */
-export function cachedPrefixTokens(workload: Pick<Workload, 'promptLen' | 'prefixCacheHitRatio'>): number {
+export function cachedPrefixTokens(
+  workload: Pick<Workload, 'promptLen' | 'prefixCacheHitRatio'>,
+): number {
   // Formula: cached = floor(P · h)
   return Math.floor(workload.promptLen * (workload.prefixCacheHitRatio ?? 0));
 }
 
 /** Prompt tokens prefill actually computes, `P_new = P − floor(P·h)` (≥ 1 since h < 1). Unit: tokens. */
-export function computedPromptTokens(workload: Pick<Workload, 'promptLen' | 'prefixCacheHitRatio'>): number {
+export function computedPromptTokens(
+  workload: Pick<Workload, 'promptLen' | 'prefixCacheHitRatio'>,
+): number {
   // Formula: P_new = P − cached
   return workload.promptLen - cachedPrefixTokens(workload);
 }

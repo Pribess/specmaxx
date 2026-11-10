@@ -31,7 +31,7 @@ Each operation takes the longer of two times (the **roofline**):
 - **compute time**: its FLOPs divided by the achievable arithmetic rate, and
 - **memory time**: its bytes divided by memory bandwidth.
 
-If compute is longer the op is *compute bound*, otherwise *bandwidth bound*. The time of a step is the sum of its operations (on the busiest device). Communication is added using a latency-plus-bandwidth cost, and by default the bandwidth part may overlap with compute while the latency part may not.
+If compute is longer the op is _compute bound_, otherwise _bandwidth bound_. The time of a step is the sum of its operations (on the busiest device). Communication is added using a latency-plus-bandwidth cost, and by default the bandwidth part may overlap with compute while the latency part may not.
 
 Attention also pays for its softmax: one exponential per score on the special-function units, plus a few vector operations, overlapped with its matrix multiplies. This only shows on long prompts on fast datacenter GPUs, where the exponentials can take longer than the matrix work.
 

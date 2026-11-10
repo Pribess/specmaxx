@@ -43,7 +43,14 @@
  */
 
 import type { MathFormat } from '../../ir/dtype';
-import type { ComputeEngine, DeviceSpec, EstimatedField, GemmTiling, MatmulPeak, SourceRef } from '../types';
+import type {
+  ComputeEngine,
+  DeviceSpec,
+  EstimatedField,
+  GemmTiling,
+  MatmulPeak,
+  SourceRef,
+} from '../types';
 import { gb, gbPerSec, tbPerSec, tflops } from '../units';
 import { AMD_PEERDIRECT_SOURCE, NO_RDMA_SOURCE_ESTIMATE } from './gpudirect';
 import { AMD_CDNA3_SFU, AMD_CDNA4_SFU, AMD_MI455X_SFU, AMD_RDNA_SFU, engineSfu } from './sfu';
@@ -58,7 +65,11 @@ const MIB = 1024 * 1024;
  * Peak rate of a matrix or vector unit = compute units × FLOP per clock per CU × clock.
  * Units: count × FLOP/(clk·CU) × Hz = FLOP/s (OP/s for integer inputs). Per device.
  */
-export function cuPeakFlopsPerSec(computeUnits: number, flopPerClockPerCu: number, clockHz: number): number {
+export function cuPeakFlopsPerSec(
+  computeUnits: number,
+  flopPerClockPerCu: number,
+  clockHz: number,
+): number {
   return computeUnits * flopPerClockPerCu * clockHz;
 }
 
@@ -72,10 +83,20 @@ function cuPeaks(
 ): MatmulPeak[] {
   const accumulate = input === 'int8' || input === 'int4' ? 'int32' : 'fp32';
   const peaks: MatmulPeak[] = [
-    { input, accumulate, sparsity: 'dense', flopsPerSec: cuPeakFlopsPerSec(computeUnits, denseFlopPerClockPerCu, clockHz) },
+    {
+      input,
+      accumulate,
+      sparsity: 'dense',
+      flopsPerSec: cuPeakFlopsPerSec(computeUnits, denseFlopPerClockPerCu, clockHz),
+    },
   ];
   if (sparseFlopPerClockPerCu !== undefined) {
-    peaks.push({ input, accumulate, sparsity: '2:4', flopsPerSec: cuPeakFlopsPerSec(computeUnits, sparseFlopPerClockPerCu, clockHz) });
+    peaks.push({
+      input,
+      accumulate,
+      sparsity: '2:4',
+      flopsPerSec: cuPeakFlopsPerSec(computeUnits, sparseFlopPerClockPerCu, clockHz),
+    });
   }
   return peaks;
 }
@@ -86,7 +107,12 @@ function peakPaths(peaks: MatmulPeak[], inputs: MathFormat[]): string[] {
 }
 
 /** Tiling with an `mmaM × mmaN × mmaK` instruction shape (elements) and the given CTA (workgroup) tiles. */
-function tiling(mmaM: number, mmaN: number, mmaK: number, ctaTiles: { m: number; n: number }[]): GemmTiling {
+function tiling(
+  mmaM: number,
+  mmaN: number,
+  mmaK: number,
+  ctaTiles: { m: number; n: number }[],
+): GemmTiling {
   return { mmaM, mmaN, mmaK, ctaTiles: ctaTiles.map((t) => ({ ...t })), ctasPerUnit: 1 };
 }
 
@@ -101,7 +127,8 @@ function ctaEstimates(keys: string[], tileReason: string): EstimatedField[] {
     { field: `engines.0.gemmTiling.${k}.ctaTiles`, reason: tileReason },
     {
       field: `engines.0.gemmTiling.${k}.ctasPerUnit`,
-      reason: 'One resident large workgroup per CU (register / LDS bound for these tile sizes); kernel-dependent, not a vendor spec.',
+      reason:
+        'One resident large workgroup per CU (register / LDS bound for these tile sizes); kernel-dependent, not a vendor spec.',
     },
   ]);
 }
@@ -113,19 +140,24 @@ function ctaEstimates(keys: string[], tileReason: string): EstimatedField[] {
 /** AMD's matrix instruction calculator (ROCm GitHub): cycles and FLOP per instruction per architecture. */
 const AMIC_URL = 'https://github.com/ROCm/amd_matrix_instruction_calculator';
 /** GPUOpen: per-CU dense and sparse WMMA rates, RDNA4 vs RDNA3. */
-const GPUOPEN_GENAI_URL = 'https://gpuopen.com/learn/accelerating_generative_ai_on_amd_radeon_gpus/';
+const GPUOPEN_GENAI_URL =
+  'https://gpuopen.com/learn/accelerating_generative_ai_on_amd_radeon_gpus/';
 /** GPUOpen: WMMA on RDNA3 (per-CU rates and the 16×16×16 shape). */
 const GPUOPEN_RDNA3_URL = 'https://gpuopen.com/learn/wmma_on_rdna3/';
 /** RDNA4 ISA reference guide (§7.12 WMMA / SWMMAC). */
 const RDNA4_ISA_URL = 'https://gpuopen.com/download/rdna4-instruction-set-architecture.pdf';
 /** ROCm blog: FP16 GEMM on RDNA (peaks of the 9070 XT and 8060S; hipBLASLt measurements). */
-const ROCM_FP16_GEMM_URL = 'https://rocm.blogs.amd.com/software-tools-optimization/rdna-fp16-gemm/README.html';
+const ROCM_FP16_GEMM_URL =
+  'https://rocm.blogs.amd.com/software-tools-optimization/rdna-fp16-gemm/README.html';
 /** ROCm blog: FP8 GEMM on RDNA4 (FP8 WMMA accumulates into FP32 only). */
-const ROCM_FP8_GEMM_URL = 'https://rocm.blogs.amd.com/software-tools-optimization/rdna-fp8-gemm/README.html';
+const ROCM_FP8_GEMM_URL =
+  'https://rocm.blogs.amd.com/software-tools-optimization/rdna-fp8-gemm/README.html';
 /** Chips and Cheese: microbenchmarking RDNA3 (dual-issue VOPD is rarely emitted for FMA). */
-const CNC_RDNA3_URL = 'https://chipsandcheese.com/p/microbenchmarking-amds-rdna-3-graphics-architecture';
+const CNC_RDNA3_URL =
+  'https://chipsandcheese.com/p/microbenchmarking-amds-rdna-3-graphics-architecture';
 /** AMD CDNA 3 architecture whitepaper (Table 1 per-CU rates p. 7; MI300X spec table p. 24). */
-const CDNA3_WP_URL = 'https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/white-papers/amd-cdna-3-white-paper.pdf';
+const CDNA3_WP_URL =
+  'https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/white-papers/amd-cdna-3-white-paper.pdf';
 /** AMD CDNA 4 architecture whitepaper (Table 1 per-CU rates p. 8; Table 2 MI350X / MI355X specs p. 18). */
 const CDNA4_WP_URL =
   'https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/white-papers/amd-cdna-4-architecture-whitepaper.pdf';
@@ -141,9 +173,21 @@ const CDNA4_ISA_URL =
  * RDNA4 dense WMMA rates per CU per clock (GPUOpen "Dense WMMA rates … RX 9070 XT FLOPS/clock/CU"):
  * FP16 1024, BF16 1024, FP8 2048, BF8 2048, IU8 2048, IU4 4096. Unit: FLOP (OP) / (clk · CU).
  */
-const RDNA4_DENSE_FLOP_PER_CLK_PER_CU = { fp16: 1024, bf16: 1024, fp8: 2048, int8: 2048, int4: 4096 } as const;
+const RDNA4_DENSE_FLOP_PER_CLK_PER_CU = {
+  fp16: 1024,
+  bf16: 1024,
+  fp8: 2048,
+  int8: 2048,
+  int4: 4096,
+} as const;
 /** RDNA4 4:2-sparse (SWMMAC) rates: 2× dense ("effectively doubling the performance of standard dense WMMA"). */
-const RDNA4_SPARSE_FLOP_PER_CLK_PER_CU = { fp16: 2048, bf16: 2048, fp8: 4096, int8: 4096, int4: 8192 } as const;
+const RDNA4_SPARSE_FLOP_PER_CLK_PER_CU = {
+  fp16: 2048,
+  bf16: 2048,
+  fp8: 4096,
+  int8: 4096,
+  int4: 8192,
+} as const;
 /** RDNA lanes per CU: 64 stream processors (4096 SP / 64 CU on Navi 48). Single-issue FP32 FMA = 2 FLOP per lane. */
 const RDNA_SP_PER_CU = 64;
 
@@ -165,10 +209,19 @@ const RDNA4_TILING_KEYS = ['default', 'fp16', 'bf16', 'fp8', 'int8', 'int4'];
  * Matmul peak = CUs × per-CU WMMA rate × boost clock (dense and 4:2 sparse); vector fp32 = CUs × 64 SP × 2 FLOP
  * × boost (single issue), vector fp16 = 2× that (packed).
  */
-function rdna4Engine(name: string, computeUnits: number, boostClockHz: number, sfuOpsPerSec: number): ComputeEngine {
+function rdna4Engine(
+  name: string,
+  computeUnits: number,
+  boostClockHz: number,
+  sfuOpsPerSec: number,
+): ComputeEngine {
   const d = RDNA4_DENSE_FLOP_PER_CLK_PER_CU;
   const s = RDNA4_SPARSE_FLOP_PER_CLK_PER_CU;
-  const fp32SingleIssueFlopsPerSec = cuPeakFlopsPerSec(computeUnits, RDNA_SP_PER_CU * 2, boostClockHz);
+  const fp32SingleIssueFlopsPerSec = cuPeakFlopsPerSec(
+    computeUnits,
+    RDNA_SP_PER_CU * 2,
+    boostClockHz,
+  );
   return {
     id: 'gpu',
     name,
@@ -237,7 +290,11 @@ const RDNA4_SHARED_SOURCES: SourceRef[] = [
 ];
 
 /** Estimated vector-fp32 entry for an RDNA card: the single-issue convention with its arithmetic. */
-function rdnaVectorFp32Estimate(sp: number, boostGhz: number, headlineTflops: number): EstimatedField {
+function rdnaVectorFp32Estimate(
+  sp: number,
+  boostGhz: number,
+  headlineTflops: number,
+): EstimatedField {
   return {
     field: 'engines.0.vectorFlopsPerSec.fp32',
     reason:
@@ -255,7 +312,12 @@ const R9700_BOOST_CLOCK_HZ = 2.92e9;
 /** R9700 SFU: 64 CU × 16 exp2/clk × 2.92 GHz (estimate, quarter-rate transcendental unit). */
 const R9700_SFU = engineSfu(AMD_RDNA_SFU, 64, 'CU', R9700_BOOST_CLOCK_HZ, SFU_FIELD);
 /** The R9700's RDNA4 engine: 64 CU at the 2920 MHz boost clock. */
-const R9700_ENGINE = rdna4Engine('Navi 48 RDNA4 AI Accelerators (WMMA)', 64, R9700_BOOST_CLOCK_HZ, R9700_SFU.sfuOpsPerSec);
+const R9700_ENGINE = rdna4Engine(
+  'Navi 48 RDNA4 AI Accelerators (WMMA)',
+  64,
+  R9700_BOOST_CLOCK_HZ,
+  R9700_SFU.sfuOpsPerSec,
+);
 
 /**
  * AMD Radeon AI PRO R9700 (Navi 48, RDNA4, 64 CU, 32 GB GDDR6, 640 GB/s), all peaks at the 2920 MHz BOOST
@@ -288,7 +350,13 @@ export const RADEON_AI_PRO_R9700: DeviceSpec = {
     {
       url: R9700_URL,
       title: 'AMD Radeon AI PRO R9700 product page',
-      fields: ['engines.0.computeUnits', 'engines.0.matmulPeaks', 'engines.0.vectorFlopsPerSec.fp16', 'memory', 'l2Bytes'],
+      fields: [
+        'engines.0.computeUnits',
+        'engines.0.matmulPeaks',
+        'engines.0.vectorFlopsPerSec.fp16',
+        'memory',
+        'l2Bytes',
+      ],
       note:
         '"Compute Units 64", "Stream Processors 4096", "Boost Frequency Up to 2920 MHz"; FP16 Matrix 191 / with ' +
         'Structured Sparsity 383 TFLOPs; FP8 (E5M2, E4M3) 383 / 766 TFLOPs; INT8 383 / 766 TOPs; INT4 766 / 1531 TOPs ' +
@@ -319,7 +387,8 @@ export const RADEON_AI_PRO_R9700: DeviceSpec = {
 };
 
 /** Radeon RX 9070 XT product page. */
-const RX_9070_XT_URL = 'https://www.amd.com/en/products/graphics/desktops/radeon/9000-series/amd-radeon-rx-9070xt.html';
+const RX_9070_XT_URL =
+  'https://www.amd.com/en/products/graphics/desktops/radeon/9000-series/amd-radeon-rx-9070xt.html';
 /** RX 9070 XT boost clock: "Boost Frequency Up to 2970 MHz" (game clock 2400 MHz). Unit: Hz. */
 const RX_9070_XT_BOOST_CLOCK_HZ = 2.97e9;
 /** RX 9070 XT SFU: 64 CU × 16 exp2/clk × 2.97 GHz (estimate, quarter-rate transcendental unit). */
@@ -362,7 +431,13 @@ export const RADEON_RX_9070_XT: DeviceSpec = {
     {
       url: RX_9070_XT_URL,
       title: 'AMD Radeon RX 9070 XT product page',
-      fields: ['engines.0.computeUnits', 'engines.0.matmulPeaks', 'engines.0.vectorFlopsPerSec.fp16', 'memory', 'l2Bytes'],
+      fields: [
+        'engines.0.computeUnits',
+        'engines.0.matmulPeaks',
+        'engines.0.vectorFlopsPerSec.fp16',
+        'memory',
+        'l2Bytes',
+      ],
       note:
         '"Compute Units 64", "Stream Processors 4096", "Boost Frequency Up to 2970 MHz"; FP16 Matrix 195 / sparse 389 ' +
         'TFLOPs; FP8 389 / 779 TFLOPs; INT8 389 / 779 TOPs; INT4 779 / 1557 TOPs (each = 64 CU × per-CU rate × 2.97 GHz, ' +
@@ -403,7 +478,8 @@ export const RADEON_RX_9070_XT: DeviceSpec = {
 // ---------------------------------------------------------------------------------------------------------
 
 /** Ryzen AI Max+ 395 product page. */
-const RYZEN_AI_MAX_395_URL = 'https://www.amd.com/en/products/processors/laptop/ryzen/ai-300-series/amd-ryzen-ai-max-plus-395.html';
+const RYZEN_AI_MAX_395_URL =
+  'https://www.amd.com/en/products/processors/laptop/ryzen/ai-300-series/amd-ryzen-ai-max-plus-395.html';
 /** AMD blog: Variable Graphics Memory FAQ (256 GB/s; 96 GB VGM on Windows). */
 const AMD_VGM_FAQ_URL =
   'https://www.amd.com/en/blogs/2025/faqs-amd-variable-graphics-memory-vram-ai-model-sizes-quantization-mcp-more.html';
@@ -411,7 +487,8 @@ const AMD_VGM_FAQ_URL =
 const AMD_TRILLION_URL =
   'https://www.amd.com/en/developer/resources/technical-articles/2026/how-to-run-a-one-trillion-parameter-llm-locally-an-amd.html';
 /** AMD ROCm documentation: Strix Halo system optimization (default GTT limit ≈ 50% of system RAM). */
-const ROCM_STRIX_HALO_URL = 'https://rocm.docs.amd.com/en/docs-7.2.0/how-to/system-optimization/strixhalo.html';
+const ROCM_STRIX_HALO_URL =
+  'https://rocm.docs.amd.com/en/docs-7.2.0/how-to/system-optimization/strixhalo.html';
 /** HP Z2 Mini G1a configurator (memory options shipped with the Ryzen AI Max+ PRO 395). */
 const HP_Z2_MINI_G1A_CONFIG_URL = 'https://www.hp.com/us-en/workstations/z2-mini-a-configure.html';
 /** Chips and Cheese: AMD's chiplet APU, an overview of Strix Halo (32 MB Infinity Cache). */
@@ -422,7 +499,13 @@ const RADEON_8060S_CLOCK_HZ = 2.9e9;
 /** Radeon 8060S compute units: "Graphics Core Count 40". */
 const RADEON_8060S_CUS = 40;
 /** Radeon 8060S SFU: 40 CU × 16 exp2/clk × 2.9 GHz (estimate, quarter-rate transcendental unit). */
-const RADEON_8060S_SFU = engineSfu(AMD_RDNA_SFU, RADEON_8060S_CUS, 'CU', RADEON_8060S_CLOCK_HZ, SFU_FIELD);
+const RADEON_8060S_SFU = engineSfu(
+  AMD_RDNA_SFU,
+  RADEON_8060S_CUS,
+  'CU',
+  RADEON_8060S_CLOCK_HZ,
+  SFU_FIELD,
+);
 /**
  * RDNA3 / RDNA 3.5 WMMA rates per CU per clock (GPUOpen "RX 7900 XTX FLOPS/clock/CU FP16 512 BF16 512 IU8 512
  * IU4 1024"); gfx1151 uses the RDNA3 WMMA instructions (AMD calculator maps GFX1151 to RDNA3). Dense only:
@@ -627,7 +710,13 @@ const CDNA3_MI300_CUS = 304;
 /** MI300X / MI325X: "Peak Engine Clock 2100 MHz". Unit: Hz. */
 const CDNA3_MI300_CLOCK_HZ = 2.1e9;
 /** MI300X / MI325X SFU: 304 CU × 16 exp2/clk × 2.1 GHz (estimate, quarter-rate transcendentals). */
-const CDNA3_MI300_SFU = engineSfu(AMD_CDNA3_SFU, CDNA3_MI300_CUS, 'CU', CDNA3_MI300_CLOCK_HZ, SFU_FIELD);
+const CDNA3_MI300_SFU = engineSfu(
+  AMD_CDNA3_SFU,
+  CDNA3_MI300_CUS,
+  'CU',
+  CDNA3_MI300_CLOCK_HZ,
+  SFU_FIELD,
+);
 
 /** Representative hipBLASLt / Tensile macro tiles for MFMA GEMMs (elements, m × n); multiples of 16. Estimated. */
 const CDNA_CTA_TILES = [
@@ -636,7 +725,8 @@ const CDNA_CTA_TILES = [
   { m: 128, n: 128 },
   { m: 128, n: 64 },
 ];
-const CDNA_CTA_REASON = 'Representative hipBLASLt / Tensile macro tiles for MFMA GEMM kernels; not a vendor spec.';
+const CDNA_CTA_REASON =
+  'Representative hipBLASLt / Tensile macro tiles for MFMA GEMM kernels; not a vendor spec.';
 
 /** CDNA3 tiling keys: MFMA 16×16×16 f16/bf16 (default), 16×16×32 fp8/i8, 16×16×8 xf32 (TF32). */
 const CDNA3_TILING_KEYS = ['default', 'fp16', 'bf16', 'tf32', 'fp8', 'int8'];
@@ -688,7 +778,12 @@ const CDNA3_SHARED_SOURCES: SourceRef[] = [
   {
     url: CDNA3_WP_URL,
     title: 'AMD CDNA 3 architecture whitepaper, Table 1 (p. 7) and MI300X spec table (p. 24)',
-    fields: ['engines.0.computeUnits', 'engines.0.matmulPeaks', 'engines.0.vectorFlopsPerSec.fp32', 'engines.0.vectorFlopsPerSec.fp64'],
+    fields: [
+      'engines.0.computeUnits',
+      'engines.0.matmulPeaks',
+      'engines.0.vectorFlopsPerSec.fp32',
+      'engines.0.vectorFlopsPerSec.fp64',
+    ],
     note:
       'Per CU per clock: FP64 matrix 256, FP64 vector 128, FP32 matrix 256, FP32 vector 256, TF32 1024, FP16 2048, BF16 2048, ' +
       'FP8 4096, INT8 4096; sparsity "doubling the computational throughput up to … 8K operations per clock for a CU". ' +
@@ -748,7 +843,14 @@ export const INSTINCT_MI300X: DeviceSpec = {
     {
       url: MI300X_DS_URL,
       title: 'AMD Instinct MI300X data sheet',
-      fields: ['engines.0.computeUnits', 'engines.0.matmulPeaks', 'engines.0.vectorFlopsPerSec.fp32', 'engines.0.vectorFlopsPerSec.fp64', 'memory', 'l2Bytes'],
+      fields: [
+        'engines.0.computeUnits',
+        'engines.0.matmulPeaks',
+        'engines.0.vectorFlopsPerSec.fp32',
+        'engines.0.vectorFlopsPerSec.fp64',
+        'memory',
+        'l2Bytes',
+      ],
       note:
         '"AI PEAK THEORETICAL PERFORMANCE": TF32 / FP16 / BF16 / FP8 / INT8 653.7 / 1307.4 / 1307.4 / 2614.9 / 2614.9, with ' +
         'sparsity 1307.4 / 2614.9 / 2614.9 / 5229.8 / 5229.8 (footnote MI300-17, at 2,100 MHz); FP64 vector 81.7, FP32 vector ' +
@@ -798,7 +900,14 @@ export const INSTINCT_MI325X: DeviceSpec = {
     {
       url: MI325X_PAGE_URL,
       title: 'AMD Instinct MI325X product page',
-      fields: ['engines.0.computeUnits', 'engines.0.matmulPeaks', 'engines.0.vectorFlopsPerSec.fp32', 'engines.0.vectorFlopsPerSec.fp64', 'memory', 'l2Bytes'],
+      fields: [
+        'engines.0.computeUnits',
+        'engines.0.matmulPeaks',
+        'engines.0.vectorFlopsPerSec.fp32',
+        'engines.0.vectorFlopsPerSec.fp64',
+        'memory',
+        'l2Bytes',
+      ],
       note:
         '"Compute Units 304", "Peak Engine Clock 2100 MHz"; peak performance figures identical to the MI300X; ' +
         '"Dedicated Memory Size 256 GB", "HBM3E", "Memory Clock 6 GHz", "Peak Memory Bandwidth 6 TB/s", "Last Level Cache ' +
@@ -932,7 +1041,13 @@ export const INSTINCT_MI355X: DeviceSpec = {
     {
       url: MI355X_PAGE_URL,
       title: 'AMD Instinct MI355X product page',
-      fields: ['engines.0.computeUnits', 'engines.0.matmulPeaks', 'engines.0.vectorFlopsPerSec', 'memory', 'l2Bytes'],
+      fields: [
+        'engines.0.computeUnits',
+        'engines.0.matmulPeaks',
+        'engines.0.vectorFlopsPerSec',
+        'memory',
+        'l2Bytes',
+      ],
       note:
         '"Compute Units 256", "Peak Engine Clock 2400 MHz"; MXFP4 10.1, MXFP6 10.1, MXFP8 5, OCP-FP8 5 / with Structured ' +
         'Sparsity 10.1, FP16 matrix 2.5 / 5, BF16 2.5 / 5 PFLOPs; INT8 5 / 10.1 POPs; FP16 (vector) 157.3, FP32 matrix and ' +
@@ -942,7 +1057,13 @@ export const INSTINCT_MI355X: DeviceSpec = {
     {
       url: CDNA4_WP_URL,
       title: 'AMD CDNA 4 architecture whitepaper, Table 1 (p. 8) and Table 2 (p. 18)',
-      fields: ['engines.0.computeUnits', 'engines.0.matmulPeaks', 'engines.0.vectorFlopsPerSec', 'memory', 'l2Bytes'],
+      fields: [
+        'engines.0.computeUnits',
+        'engines.0.matmulPeaks',
+        'engines.0.vectorFlopsPerSec',
+        'memory',
+        'l2Bytes',
+      ],
       note:
         'Table 1 MI355X FLOPS/clock/CU: vector FP64 128, FP32 256, FP16 256; matrix FP64 128, FP32 256, FP16 4096, BF16 4096, ' +
         'FP8 8192, INT8 8192, MXFP6 and MXFP4 "16834" (TYPO for 16384: 256 × 16384 × 2.4 GHz = 10.07 PF = the table\'s 10 PF). ' +
@@ -1042,7 +1163,8 @@ export const INSTINCT_MI455X: DeviceSpec = {
     AMD_PEERDIRECT_SOURCE,
     {
       url: MI455X_DS_URL,
-      title: 'AMD Instinct MI455X brochure (datasheet): AI peak theoretical performance table and specifications',
+      title:
+        'AMD Instinct MI455X brochure (datasheet): AI peak theoretical performance table and specifications',
       fields: ['engines.0.matmulPeaks', 'engines.0.vectorFlopsPerSec', 'memory'],
       note:
         '"AI PEAK THEORETICAL PERFORMANCE TFLOPS" (dense, then "W/STRUCTURED SPARSITY"): OCP MXFP4 40265, OCP MXFP6 20133, ' +

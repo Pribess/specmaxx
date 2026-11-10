@@ -64,7 +64,9 @@ function findPeak(
   acc: AccumulateType,
   sparsity: 'dense' | '2:4',
 ): MatmulPeak | undefined {
-  return engine.matmulPeaks.find((p) => p.input === input && p.accumulate === acc && p.sparsity === sparsity);
+  return engine.matmulPeaks.find(
+    (p) => p.input === input && p.accumulate === acc && p.sparsity === sparsity,
+  );
 }
 
 /**
@@ -99,7 +101,8 @@ export function matmulPeakFlopsPerSec(
       : acc === 'int32'
         ? 'fp32'
         : acc;
-    const accOptions: AccumulateType[] = candidateAcc === 'fp16' ? ['fp16', 'fp32'] : [candidateAcc];
+    const accOptions: AccumulateType[] =
+      candidateAcc === 'fp16' ? ['fp16', 'fp32'] : [candidateAcc];
     const sparsityOptions: ('dense' | '2:4')[] = sparsity === '2:4' ? ['2:4', 'dense'] : ['dense'];
     for (const s of sparsityOptions) {
       for (const a of accOptions) {
@@ -115,7 +118,12 @@ export function matmulPeakFlopsPerSec(
                   : ''),
             );
           }
-          return { flopsPerSec: hit.flopsPerSec, usedInput: hit.input, usedAccumulate: hit.accumulate, usedSparsity: hit.sparsity };
+          return {
+            flopsPerSec: hit.flopsPerSec,
+            usedInput: hit.input,
+            usedAccumulate: hit.accumulate,
+            usedSparsity: hit.sparsity,
+          };
         }
       }
     }
@@ -123,13 +131,20 @@ export function matmulPeakFlopsPerSec(
   }
   const vectorFp32 = engine.vectorFlopsPerSec.fp32;
   if (vectorFp32 === undefined) {
-    throw new Error(`engine '${engine.id}' has no matmul peak for ${requested} and no vector fp32 peak to fall back to`);
+    throw new Error(
+      `engine '${engine.id}' has no matmul peak for ${requested} and no vector fp32 peak to fall back to`,
+    );
   }
   warnings.push(
     `peak: engine '${engine.id}' has no tensor peak for ${requested} or its fallbacks; ` +
       `using the vector fp32 peak (${vectorFp32 / 1e12} TFLOP/s)`,
   );
-  return { flopsPerSec: vectorFp32, usedInput: 'fp32', usedAccumulate: 'fp32', usedSparsity: 'dense' };
+  return {
+    flopsPerSec: vectorFp32,
+    usedInput: 'fp32',
+    usedAccumulate: 'fp32',
+    usedSparsity: 'dense',
+  };
 }
 
 /**

@@ -2,12 +2,8 @@
   "name": "specmaxx",
   "version": "0.0.0",
   "private": true,
-  "type": "module",
-  "packageManager": "bun@1.4.4",
   "description": "Theoretical maximum prefill/decode tokens/s for an LLM on a hardware stack (frontend-only).",
-  "engines": {
-    "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
-  },
+  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -15,10 +11,11 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "format": "prettier --write",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.sim.json && tsc -p tsconfig.node.json",
-    "check": "bun run typecheck && bun run lint && bun run test && bun run build && bun run e2e",
+    "check": "bun run format:check && bun run typecheck && bun run lint && bun run test && bun run build && bun run e2e",
     "e2e": "playwright test --project=smoke",
     "screenshots": "bun run build && playwright test --project=screenshots",
     "screenshots:redesign": "bun run build && playwright test --project=redesign"
@@ -47,12 +44,16 @@
     "eslint-plugin-react-hooks": "7.1.1",
     "globals": "^17.14.0",
     "jsdom": "30.1.3",
+    "oxfmt": "0.78.0",
     "playwright": "1.64.1",
-    "prettier": "3.6.2",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.72.1",
     "vite": "^8.3.6",
     "vitest": "^5.1.0",
     "wrangler": "4.158.0"
-  }
+  },
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
+  },
+  "packageManager": "bun@1.4.4"
 }

@@ -27,7 +27,8 @@ function mlxFormat(bits: number, group: number, mode: string, notes: string[]): 
   if (mode === 'mxfp8') return moduleFormat('mxfp8');
   if (mode !== 'affine') return null;
   const { dtype, approx } = intDtypeFor(bits);
-  if (approx) notes.push(`MLX ${bits}-bit affine weights stored as ${dtype} (no ${bits}-bit dtype)`);
+  if (approx)
+    notes.push(`MLX ${bits}-bit affine weights stored as ${dtype} (no ${bits}-bit dtype)`);
   // Formula: extra = (scaleBits + biasBits) / group_size, 16-bit scale and bias
   return moduleFormat(dtype, groupScaleBits(16, 16, group));
 }
@@ -41,7 +42,8 @@ export function readMlx(q: JsonObject, ctx: SchemeContext): SchemeReading {
   const recipe = strAt(q, 'recipe');
   const base = mlxFormat(bits, group, mode, notes);
   if (!base) notes.push(`unrecognised MLX mode '${mode}'; using torch_dtype`);
-  if (recipe !== undefined && recipe !== 'experts_only') notes.push(`unrecognised MLX recipe '${recipe}'; all layers assumed quantized`);
+  if (recipe !== undefined && recipe !== 'experts_only')
+    notes.push(`unrecognised MLX recipe '${recipe}'; all layers assumed quantized`);
   if (mode === 'affine') notes.push(`MLX affine: 16-bit scale + 16-bit bias per group of ${group}`);
 
   const keys = Object.keys(q).filter((k) => !SETTINGS.has(k));
@@ -51,13 +53,22 @@ export function readMlx(q: JsonObject, ctx: SchemeContext): SchemeReading {
     const v = q[k];
     if (v === false) overrides.set(k, null);
     else if (isJsonObject(v)) {
-      overrides.set(k, mlxFormat(numAt(v, 'bits') ?? bits, numAt(v, 'group_size') ?? group, strAt(v, 'mode') ?? mode, notes));
+      overrides.set(
+        k,
+        mlxFormat(
+          numAt(v, 'bits') ?? bits,
+          numAt(v, 'group_size') ?? group,
+          strAt(v, 'mode') ?? mode,
+          notes,
+        ),
+      );
     }
   }
 
   const resolve = (p: Probe): ModuleQuant => {
     const i = firstMatch(list, p);
-    if (i >= 0 && overrides.has(list.entries[i].raw)) return overrides.get(list.entries[i].raw) ?? ctx.native;
+    if (i >= 0 && overrides.has(list.entries[i].raw))
+      return overrides.get(list.entries[i].raw) ?? ctx.native;
     if (!base || p.kind === 'other') return ctx.native;
     if (recipe === 'experts_only' && p.cls !== 'routed_experts') return ctx.native;
     return base;

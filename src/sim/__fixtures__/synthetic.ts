@@ -4,15 +4,32 @@
  * still passes on them.
  */
 
-import type { ComputeEngine, DeviceSpec, GemmTiling, LinkSpec, SourceRef, TopologySpec } from '../hw/types';
+import type {
+  ComputeEngine,
+  DeviceSpec,
+  GemmTiling,
+  LinkSpec,
+  SourceRef,
+  TopologySpec,
+} from '../hw/types';
 
 /** Citation used by every fixture: covers whole subtrees (made-up numbers). */
 function syntheticSource(fields: string[]): SourceRef {
-  return { url: 'synthetic://test', title: 'Synthetic test fixture (made-up round numbers)', fields };
+  return {
+    url: 'synthetic://test',
+    title: 'Synthetic test fixture (made-up round numbers)',
+    fields,
+  };
 }
 
 /** Tiling of the synthetic GPU: MMA m64 n8 k16, one 128×128 CTA tile, one CTA per unit. */
-export const SYNTH_TILING: GemmTiling = { mmaM: 64, mmaN: 8, mmaK: 16, ctaTiles: [{ m: 128, n: 128 }], ctasPerUnit: 1 };
+export const SYNTH_TILING: GemmTiling = {
+  mmaM: 64,
+  mmaN: 8,
+  mmaK: 16,
+  ctaTiles: [{ m: 128, n: 128 }],
+  ctasPerUnit: 1,
+};
 
 /** The synthetic GPU engine: 100 units; bf16/fp16 fp32-acc 100e12 dense / 200e12 2:4; fp16-acc, fp8, int8 200e12. */
 const SYNTH_GPU_ENGINE: ComputeEngine = {
@@ -39,7 +56,12 @@ export const SYNTH_GPU: DeviceSpec = {
   name: 'Synthetic GPU',
   vendor: 'Synthetic',
   engines: [SYNTH_GPU_ENGINE],
-  memory: { kind: 'dedicated', technology: 'synthetic', capacityOptionsBytes: [100e9], bandwidthBytesPerSec: 1e12 },
+  memory: {
+    kind: 'dedicated',
+    technology: 'synthetic',
+    capacityOptionsBytes: [100e9],
+    bandwidthBytesPerSec: 1e12,
+  },
   sources: [syntheticSource(['engines', 'memory'])],
   estimated: [],
 };
@@ -73,7 +95,12 @@ export const SYNTH_UNIFIED: DeviceSpec = {
       memBandwidthCapBytesPerSec: 0.25e12,
     },
   ],
-  memory: { kind: 'unified', technology: 'synthetic', capacityOptionsBytes: [32e9, 64e9, 128e9], bandwidthBytesPerSec: 0.5e12 },
+  memory: {
+    kind: 'unified',
+    technology: 'synthetic',
+    capacityOptionsBytes: [32e9, 64e9, 128e9],
+    bandwidthBytesPerSec: 0.5e12,
+  },
   sources: [syntheticSource(['engines', 'memory'])],
   estimated: [],
 };

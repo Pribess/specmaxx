@@ -29,7 +29,10 @@ const FALLBACK_BPW = 4;
 export function readExl3(qc: JsonObject, ctx: SchemeContext): SchemeReading {
   const notes: string[] = [];
   const stated = numAt(qc, 'bits') ?? numAt(qc, 'bpw') ?? numAt(qc, 'avg_bits');
-  if (stated === undefined) notes.push(`exl3: no bits / bpw / avg_bits in quantization_config; assuming ${FALLBACK_BPW} bpw`);
+  if (stated === undefined)
+    notes.push(
+      `exl3: no bits / bpw / avg_bits in quantization_config; assuming ${FALLBACK_BPW} bpw`,
+    );
   const bpw = stated ?? FALLBACK_BPW;
   const headBpw = numAt(qc, 'head_bits') ?? EXL3_DEFAULT_HEAD_BPW;
   const scope = strAt(qc, 'scope') ?? '';

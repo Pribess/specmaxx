@@ -1,0 +1,44 @@
+# Pull-request checks: formatting, lint, typecheck, unit tests and build (the same steps as `bun run check`, minus e2e).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Vitest, Vite and the other tool CLIs run on Node (their `#!/usr/bin/env node` shebang), not on Bun: pin the
+      # same Node as local work (.node-version) instead of the runner image's default, whose V8 rounds Math.pow / exp /
+      # log differently in the last bits.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - run: bun install --frozen-lockfile
+      - run: bun run format:check
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun run test
+      # The Playwright e2e step of `bun run check` is skipped here: installing Chromium costs more than the rest of
+      # the job, and e2e already runs locally in `bun run check` before every change lands.
+      - run: bun run build

@@ -5,7 +5,15 @@ import tseslint from 'typescript-eslint';
 
 /** React and DOM storage/network globals banned where code must stay pure (src/sim, src/ui/state). */
 const NO_REACT = ['error', { patterns: ['react', 'react-dom', 'react/*', 'react-dom/*'] }];
-const NO_DOM_GLOBALS = ['error', 'window', 'document', 'localStorage', 'sessionStorage', 'fetch', 'navigator'];
+const NO_DOM_GLOBALS = [
+  'error',
+  'window',
+  'document',
+  'localStorage',
+  'sessionStorage',
+  'fetch',
+  'navigator',
+];
 
 export default tseslint.config(
   { ignores: ['dist', 'deploy', 'coverage', 'test-results', 'playwright-report', 'blob-report'] },

@@ -21,7 +21,8 @@ const RTX_4090_SFU = nvidiaSfu(NVIDIA_SM_SFU, 128, tflops(82.6));
 const RTX_BLACKWELL_WHITEPAPER_URL =
   'https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf';
 /** GeForce RTX 5090 product page. */
-const RTX_5090_PRODUCT_URL = 'https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5090/';
+const RTX_5090_PRODUCT_URL =
+  'https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5090/';
 /** TechPowerUp GPU Database, RTX 5090 ("Bus Interface PCIe 5.0 x16"). */
 const TPU_RTX_5090_URL = 'https://www.techpowerup.com/gpu-specs/geforce-rtx-5090.c4216';
 /** TechPowerUp GPU Database, RTX 4090 ("Bus Interface PCIe 4.0 x16"). */
@@ -58,12 +59,21 @@ function geforceTiling(mmaK: number): GemmTiling {
 }
 
 /** The tiling keys the RTX 5090 engine lists (used to write the source/estimate field paths below). */
-const RTX_5090_TILING_KEYS: ('default' | MathFormat)[] = ['default', 'fp16', 'bf16', 'tf32', 'fp8', 'int8', 'fp4'];
+const RTX_5090_TILING_KEYS: ('default' | MathFormat)[] = [
+  'default',
+  'fp16',
+  'bf16',
+  'tf32',
+  'fp8',
+  'int8',
+  'fp4',
+];
 
 /** Whitepaper Appendix A, Table 3 citation (pages 46–48). */
 const RTX_5090_WHITEPAPER: SourceRef = {
   url: RTX_BLACKWELL_WHITEPAPER_URL,
-  title: 'NVIDIA RTX Blackwell GPU Architecture (whitepaper), Appendix A, Table 3: GeForce RTX 5090 specs',
+  title:
+    'NVIDIA RTX Blackwell GPU Architecture (whitepaper), Appendix A, Table 3: GeForce RTX 5090 specs',
   fields: [
     'engines.0.computeUnits',
     'engines.0.matmulPeaks',
@@ -154,7 +164,8 @@ export const RTX_5090: DeviceSpec = {
     RTX_5090_WHITEPAPER,
     {
       url: RTX_BLACKWELL_WHITEPAPER_URL,
-      title: 'NVIDIA RTX Blackwell GPU Architecture (whitepaper), Appendix A, Table 3: GeForce RTX 5090 specs',
+      title:
+        'NVIDIA RTX Blackwell GPU Architecture (whitepaper), Appendix A, Table 3: GeForce RTX 5090 specs',
       fields: ['hostInterface.generation'],
       note: 'Table 3 (p. 48) row "PCI Express Interface": Gen 4 (RTX 3090), Gen 4 (RTX 4090), Gen 5 (RTX 5090).',
     },
@@ -192,11 +203,13 @@ export const RTX_5090: DeviceSpec = {
   estimated: RTX_5090_TILING_KEYS.flatMap((k) => [
     {
       field: `engines.0.gemmTiling.${k}.ctaTiles`,
-      reason: 'Typical CUTLASS CTA tile shapes (https://github.com/NVIDIA/cutlass); not a vendor spec.',
+      reason:
+        'Typical CUTLASS CTA tile shapes (https://github.com/NVIDIA/cutlass); not a vendor spec.',
     },
     {
       field: `engines.0.gemmTiling.${k}.ctasPerUnit`,
-      reason: 'One resident CTA per SM for large tiles (register/shared-memory bound); not a vendor spec.',
+      reason:
+        'One resident CTA per SM for large tiles (register/shared-memory bound); not a vendor spec.',
     },
   ]).concat(RTX_5090_SFU.estimated),
 };
@@ -228,7 +241,9 @@ function tensorPair(
  * Tiling citations and estimates shared by Ampere / Ada.
  * ISA dimensions are in elements; CTA scheduling and residency are estimates, not hardware guarantees.
  */
-function legacyTilingEvidence(keys: ('default' | MathFormat)[]): Pick<DeviceSpec, 'sources' | 'estimated'> {
+function legacyTilingEvidence(
+  keys: ('default' | MathFormat)[],
+): Pick<DeviceSpec, 'sources' | 'estimated'> {
   return {
     sources: [
       {
@@ -253,14 +268,30 @@ function legacyTilingEvidence(keys: ('default' | MathFormat)[]): Pick<DeviceSpec
       },
       {
         field: `engines.0.gemmTiling.${k}.ctasPerUnit`,
-        reason: 'One resident large CTA per SM, register/shared-memory constrained; kernel-dependent estimate.',
+        reason:
+          'One resident large CTA per SM, register/shared-memory constrained; kernel-dependent estimate.',
       },
     ]),
   };
 }
 
-const AMPERE_TILING_EVIDENCE = legacyTilingEvidence(['default', 'fp16', 'bf16', 'tf32', 'int8', 'int4']);
-const ADA_TILING_EVIDENCE = legacyTilingEvidence(['default', 'fp16', 'bf16', 'tf32', 'fp8', 'int8', 'int4']);
+const AMPERE_TILING_EVIDENCE = legacyTilingEvidence([
+  'default',
+  'fp16',
+  'bf16',
+  'tf32',
+  'int8',
+  'int4',
+]);
+const ADA_TILING_EVIDENCE = legacyTilingEvidence([
+  'default',
+  'fp16',
+  'bf16',
+  'tf32',
+  'fp8',
+  'int8',
+  'int4',
+]);
 
 /**
  * GeForce RTX 3090 (GA102, sm_86), 1695 MHz boost. Appendix A Table 9's rounded rates are retained.
@@ -467,7 +498,9 @@ function tensorUnlock(experimental: boolean): UnlockAxis {
     kind: 'tensorRate',
     description:
       'Zagitta gpu-unlock doubles FP16/BF16/TF32 FP32-acc tensor issue rate using community-measured settings. ' +
-      (experimental ? 'RTX 4090 support is experimental. ' : 'RTX 3090 support is listed stable. ') +
+      (experimental
+        ? 'RTX 4090 support is experimental. '
+        : 'RTX 3090 support is listed stable. ') +
       'Unsupported by NVIDIA; power limits can reduce sustained gains.',
     options: [
       {
@@ -604,7 +637,7 @@ export const RTX_4090_UNLOCKS: UnlockAxis[] = [
           {
             kind: 'memoryBandwidth',
             // 1545 MHz × 16 transfers/clock × 384 bits / 8 = 1186.56 GB/s; stock 1008 GB/s.
-            bandwidthBytesPerSec: gbPerSec(1545 * 16 / 1000 * 384 / 8),
+            bandwidthBytesPerSec: gbPerSec((((1545 * 16) / 1000) * 384) / 8),
             note:
               'Review-sample memory OC: 1545 MHz×16 = 24.72 Gbit/s; ' +
               '384-bit/8 gives 1186.56 GB/s theoretical bus peak, not measured throughput. ' +

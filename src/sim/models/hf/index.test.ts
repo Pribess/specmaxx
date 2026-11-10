@@ -5,7 +5,12 @@ import { fixtureRepoFiles, listFixtureRepos } from '../__fixtures__/fixtures.tes
 import { mapHfModel, mergeQuantHints } from './index';
 import type { FamilyEntry, HfRepoFiles, QuantDefaults } from './types';
 
-const files = (config: unknown, api?: HfRepoFiles['api']): HfRepoFiles => ({ id: 'org/repo', revision: 'main', config, ...(api ? { api } : {}) });
+const files = (config: unknown, api?: HfRepoFiles['api']): HfRepoFiles => ({
+  id: 'org/repo',
+  revision: 'main',
+  config,
+  ...(api ? { api } : {}),
+});
 
 /** A test family that returns REF_DENSE_8B and records what it was given. */
 function fakeFamily(seen: { text?: unknown; top?: unknown }): FamilyEntry {
@@ -33,9 +38,17 @@ describe('mapHfModel', () => {
   it('runs unwrap → dispatch → build → quant → param check', () => {
     const seen: { text?: unknown; top?: unknown } = {};
     const text = { model_type: 'fake_text', hidden_size: 4096 };
-    const config = { architectures: ['FakeForConditionalGeneration'], model_type: 'fake', text_config: text, vision_config: { depth: 1 } };
+    const config = {
+      architectures: ['FakeForConditionalGeneration'],
+      model_type: 'fake',
+      text_config: text,
+      vision_config: { depth: 1 },
+    };
     const total = countParams(REF_DENSE_8B) + 30;
-    const r = mapHfModel(files(config, { id: 'org/repo', safetensors: { parameters: { BF16: total }, total } }), [fakeFamily(seen)]);
+    const r = mapHfModel(
+      files(config, { id: 'org/repo', safetensors: { parameters: { BF16: total }, total } }),
+      [fakeFamily(seen)],
+    );
     expect(seen.text).toBe(text);
     expect(seen.top).toBe(config);
     if (r.kind !== 'ok') throw new Error(JSON.stringify(r));
@@ -43,8 +56,17 @@ describe('mapHfModel', () => {
     expect(r.modelType).toBe('fake');
     expect(r.architecture).toBe('FakeForConditionalGeneration');
     expect(r.model).toBe(REF_DENSE_8B);
-    expect(r.excluded).toEqual({ mtpParamsEstimate: 10, visionParamsEstimate: 20, parts: ['MTP layer', 'vision tower'] });
-    expect(r.paramCheck).toMatchObject({ status: 'ok', expected: total, actual: total, relError: 0 });
+    expect(r.excluded).toEqual({
+      mtpParamsEstimate: 10,
+      visionParamsEstimate: 20,
+      parts: ['MTP layer', 'vision tower'],
+    });
+    expect(r.paramCheck).toMatchObject({
+      status: 'ok',
+      expected: total,
+      actual: total,
+      relError: 0,
+    });
     expect(r.quant.source).toBe('none');
     expect(r.quant.quant.weights).toEqual({ dtype: 'bf16' });
     expect(r.quant.quant.recurrentState).toBe('bf16');
@@ -65,7 +87,13 @@ describe('mapHfModel', () => {
   });
 
   it('passes family build errors through', () => {
-    const bad: FamilyEntry = { ...fakeFamily({}), build: () => ({ kind: 'invalid_config', errors: ['text_config.hidden_size: missing number'] }) };
+    const bad: FamilyEntry = {
+      ...fakeFamily({}),
+      build: () => ({
+        kind: 'invalid_config',
+        errors: ['text_config.hidden_size: missing number'],
+      }),
+    };
     expect(mapHfModel(files({ model_type: 'fake_text' }), [bad])).toEqual({
       kind: 'invalid_config',
       errors: ['text_config.hidden_size: missing number'],
@@ -74,7 +102,11 @@ describe('mapHfModel', () => {
 
   it('reports unknown model types as unsupported with the supported list', () => {
     const r = mapHfModel(files({ model_type: 'llama_9', architectures: ['Llama9ForCausalLM'] }));
-    expect(r).toMatchObject({ kind: 'unsupported', modelType: 'llama_9', architecture: 'Llama9ForCausalLM' });
+    expect(r).toMatchObject({
+      kind: 'unsupported',
+      modelType: 'llama_9',
+      architecture: 'Llama9ForCausalLM',
+    });
     if (r.kind !== 'unsupported') throw new Error('expected unsupported');
     expect(r.supported).toContain('glm_moe_dsa');
     expect(r.reason).toBeUndefined();

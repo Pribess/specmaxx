@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { opFlops } from '../ir/metrics';
-import { blockResidentWeightBytes, blockSequenceStateBytes, lowerBlock, lowerModel, type LoweringContext } from './lower';
+import {
+  blockResidentWeightBytes,
+  blockSequenceStateBytes,
+  lowerBlock,
+  lowerModel,
+  type LoweringContext,
+} from './lower';
 import type { LinearAttentionBlock } from '../ir/model';
 import type { ElementwiseOp, GemmOp, Op, RecurrentOp } from '../ir/ops';
 import { blockParams } from '../ir/params';
@@ -22,7 +28,8 @@ const layerOps = (model: typeof TINY_HYBRID, c: LoweringContext, i: number): Op[
   if (layer === undefined) throw new Error(`no layer ${i}`);
   return layer.ops;
 };
-const recurrentOf = (ops: Op[]): RecurrentOp | undefined => ops.find((o): o is RecurrentOp => o.kind === 'recurrent');
+const recurrentOf = (ops: Op[]): RecurrentOp | undefined =>
+  ops.find((o): o is RecurrentOp => o.kind === 'recurrent');
 const fnOf = (ops: Op[], fn: ElementwiseOp['fn']): ElementwiseOp | undefined =>
   ops.find((o): o is ElementwiseOp => o.kind === 'elementwise' && o.fn === fn);
 
@@ -90,7 +97,9 @@ describe('T4d TINY_HYBRID (GDN qkH 2, vH 4, dk = dv = 32, conv 4, gate; layer 3 
     const names0 = layerOps(TINY_HYBRID_DENSE_FIRST, ctx('decode'), 0).map((o) => o.name);
     expect(names0).toContain('mlp.gate_up');
     expect(names0).not.toContain('moe.router');
-    expect(layerOps(TINY_HYBRID_DENSE_FIRST, ctx('decode'), 1).map((o) => o.name)).toContain('moe.router');
+    expect(layerOps(TINY_HYBRID_DENSE_FIRST, ctx('decode'), 1).map((o) => o.name)).toContain(
+      'moe.router',
+    );
   });
 });
 
@@ -112,8 +121,12 @@ describe('value-head sharding (review P2: no replicated value heads)', () => {
   it('tp 4 > vHeads 2 is rejected (lowering, resident weights, state)', () => {
     // Replicating the 2 value heads over 4 ranks would make 4 ranks each project 64 features into the
     // row-parallel out_proj: 256 summed features for 128 logical ones.
-    expect(() => lowerBlock(gdn, ctx('decode', 4))).toThrow(/vHeads \(2\) must be divisible by tp \(4\)/);
-    expect(() => blockResidentWeightBytes(gdn, ctx('decode', 4))).toThrow(/vHeads \(2\) must be divisible by tp \(4\)/);
+    expect(() => lowerBlock(gdn, ctx('decode', 4))).toThrow(
+      /vHeads \(2\) must be divisible by tp \(4\)/,
+    );
+    expect(() => blockResidentWeightBytes(gdn, ctx('decode', 4))).toThrow(
+      /vHeads \(2\) must be divisible by tp \(4\)/,
+    );
     expect(() => blockSequenceStateBytes(gdn, ctx('decode', 4), 1000)).toThrow(/vHeads/);
   });
 
@@ -148,7 +161,11 @@ describe('Mamba-2 (Nemotron-3.5-Lightning mixer: h 2688, G 8, H 64, N 128, P 64,
     chunkTokens: 128,
     outputGate: true,
   };
-  const prefill = (qLen: number, tp = 1): LoweringContext => ({ ...ctx('prefill', tp), qLen, kvLen: qLen });
+  const prefill = (qLen: number, tp = 1): LoweringContext => ({
+    ...ctx('prefill', tp),
+    qLen,
+    kvLen: qLen,
+  });
   const gemm = (ops: Op[], name: string): GemmOp | undefined =>
     ops.find((o): o is GemmOp => o.kind === 'gemm' && o.name === name);
 
@@ -165,7 +182,12 @@ describe('Mamba-2 (Nemotron-3.5-Lightning mixer: h 2688, G 8, H 64, N 128, P 64,
     // grouped RMSNorm γ over H·P = 4096 channels · 2 B
     expect(fnOf(ops, 'gated_rmsnorm')?.weightBytes).toBe(8192);
     const rec = recurrentOf(ops);
-    expect([rec?.variant, rec?.mode, rec?.chunkLen, rec?.stateFlopsPerElemPerToken]).toEqual(['mamba2', 'step', 1, 5]);
+    expect([rec?.variant, rec?.mode, rec?.chunkLen, rec?.stateFlopsPerElemPerToken]).toEqual([
+      'mamba2',
+      'step',
+      1,
+      5,
+    ]);
     expect([rec?.heads, rec?.qkHeads, rec?.keyDim, rec?.valueDim]).toEqual([64, 8, 128, 64]);
     expect(rec === undefined ? 0 : opFlops(rec)).toBe(2_621_440); // 64·5·8192
     expect(gemm(ops, 'lin.out_proj')?.k).toBe(4096);

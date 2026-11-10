@@ -33,8 +33,23 @@ import type { AppState } from './appState';
  * sections (offloading, speculative decoding); `general` is anything else.
  */
 export type IssueField =
-  | 'tp' | 'pp' | 'dp' | 'ep' | 'denseTp' | 'dcp' | 'epImbalance' | 'redundantExperts' | 'batch' | 'promptLen'
-  | 'decodeContextLen' | 'devices' | 'bpw' | 'headBpw' | 'offload' | 'specDec' | 'general';
+  | 'tp'
+  | 'pp'
+  | 'dp'
+  | 'ep'
+  | 'denseTp'
+  | 'dcp'
+  | 'epImbalance'
+  | 'redundantExperts'
+  | 'batch'
+  | 'promptLen'
+  | 'decodeContextLen'
+  | 'devices'
+  | 'bpw'
+  | 'headBpw'
+  | 'offload'
+  | 'specDec'
+  | 'general';
 
 /** One problem with the inputs. Errors stop the simulation; warnings do not. */
 export interface FieldIssue {
@@ -47,7 +62,12 @@ export interface FieldIssue {
 }
 
 /** Label of a parallel degree in messages. */
-const DEGREE_LABEL: Record<'tp' | 'pp' | 'dp' | 'ep', string> = { tp: 'TP', pp: 'PP', dp: 'DP', ep: 'EP' };
+const DEGREE_LABEL: Record<'tp' | 'pp' | 'dp' | 'ep', string> = {
+  tp: 'TP',
+  pp: 'PP',
+  dp: 'DP',
+  ep: 'EP',
+};
 
 /** Label of a workload field in messages. */
 const WORKLOAD_LABEL: Record<'batch' | 'promptLen' | 'decodeContextLen', string> = {
@@ -92,8 +112,11 @@ export function uiShardingMessage(message: string): string {
   const experts = message.match(/experts \((\d+)\) must be divisible by ep \((\d+)\)/);
   if (experts) return `EP ${experts[2]} must divide the ${experts[1]} experts.`;
   const dense = message.match(/\((\d+)\) must be divisible by the dense TP group \((\d+)\)/);
-  if (dense) return `Dense layers on TP need EP ${dense[2]} to divide their width ${dense[1]}. Use DP.`;
-  const divide = message.match(/ep \((\d+)\) must divide tp \((\d+)\)(?:, or be a multiple of tp that divides tp·dp \((\d+)\))?/);
+  if (dense)
+    return `Dense layers on TP need EP ${dense[2]} to divide their width ${dense[1]}. Use DP.`;
+  const divide = message.match(
+    /ep \((\d+)\) must divide tp \((\d+)\)(?:, or be a multiple of tp that divides tp·dp \((\d+)\))?/,
+  );
   if (divide) {
     const [, ep, tp, tpDp] = divide;
     // tp·dp = tp means DP 1: the multiple-of-TP alternative cannot hold, so it is not offered.
@@ -107,7 +130,8 @@ export function uiShardingMessage(message: string): string {
     return `DCP ${dcpKv[1]} must divide TP ÷ KV heads = ${dcpKv[2]}: only the GPUs holding copies of the same KV head can split it.`;
   }
   if (/dcp \(\d+\) > 1 is not supported/.test(message)) {
-    if (/compressed sparse/.test(message)) return 'DCP is not supported with compressed sparse attention.';
+    if (/compressed sparse/.test(message))
+      return 'DCP is not supported with compressed sparse attention.';
     if (/sparse/.test(message)) return 'DCP is not supported with sparse attention.';
     if (/relative-position bias|short conv/.test(message)) {
       return 'DCP is not supported with relative-position bias or K/V convs.';
@@ -122,7 +146,9 @@ export function uiShardingMessage(message: string): string {
 /** Field of a `checkPlacement` error by its prefix (`tp:`, `ep:`, `pp:`, `dcp:`); anything else is about the devices. */
 export function placementField(message: string): IssueField {
   const prefix = message.match(/^(tp|ep|pp|dcp):/)?.[1];
-  return prefix === 'tp' || prefix === 'ep' || prefix === 'pp' || prefix === 'dcp' ? prefix : 'devices';
+  return prefix === 'tp' || prefix === 'ep' || prefix === 'pp' || prefix === 'dcp'
+    ? prefix
+    : 'devices';
 }
 
 /**
@@ -190,21 +216,28 @@ export function fieldIssues(
   layout?: AppState['parallelLayout'],
 ): FieldIssue[] {
   const issues: FieldIssue[] = [];
-  const error = (field: IssueField, message: string) => issues.push({ field, level: 'error', message });
+  const error = (field: IssueField, message: string) =>
+    issues.push({ field, level: 'error', message });
   const effective = onModel(parallel, model);
-  const degrees = hasMoe(model) ? (['tp', 'pp', 'dp', 'ep'] as const) : (['tp', 'pp', 'dp'] as const);
+  const degrees = hasMoe(model)
+    ? (['tp', 'pp', 'dp', 'ep'] as const)
+    : (['tp', 'pp', 'dp'] as const);
   for (const key of degrees) {
-    if (!isPositiveInteger(effective[key])) error(key, `${DEGREE_LABEL[key]} must be a whole number ≥ 1.`);
+    if (!isPositiveInteger(effective[key]))
+      error(key, `${DEGREE_LABEL[key]} must be a whole number ≥ 1.`);
   }
-  if (effective.dcp !== undefined && !isPositiveInteger(effective.dcp)) error('dcp', 'DCP must be a whole number ≥ 1.');
+  if (effective.dcp !== undefined && !isPositiveInteger(effective.dcp))
+    error('dcp', 'DCP must be a whole number ≥ 1.');
   for (const key of ['batch', 'promptLen', 'decodeContextLen'] as const) {
-    if (!isPositiveInteger(workload[key])) error(key, `${WORKLOAD_LABEL[key]} must be a whole number ≥ 1.`);
+    if (!isPositiveInteger(workload[key]))
+      error(key, `${WORKLOAD_LABEL[key]} must be a whole number ≥ 1.`);
   }
   if (issues.length > 0) return issues;
   // The EP balance knobs (kept by onModel only on a MoE model at EP > 1): ρ ≥ 1, replicas a whole number ≥ 0. They
   // do not enter the checks below, so an invalid one does not stop them (the degree hints stay right).
   const rho = effective.epImbalance;
-  if (rho !== undefined && !(Number.isFinite(rho) && rho >= 1)) error('epImbalance', 'EP imbalance must be a number ≥ 1.');
+  if (rho !== undefined && !(Number.isFinite(rho) && rho >= 1))
+    error('epImbalance', 'EP imbalance must be a number ≥ 1.');
   const replicas = effective.redundantExpertsPerRank;
   if (replicas !== undefined && !(Number.isSafeInteger(replicas) && replicas >= 0)) {
     error('redundantExperts', 'Redundant experts must be a whole number ≥ 0.');
@@ -218,11 +251,17 @@ export function fieldIssues(
     const rig = `the rig has ${devices} ${devices === 1 ? 'device' : 'devices'}. They must be equal.`;
     // In DP attention + EP, TP is 1 and DP = EP: world = EP × PP, in the words of the fields shown.
     const named = layout === 'dpAttentionEp' && hasMoe(model) && tp === 1 && dp === ep;
-    error('devices', named ? `EP × PP = ${world}, but ${rig}` : `TP × PP × DP = ${world}, but ${rig}`);
+    error(
+      'devices',
+      named ? `EP × PP = ${world}, but ${rig}` : `TP × PP × DP = ${world}, but ${rig}`,
+    );
   }
   // Each DP replica serves B_r = batch / dp sequences, so the batch must split evenly. The batch is what to change.
   if (workload.batch % dp !== 0) {
-    error('batch', `Batch ${workload.batch} does not split evenly over DP ${dp}. Use a multiple of ${dp}.`);
+    error(
+      'batch',
+      `Batch ${workload.batch} does not split evenly over DP ${dp}. Use a multiple of ${dp}.`,
+    );
   }
   const layers = model.layers.length;
   if (pp > layers) error('pp', `PP ${pp} exceeds the ${layers} layers of the model.`);
@@ -259,7 +298,9 @@ export function fieldIssues(
     const usesExpertTp =
       tp % ep === 0 &&
       tp / ep > 1 &&
-      model.layers.some((l) => l.blocks.some((b) => b.kind === 'moe' && b.expertOutputNorm === true));
+      model.layers.some((l) =>
+        l.blocks.some((b) => b.kind === 'moe' && b.expertOutputNorm === true),
+      );
     if (usesExpertTp && placementErrors.length === 0) {
       try {
         expertTpCollectivePath(effective, topology);
@@ -305,7 +346,11 @@ export function validDegrees(
   for (let k = 1; k <= Math.min(devices, MAX_DEGREE_CANDIDATES); k++) {
     // Only a pruning (dcpErrors rejects them too): a DCP that does not divide TP is never valid.
     if (field === 'dcp' && Number.isInteger(parallel.tp) && parallel.tp % k !== 0) continue;
-    const candidate: ParallelConfig = { ...parallel, [field]: k, ...(field === 'tp' ? { ep: 1 } : {}) };
+    const candidate: ParallelConfig = {
+      ...parallel,
+      [field]: k,
+      ...(field === 'tp' ? { ep: 1 } : {}),
+    };
     if (field === 'tp') delete candidate.dcp;
     const blocking = fieldIssues(model, quant, candidate, workload, topology).filter(
       (i) => i.level === 'error' && i.field === field,
@@ -349,7 +394,9 @@ export function dpAttentionEpSplits(
     // Formula: n = devices / pp
     const n = devices / pp;
     const candidate: ParallelConfig = { tp: 1, pp, dp: n, ep: n, ...dense };
-    const errors = fieldIssues(model, quant, candidate, workload, topology).filter((i) => i.level === 'error' && i.field !== 'batch');
+    const errors = fieldIssues(model, quant, candidate, workload, topology).filter(
+      (i) => i.level === 'error' && i.field !== 'batch',
+    );
     if (errors.length === 0) splits.push({ pp, n });
   }
   return splits;
@@ -405,16 +452,19 @@ function chooseCustomOrLayout(
   topology: TopologySpec,
   current: NonNullable<Parameters<typeof chooseDegrees>[4]>,
 ): { tp: number; pp: number; dp: number; ep: number } {
-  if (current.layout === 'dpAttentionEp' && hasMoe(model)) return chooseDpAttentionEp(model, quant, workload, topology, current);
+  if (current.layout === 'dpAttentionEp' && hasMoe(model))
+    return chooseDpAttentionEp(model, quant, workload, topology, current);
   const currentDp = current.dp ?? 1;
   const currentEp = current.ep ?? 1;
-  const keptDp = currentDp > 1 ? chooseTpPp(model, quant, workload, topology, currentDp) : undefined;
+  const keptDp =
+    currentDp > 1 ? chooseTpPp(model, quant, workload, topology, currentDp) : undefined;
   const { tp, pp, dp } = keptDp
     ? { ...keptDp, dp: currentDp }
     : { ...(chooseTpPp(model, quant, workload, topology, 1) ?? { tp: 1, pp: 1 }), dp: 1 };
   if (currentEp > 1 && hasMoe(model)) {
     const kept: ParallelConfig = { tp, pp, dp, ep: currentEp };
-    if (!hasErrors(fieldIssues(model, quant, kept, workload, topology))) return { tp, pp, dp, ep: currentEp };
+    if (!hasErrors(fieldIssues(model, quant, kept, workload, topology)))
+      return { tp, pp, dp, ep: currentEp };
   }
   return { tp, pp, dp, ep: 1 };
 }
@@ -430,12 +480,21 @@ function chooseDpAttentionEp(
   const devices = topology.devicesPerNode * topology.nodes;
   // Formula: N = devices / pp; dp = ep = N, tp = 1
   const shape = (pp: number) => ({ tp: 1, pp, dp: devices / pp, ep: devices / pp });
-  const dense: Partial<ParallelConfig> = current.denseTpGroup === 'ep' ? { denseTpGroup: 'ep' } : {};
-  const splits = dpAttentionEpSplits(model, quant, { tp: 1, pp: 1, dp: 1, ep: 1, ...dense }, workload, topology);
+  const dense: Partial<ParallelConfig> =
+    current.denseTpGroup === 'ep' ? { denseTpGroup: 'ep' } : {};
+  const splits = dpAttentionEpSplits(
+    model,
+    quant,
+    { tp: 1, pp: 1, dp: 1, ep: 1, ...dense },
+    workload,
+    topology,
+  );
   const currentPp = current.pp ?? 1;
   const kept = splits.find((s) => s.pp === currentPp) ?? splits[0];
   if (kept) return shape(kept.pp);
-  return shape(Number.isSafeInteger(currentPp) && currentPp >= 1 && devices % currentPp === 0 ? currentPp : 1);
+  return shape(
+    Number.isSafeInteger(currentPp) && currentPp >= 1 && devices % currentPp === 0 ? currentPp : 1,
+  );
 }
 
 /**
@@ -452,7 +511,13 @@ function chooseTpPp(
   const devices = topology.devicesPerNode * topology.nodes;
   // Bounded like validDegrees, whatever the requested device count (a huge or unsafe count cannot stall the UI):
   // TP never exceeds MAX_DEGREE_CANDIDATES, and counts that are not safe positive integers get no search.
-  if (!Number.isSafeInteger(devices) || devices < 1 || !Number.isSafeInteger(dp) || dp < 1 || devices % dp !== 0) {
+  if (
+    !Number.isSafeInteger(devices) ||
+    devices < 1 ||
+    !Number.isSafeInteger(dp) ||
+    dp < 1 ||
+    devices % dp !== 0
+  ) {
     return undefined;
   }
   // Formula: tp · pp = devices / dp

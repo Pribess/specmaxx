@@ -1,7 +1,5 @@
 {
-  "architectures": [
-    "DeepseekV41ForCausalLM"
-  ],
+  "architectures": ["DeepseekV41ForCausalLM"],
   "bos_token_id": 0,
   "dtype": "bfloat16",
   "eos_token_id": 1,
@@ -18,9 +16,7 @@
           "num_bits": 4,
           "type": "float"
         },
-        "targets": [
-          "Linear"
-        ],
+        "targets": ["Linear"],
         "weights": {
           "dynamic": false,
           "group_size": 16,
@@ -31,12 +27,7 @@
     },
     "expert_dtype": "fp4",
     "group_size": 16,
-    "ignore": [
-      "*.attn.*",
-      "*.ffn.shared_experts.*",
-      "head",
-      "mtp.*"
-    ],
+    "ignore": ["*.attn.*", "*.ffn.shared_experts.*", "head", "mtp.*"],
     "kv_cache_quant_algo": null,
     "moe_quant_algo": "NVFP4",
     "producer": {
@@ -208,17 +199,11 @@
       }
     },
     "scale_fmt": "ue8m0",
-    "weight_block_size": [
-      32,
-      32
-    ],
+    "weight_block_size": [32, 32],
     "engram_embed_quant": "mxfp4",
     "engram_embed_block_size": 32,
     "engram_embed_scale_dtype": "ue8m0",
-    "engram_embed_layers": [
-      1,
-      14
-    ]
+    "engram_embed_layers": [1, 14]
   },
   "text_config": {
     "attention_bias": false,
@@ -227,49 +212,8 @@
     "candidate_source_layer_id": 20,
     "candidate_topk_blocks": 2048,
     "compress_ratios": [
-      0,
-      0,
-      2,
-      2,
-      2,
-      2,
-      2,
-      2,
-      2,
-      2,
-      2,
-      2,
-      2,
-      2,
-      2,
-      2,
-      2,
-      2,
-      2,
-      2,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      0,
-      0,
-      0
+      0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0
     ],
     "compress_rope_theta": 160000,
     "dspark_block_size": 5,
@@ -277,26 +221,16 @@
     "dspark_n_routed_experts": 128,
     "dspark_noise_token_id": 128799,
     "dspark_num_experts_per_tok": 3,
-    "dspark_target_layer_ids": [
-      37,
-      38,
-      39
-    ],
+    "dspark_target_layer_ids": [37, 38, 39],
     "engram_compressed_vocab_size": 99092,
     "engram_head_dim": 256,
-    "engram_layer_ids": [
-      1,
-      14
-    ],
+    "engram_layer_ids": [1, 14],
     "engram_max_ngram_size": 4,
     "engram_n_heads": 8,
-    "engram_num_embeddings": [
-      384006168,
-      384016682
-    ],
+    "engram_num_embeddings": [384006168, 384016682],
     "engram_pad_token_id": 2,
     "engram_vocab_size": 16000000,
-    "hc_eps": 1e-06,
+    "hc_eps": 1e-6,
     "hc_mult": 4,
     "hc_sinkhorn_iters": 20,
     "head_dim": 512,
@@ -304,24 +238,10 @@
     "hidden_size": 5120,
     "index_head_dim": 128,
     "index_n_heads": 32,
-    "index_source_layer_ids": [
-      2,
-      8,
-      14,
-      20,
-      24,
-      28,
-      32,
-      36
-    ],
+    "index_source_layer_ids": [2, 8, 14, 20, 24, 28, 32, 36],
     "index_topk": 512,
     "initializer_range": 0.02,
-    "kv_source_layer_ids": [
-      2,
-      8,
-      14,
-      20
-    ],
+    "kv_source_layer_ids": [2, 8, 14, 20],
     "max_position_embeddings": 1048576,
     "model_type": "deepseek_v41_text",
     "moe_intermediate_size": 2304,

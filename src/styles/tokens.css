@@ -149,18 +149,35 @@
   }
 }
 
-*, *::before, *::after { box-sizing: border-box; }
-body { margin: 0; }
-button, input, textarea { font: inherit; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+button,
+input,
+textarea {
+  font: inherit;
+}
 a {
   color: inherit;
   text-decoration-thickness: 1px;
   text-underline-offset: 0.2em;
 }
-a:hover { color: var(--primary); }
+a:hover {
+  color: var(--primary);
+}
 /* Separators inside tabular numbers keep their natural width (Num.tsx). */
-.num-sep { font-variant-numeric: normal; }
-:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.num-sep {
+  font-variant-numeric: normal;
+}
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
 
 /* The page-level (document) scrollbar: the one native scrollbar left. Standard properties first (Chromium,
    Firefox); Safari takes the ::-webkit-scrollbar rules. */
@@ -168,19 +185,35 @@ html {
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--paper);
 }
-html::-webkit-scrollbar { width: var(--scrollbar-size); height: var(--scrollbar-size); background: var(--paper); }
+html::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+  background: var(--paper);
+}
 html::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   border: 2px solid var(--paper);
   border-radius: 999px;
 }
-html::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+html::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
 
 /* ScrollArea (Radix): a thin bar that shows while the pointer is over the area. The viewport scrolls
    natively, so wheel, trackpad momentum, touch and keyboard scrolling are the browser's own. */
-.scroll-area { position: relative; overflow: hidden; }
-.scroll-area-viewport { width: 100%; height: 100%; border-radius: inherit; }
-.scroll-area-viewport:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.scroll-area {
+  position: relative;
+  overflow: hidden;
+}
+.scroll-area-viewport {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+}
+.scroll-area-viewport:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
 .scroll-area-bar {
   display: flex;
   z-index: 2;
@@ -189,16 +222,26 @@ html::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); 
   user-select: none;
   transition: background-color 160ms ease;
 }
-.scroll-area-bar[data-orientation='vertical'] { width: var(--scrollbar-size); }
-.scroll-area-bar[data-orientation='horizontal'] { height: var(--scrollbar-size); flex-direction: column; }
-.scroll-area-bar:hover { background: var(--scrollbar-track); }
+.scroll-area-bar[data-orientation='vertical'] {
+  width: var(--scrollbar-size);
+}
+.scroll-area-bar[data-orientation='horizontal'] {
+  height: var(--scrollbar-size);
+  flex-direction: column;
+}
+.scroll-area-bar:hover {
+  background: var(--scrollbar-track);
+}
 .scroll-area-thumb {
   position: relative;
   flex: 1;
   border-radius: 999px;
   background: var(--scrollbar-thumb);
 }
-.scroll-area-thumb:hover, .scroll-area-bar:active .scroll-area-thumb { background: var(--scrollbar-thumb-hover); }
+.scroll-area-thumb:hover,
+.scroll-area-bar:active .scroll-area-thumb {
+  background: var(--scrollbar-thumb-hover);
+}
 /* A larger hit area than the thin thumb, for pointers and fingers. */
 .scroll-area-thumb::before {
   content: '';
@@ -213,7 +256,9 @@ html::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); 
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;

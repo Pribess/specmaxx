@@ -36,7 +36,14 @@
 import { ACCEPTANCE_PRESETS, expectedTokens, mtpTailAcceptance } from '../engine/specdec';
 import type { OffloadConfig, SimOptions, SpecDecodeConfig } from '../engine/types';
 import { ARC_PRO_B65 } from '../hw/presets/intel';
-import { PCIE_4_X16, PCIE_4_X16_DIRECT, PCIE_4_X8, PCIE_5_X16_DIRECT, SPARK_CONNECTX_7, hostPcieLink } from '../hw/presets/links';
+import {
+  PCIE_4_X16,
+  PCIE_4_X16_DIRECT,
+  PCIE_4_X8,
+  PCIE_5_X16_DIRECT,
+  SPARK_CONNECTX_7,
+  hostPcieLink,
+} from '../hw/presets/links';
 import {
   APPLE_SSD_M5_PRO_MAX,
   DGX_SPARK_SSD_4TB,
@@ -116,7 +123,10 @@ export type RateKind =
  * - `excluded`: not compared (a report whose setup the simulator cannot express); the ratio is still printed.
  *   Speculative-decoding and offload reports are simulated with the same knobs on (`input.deployment`) and asserted.
  */
-export type CheckMode = { mode: 'assert' } | { mode: 'exception'; reason: string } | { mode: 'excluded'; reason: string };
+export type CheckMode =
+  | { mode: 'assert' }
+  | { mode: 'exception'; reason: string }
+  | { mode: 'excluded'; reason: string };
 
 /** One reported rate. */
 export interface ReportedRate {
@@ -177,7 +187,10 @@ export interface BenchmarkReport {
    * The harness input that matches the report (its `model` is a {@link ReportModel}, its `deployment` a
    * {@link ReportDeployment}).
    */
-  input: Omit<SanityInput, 'model' | 'deployment'> & { model: ReportModel; deployment?: ReportDeployment };
+  input: Omit<SanityInput, 'model' | 'deployment'> & {
+    model: ReportModel;
+    deployment?: ReportDeployment;
+  };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -209,7 +222,12 @@ export const VLLM: SanityNumerics = { activations: 'bf16' };
 
 /** A GGUF file with `bpw` average bits per linear weight (and the same for embeddings and LM head unless given). */
 function ggufBpw(bpw: number, note: string, head?: number): QuantPreset {
-  return { weights: bpwFormat(bpw), embeddings: bpwFormat(bpw), lmHead: bpwFormat(head ?? bpw), note };
+  return {
+    weights: bpwFormat(bpw),
+    embeddings: bpwFormat(bpw),
+    lmHead: bpwFormat(head ?? bpw),
+    note,
+  };
 }
 
 /**
@@ -247,7 +265,8 @@ const UBERGARM_MIX_IQ3_K: QuantPreset = {
  * Dimensionless.
  */
 export function iidAlphaForExpectedTokens(tau: number, k: number): number {
-  if (!(tau >= 1 && tau < k + 1)) throw new Error(`mean accepted length ${tau} outside [1, ${k + 1}) at k ${k}`);
+  if (!(tau >= 1 && tau < k + 1))
+    throw new Error(`mean accepted length ${tau} outside [1, ${k + 1}) at k ${k}`);
   let lo = 0;
   let hi = 1 - 1e-12;
   for (let i = 0; i < 100; i++) {
@@ -275,7 +294,8 @@ export const REPORTS: BenchmarkReport[] = [
   // ----------------------------------------------------------------------------------------- LocalMaxxing
   {
     id: 'lm-01',
-    sourceUrl: 'https://localmaxxing.com/en/models/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF?run=cmw13j1dv0aeioa01vc2babep',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF?run=cmw13j1dv0aeioa01vc2babep',
     date: '2026-11-03',
     tier: 'A',
     model: 'JonathanColetti/Qwen3.8-27B-Uncensored-GGUF',
@@ -290,7 +310,8 @@ export const REPORTS: BenchmarkReport[] = [
     contextDepth: 2048,
     prefill: { tokensPerSec: 1284.3, kind: 'perSequence' },
     decode: { tokensPerSec: 43.2, kind: 'perSequence' },
-    caveats: 'Verified. Prefill = prompt / client TTFT. The gpu-unlock tensor-rate axis is applied (stated in the run notes).',
+    caveats:
+      'Verified. Prefill = prompt / client TTFT. The gpu-unlock tensor-rate axis is applied (stated in the run notes).',
     input: {
       model: QWEN27,
       quant: 'q4_k_m',
@@ -301,7 +322,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-02',
-    sourceUrl: 'https://localmaxxing.com/en/models/RedHatAI/Qwen3.8-27B-INT4?run=cmvu9h7cs0hbqs6017yhvimid',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/RedHatAI/Qwen3.8-27B-INT4?run=cmvu9h7cs0hbqs6017yhvimid',
     date: '2026-10-30',
     tier: 'A',
     model: 'RedHatAI/Qwen3.8-27B-INT4',
@@ -316,7 +338,8 @@ export const REPORTS: BenchmarkReport[] = [
     contextDepth: 296,
     prefill: { tokensPerSec: 1938.1, kind: 'perSequence' },
     decode: { tokensPerSec: 48.6, kind: 'perSequence' },
-    caveats: 'Verified. Short canonical prompt (TTFT-dominated prefill). Marlin is weight-only fp16 MMA with fp32 accumulate.',
+    caveats:
+      'Verified. Short canonical prompt (TTFT-dominated prefill). Marlin is weight-only fp16 MMA with fp32 accumulate.',
     input: {
       model: { kind: 'hf', repoId: 'RedHatAI/Qwen3.8-27B-INT4', dir: 'quant' },
       quant: 'native',
@@ -327,7 +350,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-04',
-    sourceUrl: 'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmszmr3yy0e75ms01z8t64io4',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmszmr3yy0e75ms01z8t64io4',
     date: '2026-08-19',
     tier: 'B',
     model: 'unsloth/Qwen3.8-27B-GGUF',
@@ -353,7 +377,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-05',
-    sourceUrl: 'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmsxftgtn0b99ms01ubcci7my',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmsxftgtn0b99ms01ubcci7my',
     date: '2026-08-17',
     tier: 'B',
     model: 'unsloth/Qwen3.8-27B-GGUF',
@@ -379,11 +404,13 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-06',
-    sourceUrl: 'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-NVFP4?run=cmsxzbo3t0cnbms016n4fdk9x',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-NVFP4?run=cmsxzbo3t0cnbms016n4fdk9x',
     date: '2026-08-18',
     tier: 'B',
     model: 'unsloth/Qwen3.8-27B-NVFP4',
-    simulatedModel: 'unsloth/Qwen3.8-27B-NVFP4 (quant fixture, native NVFP4 W4A4 MLP + FP8 attention)',
+    simulatedModel:
+      'unsloth/Qwen3.8-27B-NVFP4 (quant fixture, native NVFP4 W4A4 MLP + FP8 attention)',
     quant: 'NVFP4, KV fp8',
     hardware: '1× RTX 5090 32 GB, ~423 W',
     engine: 'vLLM 0.27.1 (CUDA, WSL2)',
@@ -394,7 +421,8 @@ export const REPORTS: BenchmarkReport[] = [
     contextDepth: 1037,
     prefill: { tokensPerSec: 9144.9, kind: 'perSequence' },
     decode: { tokensPerSec: 71.11, kind: 'perSequence' },
-    caveats: 'MTP off per notes; prefix cache on (one request, so no hit is assumed); client TTFT prefill.',
+    caveats:
+      'MTP off per notes; prefix cache on (one request, so no hit is assumed); client TTFT prefill.',
     input: {
       model: { kind: 'hf', repoId: 'unsloth/Qwen3.8-27B-NVFP4', dir: 'quant' },
       quant: 'native',
@@ -405,7 +433,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-07',
-    sourceUrl: 'https://localmaxxing.com/en/models/Qwen/Qwen3.8-27B-FP8?run=cmtpbv6tt02hin701q3p40kpp',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/Qwen/Qwen3.8-27B-FP8?run=cmtpbv6tt02hin701q3p40kpp',
     date: '2026-09-06',
     tier: 'A',
     model: 'Qwen/Qwen3.8-27B-FP8',
@@ -420,7 +449,8 @@ export const REPORTS: BenchmarkReport[] = [
     contextDepth: 347,
     prefill: { tokensPerSec: 9352.3, kind: 'perSequence' },
     decode: { tokensPerSec: 106.2, kind: 'perSequence' },
-    caveats: 'Verified. Decode is kernel-launch-bound per the submitter (far below the HBM roofline).',
+    caveats:
+      'Verified. Decode is kernel-launch-bound per the submitter (far below the HBM roofline).',
     input: {
       model: { kind: 'hf', repoId: 'Qwen/Qwen3.8-27B-FP8', dir: 'quant' },
       quant: 'native',
@@ -431,7 +461,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-08',
-    sourceUrl: 'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmtpbzgly02htn701f9arg2ui',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmtpbzgly02htn701f9arg2ui',
     date: '2026-09-06',
     tier: 'A',
     model: 'unsloth/Qwen3.8-27B-GGUF',
@@ -457,7 +488,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-09',
-    sourceUrl: 'https://localmaxxing.com/en/models/Qwen/Qwen3.8-27B-FP8?run=cmtrfjhhv00dcpa013a8uyn0j',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/Qwen/Qwen3.8-27B-FP8?run=cmtrfjhhv00dcpa013a8uyn0j',
     date: '2026-09-07',
     tier: 'C',
     model: 'Qwen/Qwen3.8-27B-FP8',
@@ -482,13 +514,18 @@ export const REPORTS: BenchmarkReport[] = [
       hardware: { deviceId: 'h200-sxm' },
       workload: { promptLen: 345, genLen: 512, contextDepth: 345 },
       deployment: {
-        speculative: { method: 'mtp', draftLength: 8, acceptance: { kind: 'iid', alpha: ACCEPTANCE_PRESETS.mtp_multi_step.prose.alpha } },
+        speculative: {
+          method: 'mtp',
+          draftLength: 8,
+          acceptance: { kind: 'iid', alpha: ACCEPTANCE_PRESETS.mtp_multi_step.prose.alpha },
+        },
       },
     },
   },
   {
     id: 'lm-10',
-    sourceUrl: 'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmtm14eqs00wgoe01mmqnbok9',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmtm14eqs00wgoe01mmqnbok9',
     date: '2026-09-03',
     tier: 'B',
     model: 'unsloth/Qwen3.8-27B-GGUF',
@@ -504,7 +541,8 @@ export const REPORTS: BenchmarkReport[] = [
     prefill: { tokensPerSec: 932.1, kind: 'perSequence' },
     decode: { tokensPerSec: 34.91, kind: 'perSequence' },
     weightFileBytes: 14.94 * GIB,
-    caveats: 'Paired with a UD-Q4_K_XL run on the same binary (30.5 tok/s); other R9700 records vary 1.2–52.7 tok/s.',
+    caveats:
+      'Paired with a UD-Q4_K_XL run on the same binary (30.5 tok/s); other R9700 records vary 1.2–52.7 tok/s.',
     input: {
       model: QWEN27,
       quant: 'q4_0',
@@ -515,7 +553,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-11',
-    sourceUrl: 'https://localmaxxing.com/en/models/amd/Qwen3.8-27B-Quark-AWQ-MXFP4?run=cmtx6ay860ai3ps011oye4gtx',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/amd/Qwen3.8-27B-Quark-AWQ-MXFP4?run=cmtx6ay860ai3ps011oye4gtx',
     date: '2026-09-11',
     tier: 'B',
     model: 'amd/Qwen3.8-27B-Quark-AWQ-MXFP4',
@@ -537,13 +576,17 @@ export const REPORTS: BenchmarkReport[] = [
       model: { kind: 'hf', repoId: 'amd/Qwen3.8-27B-Quark-AWQ-MXFP4', dir: 'quant' },
       quant: 'native',
       numerics: { ...VLLM, kvCache: { dtype: 'fp8_e4m3' } },
-      hardware: { deviceId: 'radeon-ai-pro-r9700', topology: pcieBox(RADEON_AI_PRO_R9700, 2, PCIE_5_X16_DIRECT) },
+      hardware: {
+        deviceId: 'radeon-ai-pro-r9700',
+        topology: pcieBox(RADEON_AI_PRO_R9700, 2, PCIE_5_X16_DIRECT),
+      },
       workload: { promptLen: 573, genLen: 512, contextDepth: 573 },
     },
   },
   {
     id: 'lm-13',
-    sourceUrl: 'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmsxtoccy0cjlms01lnbw0pzu',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmsxtoccy0cjlms01lnbw0pzu',
     date: '2026-08-17',
     tier: 'B',
     model: 'unsloth/Qwen3.8-27B-GGUF',
@@ -584,7 +627,8 @@ export const REPORTS: BenchmarkReport[] = [
     contextDepth: 343,
     prefill: { tokensPerSec: 419.4, kind: 'perSequence' },
     decode: { tokensPerSec: 15.9, kind: 'perSequence' },
-    caveats: 'Verified. Decode is flat across Q4–Q8 on this rig (engine-bound, not bandwidth-bound).',
+    caveats:
+      'Verified. Decode is flat across Q4–Q8 on this rig (engine-bound, not bandwidth-bound).',
     input: {
       model: QWEN27,
       quant: 'q8_0',
@@ -595,7 +639,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-18',
-    sourceUrl: 'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmsxndz0o0bxsms01v7pv9o2d',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmsxndz0o0bxsms01v7pv9o2d',
     date: '2026-08-17',
     tier: 'B',
     model: 'unsloth/Qwen3.8-27B-GGUF',
@@ -610,7 +655,8 @@ export const REPORTS: BenchmarkReport[] = [
     contextDepth: 0,
     prefill: { tokensPerSec: 905.3, kind: 'perSequence' },
     decode: { tokensPerSec: 20.74, kind: 'perSequence' },
-    caveats: 'Q6_K vs Q8_0 on the same box scales with bytes (20.74 vs 16.05): a clean bandwidth-bound pair (~75% of 608 GB/s).',
+    caveats:
+      'Q6_K vs Q8_0 on the same box scales with bytes (20.74 vs 16.05): a clean bandwidth-bound pair (~75% of 608 GB/s).',
     input: {
       model: QWEN27,
       quant: 'q6_k',
@@ -621,7 +667,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-20',
-    sourceUrl: 'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmvpm4oa7028vng011l44ex55',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmvpm4oa7028vng011l44ex55',
     date: '2026-10-26',
     tier: 'A',
     model: 'unsloth/Qwen3.8-27B-GGUF',
@@ -636,7 +683,8 @@ export const REPORTS: BenchmarkReport[] = [
     contextDepth: 349,
     prefill: { tokensPerSec: 261.7, kind: 'perSequence' },
     decode: { tokensPerSec: 12.9, kind: 'perSequence' },
-    caveats: 'Verified. 96 GB is not a preset option; the 128 GB option is used (bandwidth is the same 256 GB/s).',
+    caveats:
+      'Verified. 96 GB is not a preset option; the 128 GB option is used (bandwidth is the same 256 GB/s).',
     input: {
       model: QWEN27,
       quant: 'q4_k_m',
@@ -647,7 +695,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-22',
-    sourceUrl: 'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmtmy9ugn004ppb01hljz9pcq',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-GGUF?run=cmtmy9ugn004ppb01hljz9pcq',
     date: '2026-09-04',
     tier: 'C',
     model: 'unsloth/Qwen3.8-27B-GGUF',
@@ -662,7 +711,8 @@ export const REPORTS: BenchmarkReport[] = [
     contextDepth: 75,
     prefill: { tokensPerSec: 882.3, kind: 'perSequence' },
     decode: { tokensPerSec: 24.3, kind: 'perSequence' },
-    caveats: '75-token prompt: prefill is TTFT-dominated. Metal dequantizes to fp16 (no int8 path).',
+    caveats:
+      '75-token prompt: prefill is TTFT-dominated. Metal dequantizes to fp16 (no int8 path).',
     input: {
       model: QWEN27,
       quant: 'q4_k_m',
@@ -673,7 +723,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-23',
-    sourceUrl: 'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-NVFP4?run=cmt5s1z0103m7pu01km9fczpa',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/unsloth/Qwen3.8-27B-NVFP4?run=cmt5s1z0103m7pu01km9fczpa',
     date: '2026-08-23',
     tier: 'C',
     model: 'unsloth/Qwen3.8-27B-NVFP4',
@@ -699,7 +750,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-24',
-    sourceUrl: 'https://localmaxxing.com/en/models/Qwen/Qwen3.8-Flash-Next?run=cmw1704i40ajcoa01fwx8w8m9',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/Qwen/Qwen3.8-Flash-Next?run=cmw1704i40ajcoa01fwx8w8m9',
     date: '2026-11-03',
     tier: 'B',
     model: 'Qwen/Qwen3.8-Flash-Next (GGUF UD-IQ3_XXS)',
@@ -721,14 +773,18 @@ export const REPORTS: BenchmarkReport[] = [
       model: FLASH_NEXT,
       quant: { kind: 'preset', preset: ggufBpw(3.1, 'UD-IQ3_XXS, lower end of 3.1–3.3 bpw') },
       numerics: LLAMACPP_MMQ,
-      hardware: { deviceId: 'radeon-ai-pro-r9700', topology: pcieBox(RADEON_AI_PRO_R9700, 3, PCIE_4_X16_DIRECT) },
+      hardware: {
+        deviceId: 'radeon-ai-pro-r9700',
+        topology: pcieBox(RADEON_AI_PRO_R9700, 3, PCIE_4_X16_DIRECT),
+      },
       parallel: { tp: 1, pp: 3 },
       workload: { promptLen: 573, genLen: 256, contextDepth: 573 },
     },
   },
   {
     id: 'lm-27',
-    sourceUrl: 'https://localmaxxing.com/en/models/unsloth/Qwen3.8-Flash-Next-GGUF?run=cmvpm4rw10292ng01k4wnsipr',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/unsloth/Qwen3.8-Flash-Next-GGUF?run=cmvpm4rw10292ng01k4wnsipr',
     date: '2026-10-26',
     tier: 'A',
     model: 'unsloth/Qwen3.8-Flash-Next-GGUF',
@@ -743,7 +799,8 @@ export const REPORTS: BenchmarkReport[] = [
     contextDepth: 345,
     prefill: { tokensPerSec: 298.3, kind: 'perSequence' },
     decode: { tokensPerSec: 32, kind: 'perSequence' },
-    caveats: 'Verified. Sub-4-bpw (2.9) GGUF, negative extraBitsPerElem; 128 GB memory option used.',
+    caveats:
+      'Verified. Sub-4-bpw (2.9) GGUF, negative extraBitsPerElem; 128 GB memory option used.',
     input: {
       model: FLASH_NEXT,
       quant: { kind: 'preset', preset: ggufBpw(2.9, 'UD-Q2_K_XL, lower end of 2.9–3 bpw') },
@@ -754,7 +811,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-28',
-    sourceUrl: 'https://localmaxxing.com/en/models/Qwen/Qwen3.8-Flash-Next?run=cmtexccjm00bgn0011lvaqdyi',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/Qwen/Qwen3.8-Flash-Next?run=cmtexccjm00bgn0011lvaqdyi',
     date: '2026-08-29',
     tier: 'C',
     model: 'Qwen3.8-Flash-Next-MLX-4bit',
@@ -769,10 +827,17 @@ export const REPORTS: BenchmarkReport[] = [
     contextDepth: 619,
     prefill: { tokensPerSec: 309.6, kind: 'perSequence' },
     decode: { tokensPerSec: 14.8, kind: 'perSequence' },
-    caveats: 'Decode is far below the bandwidth bound of a ~7 B-active MoE (engine / MoE gather bound).',
+    caveats:
+      'Decode is far below the bandwidth bound of a ~7 B-active MoE (engine / MoE gather bound).',
     input: {
       model: FLASH_NEXT,
-      quant: { kind: 'preset', preset: { ...ggufBpw(5, 'MLX affine 4-bit g32: 16-bit scale + bias per 32'), note: 'MLX 4-bit g32 = 5 bpw' } },
+      quant: {
+        kind: 'preset',
+        preset: {
+          ...ggufBpw(5, 'MLX affine 4-bit g32: 16-bit scale + bias per 32'),
+          note: 'MLX 4-bit g32 = 5 bpw',
+        },
+      },
       numerics: MLX,
       hardware: { deviceId: 'apple-m3-ultra-80c' },
       workload: { promptLen: 619, genLen: 256, contextDepth: 619 },
@@ -780,13 +845,15 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-32',
-    sourceUrl: 'https://localmaxxing.com/en/models/nvidia/GLM-5.3-Flash-FP4-Local?run=cmvfggz3n014srf01ulz9qf41',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/nvidia/GLM-5.3-Flash-FP4-Local?run=cmvfggz3n014srf01ulz9qf41',
     date: '2026-10-19',
     tier: 'A',
     model: 'nvidia/GLM-5.3-Flash-FP4-Local',
     simulatedModel: 'nvidia/GLM-5.3-Flash-FP4-Local (quant fixture), run weight-only',
     quant: 'NVFP4 routed experts + FP8/MXFP8 rest, KV fp8',
-    hardware: '8× RTX 3090 24 GB, ~240 W each, PCIe (no NVLink; P2P not stated), Threadripper PRO 7965WX',
+    hardware:
+      '8× RTX 3090 24 GB, ~240 W each, PCIe (no NVLink; P2P not stated), Threadripper PRO 7965WX',
     engine: 'vLLM 0.28.1rc1 + local SM86 adapter (Marlin repack)',
     parallelism: 'TP8 / EP8',
     batch: 1,
@@ -802,14 +869,19 @@ export const REPORTS: BenchmarkReport[] = [
       model: { kind: 'hf', repoId: 'nvidia/GLM-5.3-Flash-FP4-Local', dir: 'quant' },
       quant: 'native',
       numerics: { ...VLLM, kvCache: { dtype: 'fp8_e4m3' }, weightOnly: true },
-      hardware: { deviceId: 'rtx-3090', topology: pcieBox(RTX_3090, 8, PCIE_4_X16), unlocks: { 'pcie-p2p': 'direct' } },
+      hardware: {
+        deviceId: 'rtx-3090',
+        topology: pcieBox(RTX_3090, 8, PCIE_4_X16),
+        unlocks: { 'pcie-p2p': 'direct' },
+      },
       parallel: { tp: 8, ep: 8 },
       workload: { promptLen: 278, genLen: 966, contextDepth: 278 },
     },
   },
   {
     id: 'lm-34',
-    sourceUrl: 'https://localmaxxing.com/en/models/zai-org/GLM-5.3-Flash?run=cmtipc711066gp401ddtg1b3p',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/zai-org/GLM-5.3-Flash?run=cmtipc711066gp401ddtg1b3p',
     date: '2026-09-01',
     tier: 'C',
     model: 'GLM-5.3-Flash-MLX-4bit',
@@ -824,7 +896,8 @@ export const REPORTS: BenchmarkReport[] = [
     contextDepth: 574,
     prefill: { tokensPerSec: 344.5, kind: 'perSequence' },
     decode: { tokensPerSec: 32.9, kind: 'perSequence' },
-    caveats: '"Mild GPU contention" (machine shared with another fleet), so the rates are lower bounds.',
+    caveats:
+      '"Mild GPU contention" (machine shared with another fleet), so the rates are lower bounds.',
     input: {
       model: GLM53_FLASH,
       quant: 'mlx-4bit',
@@ -835,13 +908,16 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-35',
-    sourceUrl: 'https://localmaxxing.com/en/models/zai-org/GLM-5.3-Flash?run=cmum3byy10j02lq01b6821y8t',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/zai-org/GLM-5.3-Flash?run=cmum3byy10j02lq01b6821y8t',
     date: '2026-09-29',
     tier: 'B',
     model: 'GLM-5.3-Flash NVFP4 (/models/glm-5.3-flash-nvfp4)',
-    simulatedModel: 'nvidia/GLM-5.3-Flash-NVFP4 (quant fixture; the closest published NVFP4 checkpoint, layout unverified)',
+    simulatedModel:
+      'nvidia/GLM-5.3-Flash-NVFP4 (quant fixture; the closest published NVFP4 checkpoint, layout unverified)',
     quant: 'NVFP4, KV fp8_e4m3',
-    hardware: '4× DGX Spark (GB10), ConnectX-7 200 GbE RoCE (record mislabeled as one 128 GB device)',
+    hardware:
+      '4× DGX Spark (GB10), ConnectX-7 200 GbE RoCE (record mislabeled as one 128 GB device)',
     engine: 'vLLM 0.30.1rc1 (CUDA), Ray, flashinfer_cutlass MoE',
     parallelism: 'TP4 (no expert parallel flag)',
     batch: 1,
@@ -876,7 +952,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-36',
-    sourceUrl: 'https://localmaxxing.com/en/models/deepseek-ai/DeepSeek-V4.1-Flash?run=cmuhen2200drdlq01fa2qr70h',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/deepseek-ai/DeepSeek-V4.1-Flash?run=cmuhen2200drdlq01fa2qr70h',
     date: '2026-09-25',
     tier: 'C',
     model: 'deepseek-ai/DeepSeek-V4.1-Flash',
@@ -915,7 +992,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-38',
-    sourceUrl: 'https://localmaxxing.com/en/models/unsloth/Inkling-Small-GGUF?run=cms90mh5r0045pm01lf9n6cre',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/unsloth/Inkling-Small-GGUF?run=cms90mh5r0045pm01lf9n6cre',
     date: '2026-07-31',
     tier: 'B',
     model: 'unsloth/Inkling-Small-GGUF',
@@ -942,11 +1020,13 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'lm-39',
-    sourceUrl: 'https://localmaxxing.com/en/models/RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead?run=cmtx753t70aiups01lmudzstu',
+    sourceUrl:
+      'https://localmaxxing.com/en/models/RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead?run=cmtx753t70aiups01lmudzstu',
     date: '2026-09-11',
     tier: 'C',
     model: 'RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead',
-    simulatedModel: 'nvidia/Qwen3.8-27B-NVFP4 (quant fixture; same NVFP4 MLP + FP8 attention layout)',
+    simulatedModel:
+      'nvidia/Qwen3.8-27B-NVFP4 (quant fixture; same NVFP4 MLP + FP8 attention layout)',
     quant: 'NVFP4 (BF16 LM head)',
     hardware: '2× RTX 5090 32 GB, PCIe, patched driver with forced P2P',
     engine: 'SGLang main@0149f56e (flashinfer 0.6.17), custom one-shot all-reduce',
@@ -965,7 +1045,11 @@ export const REPORTS: BenchmarkReport[] = [
       model: { kind: 'hf', repoId: 'nvidia/Qwen3.8-27B-NVFP4', dir: 'quant' },
       quant: 'native',
       numerics: VLLM,
-      hardware: { deviceId: 'rtx-5090', topology: RTX_5090_PCIE_2, unlocks: { 'pcie-p2p': 'direct' } },
+      hardware: {
+        deviceId: 'rtx-5090',
+        topology: RTX_5090_PCIE_2,
+        unlocks: { 'pcie-p2p': 'direct' },
+      },
       parallel: { tp: 2 },
       workload: { promptLen: 512, genLen: 1024, contextDepth: 512 },
       deployment: {
@@ -996,7 +1080,7 @@ export const REPORTS: BenchmarkReport[] = [
     prefill: { tokensPerSec: 238.6, kind: 'perSequence' },
     decode: { tokensPerSec: 371.6, kind: 'aggregate' },
     caveats:
-      'Concurrency 16: decode is the aggregate; prefill is one request\'s prompt / TTFT under load (compared with the ' +
+      "Concurrency 16: decode is the aggregate; prefill is one request's prompt / TTFT under load (compared with the " +
       'per-sequence rate of a 16-sequence prefill). PCIe 4.0 x16 direct P2P assumed (host is Gen4).',
     input: {
       model: QWEN27,
@@ -1051,7 +1135,8 @@ export const REPORTS: BenchmarkReport[] = [
     contextDepth: 32768,
     prefill: { tokensPerSec: 1567.08, kind: 'perSequence' },
     decode: { tokensPerSec: 42.76, kind: 'perSequence' },
-    caveats: 'Prefill at depth 32768 is not modeled: the depth-0 prefill is simulated (a higher, still valid bound).',
+    caveats:
+      'Prefill at depth 32768 is not modeled: the depth-0 prefill is simulated (a higher, still valid bound).',
     input: {
       model: { kind: 'spec', spec: GPT_OSS_120B },
       quant: { kind: 'preset', preset: GPT_OSS_GGUF },
@@ -1102,7 +1187,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'web-07',
-    sourceUrl: 'https://www.reddit.com/r/LocalLLaMA/comments/1o7k7zz/dgx_spark_compiled_llamacpp_benchmarks_compared/',
+    sourceUrl:
+      'https://www.reddit.com/r/LocalLLaMA/comments/1o7k7zz/dgx_spark_compiled_llamacpp_benchmarks_compared/',
     date: '2025-10-15',
     model: 'zai-org/GLM-4.5-Air (GGUF Q4_K)',
     simulatedModel: 'GLM_4_5_AIR (hand-written spec, MTP layer excluded)',
@@ -1128,12 +1214,14 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'web-12',
-    sourceUrl: 'https://www.reddit.com/r/LocalLLaMA/comments/1o7k7zz/dgx_spark_compiled_llamacpp_benchmarks_compared/',
+    sourceUrl:
+      'https://www.reddit.com/r/LocalLLaMA/comments/1o7k7zz/dgx_spark_compiled_llamacpp_benchmarks_compared/',
     date: '2025-10-15',
     model: 'ggml-org/gpt-oss-120b-GGUF',
     simulatedModel: 'GPT_OSS_120B (hand-written spec)',
     quant: 'MXFP4 experts',
-    hardware: 'Apple M4 Max (cores / RAM not stated; ≥ 64 GB needed for the 63 GB file → 40-core GPU)',
+    hardware:
+      'Apple M4 Max (cores / RAM not stated; ≥ 64 GB needed for the 63 GB file → 40-core GPU)',
     engine: 'llama.cpp Metal (second-hand numbers), llama-bench',
     parallelism: 'single SoC',
     batch: 1,
@@ -1206,12 +1294,14 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'web-29',
-    sourceUrl: 'https://www.reddit.com/r/LocalLLaMA/comments/1m6b151/updated_strix_halo_ryzen_ai_max_395_llm_benchmark/',
+    sourceUrl:
+      'https://www.reddit.com/r/LocalLLaMA/comments/1m6b151/updated_strix_halo_ryzen_ai_max_395_llm_benchmark/',
     date: '2025-07-22',
     model: 'unsloth/Qwen3-30B-A3B-GGUF',
     simulatedModel: 'QWEN3_30B_A3B (hand-written spec)',
     quant: 'UD-Q4_K_XL (≈4.5–5 bpw; 4.85 assumed as Q4_K_M)',
-    hardware: 'Framework Desktop, Ryzen AI Max+ 395, 128 GB LPDDR5x-8000 (poster measures ~215 GB/s)',
+    hardware:
+      'Framework Desktop, Ryzen AI Max+ 395, 128 GB LPDDR5x-8000 (poster measures ~215 GB/s)',
     engine: 'llama.cpp ~b5863 (Vulkan, fa=1), llama-bench pp512 / tg128',
     parallelism: 'single APU',
     batch: 1,
@@ -1220,7 +1310,8 @@ export const REPORTS: BenchmarkReport[] = [
     contextDepth: 0,
     prefill: { tokensPerSec: 604.8, kind: 'perSequence' },
     decode: { tokensPerSec: 66.3, kind: 'perSequence' },
-    caveats: 'Pre-production unit; prefill rose from 119 to 605 tok/s between May and July 2025 builds.',
+    caveats:
+      'Pre-production unit; prefill rose from 119 to 605 tok/s between May and July 2025 builds.',
     input: {
       model: { kind: 'spec', spec: QWEN3_30B_A3B },
       quant: 'q4_k_m',
@@ -1231,7 +1322,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'web-31',
-    sourceUrl: 'https://www.reddit.com/r/LocalLLaMA/comments/1m6b151/updated_strix_halo_ryzen_ai_max_395_llm_benchmark/',
+    sourceUrl:
+      'https://www.reddit.com/r/LocalLLaMA/comments/1m6b151/updated_strix_halo_ryzen_ai_max_395_llm_benchmark/',
     date: '2025-07-22',
     model: 'shisa-ai Shisa V2 70B (Llama 3.x 70B), i1-Q4_K_M GGUF',
     simulatedModel: 'LLAMA3_70B (hand-written spec)',
@@ -1256,7 +1348,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'web-36',
-    sourceUrl: 'https://www.reddit.com/r/LocalLLaMA/comments/1x023z4/qwen38flashnext_on_6x3090_6x4090_without_nvlink/',
+    sourceUrl:
+      'https://www.reddit.com/r/LocalLLaMA/comments/1x023z4/qwen38flashnext_on_6x3090_6x4090_without_nvlink/',
     date: '2026-10-07',
     model: 'unsloth/Qwen3.8-Flash-Next-GGUF',
     simulatedModel: 'Qwen/Qwen3.8-Flash-Next (fixture)',
@@ -1271,7 +1364,7 @@ export const REPORTS: BenchmarkReport[] = [
     prefill: { tokensPerSec: 1728, kind: 'perSequence' },
     decode: { tokensPerSec: 46.2, kind: 'perSequence' },
     caveats:
-      'Prefill of a 50k-token session; decode at 50k depth (generated length not stated; 128 assumed). The poster\'s ' +
+      "Prefill of a 50k-token session; decode at 50k depth (generated length not stated; 128 assumed). The poster's " +
       'patched fork reaches 7050 / 57.5.',
     input: {
       model: FLASH_NEXT,
@@ -1284,7 +1377,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'web-41',
-    sourceUrl: 'https://www.reddit.com/r/LocalLLaMA/comments/1r66jyp/vllm_maximum_performance_on_multi3090/',
+    sourceUrl:
+      'https://www.reddit.com/r/LocalLLaMA/comments/1r66jyp/vllm_maximum_performance_on_multi3090/',
     date: '2026-02-16',
     model: 'Qwen/Qwen3-Coder-Next-FP8',
     simulatedModel: 'QWEN3_NEXT_80B_A3B (hand-written spec)',
@@ -1297,12 +1391,17 @@ export const REPORTS: BenchmarkReport[] = [
     genLen: 512,
     contextDepth: 512,
     decode: { tokensPerSec: 144.6, kind: 'perSequence' },
-    caveats: 'One vLLM log line ("Avg generation throughput"), not an average. Prompt length not stated (512 assumed).',
+    caveats:
+      'One vLLM log line ("Avg generation throughput"), not an average. Prompt length not stated (512 assumed).',
     input: {
       model: { kind: 'spec', spec: QWEN3_NEXT_80B_A3B },
       quant: 'fp8-wo',
       numerics: VLLM,
-      hardware: { deviceId: 'rtx-3090', topology: pcieBox(RTX_3090, 4, PCIE_4_X8), unlocks: { 'pcie-p2p': 'direct' } },
+      hardware: {
+        deviceId: 'rtx-3090',
+        topology: pcieBox(RTX_3090, 4, PCIE_4_X8),
+        unlocks: { 'pcie-p2p': 'direct' },
+      },
       parallel: { tp: 4 },
       workload: { promptLen: 512, genLen: 512, contextDepth: 512 },
     },
@@ -1322,7 +1421,8 @@ export const REPORTS: BenchmarkReport[] = [
     genLen: 128,
     contextDepth: 1024,
     decode: { tokensPerSec: 44, kind: 'perSequence' },
-    caveats: '--max-num-seqs 1. Prompt / output lengths not stated: benchmark_serving random defaults (1024 / 128) assumed.',
+    caveats:
+      '--max-num-seqs 1. Prompt / output lengths not stated: benchmark_serving random defaults (1024 / 128) assumed.',
     input: {
       model: { kind: 'spec', spec: QWQ_32B },
       quant: 'fp8-wo',
@@ -1334,7 +1434,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'web-44',
-    sourceUrl: 'https://www.reddit.com/r/LocalLLaMA/comments/1jobe0u/benchmark_dualgpu_boosts_speed_despire_all_common/',
+    sourceUrl:
+      'https://www.reddit.com/r/LocalLLaMA/comments/1jobe0u/benchmark_dualgpu_boosts_speed_despire_all_common/',
     date: '2025-03-31',
     model: 'Qwen/QwQ-32B-AWQ',
     simulatedModel: 'QWQ_32B (hand-written spec)',
@@ -1358,7 +1459,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'web-45',
-    sourceUrl: 'https://www.reddit.com/r/LocalLLaMA/comments/1jobe0u/benchmark_dualgpu_boosts_speed_despire_all_common/',
+    sourceUrl:
+      'https://www.reddit.com/r/LocalLLaMA/comments/1jobe0u/benchmark_dualgpu_boosts_speed_despire_all_common/',
     date: '2025-03-31',
     model: 'Qwen/QwQ-32B-AWQ',
     simulatedModel: 'QWQ_32B (hand-written spec)',
@@ -1382,7 +1484,8 @@ export const REPORTS: BenchmarkReport[] = [
   },
   {
     id: 'web-48',
-    sourceUrl: 'https://www.reddit.com/r/LocalLLaMA/comments/1jobe0u/benchmark_dualgpu_boosts_speed_despire_all_common/',
+    sourceUrl:
+      'https://www.reddit.com/r/LocalLLaMA/comments/1jobe0u/benchmark_dualgpu_boosts_speed_despire_all_common/',
     date: '2025-03-31',
     model: 'Qwen/QwQ-32B-AWQ',
     simulatedModel: 'QWQ_32B (hand-written spec)',
@@ -1464,8 +1567,9 @@ export const REPORTS: BenchmarkReport[] = [
     model: 'Qwen3.8-Flash-Next GGUF Q4_0 (93.7 GiB, 65.4 GiB of routed experts)',
     simulatedModel: 'Qwen/Qwen3.8-Flash-Next (fixture) at the q4_0 preset',
     quant: 'Q4_0',
-    hardware: '1× RTX 5090 32 GB on PCIe 4.0 x16, EPYC 7742 host (16 cores on the GPU\'s NUMA node)',
-    engine: 'llama.cpp PR 29887 llama-server -fa on -cmoe --moe-cache-mib 19000 (GPU LRU cache of host experts), no MTP',
+    hardware: "1× RTX 5090 32 GB on PCIe 4.0 x16, EPYC 7742 host (16 cores on the GPU's NUMA node)",
+    engine:
+      'llama.cpp PR 29887 llama-server -fa on -cmoe --moe-cache-mib 19000 (GPU LRU cache of host experts), no MTP',
     parallelism: 'single GPU',
     batch: 1,
     promptLen: 1,
@@ -1475,7 +1579,7 @@ export const REPORTS: BenchmarkReport[] = [
     caveats:
       'Every routed expert lives in host RAM (-cmoe); a 19000 MiB GPU cache holds f = 19000 MiB / 65.4 GiB = 0.284 of ' +
       'them, at a measured 89% hit rate (custom h 0.89). Misses cross PCIe 4.0 x16 (28.8 GB/s payload, the platform link, ' +
-      'not the card\'s Gen5). The EPYC 7742 host RAM (8× DDR4-3200) has no preset; DDR5-6000 2ch (96 GB/s) stands in, ' +
+      "not the card's Gen5). The EPYC 7742 host RAM (8× DDR4-3200) has no preset; DDR5-6000 2ch (96 GB/s) stands in, " +
       'which gives the same result since the link binds, and its 96 GB capacity makes the host tier not fit (not ' +
       'checked here). The n-gram (PLE) table sits in host RAM as llama.cpp keeps it. SPEED-Bench qualitative prompts ' +
       '(--osl 512, temp 0) have no stated length: decode is simulated from an empty cache, the favourable end.',
@@ -1487,7 +1591,11 @@ export const REPORTS: BenchmarkReport[] = [
       workload: { promptLen: 1, genLen: 512, contextDepth: 1 },
       deployment: {
         offload: {
-          routedExperts: { tier: 'host_ram', residentFraction: 19000 / (65.4 * 1024), hitRatio: { kind: 'custom', h: 0.89 } },
+          routedExperts: {
+            tier: 'host_ram',
+            residentFraction: 19000 / (65.4 * 1024),
+            hitRatio: { kind: 'custom', h: 0.89 },
+          },
           lookupTables: { tier: 'host_ram' },
         },
       },
@@ -1501,7 +1609,8 @@ export const REPORTS: BenchmarkReport[] = [
     simulatedModel: 'QWEN3_235B_A22B (hand-written spec)',
     quant: 'mix-IQ3_K: attention IQ6_K, routed gate/up IQ3_K, down IQ4_K, token_embd / output Q8_0',
     hardware: '1× RTX 3090 Ti FE 24 GB, Ryzen 9 9950X, 96 GB DDR5-6400 (2×48 GB)',
-    engine: 'ik_llama.cpp llama-sweep-bench -c 32768 -b 4096 -ub 4096 -rtr, -ot ffn of layers 10–93 = CPU',
+    engine:
+      'ik_llama.cpp llama-sweep-bench -c 32768 -b 4096 -ub 4096 -rtr, -ot ffn of layers 10–93 = CPU',
     parallelism: 'single GPU + CPU experts',
     batch: 1,
     promptLen: 4096,
@@ -1515,7 +1624,7 @@ export const REPORTS: BenchmarkReport[] = [
         mode: 'exception',
         reason:
           'CPU-compute offload: ik_llama.cpp runs the experts of layers 10–93 on the CPU, reading them from DDR5 at ' +
-          '102.4 GB/s; the simulator\'s transfer mode streams the missed experts over the PCIe 4.0 x16 link (28.8 GB/s payload) ' +
+          "102.4 GB/s; the simulator's transfer mode streams the missed experts over the PCIe 4.0 x16 link (28.8 GB/s payload) " +
           'instead (cpu_compute is a hook validation rejects, design doc §2.8), so this decode is not bounded by it',
       },
     },
@@ -1534,7 +1643,12 @@ export const REPORTS: BenchmarkReport[] = [
       workload: { promptLen: 4096, genLen: 1024, contextDepth: 0 },
       deployment: {
         offload: {
-          routedExperts: { tier: 'host_ram', layers: { from: 10, to: 94 }, residentFraction: 0, hitRatio: { kind: 'uniform' } },
+          routedExperts: {
+            tier: 'host_ram',
+            layers: { from: 10, to: 94 },
+            residentFraction: 0,
+            hitRatio: { kind: 'uniform' },
+          },
         },
       },
     },
@@ -3656,7 +3770,8 @@ export const REPORTS: BenchmarkReport[] = [
     simulatedModel: 'LLAMA2_7B (hand-written spec, the same config)',
     quant: 'Q4_0',
     hardware: '1× NVIDIA CMP 170HX 8 GB, locked (stock driver and vBIOS), PCIe Gen1 x4',
-    engine: 'llama.cpp master (CUDA, sm_80), stock build (FMA on, DP4A), llama-bench -p 512 -n 128 -ngl 99 -r 3',
+    engine:
+      'llama.cpp master (CUDA, sm_80), stock build (FMA on, DP4A), llama-bench -p 512 -n 128 -ngl 99 -r 3',
     parallelism: 'single GPU',
     batch: 1,
     promptLen: 512,

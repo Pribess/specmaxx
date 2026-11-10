@@ -3,13 +3,30 @@ import type { AccumulateType, MathFormat } from '../../ir/dtype';
 import type { DeviceSpec } from '../types';
 import { validateDevice } from '../validate';
 import {
-  A100_SXM4_80GB, A100_SXM4_40GB, A100_PCIE_80GB, A100_PCIE_40GB, V100_SXM2, V100_PCIE,
-  B200, B300, DGX_SPARK, H100_SXM, H200_SXM, NVIDIA_DATACENTER_DEVICE_PRESETS,
+  A100_SXM4_80GB,
+  A100_SXM4_40GB,
+  A100_PCIE_80GB,
+  A100_PCIE_40GB,
+  V100_SXM2,
+  V100_PCIE,
+  B200,
+  B300,
+  DGX_SPARK,
+  H100_SXM,
+  H200_SXM,
+  NVIDIA_DATACENTER_DEVICE_PRESETS,
 } from './nvidia-datacenter';
 
 /** The engines[0] peak for (input, accumulate, sparsity); throws if the preset lists none. Unit: FLOP/s (OP/s). */
-function peak(d: DeviceSpec, input: MathFormat, acc: AccumulateType, sparsity: 'dense' | '2:4'): number {
-  const p = d.engines[0].matmulPeaks.find((x) => x.input === input && x.accumulate === acc && x.sparsity === sparsity);
+function peak(
+  d: DeviceSpec,
+  input: MathFormat,
+  acc: AccumulateType,
+  sparsity: 'dense' | '2:4',
+): number {
+  const p = d.engines[0].matmulPeaks.find(
+    (x) => x.input === input && x.accumulate === acc && x.sparsity === sparsity,
+  );
   if (p === undefined) throw new Error(`${d.id}: no entry ${input}/${acc}/${sparsity}`);
   return p.flopsPerSec;
 }

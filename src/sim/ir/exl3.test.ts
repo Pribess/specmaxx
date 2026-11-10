@@ -46,14 +46,27 @@ describe('EXL3 on Qwen3.8-27B (dense): weight bytes and decode rate', () => {
   const hardware = { device: RTX_5090, topology: singleDevice(RTX_5090) };
   const workload = { batch: 1, promptLen: 4096, decodeContextLen: 4096 };
   const run = (weights: QuantConfig['weights']) => {
-    const quant: QuantConfig = { weights, activations: 'fp16', kvCache: { dtype: 'fp16' }, highPrecision: 'fp16', lmHead: weights };
-    return simulate({ model: r.model, quant, parallel: { tp: 1, pp: 1, dp: 1, ep: 1 }, workload, hardware });
+    const quant: QuantConfig = {
+      weights,
+      activations: 'fp16',
+      kvCache: { dtype: 'fp16' },
+      highPrecision: 'fp16',
+      lmHead: weights,
+    };
+    return simulate({
+      model: r.model,
+      quant,
+      parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
+      workload,
+      hardware,
+    });
   };
 
   it('resident weight bytes are linear in bpw: Δ = linearElems·Δbpw/8, plus the small side-vector overhead', () => {
     const bytes = (f: QuantConfig['weights']) => run(f).memory.perStage[0].weightBytes;
     // Linear elements (all matrices incl. the head, embeddings stay fp16 so they cancel): from the 16-bit and 0-bit extremes.
-    const elems = ((bytes({ dtype: 'fp16' }) - bytes({ dtype: 'fp16', valueBitsPerElem: 0 })) * 8) / 16;
+    const elems =
+      ((bytes({ dtype: 'fp16' }) - bytes({ dtype: 'fp16', valueBitsPerElem: 0 })) * 8) / 16;
     expect(elems).toBeGreaterThan(20e9);
     const plain = (bpw: number) => bytes({ dtype: 'fp16', valueBitsPerElem: bpw });
     expect(plain(4) - plain(2.5)).toBeCloseTo((elems * 1.5) / 8, -3);

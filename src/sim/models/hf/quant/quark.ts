@@ -16,7 +16,17 @@
 import type { Dtype, TensorFormat } from '../../../ir/dtype';
 import type { ModuleQuant } from '../../../ir/model';
 import type { Probe, SchemeContext, SchemeReading } from './common';
-import { blockScaleBits, describeFormat, dtypeNameBits, groupScaleBits, numAt, numListAt, objAt, strAt, strListAt } from './common';
+import {
+  blockScaleBits,
+  describeFormat,
+  dtypeNameBits,
+  groupScaleBits,
+  numAt,
+  numListAt,
+  objAt,
+  strAt,
+  strListAt,
+} from './common';
 import { anyMatch, compilePatterns, firstMatch } from './patterns';
 import { isJsonObject } from '../reader';
 import type { JsonObject } from '../types';
@@ -38,19 +48,22 @@ export function quarkWeightFormat(spec: unknown, notes: string[]): TensorFormat 
     return { dtype: 'fp4_e2m1', extraBitsPerElem: group ? groupScaleBits(scaleBits, 0, group) : 0 };
   }
   if (dtype === 'mxfp8' || dtype === 'mx_fp8') return { dtype: 'mxfp8' };
-  if (dtype === 'mxfp6' || dtype.startsWith('mx_fp6') || dtype.startsWith('mxfp6')) return { dtype: 'mxfp6' };
+  if (dtype === 'mxfp6' || dtype.startsWith('mx_fp6') || dtype.startsWith('mxfp6'))
+    return { dtype: 'mxfp6' };
   if (dtype === 'fp8_e4m3' || dtype === 'fp8_e5m2') {
     const d: Dtype = dtype === 'fp8_e5m2' ? 'fp8_e5m2' : 'fp8_e4m3';
     if (qscheme === 'per_block' && block && block.length === 2) {
       return { dtype: d, extraBitsPerElem: blockScaleBits(scaleBits, block[0], block[1]) };
     }
-    if (qscheme === 'per_group' && group) return { dtype: d, extraBitsPerElem: groupScaleBits(scaleBits, 0, group) };
+    if (qscheme === 'per_group' && group)
+      return { dtype: d, extraBitsPerElem: groupScaleBits(scaleBits, 0, group) };
     if (qscheme === 'per_channel') notes.push('quark fp8 per-channel weight scales: overhead ≈0');
     return { dtype: d };
   }
   if (dtype === 'int4' || dtype === 'uint4') {
     const zp = dtype === 'uint4' || spec.symmetric === false ? 4 : 0;
-    if (qscheme === 'per_group' && group) return { dtype: 'int4', extraBitsPerElem: groupScaleBits(16, zp, group) };
+    if (qscheme === 'per_group' && group)
+      return { dtype: 'int4', extraBitsPerElem: groupScaleBits(16, zp, group) };
     return { dtype: 'int4' };
   }
   if (dtype === 'int8' || dtype === 'uint8') return { dtype: 'int8' };

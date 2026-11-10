@@ -180,7 +180,9 @@ describe('ParallelPanel: decode context parallelism', () => {
     const field = screen.getByRole('spinbutton', { name: 'DCP' });
     expect(field.getAttribute('aria-invalid')).toBe('true');
     expect(
-      screen.getByText('DCP 4 must divide TP ÷ KV heads = 2: only the GPUs holding copies of the same KV head can split it.'),
+      screen.getByText(
+        'DCP 4 must divide TP ÷ KV heads = 2: only the GPUs holding copies of the same KV head can split it.',
+      ),
     ).toBeTruthy();
     expect(screen.getByText('Valid DCP: 1, 2')).toBeTruthy();
   });

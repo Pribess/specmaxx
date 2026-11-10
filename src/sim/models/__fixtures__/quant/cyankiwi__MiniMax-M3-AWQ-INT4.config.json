@@ -1,7 +1,5 @@
 {
-  "architectures": [
-    "MiniMaxM3SparseForConditionalGeneration"
-  ],
+  "architectures": ["MiniMaxM3SparseForConditionalGeneration"],
   "auto_map": {
     "AutoConfig": "configuration_minimax_m3_vl.MiniMaxM3VLConfig"
   },
@@ -27,9 +25,7 @@
         "format": "pack-quantized",
         "input_activations": null,
         "output_activations": null,
-        "targets": [
-          "Linear"
-        ],
+        "targets": ["Linear"],
         "weights": {
           "actorder": null,
           "block_structure": null,
@@ -69,9 +65,7 @@
     "version": "0.1.dev490+gdde82c8"
   },
   "text_config": {
-    "architectures": [
-      "MiniMaxM3SparseForCausalLM"
-    ],
+    "architectures": ["MiniMaxM3SparseForCausalLM"],
     "attention_dropout": 0.0,
     "attention_output_gate": false,
     "bos_token_id": 200034,
@@ -226,7 +220,7 @@
     "pad_token_id": null,
     "partial_rotary_factor": 0.5,
     "qk_norm_type": "per_head",
-    "rms_norm_eps": 1e-06,
+    "rms_norm_eps": 1e-6,
     "rope_parameters": {
       "partial_rotary_factor": 0.5,
       "rope_theta": 5000000,
@@ -264,7 +258,7 @@
     "initializer_factor": 1.0,
     "initializer_range": 0.02,
     "intermediate_size": 5120,
-    "layer_norm_eps": 1e-05,
+    "layer_norm_eps": 1e-5,
     "model_type": "minimax_m3_vl_vision",
     "num_attention_heads": 16,
     "num_channels": 3,

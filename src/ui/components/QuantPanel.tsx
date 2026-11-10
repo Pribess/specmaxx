@@ -188,10 +188,12 @@ export function QuantPanel({ state, dispatch, loaded }: Props) {
           const options = isKv
             ? [
                 { value: '', label: defaultLabel },
-                ...[...KV_MAIN_DTYPES, ...(isKvAdvancedDtype(current) ? [current] : [])].map((d) => ({
-                  value: d,
-                  label: d,
-                })),
+                ...[...KV_MAIN_DTYPES, ...(isKvAdvancedDtype(current) ? [current] : [])].map(
+                  (d) => ({
+                    value: d,
+                    label: d,
+                  }),
+                ),
               ]
             : optionsFor(defaultLabel);
           return (

@@ -110,7 +110,12 @@ function decideClass(probes: Probe[], resolved: Map<Probe, ModuleQuant>): ClassD
       minorityLeaves.set(key, m);
     }
   }
-  return { format: byKey.get(winner) as ModuleQuant, minorityLayers, minorityLeaves, layerCount: byLayer.size };
+  return {
+    format: byKey.get(winner) as ModuleQuant,
+    minorityLayers,
+    minorityLeaves,
+    layerCount: byLayer.size,
+  };
 }
 
 /** Drop `gemmInput` when it equals the activations dtype (that is the default). */
@@ -141,7 +146,9 @@ function splitNotes(cls: ModuleClass, d: ClassDecision): string[] {
     );
   }
   for (const m of d.minorityLeaves.values()) {
-    notes.push(`${cls}: ${m.leaves.join(', ')} ${describeFormat(m.format)} (class uses ${describeFormat(d.format)})`);
+    notes.push(
+      `${cls}: ${m.leaves.join(', ')} ${describeFormat(m.format)} (class uses ${describeFormat(d.format)})`,
+    );
   }
   return notes;
 }
@@ -159,11 +166,17 @@ function unknownIgnoreNotes(reading: SchemeReading, probes: Probe[], numLayers: 
       const layer = /layers\\?\.(\d+)(?!\d)/.exec(raw);
       if (layer && Number(layer[1]) >= numLayers) continue;
       const list = compilePatterns([raw], { regexKeys: label === 'extra_config' });
-      if (list.invalid.length > 0 || !probes.some((p) => firstMatch(list, p) >= 0)) unknown.push(raw);
+      if (list.invalid.length > 0 || !probes.some((p) => firstMatch(list, p) >= 0))
+        unknown.push(raw);
     }
     if (unknown.length > 0) {
-      const examples = unknown.slice(0, 3).map((u) => `'${u}'`).join(', ');
-      notes.push(`${label}: ${unknown.length} entr${unknown.length === 1 ? 'y matches' : 'ies match'} no known module (${examples}); ignored`);
+      const examples = unknown
+        .slice(0, 3)
+        .map((u) => `'${u}'`)
+        .join(', ');
+      notes.push(
+        `${label}: ${unknown.length} entr${unknown.length === 1 ? 'y matches' : 'ies match'} no known module (${examples}); ignored`,
+      );
     }
   }
   return notes;
@@ -197,7 +210,11 @@ export function assemble(reading: SchemeReading, set: ProbeSet, ctx: SchemeConte
   notes.push(...unknownIgnoreNotes(reading, set.probes, set.layout.numLayers));
 
   const hasMoe = set.layout.mlp.includes('moe') && decisions.has('routed_experts');
-  const bulkCls: WeightModule = hasMoe ? 'routed_experts' : decisions.has('dense_mlp') ? 'dense_mlp' : 'attention';
+  const bulkCls: WeightModule = hasMoe
+    ? 'routed_experts'
+    : decisions.has('dense_mlp')
+      ? 'dense_mlp'
+      : 'attention';
   const bulk = decisions.get(bulkCls)?.format ?? ctx.native;
   const quant: QuantConfig = {
     weights: bulk.weights,
@@ -211,9 +228,11 @@ export function assemble(reading: SchemeReading, set: ProbeSet, ctx: SchemeConte
     const d = decisions.get(cls);
     if (!d) continue;
     const parent = WEIGHT_MODULE_FALLBACK[cls];
-    const parentEntry = parent === undefined ? undefined : (modules[parent] ?? decisions.get(parent)?.format);
+    const parentEntry =
+      parent === undefined ? undefined : (modules[parent] ?? decisions.get(parent)?.format);
     const fallback: ModuleQuant =
-      parentEntry ?? (cls === 'residual_mixer' ? moduleFormat(highPrecision) : { weights: quant.weights });
+      parentEntry ??
+      (cls === 'residual_mixer' ? moduleFormat(highPrecision) : { weights: quant.weights });
     if (!sameFormat(d.format, fallback)) modules[cls] = d.format;
   }
   if (Object.keys(modules).length > 0) quant.modules = modules;
@@ -236,5 +255,12 @@ export function assemble(reading: SchemeReading, set: ProbeSet, ctx: SchemeConte
   if (quant.modules) explicit.push('modules');
   if (quant.lookupTables) explicit.push('lookupTables');
 
-  return { quant, scheme: reading.label, source: reading.source, notes, explicit, ...(reading.exl3 ? { exl3: reading.exl3 } : {}) };
+  return {
+    quant,
+    scheme: reading.label,
+    source: reading.source,
+    notes,
+    explicit,
+    ...(reading.exl3 ? { exl3: reading.exl3 } : {}),
+  };
 }

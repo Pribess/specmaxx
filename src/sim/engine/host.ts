@@ -18,7 +18,12 @@ import type { DeviceSpec, HardwareStack, HostMemorySpec, LinkSpec, NvmeSpec } fr
 import type { ModelSpec } from '../ir/model';
 import type { ExpertPlacement, OffloadLowering, TablePlacement } from '../lower/lower';
 import { expertRules, lookupTableRules } from './offloadRules';
-import { DEFAULT_PREFETCH_ACCURACY, hitRatio, resolveQueueDepth, type TransferPath } from './transfer';
+import {
+  DEFAULT_PREFETCH_ACCURACY,
+  hitRatio,
+  resolveQueueDepth,
+  type TransferPath,
+} from './transfer';
 import type { LayerRange, OffloadConfig, OffloadTier } from './types';
 
 /** The resolved placement and the notes it produced. */
@@ -51,12 +56,16 @@ export function resolveOffload(
   if (config === undefined) return { offload: undefined, warnings };
   const onDevice = (tier: OffloadTier): boolean => {
     if (memoryKind === 'unified' && tier === 'host_ram') {
-      warnings.push("offload: on unified memory host RAM is the device memory; the 'host_ram' placement keeps the weights on the device");
+      warnings.push(
+        "offload: on unified memory host RAM is the device memory; the 'host_ram' placement keeps the weights on the device",
+      );
       return true;
     }
     return false;
   };
-  const offload: OffloadLowering = { prefetchAccuracy: config.prefetchAccuracy ?? DEFAULT_PREFETCH_ACCURACY };
+  const offload: OffloadLowering = {
+    prefetchAccuracy: config.prefetchAccuracy ?? DEFAULT_PREFETCH_ACCURACY,
+  };
   const expertPlacements: ExpertPlacement[] = [];
   const skewedRules: { range: LayerRange; f: number }[] = [];
   for (const rule of expertRules(config)) {
@@ -87,7 +96,9 @@ export function resolveOffload(
         (l, i) =>
           i >= range.from &&
           i < range.to &&
-          l.blocks.some((b) => b.kind === 'moe' && f * (b.experts / ep) > 0 && f * (b.experts / ep) < b.topK),
+          l.blocks.some(
+            (b) => b.kind === 'moe' && f * (b.experts / ep) > 0 && f * (b.experts / ep) < b.topK,
+          ),
       ),
     );
     if (thrashing) {
@@ -114,11 +125,15 @@ export function resolveOffload(
     offload.embeddings = { tier: embeddingTier };
   }
   const any =
-    offload.routedExperts !== undefined || offload.lookupTables !== undefined || offload.embeddings !== undefined;
+    offload.routedExperts !== undefined ||
+    offload.lookupTables !== undefined ||
+    offload.embeddings !== undefined;
   if (any && memoryKind === 'unified') {
     offload.hostRamIsDevice = true;
     if (offload.lookupTables?.some((t) => t.scaleLayout === 'pinned_host') === true) {
-      warnings.push('offload: unified memory — pinned table scales stay in the unified pool and count in device memory');
+      warnings.push(
+        'offload: unified memory — pinned table scales stay in the unified pool and count in device memory',
+      );
     }
   }
   return { offload: any ? offload : undefined, warnings: [...new Set(warnings)] };
@@ -167,7 +182,11 @@ export interface ResolvedHost {
  * staging hop of NVMe reads). `host.ssd` absent with an NVMe group → {@link defaultSsdFor}. Each default warns.
  * Validation guarantees a dedicated device has a link, `hostLink`, or a `hostInterface` (docs/simulation-model.md §4).
  */
-export function resolveHost(hardware: HardwareStack, device: DeviceSpec, tiers: Set<OffloadTier>): ResolvedHost {
+export function resolveHost(
+  hardware: HardwareStack,
+  device: DeviceSpec,
+  tiers: Set<OffloadTier>,
+): ResolvedHost {
   const warnings: string[] = [];
   const out: ResolvedHost = { warnings };
   const host = hardware.host;
@@ -176,9 +195,12 @@ export function resolveHost(hardware: HardwareStack, device: DeviceSpec, tiers: 
       out.link = host.link;
     } else {
       const link = deviceHostLink(device);
-      if (link === undefined) throw new Error(`offload: no host link known for ${device.id}; set hardware.host.link`);
+      if (link === undefined)
+        throw new Error(`offload: no host link known for ${device.id}; set hardware.host.link`);
       out.link = link;
-      warnings.push(`offload: no host link given; using ${out.link.name} from ${device.name}'s host interface`);
+      warnings.push(
+        `offload: no host link given; using ${out.link.name} from ${device.name}'s host interface`,
+      );
     }
     if (host?.ram !== undefined) {
       out.ram = host.ram;
@@ -195,7 +217,9 @@ export function resolveHost(hardware: HardwareStack, device: DeviceSpec, tiers: 
       warnings.push(`offload: no SSD given; using ${out.ssd.name}`);
     }
     if (out.ssd.randomRead === undefined) {
-      warnings.push(`offload: no random-read IOPS for ${out.ssd.id}; request rate from latency × queue depth`);
+      warnings.push(
+        `offload: no random-read IOPS for ${out.ssd.id}; request rate from latency × queue depth`,
+      );
     }
   }
   return out;
@@ -231,7 +255,10 @@ export function transferPath(
     path.nvmeSustainedRead = spec.sustainedRead;
   }
   if (host.link !== undefined) {
-    path.link = { latencySec: host.link.latencySec, bandwidthPerDirectionBytesPerSec: host.link.bandwidthPerDirectionBytesPerSec };
+    path.link = {
+      latencySec: host.link.latencySec,
+      bandwidthPerDirectionBytesPerSec: host.link.bandwidthPerDirectionBytesPerSec,
+    };
   }
   if (tier === 'nvme' && host.ram !== undefined) {
     path.hostStagingBandwidthBytesPerSec = host.ram.bandwidthBytesPerSec;

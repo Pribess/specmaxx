@@ -19,7 +19,15 @@
 
 import type { ModuleQuant } from '../../../ir/model';
 import type { Probe, SchemeContext, SchemeReading } from './common';
-import { blockScaleBits, groupScaleBits, moduleFormat, numAt, objAt, strAt, strListAt } from './common';
+import {
+  blockScaleBits,
+  groupScaleBits,
+  moduleFormat,
+  numAt,
+  objAt,
+  strAt,
+  strListAt,
+} from './common';
 import { compileCtGroups, ctKvCache, matchCtGroup } from './compressedTensors';
 import { anyMatch, compilePatterns, firstMatch } from './patterns';
 import { isJsonObject } from '../reader';
@@ -105,7 +113,11 @@ export interface ModeloptOptions {
  * Read a ModelOpt config: a config.json `quantization_config`, or the `quantization` object of
  * `hf_quant_config.json` (pass `hfQuantConfig.quantization`).
  */
-export function readModelopt(q: JsonObject, ctx: SchemeContext, opts: ModeloptOptions = {}): SchemeReading {
+export function readModelopt(
+  q: JsonObject,
+  ctx: SchemeContext,
+  opts: ModeloptOptions = {},
+): SchemeReading {
   const notes: string[] = [];
   const algo = strAt(q, 'quant_algo') ?? 'NVFP4';
   const groupSize = numAt(q, 'group_size');
@@ -137,7 +149,8 @@ export function readModelopt(q: JsonObject, ctx: SchemeContext, opts: ModeloptOp
     for (const f of formats) if (f) algosUsed.add(f.algo);
   } else if (algo.toUpperCase() === 'MIXED_PRECISION' && objAt(q, 'config_groups')) {
     const groups = compileCtGroups(q, ctx, notes, false);
-    resolve = (p) => (anyMatch(ignore, p) ? baseOf(p) : (matchCtGroup(groups, p)?.format ?? baseOf(p)));
+    resolve = (p) =>
+      anyMatch(ignore, p) ? baseOf(p) : (matchCtGroup(groups, p)?.format ?? baseOf(p));
     for (const g of groups) algosUsed.add(g.label);
   } else {
     const f = modeloptAlgoFormat(algo, undefined, groupSize);
@@ -153,8 +166,10 @@ export function readModelopt(q: JsonObject, ctx: SchemeContext, opts: ModeloptOp
   let kvCache = ctKvCache(q.kv_cache_scheme);
   if (typeof kvAlgo === 'string' && kvAlgo.toUpperCase() === 'FP8') kvCache = { dtype: 'fp8_e4m3' };
   if (typeof kvAlgo === 'string' && kvAlgo.toUpperCase() === 'NVFP4') kvCache = { dtype: 'nvfp4' };
-  if (isJsonObject(q.modelopt_quant_config)) notes.push('hf_quant_config modelopt_quant_config.quant_cfg not read (exclude_modules used)');
-  if (base) notes.push(`${base.label}: base format of the modules the ModelOpt export leaves alone`);
+  if (isJsonObject(q.modelopt_quant_config))
+    notes.push('hf_quant_config modelopt_quant_config.quant_cfg not read (exclude_modules used)');
+  if (base)
+    notes.push(`${base.label}: base format of the modules the ModelOpt export leaves alone`);
 
   const mixed = algo.toUpperCase() === 'MIXED_PRECISION' ? ` (${[...algosUsed].join(', ')})` : '';
   return {
@@ -182,12 +197,19 @@ export function readModelopt(q: JsonObject, ctx: SchemeContext, opts: ModeloptOp
  * This is the same schema as a `quant_method: "modelopt"` MIXED_PRECISION export, so it delegates to
  * {@link readModelopt}; a `quant_algo` other than MIXED_PRECISION is read the same way, with a note.
  */
-export function readModeloptMixed(q: JsonObject, ctx: SchemeContext, opts: ModeloptOptions = {}): SchemeReading {
+export function readModeloptMixed(
+  q: JsonObject,
+  ctx: SchemeContext,
+  opts: ModeloptOptions = {},
+): SchemeReading {
   const r = readModelopt(q, ctx, opts);
   const algo = strAt(q, 'quant_algo');
   if (algo?.toUpperCase() === 'MIXED_PRECISION') return r;
   return {
     ...r,
-    notes: [`modelopt_mixed with quant_algo '${algo ?? 'none'}' (expected MIXED_PRECISION); read as ModelOpt`, ...r.notes],
+    notes: [
+      `modelopt_mixed with quant_algo '${algo ?? 'none'}' (expected MIXED_PRECISION); read as ModelOpt`,
+      ...r.notes,
+    ],
   };
 }

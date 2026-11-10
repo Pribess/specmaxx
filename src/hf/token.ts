@@ -22,7 +22,10 @@ export function getHfToken(storage: KeyValueStorage | null = defaultLocalStorage
  * @param token the access token (`hf_...`).
  * @param storage defaults to localStorage.
  */
-export function setHfToken(token: string, storage: KeyValueStorage | null = defaultLocalStorage()): void {
+export function setHfToken(
+  token: string,
+  storage: KeyValueStorage | null = defaultLocalStorage(),
+): void {
   const t = token.trim();
   try {
     if (t) storage?.setItem(HF_TOKEN_KEY, t);

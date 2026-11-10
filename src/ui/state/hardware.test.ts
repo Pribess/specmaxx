@@ -2,15 +2,42 @@ import { describe, expect, it } from 'vitest';
 import { simulate } from '../../sim/engine/simulate';
 import { DEVICE_PRESETS } from '../../sim/hw/presets/index';
 import { POPULAR_SETUPS, composeTopology } from '../../sim/hw/presets/catalog';
-import { LINK_PRESETS, PCIE_4_X16, PCIE_5_X16, SPARK_CONNECTX_7, TB5_RDMA, USB4_HALO_RDMA, NVLINK_4, NVLINK_C2C, XGMI_MI300X_8_GPU, hostPcieLink } from '../../sim/hw/presets/links';
+import {
+  LINK_PRESETS,
+  PCIE_4_X16,
+  PCIE_5_X16,
+  SPARK_CONNECTX_7,
+  TB5_RDMA,
+  USB4_HALO_RDMA,
+  NVLINK_4,
+  NVLINK_C2C,
+  XGMI_MI300X_8_GPU,
+  hostPcieLink,
+} from '../../sim/hw/presets/links';
 import { DEFAULT_HOST_RAM, graceHostRam } from '../../sim/hw/presets/storage';
 import { validateDevice, validateLink, validateTopology } from '../../sim/hw/validate';
 import { REF_DENSE_8B } from '../../sim/models/reference';
 import { SINGLE_DEVICE_HW, type HardwareChoice } from './appState';
 import {
-  EDITED_REASON, UNITS, applyEdits, cablingName, cablingOptions, defaultLinks, editableFields, editableLinkFields,
-  effectiveCabling, findDevice, fromDisplay, matchingPopularSetup, nearestCount, normalizeCabling, popularSetupChoice,
-  resolveDevice, resolveHardware, resolveHost, toDisplay,
+  EDITED_REASON,
+  UNITS,
+  applyEdits,
+  cablingName,
+  cablingOptions,
+  defaultLinks,
+  editableFields,
+  editableLinkFields,
+  effectiveCabling,
+  findDevice,
+  fromDisplay,
+  matchingPopularSetup,
+  nearestCount,
+  normalizeCabling,
+  popularSetupChoice,
+  resolveDevice,
+  resolveHardware,
+  resolveHost,
+  toDisplay,
 } from './hardware';
 import { REFERENCE_QUANT_DEFAULTS } from './quant';
 
@@ -18,20 +45,27 @@ const hw = (over: Partial<HardwareChoice>): HardwareChoice => ({ ...SINGLE_DEVIC
 
 describe('resolveHost', () => {
   const plain = DEVICE_PRESETS.filter((d) => d.hostLink === undefined);
-  it.each(plain.map((d) => [d.id, d] as const))('%s (no hostLink): the desktop RAM default and its PCIe interface, as before', (_id, device) => {
-    for (const devicesPerNode of [1, 8, 72]) {
-      const host = resolveHost({ host: undefined, devicesPerNode }, device);
-      expect(host.ram).toBe(DEFAULT_HOST_RAM);
-      expect(host.ramDefault).toBe(true);
-      expect(host.link).toEqual(
-        device.hostInterface && hostPcieLink(device.hostInterface.generation, device.hostInterface.lanes),
-      );
-      expect(host.linkOverridden).toBe(false);
-      const overridden = resolveHost({ host: { link: { generation: 4, lanes: 8 } }, devicesPerNode }, device);
-      expect(overridden.link).toEqual(hostPcieLink(4, 8));
-      expect(overridden.linkOverridden).toBe(true);
-    }
-  });
+  it.each(plain.map((d) => [d.id, d] as const))(
+    '%s (no hostLink): the desktop RAM default and its PCIe interface, as before',
+    (_id, device) => {
+      for (const devicesPerNode of [1, 8, 72]) {
+        const host = resolveHost({ host: undefined, devicesPerNode }, device);
+        expect(host.ram).toBe(DEFAULT_HOST_RAM);
+        expect(host.ramDefault).toBe(true);
+        expect(host.link).toEqual(
+          device.hostInterface &&
+            hostPcieLink(device.hostInterface.generation, device.hostInterface.lanes),
+        );
+        expect(host.linkOverridden).toBe(false);
+        const overridden = resolveHost(
+          { host: { link: { generation: 4, lanes: 8 } }, devicesPerNode },
+          device,
+        );
+        expect(overridden.link).toEqual(hostPcieLink(4, 8));
+        expect(overridden.linkOverridden).toBe(true);
+      }
+    },
+  );
 
   it('GB200 / GB300: NVLink-C2C and the Grace pool of ceil(GPUs / 2) CPUs by default', () => {
     const gb200 = findDevice('gb200')!;
@@ -41,13 +75,20 @@ describe('resolveHost', () => {
     expect(rack.ram).toEqual(graceHostRam('gb200', 72));
     expect(rack.ram.capacityBytes).toBe(36 * 480e9);
     expect(rack.ram.bandwidthBytesPerSec).toBe(36 * 384e9);
-    expect(resolveHost({ host: undefined, devicesPerNode: 4 }, gb200).ram.capacityBytes).toBe(2 * 480e9);
-    expect(resolveHost({ host: undefined, devicesPerNode: 1 }, gb300).ram).toEqual(graceHostRam('gb300', 1));
+    expect(resolveHost({ host: undefined, devicesPerNode: 4 }, gb200).ram.capacityBytes).toBe(
+      2 * 480e9,
+    );
+    expect(resolveHost({ host: undefined, devicesPerNode: 1 }, gb300).ram).toEqual(
+      graceHostRam('gb300', 1),
+    );
   });
 
   it('GB200: ignores a PCIe override, keeps a picked RAM preset and an edited capacity', () => {
     const gb200 = findDevice('gb200')!;
-    const pcie = resolveHost({ host: { link: { generation: 5, lanes: 16 } }, devicesPerNode: 72 }, gb200);
+    const pcie = resolveHost(
+      { host: { link: { generation: 5, lanes: 16 } }, devicesPerNode: 72 },
+      gb200,
+    );
     expect(pcie.link).toBe(NVLINK_C2C);
     expect(pcie.linkOverridden).toBe(false);
     const picked = resolveHost({ host: { ramId: DEFAULT_HOST_RAM.id }, devicesPerNode: 72 }, gb200);
@@ -60,24 +101,35 @@ describe('resolveHost', () => {
   });
 
   it('GB200 NVL72 with offloading: the engine gets the C2C link and the 36-CPU Grace pool', () => {
-    const stack = resolveHardware(hw({ deviceId: 'gb200', devicesPerNode: 72, nodes: 1 }), true).stack;
+    const stack = resolveHardware(
+      hw({ deviceId: 'gb200', devicesPerNode: 72, nodes: 1 }),
+      true,
+    ).stack;
     expect(stack.host?.link).toBe(NVLINK_C2C);
     expect(stack.host?.ram).toEqual(graceHostRam('gb200', 72));
   });
 });
 
 describe('defaultLinks and topologies', () => {
-  it.each(DEVICE_PRESETS.map((d) => [d.id, d] as const))('%s: default links and node topologies validate', (_id, device) => {
-    const links = defaultLinks(device);
-    if (links.intraNode !== undefined) expect(validateLink(links.intraNode)).toEqual([]);
-    expect(validateLink(links.interNode)).toEqual([]);
-    for (const [devicesPerNode, nodes] of [[1, 1], [2, 1], [1, 2], [4, 2]]) {
-      const r = resolveHardware(hw({ deviceId: device.id, devicesPerNode, nodes }));
-      expect(validateTopology(r.topology)).toEqual([]);
-      expect(r.topology.interNode === undefined).toBe(nodes === 1);
-      if (devicesPerNode === 1) expect(r.topology.intraNode).toBeUndefined();
-    }
-  });
+  it.each(DEVICE_PRESETS.map((d) => [d.id, d] as const))(
+    '%s: default links and node topologies validate',
+    (_id, device) => {
+      const links = defaultLinks(device);
+      if (links.intraNode !== undefined) expect(validateLink(links.intraNode)).toEqual([]);
+      expect(validateLink(links.interNode)).toEqual([]);
+      for (const [devicesPerNode, nodes] of [
+        [1, 1],
+        [2, 1],
+        [1, 2],
+        [4, 2],
+      ]) {
+        const r = resolveHardware(hw({ deviceId: device.id, devicesPerNode, nodes }));
+        expect(validateTopology(r.topology)).toEqual([]);
+        expect(r.topology.interNode === undefined).toBe(nodes === 1);
+        if (devicesPerNode === 1) expect(r.topology.intraNode).toBeUndefined();
+      }
+    },
+  );
 
   it('picks the expected defaults', () => {
     expect(defaultLinks(findDevice('rtx-5090')!).intraNode).toBe(PCIE_5_X16);
@@ -108,10 +160,22 @@ describe('defaultLinks and topologies', () => {
     const ring3 = hw({ deviceId: 'dgx-spark', nodes: 3, cabling: 'ring' });
     expect(effectiveCabling(ring3)).toBe('switched');
     expect(normalizeCabling(ring3).cabling).toBeUndefined();
-    expect(normalizeCabling(hw({ deviceId: 'dgx-spark', nodes: 4, cabling: 'switched' })).cabling).toBeUndefined();
-    expect(normalizeCabling(hw({ deviceId: 'dgx-spark', nodes: 4, cabling: 'ring' })).cabling).toBe('ring');
+    expect(
+      normalizeCabling(hw({ deviceId: 'dgx-spark', nodes: 4, cabling: 'switched' })).cabling,
+    ).toBeUndefined();
+    expect(normalizeCabling(hw({ deviceId: 'dgx-spark', nodes: 4, cabling: 'ring' })).cabling).toBe(
+      'ring',
+    );
     // A link the device's catalog does not list (an older URL) is switched only.
-    expect(cablingOptions(hw({ deviceId: 'ryzen-ai-max-plus-395', nodes: 4, interLinkId: 'infiniband-ndr400-one-nic-per-gpu' }))).toEqual(['switched']);
+    expect(
+      cablingOptions(
+        hw({
+          deviceId: 'ryzen-ai-max-plus-395',
+          nodes: 4,
+          interLinkId: 'infiniband-ndr400-one-nic-per-gpu',
+        }),
+      ),
+    ).toEqual(['switched']);
   });
 
   it('names cablings in plain language, two machines as cables', () => {
@@ -150,20 +214,25 @@ describe('defaultLinks and topologies', () => {
 });
 
 describe('popular setups', () => {
-  it.each(POPULAR_SETUPS.map((p) => [p.id, p] as const))('%s: round-trips through popularSetupChoice and resolves to its topology', (_id, p) => {
-    const choice = popularSetupChoice(p);
-    expect(matchingPopularSetup(choice)).toBe(p);
-    const r = resolveHardware(choice);
-    const expected = composeTopology(p.choice);
-    expect(validateTopology(r.topology)).toEqual([]);
-    expect(r.topology.devicesPerNode).toBe(expected.devicesPerNode);
-    expect(r.topology.nodes).toBe(expected.nodes);
-    expect(r.topology.intraNode).toBe(expected.intraNode);
-    expect(r.topology.interNode).toBe(expected.interNode);
-    expect(r.topology.interNodeFabric).toEqual(expected.interNodeFabric);
-    const device = findDevice(p.choice.deviceId)!;
-    expect(r.memCapacityBytes).toBe(p.choice.memCapacityBytes ?? device.memory.capacityOptionsBytes[0]);
-  });
+  it.each(POPULAR_SETUPS.map((p) => [p.id, p] as const))(
+    '%s: round-trips through popularSetupChoice and resolves to its topology',
+    (_id, p) => {
+      const choice = popularSetupChoice(p);
+      expect(matchingPopularSetup(choice)).toBe(p);
+      const r = resolveHardware(choice);
+      const expected = composeTopology(p.choice);
+      expect(validateTopology(r.topology)).toEqual([]);
+      expect(r.topology.devicesPerNode).toBe(expected.devicesPerNode);
+      expect(r.topology.nodes).toBe(expected.nodes);
+      expect(r.topology.intraNode).toBe(expected.intraNode);
+      expect(r.topology.interNode).toBe(expected.interNode);
+      expect(r.topology.interNodeFabric).toEqual(expected.interNodeFabric);
+      const device = findDevice(p.choice.deviceId)!;
+      expect(r.memCapacityBytes).toBe(
+        p.choice.memCapacityBytes ?? device.memory.capacityOptionsBytes[0],
+      );
+    },
+  );
 
   it('RTX 5090 ×2 sets the device, counts and the PCIe link', () => {
     const p = POPULAR_SETUPS.find((s) => s.id === 'rtx-5090-x2-pcie5')!;
@@ -181,14 +250,18 @@ describe('popular setups', () => {
   });
 
   it('DGX Spark ×4 ring and switch are told apart by the cabling', () => {
-    const sparks = POPULAR_SETUPS.filter((s) => s.choice.deviceId === 'dgx-spark' && s.choice.nodes === 4);
+    const sparks = POPULAR_SETUPS.filter(
+      (s) => s.choice.deviceId === 'dgx-spark' && s.choice.nodes === 4,
+    );
     expect(sparks.length).toBe(2);
     const ring = sparks.find((s) => s.choice.cabling === 'ring')!;
     const other = sparks.find((s) => s !== ring)!;
     expect(matchingPopularSetup(popularSetupChoice(ring))).toBe(ring);
     expect(matchingPopularSetup(popularSetupChoice(other))).toBe(other);
     expect(matchingPopularSetup(hw({ deviceId: 'dgx-spark', nodes: 4 }))).toBe(other);
-    expect(matchingPopularSetup(hw({ deviceId: 'dgx-spark', nodes: 4, cabling: 'ring' }))).toBe(ring);
+    expect(matchingPopularSetup(hw({ deviceId: 'dgx-spark', nodes: 4, cabling: 'ring' }))).toBe(
+      ring,
+    );
   });
 
   it('a default-link choice with the same counts matches; any change matches nothing', () => {
@@ -197,21 +270,32 @@ describe('popular setups', () => {
     expect(matchingPopularSetup(SINGLE_DEVICE_HW)).toBeUndefined();
     const choice = popularSetupChoice(p);
     expect(matchingPopularSetup({ ...choice, devicesPerNode: 3 })).toBeUndefined();
-    expect(matchingPopularSetup({ ...choice, intraLinkId: 'pcie-5-0-x8-host-bounce' })).toBeUndefined();
-    expect(matchingPopularSetup({ ...choice, deviceEdits: { 'memory.bandwidthBytesPerSec': 2e12 } })).toBeUndefined();
+    expect(
+      matchingPopularSetup({ ...choice, intraLinkId: 'pcie-5-0-x8-host-bounce' }),
+    ).toBeUndefined();
+    expect(
+      matchingPopularSetup({ ...choice, deviceEdits: { 'memory.bandwidthBytesPerSec': 2e12 } }),
+    ).toBeUndefined();
     expect(matchingPopularSetup({ ...choice, unlocks: { 'pcie-p2p': 'direct' } })).toBeUndefined();
   });
 });
 
 describe('spec edits', () => {
   it('apply after the unlocks, rename the device and keep it valid', () => {
-    const r = resolveDevice({ deviceId: 'rtx-4090', unlocks: { 'vram-mod': '48gb' }, deviceEdits: { 'memory.capacityOptionsBytes.0': 40e9 } });
+    const r = resolveDevice({
+      deviceId: 'rtx-4090',
+      unlocks: { 'vram-mod': '48gb' },
+      deviceEdits: { 'memory.capacityOptionsBytes.0': 40e9 },
+    });
     expect(r.unlocked.memory.capacityOptionsBytes).toEqual([48e9]);
     expect(r.device.memory.capacityOptionsBytes).toEqual([40e9]);
     expect(r.device.id).toBe('rtx-4090-custom');
     expect(r.device.name).toBe(`${r.base.name} (edited)`);
     expect(r.edited).toBe(true);
-    expect(r.device.estimated).toContainEqual({ field: 'memory.capacityOptionsBytes.0', reason: EDITED_REASON });
+    expect(r.device.estimated).toContainEqual({
+      field: 'memory.capacityOptionsBytes.0',
+      reason: EDITED_REASON,
+    });
     expect(validateDevice(r.device)).toEqual([]);
     expect(r.base.memory.capacityOptionsBytes).toEqual([24e9]); // presets are never mutated
   });
@@ -219,8 +303,13 @@ describe('spec edits', () => {
   it('ignore unknown paths and return the spec itself without edits', () => {
     const device = findDevice('rtx-5090')!;
     expect(applyEdits(device, {}).spec).toBe(device);
-    expect(applyEdits(device, { 'memory.nope': 1 })).toEqual({ spec: device, unknownPaths: ['memory.nope'] });
-    expect(resolveDevice({ deviceId: 'rtx-5090', unlocks: {}, deviceEdits: {} }).edited).toBe(false);
+    expect(applyEdits(device, { 'memory.nope': 1 })).toEqual({
+      spec: device,
+      unknownPaths: ['memory.nope'],
+    });
+    expect(resolveDevice({ deviceId: 'rtx-5090', unlocks: {}, deviceEdits: {} }).edited).toBe(
+      false,
+    );
   });
 
   it('reach simulate: doubling the memory bandwidth doubles the (memory-bound) decode rate', () => {
@@ -240,7 +329,9 @@ describe('spec edits', () => {
   });
 
   it('on links: edited values reach the topology and stay valid', () => {
-    const r = resolveHardware(hw({ devicesPerNode: 2, intraEdits: { bandwidthPerDirectionBytesPerSec: 10e9 } }));
+    const r = resolveHardware(
+      hw({ devicesPerNode: 2, intraEdits: { bandwidthPerDirectionBytesPerSec: 10e9 } }),
+    );
     expect(r.topology.intraNode?.bandwidthPerDirectionBytesPerSec).toBe(10e9);
     expect(r.topology.intraNode?.name).toMatch(/\(edited\)$/);
     expect(r.edited).toBe(true);
@@ -249,17 +340,23 @@ describe('spec edits', () => {
 });
 
 describe('editable fields', () => {
-  it.each(DEVICE_PRESETS.map((d) => [d.id, d] as const))('%s: every editable field has a human label and a unit, never its raw path', (_id, device) => {
-    for (const f of editableFields(device)) {
-      expect(f.label, f.path).not.toBe(f.path);
-      expect(f.unit, f.path).toBeDefined();
-    }
-    expect(editableFields(device).some((f) => f.path.startsWith('hostLink.'))).toBe(false);
-  });
+  it.each(DEVICE_PRESETS.map((d) => [d.id, d] as const))(
+    '%s: every editable field has a human label and a unit, never its raw path',
+    (_id, device) => {
+      for (const f of editableFields(device)) {
+        expect(f.label, f.path).not.toBe(f.path);
+        expect(f.unit, f.path).toBeDefined();
+      }
+      expect(editableFields(device).some((f) => f.path.startsWith('hostLink.'))).toBe(false);
+    },
+  );
 
-  it.each(LINK_PRESETS.map((l) => [l.name, l] as const))('%s: every editable link field has a human label, never its raw path', (_name, link) => {
-    for (const f of editableLinkFields(link)) expect(f.label, f.path).not.toBe(f.path);
-  });
+  it.each(LINK_PRESETS.map((l) => [l.name, l] as const))(
+    '%s: every editable link field has a human label, never its raw path',
+    (_name, link) => {
+      for (const f of editableLinkFields(link)) expect(f.label, f.path).not.toBe(f.path);
+    },
+  );
   it('covers every numeric leaf with a group, a label and a unit', () => {
     for (const device of DEVICE_PRESETS) {
       const fields = editableFields(device);
@@ -270,11 +367,15 @@ describe('editable fields', () => {
     const bw = fields.find((f) => f.path === 'memory.bandwidthBytesPerSec')!;
     expect(bw).toMatchObject({ group: 'memory', unit: UNITS.gbps });
     expect(toDisplay(bw.value, bw.unit)).toBeCloseTo(1792);
-    const bf16 = fields.find((f) => f.group === 'matmul' && f.label === 'bf16, fp32 accumulate, dense');
+    const bf16 = fields.find(
+      (f) => f.group === 'matmul' && f.label === 'bf16, fp32 accumulate, dense',
+    );
     expect(bf16?.unit).toBe(UNITS.tflops);
     expect(fields.some((f) => f.group === 'vector')).toBe(true);
     expect(fields.some((f) => f.group === 'tiling')).toBe(true);
-    expect(editableFields(findDevice('apple-m5-max-40c')!).some((f) => f.label.includes(': '))).toBe(true);
+    expect(
+      editableFields(findDevice('apple-m5-max-40c')!).some((f) => f.label.includes(': ')),
+    ).toBe(true);
   });
 
   it('converts display units exactly for round numbers', () => {
@@ -285,15 +386,24 @@ describe('editable fields', () => {
 
   it('labels link fields', () => {
     const fields = editableLinkFields(PCIE_5_X16);
-    expect(fields.map((f) => f.path).sort()).toEqual(
-      ['bandwidthPerDirectionBytesPerSec', 'hostBounce.extraLatencySec', 'hostBounce.hostMemBandwidthBytesPerSec', 'latencySec'],
-    );
+    expect(fields.map((f) => f.path).sort()).toEqual([
+      'bandwidthPerDirectionBytesPerSec',
+      'hostBounce.extraLatencySec',
+      'hostBounce.hostMemBandwidthBytesPerSec',
+      'latencySec',
+    ]);
     expect(fields.find((f) => f.path === 'latencySec')?.unit).toBe(UNITS.us);
   });
 
   it('labels the multi-port link fields: the cap over all ports and the relay latency', () => {
     const fields = editableLinkFields(SPARK_CONNECTX_7);
-    expect(fields.find((f) => f.path === 'allPortsCapPerDirectionBytesPerSec')).toMatchObject({ label: 'Bandwidth cap, all ports', unit: UNITS.gbps });
-    expect(fields.find((f) => f.path === 'forwardingLatencySec')).toMatchObject({ label: 'Relay latency per hop', unit: UNITS.us });
+    expect(fields.find((f) => f.path === 'allPortsCapPerDirectionBytesPerSec')).toMatchObject({
+      label: 'Bandwidth cap, all ports',
+      unit: UNITS.gbps,
+    });
+    expect(fields.find((f) => f.path === 'forwardingLatencySec')).toMatchObject({
+      label: 'Relay latency per hop',
+      unit: UNITS.us,
+    });
   });
 });

@@ -62,7 +62,12 @@ export type DeviceModifier =
    * entry. Matmul peaks and the SFU rate are unaffected. Example: an FP32 FMA throttled to 1/32 of its issue rate and
    * restored by a driver patch = `{ dtype: 'fp32', factor: 32 }`.
    */
-  | ({ kind: 'vectorScale'; engineId?: string; dtype?: VectorDtype; factor: number } & ModifierProvenance)
+  | ({
+      kind: 'vectorScale';
+      engineId?: string;
+      dtype?: VectorDtype;
+      factor: number;
+    } & ModifierProvenance)
   /**
    * Change the compute-unit count (SMs, CUs) of one engine (default: every engine) to `computeUnits` (an integer
    * ≥ 1), and scale its matmul and vector peaks and SFU rate by the dimensionless ratio computeUnits' / computeUnits
@@ -76,7 +81,11 @@ export type DeviceModifier =
    * width unlock (`lanes: 16`) on different axes combine to Gen2 x16. At least one field; the device must have a
    * `hostInterface`. Units: PCIe generation (integer), electrical lanes (count).
    */
-  | ({ kind: 'hostInterface'; generation?: PcieGeneration; lanes?: PcieLanes } & ModifierProvenance);
+  | ({
+      kind: 'hostInterface';
+      generation?: PcieGeneration;
+      lanes?: PcieLanes;
+    } & ModifierProvenance);
 
 /** One typed partial override of a {@link LinkSpec}. Applied in list order by {@link applyLinkModifiers}. */
 export type LinkModifier =
@@ -160,7 +169,10 @@ function engineSelected(engineId: string | undefined, engine: ComputeEngine): bo
 }
 
 /** True if `peak` matches ALL given filters of a `peakScale` modifier (an omitted filter matches any value). */
-function peakMatches(mod: Extract<DeviceModifier, { kind: 'peakScale' }>, peak: MatmulPeak): boolean {
+function peakMatches(
+  mod: Extract<DeviceModifier, { kind: 'peakScale' }>,
+  peak: MatmulPeak,
+): boolean {
   return (
     (mod.input === undefined || peak.input === mod.input) &&
     (mod.accumulate === undefined || peak.accumulate === mod.accumulate) &&
@@ -172,7 +184,10 @@ function peakMatches(mod: Extract<DeviceModifier, { kind: 'peakScale' }>, peak: 
 function provenanceErrors(mod: ModifierProvenance, label: string): string[] {
   const errors: string[] = [];
   if (mod.note.trim() === '') errors.push(`${label}: note is empty`);
-  if (mod.sources.length === 0 && (mod.estimatedReason === undefined || mod.estimatedReason.trim() === '')) {
+  if (
+    mod.sources.length === 0 &&
+    (mod.estimatedReason === undefined || mod.estimatedReason.trim() === '')
+  ) {
     errors.push(`${label}: needs sources or an estimatedReason (every number must be sourced)`);
   }
   return errors;
@@ -180,7 +195,9 @@ function provenanceErrors(mod: ModifierProvenance, label: string): string[] {
 
 /** Errors for a positive finite number field. */
 function positiveErrors(value: number, label: string): string[] {
-  return Number.isFinite(value) && value > 0 ? [] : [`${label} must be a finite number > 0 (got ${value})`];
+  return Number.isFinite(value) && value > 0
+    ? []
+    : [`${label} must be a finite number > 0 (got ${value})`];
 }
 
 /** True if a `hostInterface` modifier's `generation` is a PCIe generation 1–5 (the values the type allows). */
@@ -205,8 +222,11 @@ export function deviceModifierErrors(spec: DeviceSpec, mod: DeviceModifier): str
   const errors = provenanceErrors(mod, label);
   switch (mod.kind) {
     case 'memoryCapacity':
-      if (mod.capacityOptionsBytes.length === 0) errors.push(`${label}: capacityOptionsBytes is empty`);
-      mod.capacityOptionsBytes.forEach((c, i) => errors.push(...positiveErrors(c, `${label}: capacityOptionsBytes[${i}]`)));
+      if (mod.capacityOptionsBytes.length === 0)
+        errors.push(`${label}: capacityOptionsBytes is empty`);
+      mod.capacityOptionsBytes.forEach((c, i) =>
+        errors.push(...positiveErrors(c, `${label}: capacityOptionsBytes[${i}]`)),
+      );
       break;
     case 'memoryBandwidth':
       errors.push(...positiveErrors(mod.bandwidthBytesPerSec, `${label}: bandwidthBytesPerSec`));
@@ -227,7 +247,10 @@ export function deviceModifierErrors(spec: DeviceSpec, mod: DeviceModifier): str
       if (mod.kind === 'vectorScale') {
         const matched = spec.engines
           .filter((e) => engineSelected(mod.engineId, e))
-          .reduce((count, e) => count + vectorKeysMatching(e.vectorFlopsPerSec, mod.dtype).length, 0);
+          .reduce(
+            (count, e) => count + vectorKeysMatching(e.vectorFlopsPerSec, mod.dtype).length,
+            0,
+          );
         if (matched === 0) errors.push(`${label}: dtype matches no listed vector peak (typo?)`);
       }
       break;
@@ -241,12 +264,15 @@ export function deviceModifierErrors(spec: DeviceSpec, mod: DeviceModifier): str
       }
       break;
     case 'hostInterface':
-      if (spec.hostInterface === undefined) errors.push(`${label}: the device has no hostInterface to change`);
-      if (mod.generation === undefined && mod.lanes === undefined) errors.push(`${label}: give generation, lanes or both`);
+      if (spec.hostInterface === undefined)
+        errors.push(`${label}: the device has no hostInterface to change`);
+      if (mod.generation === undefined && mod.lanes === undefined)
+        errors.push(`${label}: give generation, lanes or both`);
       if (mod.generation !== undefined && !isPcieGeneration(mod.generation)) {
         errors.push(`${label}: generation must be 1, 2, 3, 4 or 5 (got ${mod.generation})`);
       }
-      if (mod.lanes !== undefined && !isPcieLanes(mod.lanes)) errors.push(`${label}: lanes must be 4, 8 or 16 (got ${mod.lanes})`);
+      if (mod.lanes !== undefined && !isPcieLanes(mod.lanes))
+        errors.push(`${label}: lanes must be 4, 8 or 16 (got ${mod.lanes})`);
       break;
     default: {
       const _never: never = mod;
@@ -270,8 +296,17 @@ export function linkModifierErrors(link: LinkSpec, mod: LinkModifier): string[] 
         if (mod.hostBounce === undefined) {
           errors.push(`${label}: p2p 'host_bounce' requires hostBounce`);
         } else {
-          errors.push(...positiveErrors(mod.hostBounce.hostMemBandwidthBytesPerSec, `${label}: hostBounce.hostMemBandwidthBytesPerSec`));
-          if (!(Number.isFinite(mod.hostBounce.extraLatencySec) && mod.hostBounce.extraLatencySec >= 0)) {
+          errors.push(
+            ...positiveErrors(
+              mod.hostBounce.hostMemBandwidthBytesPerSec,
+              `${label}: hostBounce.hostMemBandwidthBytesPerSec`,
+            ),
+          );
+          if (
+            !(
+              Number.isFinite(mod.hostBounce.extraLatencySec) && mod.hostBounce.extraLatencySec >= 0
+            )
+          ) {
             errors.push(`${label}: hostBounce.extraLatencySec must be finite and ≥ 0`);
           }
         }
@@ -280,7 +315,12 @@ export function linkModifierErrors(link: LinkSpec, mod: LinkModifier): string[] 
       }
       break;
     case 'linkBandwidth':
-      errors.push(...positiveErrors(mod.bandwidthPerDirectionBytesPerSec, `${label}: bandwidthPerDirectionBytesPerSec`));
+      errors.push(
+        ...positiveErrors(
+          mod.bandwidthPerDirectionBytesPerSec,
+          `${label}: bandwidthPerDirectionBytesPerSec`,
+        ),
+      );
       break;
     default: {
       const _never: never = mod;
@@ -298,7 +338,9 @@ export function describeDeviceModifier(mod: DeviceModifier): string {
     case 'memoryBandwidth':
       return `variant: memoryBandwidth ${mod.bandwidthBytesPerSec / 1e9} GB/s (${mod.note})`;
     case 'peakScale': {
-      const filter = [mod.engineId, mod.input, mod.accumulate, mod.sparsity].filter((x) => x !== undefined).join('/');
+      const filter = [mod.engineId, mod.input, mod.accumulate, mod.sparsity]
+        .filter((x) => x !== undefined)
+        .join('/');
       return `variant: peakScale ${filter === '' ? 'all' : filter} ×${mod.factor} (${mod.note})`;
     }
     case 'clockScale':
@@ -348,18 +390,26 @@ function deviceModifierPaths(spec: DeviceSpec, mod: DeviceModifier): string[] {
     case 'memoryBandwidth':
       return ['memory.bandwidthBytesPerSec'];
     case 'peakScale':
-      return spec.engines.flatMap((e, i) => (engineSelected(mod.engineId, e) ? [`engines.${i}.matmulPeaks`] : []));
+      return spec.engines.flatMap((e, i) =>
+        engineSelected(mod.engineId, e) ? [`engines.${i}.matmulPeaks`] : [],
+      );
     case 'clockScale':
-      return spec.engines.flatMap((e, i) => (engineSelected(mod.engineId, e) ? enginePeakPaths(e, i) : []));
+      return spec.engines.flatMap((e, i) =>
+        engineSelected(mod.engineId, e) ? enginePeakPaths(e, i) : [],
+      );
     case 'vectorScale':
       return spec.engines.flatMap((e, i) =>
         engineSelected(mod.engineId, e)
-          ? vectorKeysMatching(e.vectorFlopsPerSec, mod.dtype).map((k) => `engines.${i}.vectorFlopsPerSec.${k}`)
+          ? vectorKeysMatching(e.vectorFlopsPerSec, mod.dtype).map(
+              (k) => `engines.${i}.vectorFlopsPerSec.${k}`,
+            )
           : [],
       );
     case 'computeUnits':
       return spec.engines.flatMap((e, i) =>
-        engineSelected(mod.engineId, e) ? [`engines.${i}.computeUnits`, ...enginePeakPaths(e, i)] : [],
+        engineSelected(mod.engineId, e)
+          ? [`engines.${i}.computeUnits`, ...enginePeakPaths(e, i)]
+          : [],
       );
     case 'hostInterface':
       return [
@@ -374,8 +424,13 @@ function deviceModifierPaths(spec: DeviceSpec, mod: DeviceModifier): string[] {
 }
 
 /** The vector-peak dtypes of `v` a modifier's optional `dtype` filter selects (omitted = every listed dtype). */
-function vectorKeysMatching(v: ComputeEngine['vectorFlopsPerSec'], dtype: VectorDtype | undefined): VectorDtype[] {
-  return (Object.keys(v) as VectorDtype[]).filter((k) => v[k] !== undefined && (dtype === undefined || k === dtype));
+function vectorKeysMatching(
+  v: ComputeEngine['vectorFlopsPerSec'],
+  dtype: VectorDtype | undefined,
+): VectorDtype[] {
+  return (Object.keys(v) as VectorDtype[]).filter(
+    (k) => v[k] !== undefined && (dtype === undefined || k === dtype),
+  );
 }
 
 /** `v` with the entries {@link vectorKeysMatching} `dtype` multiplied by the dimensionless `factor`. Unit: FLOP/s. */
@@ -411,9 +466,15 @@ function enginePeakPaths(e: ComputeEngine, i: number): string[] {
 function applyOneDeviceModifier(spec: DeviceSpec, mod: DeviceModifier): DeviceSpec {
   switch (mod.kind) {
     case 'memoryCapacity':
-      return { ...spec, memory: { ...spec.memory, capacityOptionsBytes: [...mod.capacityOptionsBytes] } };
+      return {
+        ...spec,
+        memory: { ...spec.memory, capacityOptionsBytes: [...mod.capacityOptionsBytes] },
+      };
     case 'memoryBandwidth':
-      return { ...spec, memory: { ...spec.memory, bandwidthBytesPerSec: mod.bandwidthBytesPerSec } };
+      return {
+        ...spec,
+        memory: { ...spec.memory, bandwidthBytesPerSec: mod.bandwidthBytesPerSec },
+      };
     case 'peakScale':
       // Formula: peak' = peak · factor   for every peak matching all filters
       // See docs/simulation-model.md §4 ("Device variants and modifiers")
@@ -435,7 +496,9 @@ function applyOneDeviceModifier(spec: DeviceSpec, mod: DeviceModifier): DeviceSp
       // See docs/simulation-model.md §4 ("Device variants and modifiers")
       return {
         ...spec,
-        engines: spec.engines.map((e) => (engineSelected(mod.engineId, e) ? scaleEngineRates(e, mod.factor) : e)),
+        engines: spec.engines.map((e) =>
+          engineSelected(mod.engineId, e) ? scaleEngineRates(e, mod.factor) : e,
+        ),
       };
     case 'vectorScale':
       // Formula: vector' = vector · factor   for the matching vector peaks of the selected engines
@@ -444,7 +507,10 @@ function applyOneDeviceModifier(spec: DeviceSpec, mod: DeviceModifier): DeviceSp
         ...spec,
         engines: spec.engines.map((e) =>
           engineSelected(mod.engineId, e)
-            ? { ...e, vectorFlopsPerSec: scaleVectorPeaks(e.vectorFlopsPerSec, mod.factor, mod.dtype) }
+            ? {
+                ...e,
+                vectorFlopsPerSec: scaleVectorPeaks(e.vectorFlopsPerSec, mod.factor, mod.dtype),
+              }
             : e,
         ),
       };
@@ -479,11 +545,16 @@ function applyOneDeviceModifier(spec: DeviceSpec, mod: DeviceModifier): DeviceSp
 }
 
 /** Provenance entries of a modifier: its sources as given, and its estimatedReason on each covered path. */
-function provenanceOf(mod: ModifierProvenance, paths: string[]): { sources: SourceRef[]; estimated: EstimatedField[] } {
+function provenanceOf(
+  mod: ModifierProvenance,
+  paths: string[],
+): { sources: SourceRef[]; estimated: EstimatedField[] } {
   return {
     sources: copySources(mod.sources),
     estimated:
-      mod.estimatedReason !== undefined ? paths.map((field) => ({ field, reason: `${mod.note}: ${mod.estimatedReason}` })) : [],
+      mod.estimatedReason !== undefined
+        ? paths.map((field) => ({ field, reason: `${mod.note}: ${mod.estimatedReason}` }))
+        : [],
   };
 }
 

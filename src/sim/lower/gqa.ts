@@ -22,7 +22,15 @@ import {
   stepTokens,
   tpAllReduce,
 } from './common';
-import { dcpActive, dcpDegree, dcpGatherQ, dcpKvTokens, dcpReduceOut, dcpShardAttention, dcpShardsBlock } from './dcp';
+import {
+  dcpActive,
+  dcpDegree,
+  dcpGatherQ,
+  dcpKvTokens,
+  dcpReduceOut,
+  dcpShardAttention,
+  dcpShardsBlock,
+} from './dcp';
 import { indexerSelection, lowerSparseSelection, sparseSelectionStateBytes } from './indexer';
 import type { LoweringContext } from './lower';
 
@@ -31,7 +39,8 @@ function gqaSelection(block: GqaAttentionBlock): KvSelection {
   if (block.slidingWindow !== undefined && block.sparse !== undefined) {
     throw new Error(`${block.name}: slidingWindow and sparse are mutually exclusive`);
   }
-  if (block.slidingWindow !== undefined) return { kind: 'window', windowTokens: block.slidingWindow };
+  if (block.slidingWindow !== undefined)
+    return { kind: 'window', windowTokens: block.slidingWindow };
   if (block.sparse !== undefined) return indexerSelection(block.sparse);
   return { kind: 'full' };
 }
@@ -58,19 +67,35 @@ export function lowerGqa(block: GqaAttentionBlock, ctx: LoweringContext): Op[] {
   // Formula: qkv_proj: m = T, n = (Hl·(gate ? 2 : 1) + 2·KVl)·hd, k = h
   // See docs/simulation-model.md §5 "TP sharding"
   const qkvN = (Hl * (block.outputGate ? 2 : 1) + 2 * KVl) * hd;
-  ops.push(linearGemm('attn.qkv_proj', { m: T, n: qkvN, k: h }, ctx, { module: 'attention', bias: block.qkvBias, outParts: [Hl * (block.outputGate ? 2 : 1) * hd, KVl * hd, KVl * hd] }));
+  ops.push(
+    linearGemm('attn.qkv_proj', { m: T, n: qkvN, k: h }, ctx, {
+      module: 'attention',
+      bias: block.qkvBias,
+      outParts: [Hl * (block.outputGate ? 2 : 1) * hd, KVl * hd, KVl * hd],
+    }),
+  );
 
   if (block.kvConvKernel !== undefined) {
     // Formula: kv_conv: causal_conv1d + residual over T·2·KVl·hd (K and V; 2·K + 1 FLOP/elem), state (K−1)·2·KVl·hd
     // See docs/simulation-model.md §5 "Short convs"
-    ops.push(causalConvOp('attn.kv_conv', T, 2 * KVl * hd, { kernel: block.kvConvKernel, residual: true }, ctx));
+    ops.push(
+      causalConvOp(
+        'attn.kv_conv',
+        T,
+        2 * KVl * hd,
+        { kernel: block.kvConvKernel, residual: true },
+        ctx,
+      ),
+    );
   }
   const rb = block.relativeBias;
   if (rb !== undefined) {
     // Formula: rel_proj: m = T, n = Hl·relDim, k = h; rel_table: m = T·Hl, n = extent, k = relDim (weights in hp)
     // The bias gather and add inside the attention kernel are vector work, excluded like softmax (§9).
     // See docs/simulation-model.md §5 "Relative-position bias"
-    ops.push(linearGemm('attn.rel_proj', { m: T, n: Hl * rb.relDim, k: h }, ctx, { module: 'attention' }));
+    ops.push(
+      linearGemm('attn.rel_proj', { m: T, n: Hl * rb.relDim, k: h }, ctx, { module: 'attention' }),
+    );
     ops.push(
       linearGemm('attn.rel_table', { m: T * Hl, n: rb.extentTokens, k: rb.relDim }, ctx, {
         format: { weights: { dtype: highPrecision(ctx) } },
@@ -145,14 +170,23 @@ export function lowerGqa(block: GqaAttentionBlock, ctx: LoweringContext): Op[] {
       elementwise(
         'attn.output_gate',
         'sigmoid_mul',
-        { elems: gateElems, activationReadBytes: 2 * gateElems * act, activationWriteBytes: gateElems * act },
+        {
+          elems: gateElems,
+          activationReadBytes: 2 * gateElems * act,
+          activationWriteBytes: gateElems * act,
+        },
         ctx,
       ),
     );
   }
 
   // Formula: o_proj: m = T, n = h, k = Hl·hd
-  ops.push(linearGemm('attn.o_proj', { m: T, n: h, k: Hl * hd }, ctx, { module: 'attention', bias: block.outBias }));
+  ops.push(
+    linearGemm('attn.o_proj', { m: T, n: h, k: Hl * hd }, ctx, {
+      module: 'attention',
+      bias: block.outBias,
+    }),
+  );
   ops.push(...tpAllReduce('attn.tp_all_reduce', T, h, ctx));
   return ops;
 }
@@ -163,16 +197,24 @@ export function lowerGqa(block: GqaAttentionBlock, ctx: LoweringContext): Op[] {
  * (d > 1) this rank's `ceil(ctx/d)` tokens; a sparse block adds the owned indexer key cache, and K/V convs
  * their rolling state. Unit: bytes.
  */
-export function gqaSequenceStateBytes(block: GqaAttentionBlock, ctx: LoweringContext, contextTokens: number): number {
+export function gqaSequenceStateBytes(
+  block: GqaAttentionBlock,
+  ctx: LoweringContext,
+  contextTokens: number,
+): number {
   const KVl = shardKvHeads(block.kvHeads, ctx.parallel.tp, `${block.name} kvHeads`);
-  const fullTokens = dcpShardsBlock(block, ctx) ? dcpKvTokens(contextTokens, dcpDegree(ctx)) : contextTokens;
-  const cachedTokens = block.slidingWindow === undefined ? fullTokens : Math.min(contextTokens, block.slidingWindow);
+  const fullTokens = dcpShardsBlock(block, ctx)
+    ? dcpKvTokens(contextTokens, dcpDegree(ctx))
+    : contextTokens;
+  const cachedTokens =
+    block.slidingWindow === undefined ? fullTokens : Math.min(contextTokens, block.slidingWindow);
   // Formula: S = N·2·KVl·hd·bpe(kv) [+ ceil(ctx/p)·hd_I·bpe(key) if it owns indexer keys]
   //            [+ (K−1)·2·KVl·hd·bpe(act) with kvConvKernel],
   //          N = min(ctx, W) (window), ceil(ctx/d) (full attention under DCP), else ctx
   // See docs/simulation-model.md §8 "Memory fit", §5 "Decode context parallelism (DCP)"
   const kvBytes = cachedTokens * 2 * KVl * block.headDim * bytesPerElement(ctx.quant.kvCache);
-  const indexerBytes = block.sparse === undefined ? 0 : sparseSelectionStateBytes(block.sparse, ctx, contextTokens);
+  const indexerBytes =
+    block.sparse === undefined ? 0 : sparseSelectionStateBytes(block.sparse, ctx, contextTokens);
   const convBytes =
     block.kvConvKernel === undefined
       ? 0

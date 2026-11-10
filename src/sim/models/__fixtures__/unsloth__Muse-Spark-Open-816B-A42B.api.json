@@ -22,9 +22,7 @@
     "region:us"
   ],
   "cardData": {
-    "base_model": [
-      "meta-models/Muse-Spark-Open-816B-A42B"
-    ]
+    "base_model": ["meta-models/Muse-Spark-Open-816B-A42B"]
   },
   "safetensors": {
     "parameters": {

@@ -5,5 +5,7 @@ import './style.css';
 import { AboutPage } from './AboutPage';
 
 createRoot(document.getElementById('root')!).render(
-  <StrictMode><AboutPage /></StrictMode>,
+  <StrictMode>
+    <AboutPage />
+  </StrictMode>,
 );

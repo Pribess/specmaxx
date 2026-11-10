@@ -9,7 +9,13 @@
 import type { DeviceModifier, LinkModifier } from './modifiers';
 
 /** What an unlock axis changes (informational; drives grouping in the UI). */
-export type UnlockAxisKind = 'vram' | 'memoryClock' | 'tensorRate' | 'interconnect' | 'powerClock' | 'other';
+export type UnlockAxisKind =
+  | 'vram'
+  | 'memoryClock'
+  | 'tensorRate'
+  | 'interconnect'
+  | 'powerClock'
+  | 'other';
 
 /** One choice on an {@link UnlockAxis}. */
 export interface UnlockOption {
@@ -65,7 +71,8 @@ export function resolveUnlocks(axes: UnlockAxis[], selection: UnlockSelection): 
     const optionId = selection[axis.id];
     if (optionId === undefined) continue;
     const option = axis.options.find((o) => o.id === optionId);
-    if (option === undefined) throw new Error(`unknown option '${optionId}' on unlock axis '${axis.id}'`);
+    if (option === undefined)
+      throw new Error(`unknown option '${optionId}' on unlock axis '${axis.id}'`);
     deviceModifiers.push(...option.deviceModifiers);
     intraNodeLinkModifiers.push(...(option.intraNodeLinkModifiers ?? []));
   }
@@ -99,7 +106,8 @@ export function unlockAxesErrors(axes: UnlockAxis[]): string[] {
     if (axis.options.length === 0) errors.push(`unlock axis '${axis.id}' has no options`);
     const optionIds = new Set<string>();
     for (const o of axis.options) {
-      if (optionIds.has(o.id)) errors.push(`unlock axis '${axis.id}': duplicate option id '${o.id}'`);
+      if (optionIds.has(o.id))
+        errors.push(`unlock axis '${axis.id}': duplicate option id '${o.id}'`);
       optionIds.add(o.id);
       if (o.deviceModifiers.length === 0 && (o.intraNodeLinkModifiers ?? []).length === 0) {
         errors.push(`unlock axis '${axis.id}' option '${o.id}' has no modifiers`);

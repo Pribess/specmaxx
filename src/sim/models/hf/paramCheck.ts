@@ -52,7 +52,11 @@ export function checkParams(
 
   const st = api?.safetensors;
   if (!st || !Number.isFinite(st.total) || st.total <= 0) {
-    return { status: 'unavailable', actual, note: 'the repo publishes no safetensors parameter totals' };
+    return {
+      status: 'unavailable',
+      actual,
+      note: 'the repo publishes no safetensors parameter totals',
+    };
   }
   const expected = st.total;
   // Formula: relError = (actual − expected) / expected
@@ -74,7 +78,10 @@ export function checkParams(
   if (packedKey || packedI8) {
     const base = api?.cardData?.base_model;
     const baseList = base === undefined ? [] : Array.isArray(base) ? base : [base];
-    const baseHint = baseList.length > 0 ? `compare against the base model (${baseList.join(', ')}) instead` : 'compare against the unquantized base model instead';
+    const baseHint =
+      baseList.length > 0
+        ? `compare against the base model (${baseList.join(', ')}) instead`
+        : 'compare against the unquantized base model instead';
     return {
       status: 'packed',
       expected,
@@ -85,7 +92,10 @@ export function checkParams(
   }
 
   // Formula: sum = Σ_dtype parameters[dtype]; use it when (sum − total) / total > PARAM_SUM_TOLERANCE
-  const sum = Object.values(st.parameters ?? {}).reduce((a, n) => a + (Number.isFinite(n) ? n : 0), 0);
+  const sum = Object.values(st.parameters ?? {}).reduce(
+    (a, n) => a + (Number.isFinite(n) ? n : 0),
+    0,
+  );
   if ((sum - st.total) / st.total > PARAM_SUM_TOLERANCE) {
     const sumRelError = (actual - sum) / sum;
     const sumPct = (sumRelError * 100).toFixed(2);
@@ -93,7 +103,13 @@ export function checkParams(
       `safetensors.total (${st.total}) differs from the per-dtype sum (${sum}; the index's total_parameters can ` +
       'leave out MTP); checked against the sum';
     if (Math.abs(sumRelError) <= PARAM_CHECK_TOLERANCE) {
-      return { status: 'ok', expected: sum, actual, relError: sumRelError, note: `IR + excluded parts match (${sumPct}%); ${why}` };
+      return {
+        status: 'ok',
+        expected: sum,
+        actual,
+        relError: sumRelError,
+        note: `IR + excluded parts match (${sumPct}%); ${why}`,
+      };
     }
     return {
       status: 'mismatch',
@@ -132,7 +148,10 @@ function posNum(o: JsonObject, ...keys: string[]): number | undefined {
  * shortlist model); families that know their tower better may compute their own. Returns 0 when the config
  * lacks a width or a depth.
  */
-export function estimateVisionParams(visionConfig: JsonObject | undefined, textHidden?: number): number {
+export function estimateVisionParams(
+  visionConfig: JsonObject | undefined,
+  textHidden?: number,
+): number {
   if (!visionConfig) return 0;
   const depth = posNum(visionConfig, 'depth', 'num_hidden_layers', 'n_layers');
   const d = posNum(visionConfig, 'hidden_size', 'embed_dim');

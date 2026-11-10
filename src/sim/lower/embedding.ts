@@ -90,7 +90,9 @@ export function lowerEmbedding(model: ModelSpec, ctx: LoweringContext): Op[] {
  */
 export function embeddingShardBytes(model: ModelSpec, ctx: LoweringContext): number {
   // Formula: W_emb = ceil(vocab/tp)·h·bpe(emb)
-  return Math.ceil(model.vocab / ctx.parallel.tp) * model.hidden * bytesPerElement(embeddingFormat(ctx));
+  return (
+    Math.ceil(model.vocab / ctx.parallel.tp) * model.hidden * bytesPerElement(embeddingFormat(ctx))
+  );
 }
 
 /**

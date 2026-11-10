@@ -37,7 +37,14 @@ describe('mistral_large4: Mistral Large 4', () => {
 
   it('reads MLA without q-LoRA, ignoring head_dim 64 and num_key_value_heads', () => {
     expect(m.layers).toHaveLength(72);
-    expect(mlaOf(m.layers[0])).toMatchObject({ heads: 64, qLoraRank: 0, kvLoraRank: 512, qkNopeDim: 64, qkRopeDim: 64, vHeadDim: 128 });
+    expect(mlaOf(m.layers[0])).toMatchObject({
+      heads: 64,
+      qLoraRank: 0,
+      kvLoraRank: 512,
+      qkNopeDim: 64,
+      qkRopeDim: 64,
+      vHeadDim: 128,
+    });
   });
 
   it('makes every no_rope_layers[i] == 0 layer NoPE with the RoPE slice folded into the nope dims', () => {
@@ -51,7 +58,9 @@ describe('mistral_large4: Mistral Large 4', () => {
     const reuse = m.layers.filter((l) => mlaOf(l).sparse?.kind === 'reuse');
     expect(reuse).toHaveLength(28);
     expect(mlaOf(m.layers[17]).sparse).toEqual({ kind: 'reuse', topK: 2048 });
-    const consumers = m.layers.flatMap((l, i) => (mlaOf(l).kvCacheFromLayer !== undefined ? [i] : []));
+    const consumers = m.layers.flatMap((l, i) =>
+      mlaOf(l).kvCacheFromLayer !== undefined ? [i] : [],
+    );
     expect(consumers).toEqual([39, 43, 47, 51, 55, 59, 63, 67, 71]);
     expect(consumers.every((i) => mlaOf(m.layers[i]).kvCacheFromLayer === 35)).toBe(true);
     // A KV consumer keeps its own indexer (indexer_types[39] is 'full').
@@ -60,9 +69,17 @@ describe('mistral_large4: Mistral Large 4', () => {
 
   it('has 1 dense FFN layer and 71 MoE layers with a shared expert of moe_intermediate_size', () => {
     expect(m.layers[0].blocks.find((x) => x.kind === 'mlp')).toMatchObject({ intermediate: 24576 });
-    const moe = m.layers.map((l) => l.blocks.find((x) => x.kind === 'moe')).filter((x) => x !== undefined);
+    const moe = m.layers
+      .map((l) => l.blocks.find((x) => x.kind === 'moe'))
+      .filter((x) => x !== undefined);
     expect(moe).toHaveLength(71);
-    expect(moe[0]).toMatchObject({ experts: 128, topK: 4, expertIntermediate: 6144, sharedExperts: 1, sharedIntermediate: 6144 });
+    expect(moe[0]).toMatchObject({
+      experts: 128,
+      topK: 4,
+      expertIntermediate: 6144,
+      sharedExperts: 1,
+      sharedIntermediate: 6144,
+    });
   });
 
   it('falls back to no_rope_layer_interval and an identity kv_source_layers', () => {
@@ -93,7 +110,7 @@ describe('mistral_large4: Mistral Large 4', () => {
 
   it('estimates the DSpark draft from params.json; the param check is unavailable', () => {
     expect(Math.abs(b.mtpParamsEstimate / 2_099_969_024 - 1)).toBeLessThan(0.01);
-    expect(Math.abs(b.visionParamsEstimate / 1.70e9 - 1)).toBeLessThan(0.05);
+    expect(Math.abs(b.visionParamsEstimate / 1.7e9 - 1)).toBeLessThan(0.05);
     expect(checkParams(m, b, fixtureRepoFiles(ID).api).status).toBe('unavailable');
   });
 

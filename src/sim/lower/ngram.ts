@@ -14,7 +14,16 @@ import { bytesPerElement, DTYPE_INFO, type TensorFormat } from '../ir/dtype';
 import { opBytes } from '../ir/metrics';
 import type { NgramEmbeddingBlock } from '../ir/model';
 import type { EmbeddingOp, Op, TransferOp } from '../ir/ops';
-import { actBpe, causalConvOp, convStateTokens, elementwise, hpBpe, linearGemm, stepTokens, tpAllReduce } from './common';
+import {
+  actBpe,
+  causalConvOp,
+  convStateTokens,
+  elementwise,
+  hpBpe,
+  linearGemm,
+  stepTokens,
+  tpAllReduce,
+} from './common';
 import { embeddingFormat } from './embedding';
 import type { LoweringContext, TablePlacement } from './lower';
 import { prefetchedFraction, tablePlacementAt } from './offload';
@@ -30,11 +39,15 @@ export function lookupTableFormat(ctx: LoweringContext): TensorFormat {
  * `rowBytes = d·bpe(format) = valueBytes + scaleBytes` (Engram mxfp8 d 256: 256 + 8 = 264 B; PLE bf16 d 160: 320 + 0).
  * Unit: bytes.
  */
-export function tableRowBytes(format: TensorFormat, d: number): { valueBytes: number; scaleBytes: number; rowBytes: number } {
+export function tableRowBytes(
+  format: TensorFormat,
+  d: number,
+): { valueBytes: number; scaleBytes: number; rowBytes: number } {
   const info = DTYPE_INFO[format.dtype];
   // Formula: valueBytes = d·(valueBits + extraBits)/8;  scaleBytes = d·blockScaleBits/8;  rowBytes = d·bpe
   // See docs/simulation-model.md §12 ("n-gram tables off-device")
-  const valueBytes = (d * ((format.valueBitsPerElem ?? info.elementBits) + (format.extraBitsPerElem ?? 0))) / 8;
+  const valueBytes =
+    (d * ((format.valueBitsPerElem ?? info.elementBits) + (format.extraBitsPerElem ?? 0))) / 8;
   const scaleBytes = (d * info.blockScaleBitsPerElem) / 8;
   return { valueBytes, scaleBytes, rowBytes: d * bytesPerElement(format) };
 }
@@ -91,7 +104,9 @@ export function tableFetchOp(
     source: placement.tier,
     reads: tableRowReads(rows, format, block.rowDim, placement.scaleLayout),
     usefulBytes: rows * rowBytes,
-    prefetchedFraction: prefetchedFraction(ctx.offload?.prefetchAccuracy ?? 0, { group: 'lookup_table' }),
+    prefetchedFraction: prefetchedFraction(ctx.offload?.prefetchAccuracy ?? 0, {
+      group: 'lookup_table',
+    }),
   };
 }
 
@@ -101,7 +116,11 @@ export function tableFetchOp(
  * projection outputs and the stream, writes the stream; carries the `vectorParams` weights) → [dilated causal conv
  * over T·O].
  */
-export function lowerNgram(block: NgramEmbeddingBlock, ctx: LoweringContext, layerIndex?: number): Op[] {
+export function lowerNgram(
+  block: NgramEmbeddingBlock,
+  ctx: LoweringContext,
+  layerIndex?: number,
+): Op[] {
   const T = stepTokens(ctx);
   const g = block.rowsPerToken;
   const d = block.rowDim;
@@ -127,7 +146,11 @@ export function lowerNgram(block: NgramEmbeddingBlock, ctx: LoweringContext, lay
   ops.push(gather, ...tpAllReduce(`${block.name}.tp_all_reduce`, T * g, d, ctx));
   let projectedElems = 0;
   for (const p of block.projections) {
-    ops.push(linearGemm(`${block.name}.${p.name}`, { m: T, n: p.outputDim, k: p.inputDim }, ctx, { module: 'ngram' }));
+    ops.push(
+      linearGemm(`${block.name}.${p.name}`, { m: T, n: p.outputDim, k: p.inputDim }, ctx, {
+        module: 'ngram',
+      }),
+    );
     projectedElems += T * p.outputDim;
   }
   // Formula: ngram_gate over T·O: read Σ T·out (projections) + T·O (stream), write T·O
@@ -153,7 +176,11 @@ export function lowerNgram(block: NgramEmbeddingBlock, ctx: LoweringContext, lay
  */
 export function ngramTableShardBytes(block: NgramEmbeddingBlock, ctx: LoweringContext): number {
   // Formula: W_table = ceil(rows/tp)·d·bpe(lookup)
-  return Math.ceil(block.tableRows / ctx.parallel.tp) * block.rowDim * bytesPerElement(lookupTableFormat(ctx));
+  return (
+    Math.ceil(block.tableRows / ctx.parallel.tp) *
+    block.rowDim *
+    bytesPerElement(lookupTableFormat(ctx))
+  );
 }
 
 /**
@@ -175,7 +202,11 @@ export function pinnedScaleBytes(block: NgramEmbeddingBlock, ctx: LoweringContex
  * (`offload.hostRamIsDevice`) with `scaleLayout 'pinned_host'`, the scales: host RAM is the device pool there, so the
  * pinned scales are device bytes, not a tier. Unit: bytes.
  */
-export function ngramResidentWeightBytes(block: NgramEmbeddingBlock, ctx: LoweringContext, layerIndex?: number): number {
+export function ngramResidentWeightBytes(
+  block: NgramEmbeddingBlock,
+  ctx: LoweringContext,
+  layerIndex?: number,
+): number {
   const oneToken: LoweringContext = { ...ctx, phase: 'decode', seqs: 1, qLen: 1, kvLen: 2 };
   const nonTable = lowerNgram(block, oneToken)
     .filter((op) => op.kind !== 'embedding')
@@ -186,7 +217,8 @@ export function ngramResidentWeightBytes(block: NgramEmbeddingBlock, ctx: Loweri
   // See docs/simulation-model.md §8 "Memory fit", §12 ("Memory tiers")
   const placement = tablePlacementAt(ctx, layerIndex);
   if (placement !== undefined) {
-    const scalesOnDevice = placement.scaleLayout === 'pinned_host' && ctx.offload?.hostRamIsDevice === true;
+    const scalesOnDevice =
+      placement.scaleLayout === 'pinned_host' && ctx.offload?.hostRamIsDevice === true;
     return scalesOnDevice ? nonTable + pinnedScaleBytes(block, ctx) : nonTable;
   }
   const table = ngramTableShardBytes(block, ctx);

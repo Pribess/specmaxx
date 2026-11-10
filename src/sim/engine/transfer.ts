@@ -78,7 +78,10 @@ export function uniqueLocalExperts(localExperts: number, assignments: number): n
 }
 
 /** Exponent γ of the skewed hit-ratio fit `h = f^γ` (design doc §5.2): classic MoEs (E ≤ 64) 0.55, fine-grained 0.2. */
-export const SKEWED_HIT_RATIO_EXPONENT = { skewed_classic: 0.55, skewed_fine_grained: 0.2 } as const;
+export const SKEWED_HIT_RATIO_EXPONENT = {
+  skewed_classic: 0.55,
+  skewed_fine_grained: 0.2,
+} as const;
 
 /**
  * The hit ratio h(f): the probability that a unique routed expert a token needs is already in device memory, per
@@ -205,7 +208,10 @@ export function tierBandwidthBytesPerSec(tier: StorageTierSpec): number {
  * Queue depth a deployment gets on a tier: the requested depth, capped by (and defaulting to) the tier's
  * `maxOutstanding`. `QD = 1` serializes every request behind its latency. Count.
  */
-export function resolveQueueDepth(tier: HostMemorySpec | NvmeSpec, requested: number | undefined): number {
+export function resolveQueueDepth(
+  tier: HostMemorySpec | NvmeSpec,
+  requested: number | undefined,
+): number {
   // Formula: QD = min(queueDepth ?? maxOutstanding, maxOutstanding)
   return Math.min(requested ?? tier.maxOutstanding, tier.maxOutstanding);
 }
@@ -321,7 +327,8 @@ export function transferTime(
   //          hostRamSec   = host_ram: tier (= bytes_tier/(B_ram/n_host));  NVMe with staging: host;  else 0
   // See docs/simulation-model.md §12 ("Overlap across tiers")
   const linkBytes = link === undefined ? 0 : usefulBytes;
-  const hostRamBytes = tier.kind === 'host_ram' ? tierBytes : hostSec === undefined ? 0 : 2 * tierBytes;
+  const hostRamBytes =
+    tier.kind === 'host_ram' ? tierBytes : hostSec === undefined ? 0 : 2 * tierBytes;
   const hostRamSec = tier.kind === 'host_ram' ? tierSec : (hostSec ?? 0);
   const serviceSec = Math.max(littleSec, iopsSec ?? 0, tierSec, linkSec, hostSec ?? 0);
   const result: TransferTime = {
@@ -353,7 +360,13 @@ export function transferTime(
  * stage are the contiguous block `[stage·tp·dp, (stage+1)·tp·dp)`, so this is its overlap with the node's ranks.
  * Count.
  */
-export function stageDevicesOnNode(tp: number, dp: number, devicesPerNode: number, stage: number, node: number): number {
+export function stageDevicesOnNode(
+  tp: number,
+  dp: number,
+  devicesPerNode: number,
+  stage: number,
+  node: number,
+): number {
   // Formula: |[s·tp·dp, (s+1)·tp·dp) ∩ [node·D, (node+1)·D)|
   const stageStart = stage * tp * dp;
   const stageEnd = stageStart + tp * dp;
@@ -367,7 +380,11 @@ export function stageDevicesOnNode(tp: number, dp: number, devicesPerNode: numbe
  * stage can have a prefetch in flight (`|S_tier|`); without it (p = 0) a stage streams only while a microbatch
  * occupies it, and `m` microbatches circulate, so at most `min(m, |S_tier|)`. Count.
  */
-export function streamSlots(prefetching: boolean, microbatches: number, streamingStages: number): number {
+export function streamSlots(
+  prefetching: boolean,
+  microbatches: number,
+  streamingStages: number,
+): number {
   // Formula: slots = p > 0 ? |S_tier| : min(m, |S_tier|)
   return prefetching ? streamingStages : Math.min(microbatches, streamingStages);
 }

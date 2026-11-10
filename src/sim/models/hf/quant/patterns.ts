@@ -61,8 +61,10 @@ function globToRegExp(glob: string): RegExp {
 /** Compile one entry; `null` for an invalid regex. */
 export function compilePattern(raw: string, opts: CompileOptions = {}): NamePattern | null {
   try {
-    if (raw.startsWith('re:')) return { kind: 'regex', raw, re: new RegExp(`^(?:${raw.slice(3)})`) };
-    if (opts.regexKeys && REGEX_SYNTAX.test(raw)) return { kind: 'regex', raw, re: new RegExp(raw) };
+    if (raw.startsWith('re:'))
+      return { kind: 'regex', raw, re: new RegExp(`^(?:${raw.slice(3)})`) };
+    if (opts.regexKeys && REGEX_SYNTAX.test(raw))
+      return { kind: 'regex', raw, re: new RegExp(raw) };
     if (/[*?[]/.test(raw)) return { kind: 'regex', raw, re: globToRegExp(raw) };
   } catch {
     return null;
@@ -157,7 +159,9 @@ function dottedRuns(name: string): string[] {
 export function firstMatch(list: PatternList, probe: Probe): number {
   let best = -1;
   if (list.names.size > 0) {
-    const keys = list.exact ? [probe.name, layerTail(probe.name) ?? probe.name] : dottedRuns(probe.name);
+    const keys = list.exact
+      ? [probe.name, layerTail(probe.name) ?? probe.name]
+      : dottedRuns(probe.name);
     for (const run of keys) {
       const i = list.names.get(run);
       if (i !== undefined && (best < 0 || i < best)) best = i;

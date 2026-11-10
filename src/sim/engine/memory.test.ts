@@ -18,7 +18,11 @@ function expectClose(actual: number, expected: number, rel = 1e-9): void {
   expect(Math.abs(actual - expected)).toBeLessThanOrEqual(rel * Math.abs(expected));
 }
 
-const BF16: QuantConfig = { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } };
+const BF16: QuantConfig = {
+  weights: { dtype: 'bf16' },
+  activations: 'bf16',
+  kvCache: { dtype: 'bf16' },
+};
 
 function input(over: Partial<SimInput['hardware']> = {}): SimInput {
   return {
@@ -50,7 +54,9 @@ describe('T14 unified memory + engines (SYNTH_UNIFIED)', () => {
 
   it("engineId 'npu' with bf16 weights: fallback warning (no bf16 → vector fp32) and memory at the 0.25e12 cap", () => {
     const r = simulate(input({ engineId: 'npu' }));
-    expect(r.warnings.some((w) => w.includes("engine 'npu'") && w.includes('vector fp32'))).toBe(true);
+    expect(r.warnings.some((w) => w.includes("engine 'npu'") && w.includes('vector fp32'))).toBe(
+      true,
+    );
     const ops = r.decode.stages[0].layers.flatMap((l) => l.ops);
     const qkv = ops.find((o) => o.op.name === 'attn.qkv_proj');
     if (qkv === undefined) throw new Error('no qkv');
@@ -68,10 +74,23 @@ describe('stage weights', () => {
       hidden: 256,
       vocab: 1000,
       tieEmbeddings: true,
-      layers: [decoderLayer({ hidden: 256, mixer: { kind: 'gqa', heads: 4, kvHeads: 2, headDim: 64 }, ffn: { kind: 'dense', intermediate: 512 } })],
+      layers: [
+        decoderLayer({
+          hidden: 256,
+          mixer: { kind: 'gqa', heads: 4, kvHeads: 2, headDim: 64 },
+          ffn: { kind: 'dense', intermediate: 512 },
+        }),
+      ],
     });
     const untied = { ...tied, tieEmbeddings: false };
-    const ctx: LoweringContext = { phase: 'decode', seqs: 1, qLen: 1, kvLen: 2, quant: BF16, parallel: { tp: 1, pp: 1, dp: 1, ep: 1 } };
+    const ctx: LoweringContext = {
+      phase: 'decode',
+      seqs: 1,
+      qLen: 1,
+      kvLen: 2,
+      quant: BF16,
+      parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
+    };
     // The difference is the head matrix: 1000 · 256 · 2 B = 512,000 B
     expect(stageWeightBytes(untied, ctx, 0) - stageWeightBytes(tied, ctx, 0)).toBe(1000 * 256 * 2);
     expect(lmHeadResidentWeightBytes(untied, ctx)).toBe(1000 * 256 * 2 + 256 * 2); // + rmsnorm γ
@@ -84,18 +103,41 @@ describe('stage weights', () => {
       hidden: 256,
       vocab: 1000,
       tieEmbeddings: true,
-      layers: [decoderLayer({ hidden: 256, mixer: { kind: 'gqa', heads: 4, kvHeads: 2, headDim: 64 }, ffn: { kind: 'dense', intermediate: 512 } })],
+      layers: [
+        decoderLayer({
+          hidden: 256,
+          mixer: { kind: 'gqa', heads: 4, kvHeads: 2, headDim: 64 },
+          ffn: { kind: 'dense', intermediate: 512 },
+        }),
+      ],
     });
-    const at = (quant: QuantConfig): LoweringContext => ({ phase: 'decode', seqs: 1, qLen: 1, kvLen: 2, quant, parallel: { tp: 1, pp: 1, dp: 1, ep: 1 } });
+    const at = (quant: QuantConfig): LoweringContext => ({
+      phase: 'decode',
+      seqs: 1,
+      qLen: 1,
+      kvLen: 2,
+      quant,
+      parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
+    });
     const shared = stageWeightBytes(tied, at(BF16), 0); // layers + bf16 table 512,000 + final norm 512
     // Explicit bf16 head = the default bf16 embedding format: still one shared allocation.
     expect(stageWeightBytes(tied, at({ ...BF16, lmHead: { dtype: 'bf16' } }), 0)).toBe(shared);
     // int4 head: an extra 1000 · 256 · 4 bit / 8 = 128,000 B copy next to the bf16 embedding table.
-    expect(stageWeightBytes(tied, at({ ...BF16, lmHead: { dtype: 'int4' } }), 0) - shared).toBe(128_000);
+    expect(stageWeightBytes(tied, at({ ...BF16, lmHead: { dtype: 'int4' } }), 0) - shared).toBe(
+      128_000,
+    );
     // Same dtype, different group-quant overhead (bf16 + 0.15625 bit): 1000 · 256 · 16.15625 / 8 = 517,000 B extra.
-    expect(stageWeightBytes(tied, at({ ...BF16, lmHead: { dtype: 'bf16', extraBitsPerElem: 0.15625 } }), 0) - shared).toBe(517_000);
+    expect(
+      stageWeightBytes(
+        tied,
+        at({ ...BF16, lmHead: { dtype: 'bf16', extraBitsPerElem: 0.15625 } }),
+        0,
+      ) - shared,
+    ).toBe(517_000);
     // int4 embeddings with the default head (= the embedding format): shared again; table 1000 · 256 · 0.5 B.
-    expect(shared - stageWeightBytes(tied, at({ ...BF16, embeddings: { dtype: 'int4' } }), 0)).toBe(512_000 - 128_000);
+    expect(shared - stageWeightBytes(tied, at({ ...BF16, embeddings: { dtype: 'int4' } }), 0)).toBe(
+      512_000 - 128_000,
+    );
   });
 });
 
@@ -113,7 +155,12 @@ describe('U-6 memory with routed experts offloaded (TINY_HYBRID on one RTX 5090,
     if (f !== undefined) {
       // 'ideal' = prefetch accuracy 1 (double-buffered staging), 'none' = 0 (single buffer).
       const prefetchAccuracy = prefetch === 'ideal' ? 1 : 0;
-      r.deployment = { offload: { prefetchAccuracy, routedExperts: { tier: 'host_ram', residentFraction: f, hitRatio: { kind: 'uniform' } } } };
+      r.deployment = {
+        offload: {
+          prefetchAccuracy,
+          routedExperts: { tier: 'host_ram', residentFraction: f, hitRatio: { kind: 'uniform' } },
+        },
+      };
     }
     return simulate(r);
   };
@@ -122,17 +169,37 @@ describe('U-6 memory with routed experts offloaded (TINY_HYBRID on one RTX 5090,
     const base = run(undefined).memory;
     const m = run(0.5).memory;
     expect(base.perStage[0].weightBytes - m.perStage[0].weightBytes).toBe(6_291_456 / 2);
-    expect(m.tiers).toEqual([{ tier: 'host_ram', bytes: 6_291_456, breakdown: { lookupTables: 0, routedExperts: 6_291_456, draftExperts: 0, tokenEmbeddings: 0 }, capacityBytes: 96e9, fits: true }]);
+    expect(m.tiers).toEqual([
+      {
+        tier: 'host_ram',
+        bytes: 6_291_456,
+        breakdown: {
+          lookupTables: 0,
+          routedExperts: 6_291_456,
+          draftExperts: 0,
+          tokenEmbeddings: 0,
+        },
+        capacityBytes: 96e9,
+        fits: true,
+      },
+    ]);
     // Prefill T = 128: U ≈ 8 = E, hits = C = 4, M_max = 4 (decode: U 2, M 1).
     expect(m.perStage[0].stagingBytes).toBe(2 * 4 * W_EXPERT);
     expect(run(0.5, 'none').memory.perStage[0].stagingBytes).toBe(4 * W_EXPERT);
     expect(m.perStage[0].totalBytes).toBe(
-      m.perStage[0].weightBytes + m.perStage[0].sequenceStateBytes + m.perStage[0].activationPeakBytes + 2 * 4 * W_EXPERT,
+      m.perStage[0].weightBytes +
+        m.perStage[0].sequenceStateBytes +
+        m.perStage[0].activationPeakBytes +
+        2 * 4 * W_EXPERT,
     );
     // maxSequencesPerReplica uses W_s + staging.
     const d = m.perStage[0];
     const perSeq = d.sequenceStateBytes; // B_r = 1
-    expect(m.maxSequencesPerReplica).toBe(Math.floor((d.capacityBytes - d.weightBytes - d.activationPeakBytes - d.stagingBytes) / perSeq));
+    expect(m.maxSequencesPerReplica).toBe(
+      Math.floor(
+        (d.capacityBytes - d.weightBytes - d.activationPeakBytes - d.stagingBytes) / perSeq,
+      ),
+    );
   });
 
   it('f 1: stagingBytes 0, no TransferOp, the device lines and every rate equal the all-device baseline; tiers and warnings differ', () => {
@@ -145,11 +212,26 @@ describe('U-6 memory with routed experts offloaded (TINY_HYBRID on one RTX 5090,
     expect(d.activationPeakBytes).toBe(b.activationPeakBytes);
     expect(d.fits).toBe(b.fits);
     for (const phase of ['decode', 'prefill'] as const) {
-      expect(r[phase].stages[0].layers.flatMap((l) => l.ops).some((o) => o.op.kind === 'transfer')).toBe(false);
+      expect(
+        r[phase].stages[0].layers.flatMap((l) => l.ops).some((o) => o.op.kind === 'transfer'),
+      ).toBe(false);
       expect(r[phase].cycleSec).toBe(base[phase].cycleSec);
       expect(r[phase].tokensPerSec).toBe(base[phase].tokensPerSec);
     }
-    expect(r.memory.tiers).toEqual([{ tier: 'host_ram', bytes: 6_291_456, breakdown: { lookupTables: 0, routedExperts: 6_291_456, draftExperts: 0, tokenEmbeddings: 0 }, capacityBytes: 96e9, fits: true }]);
+    expect(r.memory.tiers).toEqual([
+      {
+        tier: 'host_ram',
+        bytes: 6_291_456,
+        breakdown: {
+          lookupTables: 0,
+          routedExperts: 6_291_456,
+          draftExperts: 0,
+          tokenEmbeddings: 0,
+        },
+        capacityBytes: 96e9,
+        fits: true,
+      },
+    ]);
     expect(r.warnings).not.toEqual(base.warnings);
   });
 });
@@ -163,7 +245,9 @@ describe('offloaded experts on unified memory', () => {
       parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
       workload: { batch: 1, promptLen: 128, decodeContextLen: 256 },
       hardware: { device: SYNTH_UNIFIED, topology: singleDevice(SYNTH_UNIFIED) },
-      deployment: { offload: { routedExperts: { tier, residentFraction: 0, hitRatio: { kind: 'uniform' } } } },
+      deployment: {
+        offload: { routedExperts: { tier, residentFraction: 0, hitRatio: { kind: 'uniform' } } },
+      },
     });
   const base = simulate({
     model: TINY_HYBRID,
@@ -180,7 +264,9 @@ describe('offloaded experts on unified memory', () => {
     expect(ram.memory.perStage[0].weightBytes).toBe(base.memory.perStage[0].weightBytes);
     expect(ram.warnings.some((w) => w.includes('host RAM is the device memory'))).toBe(true);
     const ssd = experts('nvme');
-    const fetch = ssd.decode.stages[0].layers.flatMap((l) => l.ops).find((o) => o.op.kind === 'transfer');
+    const fetch = ssd.decode.stages[0].layers
+      .flatMap((l) => l.ops)
+      .find((o) => o.op.kind === 'transfer');
     // The default SSD of a device with no internal-drive preset is the 990 PRO: α = 1/22,000 s only (no link hop).
     expectClose(fetch?.transferLatencySec ?? 0, 1 / 22_000);
     expect(ssd.memory.tiers.map((t) => t.tier)).toEqual(['nvme']);
@@ -197,10 +283,17 @@ describe('token embedding off-device: stage 0 drops exactly its shard, and the t
     vocab: 1001,
     tieEmbeddings: false,
     layers: Array.from({ length: 4 }, () =>
-      decoderLayer({ hidden: 256, mixer: { kind: 'gqa', heads: 12, kvHeads: 6, headDim: 64 }, ffn: { kind: 'dense', intermediate: 768 } }),
+      decoderLayer({
+        hidden: 256,
+        mixer: { kind: 'gqa', heads: 12, kvHeads: 6, headDim: 64 },
+        ffn: { kind: 'dense', intermediate: 768 },
+      }),
     ),
   });
-  const at = (parallel: Partial<LoweringContext['parallel']>, offload?: OffloadLowering): LoweringContext => {
+  const at = (
+    parallel: Partial<LoweringContext['parallel']>,
+    offload?: OffloadLowering,
+  ): LoweringContext => {
     const c: LoweringContext = {
       phase: 'decode',
       seqs: 1,
@@ -212,7 +305,10 @@ describe('token embedding off-device: stage 0 drops exactly its shard, and the t
     if (offload !== undefined) c.offload = offload;
     return c;
   };
-  const placed = (tier: 'host_ram' | 'nvme'): OffloadLowering => ({ prefetchAccuracy: 0.8, embeddings: { tier } });
+  const placed = (tier: 'host_ram' | 'nvme'): OffloadLowering => ({
+    prefetchAccuracy: 0.8,
+    embeddings: { tier },
+  });
 
   it.each([
     ['host_ram', 1],
@@ -222,9 +318,16 @@ describe('token embedding off-device: stage 0 drops exactly its shard, and the t
   ] as const)('%s, tp %d: ΔW_0 = tierBytes_0 = ceil(V/tp)·h·bpe', (tier, tp) => {
     const shard = Math.ceil(1001 / tp) * 256 * 2;
     expect(embeddingShardBytes(model, at({ tp }))).toBe(shard);
-    expect(stageWeightBytes(model, at({ tp }), 0) - stageWeightBytes(model, at({ tp }, placed(tier)), 0)).toBe(shard);
+    expect(
+      stageWeightBytes(model, at({ tp }), 0) - stageWeightBytes(model, at({ tp }, placed(tier)), 0),
+    ).toBe(shard);
     const tiers = stageTierBreakdown(model, at({ tp }, placed(tier)), 0);
-    expect(tiers[tier]).toEqual({ lookupTables: 0, routedExperts: 0, draftExperts: 0, tokenEmbeddings: shard });
+    expect(tiers[tier]).toEqual({
+      lookupTables: 0,
+      routedExperts: 0,
+      draftExperts: 0,
+      tokenEmbeddings: shard,
+    });
     const other = tier === 'host_ram' ? 'nvme' : 'host_ram';
     expect(tiers[other].tokenEmbeddings).toBe(0);
   });
@@ -248,7 +351,9 @@ describe('token embedding off-device: stage 0 drops exactly its shard, and the t
   it('a tied head with the embedding off-device keeps its own matrix (defense; validation rejects this input)', () => {
     const tied = { ...model, tieEmbeddings: true };
     // Off-device, nothing is shared: W_0 = layers + the full head, the same as the untied model's.
-    expect(stageWeightBytes(tied, at({}, placed('host_ram')), 0)).toBe(stageWeightBytes(model, at({}, placed('host_ram')), 0));
+    expect(stageWeightBytes(tied, at({}, placed('host_ram')), 0)).toBe(
+      stageWeightBytes(model, at({}, placed('host_ram')), 0),
+    );
     expect(lmHeadResidentWeightBytes(tied, at({}))).toBe(1001 * 256 * 2 + 256 * 2);
   });
 });

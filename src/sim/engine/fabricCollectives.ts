@@ -82,7 +82,9 @@ export function fabricLinkParams(
   const linkCapBytesPerSec = link.allPortsCapPerDirectionBytesPerSec ?? Infinity;
   // Formula: C = min(C_link, B_stg) when staged, else C_link
   const allPortsCapBytesPerSec =
-    staging === undefined ? linkCapBytesPerSec : Math.min(linkCapBytesPerSec, stagingBandwidthCapBytesPerSec(staging));
+    staging === undefined
+      ? linkCapBytesPerSec
+      : Math.min(linkCapBytesPerSec, stagingBandwidthCapBytesPerSec(staging));
   return {
     portBandwidthBytesPerSec: eff.bandwidthBytesPerSec,
     allPortsCapBytesPerSec,

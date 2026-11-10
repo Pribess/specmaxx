@@ -94,10 +94,28 @@ describe('4 × DGX Spark-like nodes: ring fabric vs switch (docs §6 "Fabric sha
     allPortsCapPerDirectionBytesPerSec: 25e9,
     forwardingLatencySec: 5e-6,
     p2p: 'direct',
-    sources: [{ url: 'synthetic://test', title: 't', fields: ['bandwidthPerDirectionBytesPerSec', 'latencySec', 'allPortsCapPerDirectionBytesPerSec', 'forwardingLatencySec'] }],
+    sources: [
+      {
+        url: 'synthetic://test',
+        title: 't',
+        fields: [
+          'bandwidthPerDirectionBytesPerSec',
+          'latencySec',
+          'allPortsCapPerDirectionBytesPerSec',
+          'forwardingLatencySec',
+        ],
+      },
+    ],
     estimated: [],
   };
-  const switched: TopologySpec = { id: 's', name: 's', devicesPerNode: 1, nodes: 4, interNode: link, sources: [] };
+  const switched: TopologySpec = {
+    id: 's',
+    name: 's',
+    devicesPerNode: 1,
+    nodes: 4,
+    interNode: link,
+    sources: [],
+  };
   const ring: TopologySpec = { ...switched, interNodeFabric: { kind: 'ring' } };
   const sim = (topology: TopologySpec) =>
     simulate({

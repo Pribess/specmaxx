@@ -4,7 +4,13 @@ import { M3_ULTRA_80C, M5_MAX_40C } from '../hw/presets/apple';
 import { RTX_5090 } from '../hw/presets/nvidia';
 import type { ComputeEngine } from '../hw/types';
 import type { AttentionOp, ElementwiseOp, GemmOp, IndexerOp, RecurrentOp } from '../ir/ops';
-import { elementwiseBytesUnderFusion, engineMemBandwidthBytesPerSec, opTime, roofline, type OpTimeContext } from './opTime';
+import {
+  elementwiseBytesUnderFusion,
+  engineMemBandwidthBytesPerSec,
+  opTime,
+  roofline,
+  type OpTimeContext,
+} from './opTime';
 
 function expectClose(actual: number, expected: number, rel = 1e-9): void {
   expect(Math.abs(actual - expected)).toBeLessThanOrEqual(rel * Math.abs(expected));
@@ -14,7 +20,10 @@ const SYNTH_GPU_ENGINE = SYNTH_GPU.engines[0];
 /** SYNTH_GPU: bf16/fp32 dense 100e12 FLOP/s, vector bf16 20e12, 100 units, tile 128×128 (mma 64×8×16), 1e12 B/s. */
 const CTX: OpTimeContext = {
   engine: SYNTH_GPU_ENGINE,
-  memBandwidthBytesPerSec: engineMemBandwidthBytesPerSec(SYNTH_GPU_ENGINE, SYNTH_GPU.memory.bandwidthBytesPerSec),
+  memBandwidthBytesPerSec: engineMemBandwidthBytesPerSec(
+    SYNTH_GPU_ENGINE,
+    SYNTH_GPU.memory.bandwidthBytesPerSec,
+  ),
   collectivePaths: { tp: { kind: 'none' }, ep: { kind: 'none' }, pp: { kind: 'none' } },
   collectiveAlgorithm: 'best',
   elementwiseFusion: 'none',
@@ -92,7 +101,12 @@ describe('T6 roofline (SYNTH_GPU)', () => {
   });
 
   it('an engine memory cap lowers the bandwidth: min(device, cap)', () => {
-    expect(engineMemBandwidthBytesPerSec({ ...SYNTH_GPU_ENGINE, memBandwidthCapBytesPerSec: 0.25e12 }, 1e12)).toBe(0.25e12);
+    expect(
+      engineMemBandwidthBytesPerSec(
+        { ...SYNTH_GPU_ENGINE, memBandwidthCapBytesPerSec: 0.25e12 },
+        1e12,
+      ),
+    ).toBe(0.25e12);
     expect(engineMemBandwidthBytesPerSec(SYNTH_GPU_ENGINE, 1e12)).toBe(1e12);
   });
 });
@@ -118,7 +132,10 @@ describe('attention softmax: t_compute = max(t_mma, t_exp + t_vec) (docs §7 "At
     activationDtype: 'bf16',
   };
   const S = 8 * 1024 * 1024;
-  const withSfu = (sfuOpsPerSec: number): OpTimeContext => ({ ...CTX, engine: { ...SYNTH_GPU_ENGINE, sfuOpsPerSec } });
+  const withSfu = (sfuOpsPerSec: number): OpTimeContext => ({
+    ...CTX,
+    engine: { ...SYNTH_GPU_ENGINE, sfuOpsPerSec },
+  });
 
   it('no sfuOpsPerSec: softmax not costed, the result is the MMA roofline alone', () => {
     const r = opTime(attention, CTX);
@@ -185,7 +202,11 @@ describe('attention softmax: t_compute = max(t_mma, t_exp + t_vec) (docs §7 "At
       math: 'bf16',
       accumulate: 'fp32',
     };
-    for (const op of [indexer, chunked, { ...chunked, mode: 'step' as const, qLen: 1, chunkLen: 1 }]) {
+    for (const op of [
+      indexer,
+      chunked,
+      { ...chunked, mode: 'step' as const, qLen: 1, chunkLen: 1 },
+    ]) {
       expect(opTime(op, withSfu(1e9))).toEqual(opTime(op, CTX));
     }
   });
@@ -196,7 +217,10 @@ describe('GEMV path: t_compute = min(t_mma, F / vectorPeak) for m ≤ gemvMaxRow
   const ctxOf = (engine: ComputeEngine, device = M3_ULTRA_80C): OpTimeContext => ({
     ...CTX,
     engine,
-    memBandwidthBytesPerSec: engineMemBandwidthBytesPerSec(engine, device.memory.bandwidthBytesPerSec),
+    memBandwidthBytesPerSec: engineMemBandwidthBytesPerSec(
+      engine,
+      device.memory.bandwidthBytesPerSec,
+    ),
   });
   const { gemvMaxRows: _rows, ...mmaOnly } = m3;
   void _rows;
@@ -225,7 +249,13 @@ describe('GEMV path: t_compute = min(t_mma, F / vectorPeak) for m ≤ gemvMaxRow
   });
 
   it('int8 math and 2:4 weights are not eligible (no vector peak / no sparse GEMV)', () => {
-    const int8: GemmOp = { ...router, inputDtype: 'int8', weight: { dtype: 'int8' }, math: 'int8', accumulate: 'int32' };
+    const int8: GemmOp = {
+      ...router,
+      inputDtype: 'int8',
+      weight: { dtype: 'int8' },
+      math: 'int8',
+      accumulate: 'int32',
+    };
     expect(opTime(int8, ctxOf(m3)).computePath).toBeUndefined();
     const sparse: GemmOp = { ...router, sparsity: '2:4' };
     expect(opTime(sparse, ctxOf(m3)).computePath).toBeUndefined();

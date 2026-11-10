@@ -44,7 +44,7 @@ describe('gemmComputeSec (T5, SYNTH_GPU)', () => {
     expect(r.computeSec).toBeLessThan(unswappedSec);
   });
 
-  it('K 1000 pads to K\' 1008 (mmaK 16): efficiency × 1000/1008', () => {
+  it("K 1000 pads to K' 1008 (mmaK 16): efficiency × 1000/1008", () => {
     const r = gemmComputeSec({ batch: 1, m: 1280, n: 1280, k: 1000 }, PEAK, UNITS, SYNTH_TILING);
     expectClose(r.efficiency, 1000 / 1008); // roundUp(1000, 16) = 1008
   });

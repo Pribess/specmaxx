@@ -839,7 +839,10 @@ export interface ResolvedSpeculative {
  * configured block drafter otherwise), k, the verify width `k + 1`, `m_ctx = ⌈E[τ]⌉` and the `k + 1` state
  * snapshots of the verify. Undefined when the deployment has none. Validation has already checked the config.
  */
-export function resolveSpeculative(model: ModelSpec, config: SpecDecodeConfig | undefined): ResolvedSpeculative | undefined {
+export function resolveSpeculative(
+  model: ModelSpec,
+  config: SpecDecodeConfig | undefined,
+): ResolvedSpeculative | undefined {
   if (config === undefined) return undefined;
   const draft = config.method === 'mtp' ? model.draft : config.drafter?.spec;
   if (draft === undefined) throw new Error(`speculative decoding '${config.method}': no drafter`);

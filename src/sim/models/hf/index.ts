@@ -31,7 +31,10 @@ export type { QuantInputs } from './quant/index';
  * Map one repo's files to the IR, or say why it cannot be mapped.
  * `families` defaults to the built-in table ({@link FAMILIES}); tests pass their own.
  */
-export function mapHfModel(files: HfRepoFiles, families: readonly FamilyEntry[] = FAMILIES): HfMapResult {
+export function mapHfModel(
+  files: HfRepoFiles,
+  families: readonly FamilyEntry[] = FAMILIES,
+): HfMapResult {
   const unwrapped = unwrapTextConfig(files.config);
   if (unwrapped.kind === 'invalid_config') return unwrapped;
   const view = unwrapped.view;
@@ -65,11 +68,13 @@ export function mapHfModel(files: HfRepoFiles, families: readonly FamilyEntry[] 
     parts: built.excludedParts,
   };
   const qc = view.quantizationConfig;
-  const quantMethod = isJsonObject(qc) && typeof qc.quant_method === 'string' ? qc.quant_method : undefined;
+  const quantMethod =
+    isJsonObject(qc) && typeof qc.quant_method === 'string' ? qc.quant_method : undefined;
   const paramCheck = checkParams(built.model, excluded, files.api, quantMethod);
 
   const notes = [...view.notes, ...built.notes, ...quant.notes, ...merged.notes];
-  if (paramCheck.status !== 'ok') notes.push(`param check (${paramCheck.status}): ${paramCheck.note}`);
+  if (paramCheck.status !== 'ok')
+    notes.push(`param check (${paramCheck.status}): ${paramCheck.note}`);
 
   return {
     kind: 'ok',
@@ -84,7 +89,9 @@ export function mapHfModel(files: HfRepoFiles, families: readonly FamilyEntry[] 
     // Where config / metadata came from when not the repo itself (a base model, a gated repo's mirror): data only,
     // deliberately not a note, so it never reaches the UI.
     ...(files.configFrom && files.configFrom !== files.id ? { configFrom: files.configFrom } : {}),
-    ...(files.metadataFrom && files.metadataFrom !== files.id ? { metadataFrom: files.metadataFrom } : {}),
+    ...(files.metadataFrom && files.metadataFrom !== files.id
+      ? { metadataFrom: files.metadataFrom }
+      : {}),
   };
 }
 
@@ -101,7 +108,8 @@ export function mergeQuantHints(
   const notes: string[] = [];
   for (const key of Object.keys(hints) as (keyof QuantConfig)[]) {
     if (hints[key] === undefined) continue;
-    if (derived.explicit.includes(key)) notes.push(`family hint for ${key} overridden by the repo's quant metadata`);
+    if (derived.explicit.includes(key))
+      notes.push(`family hint for ${key} overridden by the repo's quant metadata`);
     else Object.assign(kept, { [key]: hints[key] });
   }
   return { quant: { ...derived, quant: { ...derived.quant, ...kept } }, notes };

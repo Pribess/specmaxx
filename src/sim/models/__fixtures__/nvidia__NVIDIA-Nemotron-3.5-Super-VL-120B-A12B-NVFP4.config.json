@@ -1,7 +1,5 @@
 {
-  "architectures": [
-    "NemotronH_Omni_Reasoning_V3"
-  ],
+  "architectures": ["NemotronH_Omni_Reasoning_V3"],
   "auto_map": {
     "AutoConfig": "configuration_nemotron_h_omni.NemotronH_Omni_Reasoning_V3_Config",
     "AutoModel": "modeling_nemotron_h_omni.NemotronH_Omni_Reasoning_V3",
@@ -16,9 +14,7 @@
   "img_context_token": "<image>",
   "img_context_token_id": 18,
   "llm_config": {
-    "architectures": [
-      "NemotronHForCausalLM"
-    ],
+    "architectures": ["NemotronHForCausalLM"],
     "attention_bias": false,
     "attention_dropout": 0.0,
     "bos_token_id": 1,
@@ -32,7 +28,7 @@
     "hidden_size": 4096,
     "initializer_range": 0.02,
     "intermediate_size": 2688,
-    "layer_norm_epsilon": 1e-05,
+    "layer_norm_epsilon": 1e-5,
     "layers_block_type": [
       "mamba",
       "moe",
@@ -136,10 +132,7 @@
     "moe_latent_size": 1024,
     "moe_shared_expert_intermediate_size": 5376,
     "moe_shared_expert_overlap": false,
-    "mtp_layers_block_type": [
-      "attention",
-      "moe"
-    ],
+    "mtp_layers_block_type": ["attention", "moe"],
     "n_group": 1,
     "n_groups": 8,
     "n_routed_experts": 512,
@@ -174,16 +167,8 @@
     "vocab_size": 131072
   },
   "model_type": "nemotron_h_omni",
-  "norm_mean": [
-    0.48145466,
-    0.4578275,
-    0.40821073
-  ],
-  "norm_std": [
-    0.26862954,
-    0.26130258,
-    0.27577711
-  ],
+  "norm_mean": [0.48145466, 0.4578275, 0.40821073],
+  "norm_std": [0.26862954, 0.26130258, 0.27577711],
   "patch_size": 16,
   "processor_class": "NemotronH_Omni_Reasoning_V3Processor",
   "projector_hidden_size": 20480,
@@ -230,23 +215,15 @@
     "hidden_size": 1280,
     "image_size": 224,
     "initializer_range": 0.02,
-    "layer_norm_eps": 1e-06,
+    "layer_norm_eps": 1e-6,
     "layerscale_value": 1.0,
     "max_img_size": 2048,
     "max_num_patches": 13312,
     "min_num_patches": 1024,
     "mlp_ratio": 4.0,
     "model_type": "radio",
-    "norm_mean": [
-      0.48145466,
-      0.4578275,
-      0.40821073
-    ],
-    "norm_std": [
-      0.26862954,
-      0.26130258,
-      0.27577711
-    ],
+    "norm_mean": [0.48145466, 0.4578275, 0.40821073],
+    "norm_std": [0.26862954, 0.26130258, 0.27577711],
     "num_attention_heads": 16,
     "num_channels": 3,
     "num_cls_tokens": 3,
@@ -254,10 +231,7 @@
     "num_registers": 7,
     "patch_size": 16,
     "qkv_bias": true,
-    "summary_idxs": [
-      0,
-      1
-    ],
+    "summary_idxs": [0, 1],
     "use_swiglu_ffn": false,
     "video_temporal_patch_size": 2
   },

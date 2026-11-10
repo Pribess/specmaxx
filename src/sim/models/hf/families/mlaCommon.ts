@@ -77,7 +77,11 @@ export function readMlaMixer(r: ConfigReader, useRope = true): MlaMixerParams {
  * and are owned by the layer; head weights (`weights_proj`) are on.
  */
 export function readDsaIndexer(r: ConfigReader): IndexerSpec {
-  const indexer: IndexerSpec = { heads: r.int('index_n_heads'), headDim: r.int('index_head_dim'), topK: r.int('index_topk') };
+  const indexer: IndexerSpec = {
+    heads: r.int('index_n_heads'),
+    headDim: r.int('index_head_dim'),
+    topK: r.int('index_topk'),
+  };
   const pool = r.optInt('index_kpool');
   if (pool !== undefined && pool > 1) {
     indexer.keyPoolTokens = pool;
@@ -109,13 +113,17 @@ export function readIndexerSchedule(r: ConfigReader, n: number): IndexerMode[] {
   } else {
     const freq = Math.max(r.optInt('index_topk_freq') ?? 1, 1);
     const offset = r.optInt('index_skip_topk_offset') ?? 2;
-    modes = Array.from({ length: n }, (_, i) => (Math.max(i - offset + 1, 0) % freq === 0 ? 'full' : 'shared'));
+    modes = Array.from({ length: n }, (_, i) =>
+      Math.max(i - offset + 1, 0) % freq === 0 ? 'full' : 'shared',
+    );
   }
-  if (modes.length < n) r.errors.push(`${where('indexer_types')}: ${modes.length} entries for ${n} layers`);
+  if (modes.length < n)
+    r.errors.push(`${where('indexer_types')}: ${modes.length} entries for ${n} layers`);
   const out: IndexerMode[] = [];
   for (let i = 0; i < n; i++) {
     const m = modes[i] ?? 'full';
-    if (m !== 'full' && m !== 'shared') r.errors.push(`${where('indexer_types')}[${i}]: unknown mode '${m}'`);
+    if (m !== 'full' && m !== 'shared')
+      r.errors.push(`${where('indexer_types')}[${i}]: unknown mode '${m}'`);
     out.push(m === 'shared' ? 'shared' : 'full');
   }
   return out;
@@ -190,7 +198,11 @@ export function dsaSelection(mode: IndexerMode, indexer: IndexerSpec): SparseSel
  * comb; the sublayer keeps its own pre-norm (`subNorms`). Weights: `hc_attn_fn [24, 4·D]`, `hc_attn_base [24]`,
  * `hc_attn_scale [3]` and the same for `hc_ffn_*` (N = 4).
  */
-export function mhcResidual(streams: number, hidden: number, sinkhornIters: number): ResidualParams {
+export function mhcResidual(
+  streams: number,
+  hidden: number,
+  sinkhornIters: number,
+): ResidualParams {
   // Formula: mix = (2 + N)·N; vectorParams = mix (base) + 3 (scale)
   const mix = (2 + streams) * streams;
   return {
@@ -212,7 +224,11 @@ export function mhcResidual(streams: number, hidden: number, sinkhornIters: numb
  * `hc_pre` with the last FFN's pre weights; GLM `hc_head`, a mean over the streams).
  */
 export function mhcCollapse(streams: number, hidden: number): HcPreBlock {
-  return hyperCollapse({ streams, dim: hidden, pre: { normGamma: false, projections: [], sinkhornIters: 0, vectorParams: 0 } });
+  return hyperCollapse({
+    streams,
+    dim: hidden,
+    pre: { normGamma: false, projections: [], sinkhornIters: 0, vectorParams: 0 },
+  });
 }
 
 /** All params of one layer (every block). Unit: params. */

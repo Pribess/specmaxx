@@ -31,7 +31,15 @@ import {
 } from './amd';
 import { APPLE_DEVICE_PRESETS } from './apple';
 import { INTEL_DEVICE_PRESETS } from './intel';
-import { NVIDIA_CONSUMER_DEVICE_PRESETS, RTX_3090, RTX_3090_UNLOCKS, RTX_4090, RTX_4090_UNLOCKS, RTX_5090, RTX_5090_UNLOCKS } from './nvidia';
+import {
+  NVIDIA_CONSUMER_DEVICE_PRESETS,
+  RTX_3090,
+  RTX_3090_UNLOCKS,
+  RTX_4090,
+  RTX_4090_UNLOCKS,
+  RTX_5090,
+  RTX_5090_UNLOCKS,
+} from './nvidia';
 import { CMP_170HX, CMP_170HX_UNLOCKS, NVIDIA_CMP_DEVICE_PRESETS } from './nvidia-cmp';
 import {
   A100_SXM4_80GB,
@@ -90,7 +98,10 @@ export const DEVICE_PRESET_GROUPS: DevicePresetGroup[] = [
   { name: 'NVIDIA CMP (mining)', devices: NVIDIA_CMP_DEVICE_PRESETS },
   { name: 'NVIDIA RTX PRO', devices: NVIDIA_PRO_DEVICE_PRESETS },
   { name: 'Apple silicon', devices: APPLE_DEVICE_PRESETS },
-  { name: 'AMD Radeon / Ryzen AI', devices: [RADEON_AI_PRO_R9700, RADEON_RX_9070_XT, RYZEN_AI_MAX_PLUS_395] },
+  {
+    name: 'AMD Radeon / Ryzen AI',
+    devices: [RADEON_AI_PRO_R9700, RADEON_RX_9070_XT, RYZEN_AI_MAX_PLUS_395],
+  },
   { name: 'Intel Arc', devices: INTEL_DEVICE_PRESETS },
   { name: 'NVIDIA DGX Spark', devices: [DGX_SPARK] },
   {
@@ -142,5 +153,11 @@ export function deviceUnlocks(device: Pick<DeviceSpec, 'id'>): UnlockAxis[] {
  * validation error). Its numbers are configuration counts, not vendor numbers, so it cites none.
  */
 export function singleDevice(device: DeviceSpec): TopologySpec {
-  return { id: `single-${device.id}`, name: `1 × ${device.name}`, devicesPerNode: 1, nodes: 1, sources: [] };
+  return {
+    id: `single-${device.id}`,
+    name: `1 × ${device.name}`,
+    devicesPerNode: 1,
+    nodes: 1,
+    sources: [],
+  };
 }

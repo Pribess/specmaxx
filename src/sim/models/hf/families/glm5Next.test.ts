@@ -34,10 +34,21 @@ describe('glm5_next: GLM-5.3-Flash', () => {
   });
 
   it('maps layer_types to 34 KDA and 11 NoPE MLA + k-pool DSA layers', () => {
-    const mixers = m.layers.map((l) => l.blocks.find((x) => x.kind === 'linear_attention' || x.kind === 'mla_attention'));
+    const mixers = m.layers.map((l) =>
+      l.blocks.find((x) => x.kind === 'linear_attention' || x.kind === 'mla_attention'),
+    );
     expect(mixers.filter((x) => x?.kind === 'linear_attention')).toHaveLength(34);
     expect(mixers.filter((x) => x?.kind === 'mla_attention')).toHaveLength(11);
-    expect(mixers[0]).toMatchObject({ variant: 'kda', qkHeads: 64, vHeads: 64, keyDim: 128, valueDim: 128, convKernel: 4, outputGate: true, gateRank: 128 });
+    expect(mixers[0]).toMatchObject({
+      variant: 'kda',
+      qkHeads: 64,
+      vHeads: 64,
+      keyDim: 128,
+      valueDim: 128,
+      convKernel: 4,
+      outputGate: true,
+      gateRank: 128,
+    });
     expect(mixers[3]).toMatchObject({
       kind: 'mla_attention',
       heads: 64,
@@ -46,12 +57,24 @@ describe('glm5_next: GLM-5.3-Flash', () => {
       qkNopeDim: 256,
       qkRopeDim: 0,
       vHeadDim: 256,
-      sparse: { kind: 'indexer', indexer: { heads: 32, headDim: 128, topK: 2048, keyPoolTokens: 4, keyPoolGate: true } },
+      sparse: {
+        kind: 'indexer',
+        indexer: { heads: 32, headDim: 128, topK: 2048, keyPoolTokens: 4, keyPoolGate: true },
+      },
     });
   });
 
   it('wraps each sublayer in hc_pre → norm → … → hc_post and collapses the streams before the head', () => {
-    expect(kinds(m.layers[0])).toEqual(['hc_pre', 'norm', 'linear_attention', 'hc_post', 'hc_pre', 'norm', 'mlp', 'hc_post']);
+    expect(kinds(m.layers[0])).toEqual([
+      'hc_pre',
+      'norm',
+      'linear_attention',
+      'hc_post',
+      'hc_pre',
+      'norm',
+      'mlp',
+      'hc_post',
+    ]);
     expect(kinds(m.layers[44]).slice(-1)).toEqual(['hc_pre']);
     expect(m.layers[44].blocks.at(-1)).toMatchObject({ projections: [], vectorParams: 0 });
   });

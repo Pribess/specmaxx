@@ -80,7 +80,10 @@ export interface OpTimeContext {
 }
 
 /** Memory-effective bandwidth of `engine` on a device with peak memory bandwidth `deviceMemBandwidthBytesPerSec` (B/s). */
-export function engineMemBandwidthBytesPerSec(engine: ComputeEngine, deviceMemBandwidthBytesPerSec: number): number {
+export function engineMemBandwidthBytesPerSec(
+  engine: ComputeEngine,
+  deviceMemBandwidthBytesPerSec: number,
+): number {
   // Formula: memBW = min(device.memory.bandwidthBytesPerSec, engine.memBandwidthCapBytesPerSec ?? ∞)
   // See docs/simulation-model.md §7 ("Per-op time")
   return Math.min(deviceMemBandwidthBytesPerSec, engine.memBandwidthCapBytesPerSec ?? Infinity);
@@ -93,7 +96,9 @@ export function engineMemBandwidthBytesPerSec(engine: ComputeEngine, deviceMemBa
 export function roofline(computeSec: number, memorySec: number): { sec: number; bound: Bound } {
   // Formula: t = max(t_compute, t_memory)
   // See docs/simulation-model.md §7 ("Per-op time")
-  return computeSec >= memorySec ? { sec: computeSec, bound: 'compute' } : { sec: memorySec, bound: 'memory' };
+  return computeSec >= memorySec
+    ? { sec: computeSec, bound: 'compute' }
+    : { sec: memorySec, bound: 'memory' };
 }
 
 /**
@@ -149,7 +154,12 @@ function opTimeByKind(op: Op, ctx: OpTimeContext): OpResult {
         ? tensorOpTime(op, recurrentChunkShape(op), op.math, op.accumulate, 'dense', ctx)
         : vectorOpTime(op, op.stateDtype, opBytes(op), ctx);
     case 'elementwise':
-      return vectorOpTime(op, op.dtype, elementwiseBytesUnderFusion(op, ctx.elementwiseFusion), ctx);
+      return vectorOpTime(
+        op,
+        op.dtype,
+        elementwiseBytesUnderFusion(op, ctx.elementwiseFusion),
+        ctx,
+      );
     case 'embedding':
       return memoryOnlyOpTime(op, ctx);
     case 'collective':
@@ -192,14 +202,24 @@ export function indexerShape(op: IndexerOp): GemmShape {
   const pairsFull = indexerPairs(op); // scored (pooled, capped) keys
   // Formula: batch = seqs, m = qLen·heads, n = ceil(pairs_full/qLen), k = headDim
   // See docs/simulation-model.md §4 ("Shape efficiency")
-  return { batch: op.seqs, m: op.qLen * op.heads, n: Math.ceil(pairsFull / op.qLen), k: op.headDim };
+  return {
+    batch: op.seqs,
+    m: op.qLen * op.heads,
+    n: Math.ceil(pairsFull / op.qLen),
+    k: op.headDim,
+  };
 }
 
 /** The equivalent batched-GEMM shape of a chunked recurrent mixer: one chunk × value dim × key dim per (seq, head, chunk). */
 export function recurrentChunkShape(op: RecurrentOp): GemmShape {
   // Formula: batch = seqs·heads·ceil(qLen/chunkLen), m = chunkLen, n = valueDim, k = keyDim
   // See docs/simulation-model.md §4 ("Shape efficiency")
-  return { batch: op.seqs * op.heads * Math.ceil(op.qLen / op.chunkLen), m: op.chunkLen, n: op.valueDim, k: op.keyDim };
+  return {
+    batch: op.seqs * op.heads * Math.ceil(op.qLen / op.chunkLen),
+    m: op.chunkLen,
+    n: op.valueDim,
+    k: op.keyDim,
+  };
 }
 
 /**
@@ -255,7 +275,8 @@ const GEMV_MATH: ReadonlySet<MathFormat> = new Set<MathFormat>(['fp16', 'bf16', 
 function gemmOpTime(op: GemmOp, ctx: OpTimeContext): OpResult {
   const mma = tensorOpTime(op, gemmShape(op), op.math, op.accumulate, op.sparsity, ctx);
   const maxRows = ctx.engine.gemvMaxRows;
-  if (maxRows === undefined || op.m > maxRows || op.sparsity !== 'dense' || !GEMV_MATH.has(op.math)) return mma;
+  if (maxRows === undefined || op.m > maxRows || op.sparsity !== 'dense' || !GEMV_MATH.has(op.math))
+    return mma;
   const vectorPeak = vectorPeakFlopsPerSec(ctx.engine, op.math as 'fp16' | 'bf16' | 'fp32');
   // Formula: t_compute = min(t_mma, t_gemv),  t_gemv = F / vectorPeak(math)
   // See docs/simulation-model.md §4 ("GEMV path")
@@ -265,7 +286,15 @@ function gemmOpTime(op: GemmOp, ctx: OpTimeContext): OpResult {
   const { usedInput: _input, usedAccumulate: _accumulate, ...rest } = mma;
   void _input;
   void _accumulate;
-  return { ...rest, computeSec: gemvSec, sec, bound, efficiency: 1, peakFlopsPerSec: vectorPeak, computePath: 'gemv' };
+  return {
+    ...rest,
+    computeSec: gemvSec,
+    sec,
+    bound,
+    efficiency: 1,
+    peakFlopsPerSec: vectorPeak,
+    computePath: 'gemv',
+  };
 }
 
 /**
@@ -280,7 +309,8 @@ export function attentionSoftmaxSec(op: AttentionOp, engine: ComputeEngine): num
   // Formula: S = seqs·heads·pairs;  t_exp = S / sfuOpsPerSec;  t_vec = 5·S / vectorPeak(fp32);  t_softmax = t_exp + t_vec
   // See docs/simulation-model.md §7 ("Attention softmax")
   const expSec = scores / sfuOpsPerSec;
-  const vectorSec = (SOFTMAX_VECTOR_FLOP_PER_SCORE * scores) / vectorPeakFlopsPerSec(engine, 'fp32');
+  const vectorSec =
+    (SOFTMAX_VECTOR_FLOP_PER_SCORE * scores) / vectorPeakFlopsPerSec(engine, 'fp32');
   return expSec + vectorSec;
 }
 
@@ -308,7 +338,10 @@ function attentionOpTime(op: AttentionOp, ctx: OpTimeContext): OpResult {
  * Memory traffic of an elementwise op under the fusion assumption: `'none'` = its own fields; `'ideal'` = the
  * activation read and write are 0 (fused into a neighbour), weight and state bytes stay. Unit: bytes.
  */
-export function elementwiseBytesUnderFusion(op: ElementwiseOp, fusion: SimOptions['elementwiseFusion']): ByteBreakdown {
+export function elementwiseBytesUnderFusion(
+  op: ElementwiseOp,
+  fusion: SimOptions['elementwiseFusion'],
+): ByteBreakdown {
   const bytes = opBytes(op);
   switch (fusion) {
     case 'none':
@@ -327,7 +360,12 @@ export function elementwiseBytesUnderFusion(op: ElementwiseOp, fusion: SimOption
 }
 
 /** Roofline of a vector op: FLOP at the engine's vector peak for `dtype` (no efficiency term) vs memory traffic. */
-function vectorOpTime(op: ElementwiseOp | RecurrentOp, dtype: ElementwiseOp['dtype'], bytes: ByteBreakdown, ctx: OpTimeContext): OpResult {
+function vectorOpTime(
+  op: ElementwiseOp | RecurrentOp,
+  dtype: ElementwiseOp['dtype'],
+  bytes: ByteBreakdown,
+  ctx: OpTimeContext,
+): OpResult {
   const flops = opFlops(op);
   const peakFlopsPerSec = vectorPeakFlopsPerSec(ctx.engine, dtype);
   // Formula: t_compute = F / vectorPeak(dtype);  t_memory = bytes / memBW
@@ -394,8 +432,15 @@ function linkLevelOf(path: CollectivePath): OpResult['linkLevel'] {
 /** A collective: alpha-beta time on the path of its group (docs §6); no FLOP, no HBM traffic in this model. */
 function collectiveOpTime(op: CollectiveOp, ctx: OpTimeContext): OpResult {
   const path = ctx.collectivePaths[op.group];
-  if (path === undefined) throw new Error(`collective '${op.name}': no path for group '${op.group}'`);
-  const t = collectiveTime(op.collective, op.messageBytes, op.groupSize, path, ctx.collectiveAlgorithm);
+  if (path === undefined)
+    throw new Error(`collective '${op.name}': no path for group '${op.group}'`);
+  const t = collectiveTime(
+    op.collective,
+    op.messageBytes,
+    op.groupSize,
+    path,
+    ctx.collectiveAlgorithm,
+  );
   const result: OpResult = {
     op,
     flops: 0,
@@ -422,7 +467,8 @@ function collectiveOpTime(op: CollectiveOp, ctx: OpTimeContext): OpResult {
  */
 function transferOpTime(op: TransferOp, ctx: OpTimeContext): OpResult {
   const path = ctx.transferPaths?.[op.source];
-  if (path === undefined) throw new Error(`transfer op '${op.name}': no transfer path for tier '${op.source}'`);
+  if (path === undefined)
+    throw new Error(`transfer op '${op.name}': no transfer path for tier '${op.source}'`);
   // Formula: t = α_tier + α_link + max(Little, IOPS/n, tier/n, link, host staging)
   // See docs/simulation-model.md §12 ("Transfer path")
   const t = transferTime(op.reads, op.usefulBytes, path);

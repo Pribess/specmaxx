@@ -162,8 +162,18 @@ describe('unified memory × every placement: no host_ram tier, the invariant nev
         deployment: {
           offload: {
             routedExperts: [
-              { tier, layers: { from: 0, to: 24 }, residentFraction: 0, hitRatio: { kind: 'uniform' } },
-              { tier: 'nvme', layers: { from: 24, to: 48 }, residentFraction: 0, hitRatio: { kind: 'uniform' } },
+              {
+                tier,
+                layers: { from: 0, to: 24 },
+                residentFraction: 0,
+                hitRatio: { kind: 'uniform' },
+              },
+              {
+                tier: 'nvme',
+                layers: { from: 24, to: 48 },
+                residentFraction: 0,
+                hitRatio: { kind: 'uniform' },
+              },
             ],
           },
         },

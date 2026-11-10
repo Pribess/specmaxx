@@ -224,7 +224,15 @@ describe('summarize', () => {
     const result = structuredClone(base);
     result.decode.stages[0].layers[1].ops.unshift(transferOp(0.5e-3, 1.5e-3));
     result.decode.transfer = { sec: 2e-3, exposedSec: 1e-3, bytes: 300e6, requests: 40 };
-    result.memory.tiers = [{ tier: 'host_ram', bytes: 16.3e9, breakdown: { lookupTables: 0, routedExperts: 16.3e9, draftExperts: 0, tokenEmbeddings: 0 }, capacityBytes: 96e9, fits: true }];
+    result.memory.tiers = [
+      {
+        tier: 'host_ram',
+        bytes: 16.3e9,
+        breakdown: { lookupTables: 0, routedExperts: 16.3e9, draftExperts: 0, tokenEmbeddings: 0 },
+        capacityBytes: 96e9,
+        fits: true,
+      },
+    ];
     const input: SimInput = {
       ...built.input,
       deployment: {
@@ -298,7 +306,9 @@ describe('summarize', () => {
       offloadPlacements({ ...built.input, deployment: { offload: { embeddings: { tier } } } });
     expect(embedOn('nvme')).toEqual([{ group: 'token_embeddings', tier: 'nvme' }]);
     expect(embedOn('device')).toEqual([]);
-    expect(offloadChipText({ group: 'token_embeddings', tier: 'host_ram' })).toBe('Token embeddings: host RAM');
+    expect(offloadChipText({ group: 'token_embeddings', tier: 'host_ram' })).toBe(
+      'Token embeddings: host RAM',
+    );
     expect(withRules(one)).toEqual(withRules([one]));
     expect(withRules([])).toEqual([]);
   });

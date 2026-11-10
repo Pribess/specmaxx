@@ -61,7 +61,14 @@ export function gemmComputeSec(
   // See docs/simulation-model.md §4 ("Shape efficiency")
   const usefulFlops = 2 * batch * m * n * k;
   if (usefulFlops === 0) {
-    return { computeSec: 0, efficiency: 1, tile: { m: 0, n: 0 }, swapped: false, tiles: 0, waves: 0 };
+    return {
+      computeSec: 0,
+      efficiency: 1,
+      tile: { m: 0, n: 0 },
+      swapped: false,
+      tiles: 0,
+      waves: 0,
+    };
   }
 
   // Formula: P = computeUnits · ctasPerUnit   (concurrent CTA slots per wave)
@@ -90,7 +97,14 @@ export function gemmComputeSec(
       // Formula: sec = waves · 2·tm·tn·K' / (peak / P)   (every slot runs full padded tiles at its share of the peak)
       const sec = (waves * 2 * tileM * tileN * paddedK) / peakPerSlotFlopsPerSec;
       if (best === null || sec < best.computeSec) {
-        best = { computeSec: sec, efficiency: 0, tile: { m: tileM, n: tileN }, swapped: layout.swapped, tiles, waves };
+        best = {
+          computeSec: sec,
+          efficiency: 0,
+          tile: { m: tileM, n: tileN },
+          swapped: layout.swapped,
+          tiles,
+          waves,
+        };
       }
     }
   }

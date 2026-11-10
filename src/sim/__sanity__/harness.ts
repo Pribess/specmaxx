@@ -40,9 +40,22 @@ import { applyDeviceModifiers } from '../hw/modifiers';
 import { DEVICE_PRESETS, TOPOLOGY_PRESETS, deviceUnlocks, singleDevice } from '../hw/presets/index';
 import type { DeviceSpec, HardwareStack, HostSpec, TopologySpec } from '../hw/types';
 import { resolveUnlocks, type UnlockSelection } from '../hw/unlocks';
-import { decoderLayer, decoderModel, repeatLayers, type FfnParams, type MixerParams } from '../ir/builders';
+import {
+  decoderLayer,
+  decoderModel,
+  repeatLayers,
+  type FfnParams,
+  type MixerParams,
+} from '../ir/builders';
 import type { Dtype, TensorFormat } from '../ir/dtype';
-import type { BlockDraftSpec, ModelSpec, ModuleQuant, ParallelConfig, QuantConfig, WeightModule } from '../ir/model';
+import type {
+  BlockDraftSpec,
+  ModelSpec,
+  ModuleQuant,
+  ParallelConfig,
+  QuantConfig,
+  WeightModule,
+} from '../ir/model';
 import { mapHfModel } from '../models/hf/index';
 import type { HfRepoFiles } from '../models/hf/types';
 
@@ -79,7 +92,8 @@ export function simpleDecoder(p: {
   /** Feed-forward of every layer, or of layer i. */
   ffn: FfnParams | ((i: number) => FfnParams);
 }): ModelSpec {
-  const at = <T>(v: T | ((i: number) => T), i: number): T => (typeof v === 'function' ? (v as (i: number) => T)(i) : v);
+  const at = <T>(v: T | ((i: number) => T), i: number): T =>
+    typeof v === 'function' ? (v as (i: number) => T)(i) : v;
   return decoderModel({
     name: p.name,
     hidden: p.hidden,
@@ -87,7 +101,12 @@ export function simpleDecoder(p: {
     tieEmbeddings: p.tieEmbeddings,
     source: p.source,
     layers: repeatLayers(p.layers, (i) =>
-      decoderLayer({ name: `layer.${i}`, hidden: p.hidden, mixer: at(p.mixer, i), ffn: at(p.ffn, i) }),
+      decoderLayer({
+        name: `layer.${i}`,
+        hidden: p.hidden,
+        mixer: at(p.mixer, i),
+        ffn: at(p.ffn, i),
+      }),
     ),
   });
 }
@@ -180,13 +199,19 @@ export const QUANT_PRESETS: Record<Exclude<QuantPresetId, 'native'>, QuantPreset
     gemmInput: 'fp8_e4m3',
     note: 'W8A8 fp8 e4m3, per-channel or 128×128 block scales (≤ 0.002 bit/weight, left out); LM head unquantized',
   },
-  'fp8-wo': { weights: { dtype: 'fp8_e4m3' }, note: 'fp8 e4m3 weight-only (dequantized to the activation format)' },
+  'fp8-wo': {
+    weights: { dtype: 'fp8_e4m3' },
+    note: 'fp8 e4m3 weight-only (dequantized to the activation format)',
+  },
   nvfp4: {
     weights: { dtype: 'nvfp4' },
     gemmInput: 'nvfp4',
     note: 'W4A4 NVFP4 (e2m1 + e4m3 scale per 16 = 4.5 bpw); LM head unquantized',
   },
-  'mxfp4-wo': { weights: { dtype: 'mxfp4' }, note: 'mxfp4 weight-only (e2m1 + e8m0 scale per 32 = 4.25 bpw); LM head unquantized' },
+  'mxfp4-wo': {
+    weights: { dtype: 'mxfp4' },
+    note: 'mxfp4 weight-only (e2m1 + e8m0 scale per 32 = 4.25 bpw); LM head unquantized',
+  },
   'int4-g128': {
     weights: { dtype: 'int4', extraBitsPerElem: (16 + 4) / 128 },
     note: 'GPTQ/AWQ int4 g128: fp16 scale + 4-bit zero per 128 = 4.15625 bpw, weight-only; LM head unquantized',
@@ -283,13 +308,22 @@ export interface SanityNumerics {
  * the weight, embedding and LM-head formats and keeps the repo's special caches (compressed KV, indexer keys,
  * recurrent state, lookup tables); `native` keeps the repo's quantization whole.
  */
-export function resolveQuant(quant: SanityQuant, numerics: SanityNumerics = {}, native?: QuantConfig): QuantConfig {
+export function resolveQuant(
+  quant: SanityQuant,
+  numerics: SanityNumerics = {},
+  native?: QuantConfig,
+): QuantConfig {
   if (typeof quant !== 'string' && quant.kind === 'config') return quant.config;
   const activations = numerics.activations ?? 'fp16';
   const accumulate = numerics.accumulate ?? 'fp32';
   if (quant === 'native') {
-    if (native === undefined) throw new Error("quant 'native' needs a Hugging Face model (kind: 'hf')");
-    const base: QuantConfig = { ...native, ...(numerics.kvCache ? { kvCache: numerics.kvCache } : {}), accumulate };
+    if (native === undefined)
+      throw new Error("quant 'native' needs a Hugging Face model (kind: 'hf')");
+    const base: QuantConfig = {
+      ...native,
+      ...(numerics.kvCache ? { kvCache: numerics.kvCache } : {}),
+      accumulate,
+    };
     return numerics.weightOnly ? stripActivationQuant(base) : base;
   }
   const p = typeof quant === 'string' ? QUANT_PRESETS[quant] : quant.preset;
@@ -376,12 +410,15 @@ export function resolveHardware(h: SanityHardware): HardwareStack {
   const unlocks = resolveUnlocks(deviceUnlocks(device), h.unlocks ?? {});
   const modified = applyDeviceModifiers(device, unlocks.deviceModifiers);
   const options = modified.memory.capacityOptionsBytes;
-  const memCapacityBytes = h.memCapacityGb === undefined ? Math.max(...options) : h.memCapacityGb * 1e9;
+  const memCapacityBytes =
+    h.memCapacityGb === undefined ? Math.max(...options) : h.memCapacityGb * 1e9;
   return {
     device,
     topology,
     ...(unlocks.deviceModifiers.length > 0 ? { deviceModifiers: unlocks.deviceModifiers } : {}),
-    ...(unlocks.intraNodeLinkModifiers.length > 0 ? { linkModifiers: { intraNode: unlocks.intraNodeLinkModifiers } } : {}),
+    ...(unlocks.intraNodeLinkModifiers.length > 0
+      ? { linkModifiers: { intraNode: unlocks.intraNodeLinkModifiers } }
+      : {}),
     memCapacityBytes,
     ...(h.host ? { host: h.host } : {}),
   };
@@ -450,7 +487,8 @@ export function resolveDeployment(d: SanityDeployment, model: ModelSpec): Deploy
   let resolved: SpecDecodeConfig['drafter'];
   if (drafter?.kind === 'checkpoint') {
     const draft = model.draft;
-    if (draft?.kind !== 'block_drafter') throw new Error(`${model.name}: no in-checkpoint block drafter (model.draft)`);
+    if (draft?.kind !== 'block_drafter')
+      throw new Error(`${model.name}: no in-checkpoint block drafter (model.draft)`);
     const spec: BlockDraftSpec = draft;
     resolved = { kind: 'repo', repoId: model.name, spec };
   } else resolved = drafter;
@@ -501,7 +539,8 @@ function boundSummary(phase: SimResult['prefill']): { dominant: Bound; seconds: 
 export function resolveModel(m: SanityModel): { spec: ModelSpec; native?: QuantConfig } {
   if (m.kind === 'spec') return { spec: m.spec };
   const r = mapHfModel(m.files);
-  if (r.kind !== 'ok') throw new Error(`${m.files.id}: ${r.kind}${'reason' in r && r.reason ? `: ${r.reason}` : ''}`);
+  if (r.kind !== 'ok')
+    throw new Error(`${m.files.id}: ${r.kind}${'reason' in r && r.reason ? `: ${r.reason}` : ''}`);
   return { spec: r.model, native: r.quant.quant };
 }
 

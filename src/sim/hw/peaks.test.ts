@@ -9,7 +9,9 @@ const GPU = RTX_5090.engines[0];
 
 /** The preset's own table entry (tests derive from the preset, not from re-typed numbers). */
 function entry(input: MathFormat, accumulate: AccumulateType, sparsity: 'dense' | '2:4'): number {
-  const p = GPU.matmulPeaks.find((x) => x.input === input && x.accumulate === accumulate && x.sparsity === sparsity);
+  const p = GPU.matmulPeaks.find(
+    (x) => x.input === input && x.accumulate === accumulate && x.sparsity === sparsity,
+  );
   if (p === undefined) throw new Error(`no entry ${input}/${accumulate}/${sparsity}`);
   return p.flopsPerSec;
 }
@@ -50,7 +52,9 @@ describe('matmulPeakFlopsPerSec on RTX_5090 (T5b)', () => {
 
   it('fp4 with fp16 accumulate falls back to fp4/fp32; fp6 (no rate published) falls back to fp8', () => {
     const w1: string[] = [];
-    expect(matmulPeakFlopsPerSec(GPU, 'fp4', 'fp16', 'dense', w1).flopsPerSec).toBe(entry('fp4', 'fp32', 'dense'));
+    expect(matmulPeakFlopsPerSec(GPU, 'fp4', 'fp16', 'dense', w1).flopsPerSec).toBe(
+      entry('fp4', 'fp32', 'dense'),
+    );
     const w2: string[] = [];
     const r = matmulPeakFlopsPerSec(GPU, 'fp6', 'fp32', 'dense', w2);
     expect(r.usedInput).toBe('fp8');
@@ -62,7 +66,12 @@ describe('matmulPeakFlopsPerSec on RTX_5090 (T5b)', () => {
     const warnings: string[] = [];
     // SYNTH_UNIFIED gpu lists bf16 dense only (50e12).
     const r = matmulPeakFlopsPerSec(SYNTH_UNIFIED.engines[0], 'bf16', 'fp32', '2:4', warnings);
-    expect(r).toEqual({ flopsPerSec: 50e12, usedInput: 'bf16', usedAccumulate: 'fp32', usedSparsity: 'dense' });
+    expect(r).toEqual({
+      flopsPerSec: 50e12,
+      usedInput: 'bf16',
+      usedAccumulate: 'fp32',
+      usedSparsity: 'dense',
+    });
     expect(warnings).toHaveLength(1);
   });
 

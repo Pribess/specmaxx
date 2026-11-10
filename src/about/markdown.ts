@@ -2,7 +2,10 @@ import { Marked, Renderer } from 'marked';
 
 /** GitHub-style fragment for a heading; duplicate allocation happens per document. */
 export function githubSlug(text: string): string {
-  return text.toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/g, '-');
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+    .replace(/\s/g, '-');
 }
 
 /** Render trusted repository Markdown, resolving links only to documents present on this page. */
@@ -16,7 +19,9 @@ export function renderMarkdown(
     gfm: true,
     renderer: {
       link(token) {
-        const documentLink = /^(?:\.\/)?(simulation-model|sanity-check)\.md(#.*)?$/.exec(token.href);
+        const documentLink = /^(?:\.\/)?(simulation-model|sanity-check)\.md(#.*)?$/.exec(
+          token.href,
+        );
         if (documentLink && renderedDocs.includes(`${documentLink[1]}.md`)) {
           const href = documentLink[2] || `#${documentLink[1]}`;
           return defaultRenderer.link.call(this, { ...token, href });
@@ -36,10 +41,10 @@ export function renderMarkdown(
         return `<h${depth} id="${id}">${this.parser.parseInline(tokens)}</h${depth}>\n`;
       },
       table(token) {
-        const header = token.header.map(cell => this.tablecell(cell)).join('');
-        const rows = token.rows.map(row =>
-          `<tr>${row.map(cell => this.tablecell(cell)).join('')}</tr>`
-        ).join('');
+        const header = token.header.map((cell) => this.tablecell(cell)).join('');
+        const rows = token.rows
+          .map((row) => `<tr>${row.map((cell) => this.tablecell(cell)).join('')}</tr>`)
+          .join('');
         // AboutPage wraps each table in a themed horizontal ScrollArea (see splitTables).
         return `<table><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
       },

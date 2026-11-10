@@ -1,15 +1,9 @@
 {
-  "architectures": [
-    "GlmMoeDsaForCausalLM"
-  ],
+  "architectures": ["GlmMoeDsaForCausalLM"],
   "attention_bias": false,
   "attention_dropout": 0.0,
   "dtype": "bfloat16",
-  "eos_token_id": [
-    154820,
-    154827,
-    154829
-  ],
+  "eos_token_id": [154820, 154827, 154829],
   "ep_size": 1,
   "first_k_dense_replace": 3,
   "head_dim": 192,
@@ -206,7 +200,7 @@
   "qk_head_dim": 256,
   "qk_nope_head_dim": 192,
   "qk_rope_head_dim": 64,
-  "rms_norm_eps": 1e-05,
+  "rms_norm_eps": 1e-5,
   "rope_interleave": true,
   "rope_parameters": {
     "rope_theta": 8000000,

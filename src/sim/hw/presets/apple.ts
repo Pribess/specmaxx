@@ -92,7 +92,8 @@ const APPLE_GEMV_MAX_ROWS = 1;
 /** MLX source of the vector (non-MMA) GEMV dispatch (main, commit fc344c98, 2026-11-06). */
 const MLX_GEMV_URL = 'https://github.com/ml-explore/mlx/blob/fc344c98/mlx/backend/metal/matmul.cpp';
 /** llama.cpp Metal mat-vec vs mat-mat dispatch (master, commit a0ad695, 2026-11-09). */
-const LLAMACPP_MUL_MV_URL = 'https://github.com/ggml-org/llama.cpp/blob/a0ad695/ggml/src/ggml-metal/ggml-metal-common.cpp';
+const LLAMACPP_MUL_MV_URL =
+  'https://github.com/ggml-org/llama.cpp/blob/a0ad695/ggml/src/ggml-metal/ggml-metal-common.cpp';
 
 /** SIMD-group MMA dimensions in elements; CTA shapes and residency remain estimates. */
 function simdTiling(): GemmTiling {
@@ -267,9 +268,10 @@ function appleDevice(params: AppleDeviceParams): DeviceSpec {
   // Every engine (SIMD, and NAX on M5) runs softmax exp and the GEMV path on the SIMD ALUs.
   const engineRoots = hasNeuralAccelerators ? ['engines.0', 'engines.1'] : ['engines.0'];
   const gemvFields = engineRoots.map((root) => `${root}.gemvMaxRows`);
-  const sfus = engineRoots.map((root) => engineSfu(APPLE_GPU_SFU, gpuCores, 'GPU cores', gpuClockHz, `${root}.sfuOpsPerSec`));
-  const fp32Derivation =
-    `${gpuCores} GPU cores × 256 FLOP/core/clock × ${gpuClockHz} Hz = SIMD FP32 FLOP/s. `;
+  const sfus = engineRoots.map((root) =>
+    engineSfu(APPLE_GPU_SFU, gpuCores, 'GPU cores', gpuClockHz, `${root}.sfuOpsPerSec`),
+  );
+  const fp32Derivation = `${gpuCores} GPU cores × 256 FLOP/core/clock × ${gpuClockHz} Hz = SIMD FP32 FLOP/s. `;
   let halfDerivation = 'FP16/BF16 vector and matmul rate equals the FP32 SIMD rate. ';
   if (hasNeuralAccelerators) {
     halfDerivation = 'M5 FP16/BF16 SIMD rate assumed 2× FP32 (concurrent half-precision issue). ';
@@ -293,11 +295,7 @@ function appleDevice(params: AppleDeviceParams): DeviceSpec {
     {
       url: MSL_URL,
       title: 'Metal Shading Language specification, SIMD-group matrix types (§2.4)',
-      fields: [
-        `${simdTilingPath}.mmaM`,
-        `${simdTilingPath}.mmaN`,
-        `${simdTilingPath}.mmaK`,
-      ],
+      fields: [`${simdTilingPath}.mmaM`, `${simdTilingPath}.mmaN`, `${simdTilingPath}.mmaK`],
       note: 'simdgroup_matrix<T,8,8>: 8×8 matrix multiply-accumulate has K=8; half/bfloat/float types.',
     },
     {
@@ -334,7 +332,8 @@ function appleDevice(params: AppleDeviceParams): DeviceSpec {
     },
     {
       field: `${simdTilingPath}.ctasPerUnit`,
-      reason: 'One resident GEMM threadgroup per GPU core assumed; register/shared-memory use affects occupancy.',
+      reason:
+        'One resident GEMM threadgroup per GPU core assumed; register/shared-memory use affects occupancy.',
     },
     ...sfus.flatMap((s) => s.estimated),
   ];
@@ -346,8 +345,7 @@ function appleDevice(params: AppleDeviceParams): DeviceSpec {
   if (hasNeuralAccelerators) {
     engines.unshift(neuralEngine(gpuCores, gpuClockHz));
     const neuralComputeFields = ['engines.0.matmulPeaks', 'engines.0.vectorFlopsPerSec'];
-    const halfNeuralDerivation =
-      `${gpuCores} GPU cores × 1024 FP16/BF16 FLOP/core/clock × ${gpuClockHz} Hz. `;
+    const halfNeuralDerivation = `${gpuCores} GPU cores × 1024 FP16/BF16 FLOP/core/clock × ${gpuClockHz} Hz. `;
     const int8NeuralDerivation =
       'INT8 extrapolated: cores × 2048 OP/core/clock × clock Hz (2× FP16). ';
     neuralSources.push(
@@ -363,7 +361,8 @@ function appleDevice(params: AppleDeviceParams): DeviceSpec {
         title: 'Community Apple GPU Neural Accelerator architecture measurements',
         kind: 'community',
         fields: ['engines.0.matmulPeaks'],
-        note: '512 FP16 FMA/core/clock × 2 FLOP/FMA = 1024 FLOP/core/clock. ' +
+        note:
+          '512 FP16 FMA/core/clock × 2 FLOP/FMA = 1024 FLOP/core/clock. ' +
           'INT8 nominal 2048 OP/core/clock extrapolated from A19; BF16 matches FP16 on M5 Max.',
       },
       {
@@ -383,7 +382,8 @@ function appleDevice(params: AppleDeviceParams): DeviceSpec {
         title: 'M5 Max MPP matmul2d community benchmark',
         kind: 'community',
         fields: ['engines.0.gemmTiling.default.ctaTiles'],
-        note: 'Best tile 128×64, four SIMD groups; FP16→FP32 61.2 TFLOPS, BF16 61.0, INT8 119 TOPS. ' +
+        note:
+          'Best tile 128×64, four SIMD groups; FP16→FP32 61.2 TFLOPS, BF16 61.0, INT8 119 TOPS. ' +
           'Measurement was power-limited.',
       },
     );
@@ -398,7 +398,8 @@ function appleDevice(params: AppleDeviceParams): DeviceSpec {
       },
       {
         field: 'engines.0.gemmTiling.default',
-        reason: 'Native NAX MMA shape unpublished: 8×8×8 is a proxy, not a hardware fact. ' +
+        reason:
+          'Native NAX MMA shape unpublished: 8×8×8 is a proxy, not a hardware fact. ' +
           'Measured 128×64 CTA extrapolated across M5 SKUs; one resident threadgroup/core assumed.',
       },
       {
@@ -436,20 +437,32 @@ function appleDevice(params: AppleDeviceParams): DeviceSpec {
       // macOS GPU wired limit (≈ 3/4 of RAM at ≥ 36 GB); the 2/3 rule of smaller Macs is not needed here.
       gpuUsableFraction: MACOS_GPU_USABLE_FRACTION,
     },
-    sources: [memorySource, ...simdSources, ...neuralSources, ...MACOS_WIRED_LIMIT_SOURCES, ...additionalSources],
+    sources: [
+      memorySource,
+      ...simdSources,
+      ...neuralSources,
+      ...MACOS_WIRED_LIMIT_SOURCES,
+      ...additionalSources,
+    ],
     estimated: [...simdEstimated, ...neuralEstimated],
   };
 }
 
-const M3_CLOCK_NOTE = 'M3 Ultra clock estimated at 1.398 GHz from M2 Max DVFS; no direct Ultra measurement.';
-const M3_MAX_CLOCK_NOTE = 'M3 Max clock estimated at 1.398 GHz from M2 Max DVFS; no direct M3 Max measurement found.';
+const M3_CLOCK_NOTE =
+  'M3 Ultra clock estimated at 1.398 GHz from M2 Max DVFS; no direct Ultra measurement.';
+const M3_MAX_CLOCK_NOTE =
+  'M3 Max clock estimated at 1.398 GHz from M2 Max DVFS; no direct M3 Max measurement found.';
 /** The MacBook Pro (Nov 2023) spec pages: the only machines with an M3 Max. Thunderbolt 4 only (no TB5, so no RDMA). */
-const MBP_M3_SPEC_PAGE = { url: MBP14_M3_URL, title: 'Apple MacBook Pro (14-inch, Nov 2023) technical specifications' };
+const MBP_M3_SPEC_PAGE = {
+  url: MBP14_M3_URL,
+  title: 'Apple MacBook Pro (14-inch, Nov 2023) technical specifications',
+};
 const MBP16_M3_SOURCE: SourceRef = {
   url: MBP16_M3_URL,
   title: 'Apple MacBook Pro (16-inch, Nov 2023) technical specifications',
   fields: ['memory.capacityOptionsBytes', 'memory.bandwidthBytesPerSec'],
-  note: 'Same M3 Max options as the 14-inch: 30-core GPU with 36GB or 96GB at 300GB/s; 40-core GPU with 48GB, 64GB or ' +
+  note:
+    'Same M3 Max options as the 14-inch: 30-core GPU with 36GB or 96GB at 300GB/s; 40-core GPU with 48GB, 64GB or ' +
     '128GB at 400GB/s. Three Thunderbolt 4 ports (40 Gb/s).',
 };
 
@@ -462,7 +475,8 @@ export const M3_MAX_30C = appleDevice({
   memBandwidthBytesPerSec: gbPerSec(300),
   hasNeuralAccelerators: false,
   clockNote: M3_MAX_CLOCK_NOTE,
-  memoryNote: 'M3 Max with 14-core CPU, 30-core GPU; 36GB or 96GB unified memory; 300GB/s memory bandwidth.',
+  memoryNote:
+    'M3 Max with 14-core CPU, 30-core GPU; 36GB or 96GB unified memory; 300GB/s memory bandwidth.',
   specPage: MBP_M3_SPEC_PAGE,
   additionalSources: [MBP16_M3_SOURCE],
 });
@@ -475,14 +489,17 @@ export const M3_MAX_40C = appleDevice({
   memBandwidthBytesPerSec: gbPerSec(400),
   hasNeuralAccelerators: false,
   clockNote: M3_MAX_CLOCK_NOTE,
-  memoryNote: 'M3 Max with 16-core CPU, 40-core GPU; 48GB, 64GB or 128GB unified memory; 400GB/s memory bandwidth.',
+  memoryNote:
+    'M3 Max with 16-core CPU, 40-core GPU; 48GB, 64GB or 128GB unified memory; 400GB/s memory bandwidth.',
   specPage: MBP_M3_SPEC_PAGE,
   additionalSources: [MBP16_M3_SOURCE],
 });
-const M4_CLOCK_NOTE = '1.578 GHz base-M4 device-tree P15 extrapolated to M4 Max, not an Apple clock guarantee.';
+const M4_CLOCK_NOTE =
+  '1.578 GHz base-M4 device-tree P15 extrapolated to M4 Max, not an Apple clock guarantee.';
 const M5_MAX_CLOCK_NOTE =
   '1.62 GHz community M5 Max uncapped powermetrics; workload/cooling dependent, not Apple-published.';
-const M5_ULTRA_CLOCK_NOTE = '1.62 GHz assumed from M5 Max; no M5 Ultra GPU clock measurement found.';
+const M5_ULTRA_CLOCK_NOTE =
+  '1.62 GHz assumed from M5 Max; no M5 Ultra GPU clock measurement found.';
 
 /** M4 Max 32-core: 36 GB, 410 GB/s; SIMD compute estimated at 1.578 GHz (base-M4 clock). */
 export const M4_MAX_32C = appleDevice({
@@ -526,7 +543,8 @@ export const M3_ULTRA_80C = appleDevice({
   memBandwidthBytesPerSec: gbPerSec(819),
   hasNeuralAccelerators: false,
   clockNote: M3_CLOCK_NOTE,
-  memoryNote: '80-core GPU; 96GB, 256GB or 512GB unified memory; 819GB/s. Apple launch release confirms up to 512GB.',
+  memoryNote:
+    '80-core GPU; 96GB, 256GB or 512GB unified memory; 819GB/s. Apple launch release confirms up to 512GB.',
   additionalSources: [
     {
       url: 'https://www.apple.com/newsroom/2025/03/apple-unveils-new-mac-studio-the-most-powerful-mac-ever/',

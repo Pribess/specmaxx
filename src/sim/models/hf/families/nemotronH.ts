@@ -102,20 +102,18 @@ export const nemotronHFamily: FamilyEntry = {
       let value: T | undefined;
       return () => (value ??= make());
     };
-    const mamba = once(
-      (): MixerParams => ({
-        kind: 'linear',
-        variant: 'mamba2',
-        qkHeads: r.int('n_groups'),
-        vHeads: r.int('mamba_num_heads'),
-        keyDim: r.int('ssm_state_size'),
-        valueDim: r.int('mamba_head_dim'),
-        convKernel: r.int('conv_kernel'),
-        outputGate: true,
-        convBias: r.bool('use_conv_bias', true),
-        ...(r.optInt('chunk_size') !== undefined ? { chunkTokens: r.optInt('chunk_size') } : {}),
-      }),
-    );
+    const mamba = once((): MixerParams => ({
+      kind: 'linear',
+      variant: 'mamba2',
+      qkHeads: r.int('n_groups'),
+      vHeads: r.int('mamba_num_heads'),
+      keyDim: r.int('ssm_state_size'),
+      valueDim: r.int('mamba_head_dim'),
+      convKernel: r.int('conv_kernel'),
+      outputGate: true,
+      convBias: r.bool('use_conv_bias', true),
+      ...(r.optInt('chunk_size') !== undefined ? { chunkTokens: r.optInt('chunk_size') } : {}),
+    }));
     const attention = once((): MixerParams => {
       const heads = r.int('num_attention_heads');
       return {
@@ -129,28 +127,24 @@ export const nemotronHFamily: FamilyEntry = {
       };
     });
     const latent = r.optInt('moe_latent_size');
-    const moe = once(
-      (): FfnParams => ({
-        kind: 'moe',
-        experts: r.int('n_routed_experts'),
-        topK: r.int('num_experts_per_tok'),
-        expertIntermediate: r.int('moe_intermediate_size'),
-        sharedExperts: r.optInt('n_shared_experts') ?? 0,
-        sharedIntermediate: r.optInt('moe_shared_expert_intermediate_size') ?? 0,
-        gated: false,
-        activation: act,
-        ...(latent !== undefined ? { latentDim: latent } : {}),
-      }),
-    );
-    const mlp = once(
-      (): FfnParams => ({
-        kind: 'dense',
-        intermediate: r.int('intermediate_size'),
-        gated: false,
-        activation: act,
-        bias: r.bool('mlp_bias', false),
-      }),
-    );
+    const moe = once((): FfnParams => ({
+      kind: 'moe',
+      experts: r.int('n_routed_experts'),
+      topK: r.int('num_experts_per_tok'),
+      expertIntermediate: r.int('moe_intermediate_size'),
+      sharedExperts: r.optInt('n_shared_experts') ?? 0,
+      sharedIntermediate: r.optInt('moe_shared_expert_intermediate_size') ?? 0,
+      gated: false,
+      activation: act,
+      ...(latent !== undefined ? { latentDim: latent } : {}),
+    }));
+    const mlp = once((): FfnParams => ({
+      kind: 'dense',
+      intermediate: r.int('intermediate_size'),
+      gated: false,
+      activation: act,
+      bias: r.bool('mlp_bias', false),
+    }));
     const layerOf = (role: HybridBlockType, name: string): LayerSpec => {
       const base = { hidden, name };
       switch (role) {

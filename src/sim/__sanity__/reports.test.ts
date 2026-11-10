@@ -9,7 +9,12 @@
 
 import { describe, expect, it } from 'vitest';
 import { sanityDrafterSpec, sanityRepoFiles } from './configs.testutil';
-import { simulateReport, type SanityDeployment, type SanityModel, type SanityResult } from './harness';
+import {
+  simulateReport,
+  type SanityDeployment,
+  type SanityModel,
+  type SanityResult,
+} from './harness';
 import {
   REPORTS,
   UPPER_BOUND_OPTIONS,
@@ -24,7 +29,9 @@ const MARGIN = 0.9;
 
 /** The harness model of a report model (HF fixtures are loaded here: the loader needs vite). */
 function toSanityModel(m: ReportModel): SanityModel {
-  return m.kind === 'spec' ? m : { kind: 'hf', files: sanityRepoFiles(m.repoId, m.dir ? { dir: m.dir } : {}) };
+  return m.kind === 'spec'
+    ? m
+    : { kind: 'hf', files: sanityRepoFiles(m.repoId, m.dir ? { dir: m.dir } : {}) };
 }
 
 /** The harness deployment of a report's: a drafter repo id becomes the parsed drafter fixture. */
@@ -32,7 +39,10 @@ function toSanityDeployment(d: ReportDeployment): SanityDeployment {
   const s = d.speculative;
   if (s?.drafter?.kind !== 'repo') return d as SanityDeployment;
   const { repoId } = s.drafter;
-  return { ...d, speculative: { ...s, drafter: { kind: 'repo', repoId, spec: sanityDrafterSpec(repoId) } } };
+  return {
+    ...d,
+    speculative: { ...s, drafter: { kind: 'repo', repoId, spec: sanityDrafterSpec(repoId) } },
+  };
 }
 
 /** Simulates one report with the shared upper-bound options. */
@@ -48,7 +58,10 @@ function simulate(r: BenchmarkReport): SanityResult {
 
 /** The simulated rate matching a reported one (same phase, same per-sequence / aggregate kind). Unit: tokens/s. */
 function simulatedRate(sim: SanityResult, phase: 'prefill' | 'decode', rate: ReportedRate): number {
-  if (phase === 'prefill') return rate.kind === 'perSequence' ? sim.prefillPerSequenceTokensPerSec : sim.prefillTokensPerSec;
+  if (phase === 'prefill')
+    return rate.kind === 'perSequence'
+      ? sim.prefillPerSequenceTokensPerSec
+      : sim.prefillTokensPerSec;
   return rate.kind === 'perSequence' ? sim.decodePerSequenceTokensPerSec : sim.decodeTokensPerSec;
 }
 
@@ -71,7 +84,17 @@ const ROWS: Row[] = REPORTS.flatMap((r) => {
     if (rate === undefined) return [];
     const simulated = simulatedRate(sim, phase, rate);
     const bound = phase === 'prefill' ? sim.prefillBound.dominant : sim.decodeBound.dominant;
-    return [{ id: r.id, phase, reported: rate.tokensPerSec, simulated, ratio: rate.tokensPerSec / simulated, mode: rate.check?.mode ?? 'assert', bound }];
+    return [
+      {
+        id: r.id,
+        phase,
+        reported: rate.tokensPerSec,
+        simulated,
+        ratio: rate.tokensPerSec / simulated,
+        mode: rate.check?.mode ?? 'assert',
+        bound,
+      },
+    ];
   });
 });
 
@@ -95,7 +118,12 @@ describe('community reports vs simulated theoretical maxima', () => {
         .map((r) => r.ratio)
         .sort((a, b) => a - b);
       const buckets = [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1, Infinity];
-      const hist = buckets.slice(0, -1).map((lo, i) => `[${lo}, ${buckets[i + 1]}): ${v.filter((x) => x >= lo && x < buckets[i + 1]).length}`);
+      const hist = buckets
+        .slice(0, -1)
+        .map(
+          (lo, i) =>
+            `[${lo}, ${buckets[i + 1]}): ${v.filter((x) => x >= lo && x < buckets[i + 1]).length}`,
+        );
       return (
         `${phase}: n ${v.length}, min ${v[0].toFixed(3)}, p25 ${quantile(v, 0.25).toFixed(3)}, median ${quantile(v, 0.5).toFixed(3)}, ` +
         `p75 ${quantile(v, 0.75).toFixed(3)}, max ${v[v.length - 1].toFixed(3)} | ${hist.join(' ')}`
@@ -111,11 +139,18 @@ describe('community reports vs simulated theoretical maxima', () => {
       const rate = r[phase];
       if (rate === undefined) continue;
       const simulated = simulatedRate(sim, phase, rate);
-      expect(Number.isFinite(simulated) && simulated > 0, `${r.id} ${phase}: simulated rate`).toBe(true);
+      expect(Number.isFinite(simulated) && simulated > 0, `${r.id} ${phase}: simulated rate`).toBe(
+        true,
+      );
       const holds = simulated >= MARGIN * rate.tokensPerSec;
       const check = rate.check ?? { mode: 'assert' as const };
-      if (check.mode === 'assert') expect(holds, `${r.id} ${phase}: sim ${simulated.toFixed(1)} vs reported ${rate.tokensPerSec}`).toBe(true);
-      if (check.mode === 'exception') expect(holds, `${r.id} ${phase}: known exception now passes (${check.reason})`).toBe(false);
+      if (check.mode === 'assert')
+        expect(
+          holds,
+          `${r.id} ${phase}: sim ${simulated.toFixed(1)} vs reported ${rate.tokensPerSec}`,
+        ).toBe(true);
+      if (check.mode === 'exception')
+        expect(holds, `${r.id} ${phase}: known exception now passes (${check.reason})`).toBe(false);
     }
   });
 
@@ -125,21 +160,36 @@ describe('community reports vs simulated theoretical maxima', () => {
       const sim = SIMS.get(r.id)!;
       const tp = r.input.parallel?.tp ?? 1;
       // Formula: total weights = Σ_stages (per-device weight bytes × tp)  (each stage's tp devices are symmetric)
-      const totalWeightBytes = sim.sim.memory.perStage.reduce((sum, s) => sum + s.weightBytes * tp, 0);
+      const totalWeightBytes = sim.sim.memory.perStage.reduce(
+        (sum, s) => sum + s.weightBytes * tp,
+        0,
+      );
       const fileBytes = r.weightFileBytes!;
-      expect(Math.abs(totalWeightBytes / fileBytes - 1), `${r.id}: sim ${totalWeightBytes / 1e9} GB vs file ${fileBytes / 1e9} GB`).toBeLessThan(0.08);
+      expect(
+        Math.abs(totalWeightBytes / fileBytes - 1),
+        `${r.id}: sim ${totalWeightBytes / 1e9} GB vs file ${fileBytes / 1e9} GB`,
+      ).toBeLessThan(0.08);
     },
   );
 
-  it.each(REPORTS.map((r) => [r.id, r] as const))('%s: decode is simulated at the recorded context', (_id, r) => {
-    // The recorded depth and the simulated one agree, and decode runs at depth + ceil(genLen / 2).
-    expect(r.input.workload.contextDepth ?? 0).toBe(r.contextDepth);
-    expect(SIMS.get(r.id)!.decodeContextLen).toBe(Math.max(1, r.contextDepth + Math.ceil(r.genLen / 2)));
-    // Only llama-bench's tg test (and llama-sweep-bench's, at each N_KV) starts from an empty cache; everywhere else
-    // generation follows the prompt.
-    const emptyCacheTg = r.engine.includes('llama-bench') || r.engine.includes('llama-sweep-bench');
-    if (!emptyCacheTg) expect(r.contextDepth, `${r.id}: decode should follow the prompt`).toBeGreaterThanOrEqual(r.promptLen);
-  });
+  it.each(REPORTS.map((r) => [r.id, r] as const))(
+    '%s: decode is simulated at the recorded context',
+    (_id, r) => {
+      // The recorded depth and the simulated one agree, and decode runs at depth + ceil(genLen / 2).
+      expect(r.input.workload.contextDepth ?? 0).toBe(r.contextDepth);
+      expect(SIMS.get(r.id)!.decodeContextLen).toBe(
+        Math.max(1, r.contextDepth + Math.ceil(r.genLen / 2)),
+      );
+      // Only llama-bench's tg test (and llama-sweep-bench's, at each N_KV) starts from an empty cache; everywhere else
+      // generation follows the prompt.
+      const emptyCacheTg =
+        r.engine.includes('llama-bench') || r.engine.includes('llama-sweep-bench');
+      if (!emptyCacheTg)
+        expect(r.contextDepth, `${r.id}: decode should follow the prompt`).toBeGreaterThanOrEqual(
+          r.promptLen,
+        );
+    },
+  );
 
   it('web-26 (mlx_lm.benchmark -p 2048 -g 128) decodes after its 2048-token prompt: context 2048 + 64', () => {
     expect(SIMS.get('web-26')!.decodeContextLen).toBe(2112);

@@ -228,7 +228,12 @@ function mapOk(id: string): Extract<HfMapResult, { kind: 'ok' }> {
 
 const hasMoe = (m: ModelSpec) => m.layers.some((l) => l.blocks.some((b) => b.kind === 'moe'));
 
-function run(model: ModelSpec, quant: QuantConfig, parallel: ParallelConfig, hardware: HardwareStack): SimResult {
+function run(
+  model: ModelSpec,
+  quant: QuantConfig,
+  parallel: ParallelConfig,
+  hardware: HardwareStack,
+): SimResult {
   return simulate({ model, quant, parallel, workload: WORKLOAD, hardware });
 }
 
@@ -237,14 +242,23 @@ function expectSane(r: SimResult): void {
     expect(Number.isFinite(p.tokensPerSec) && p.tokensPerSec > 0).toBe(true);
     expect(Number.isFinite(p.latencySec) && p.latencySec > 0).toBe(true);
   }
-  for (const s of r.memory.perStage) expect(Number.isFinite(s.totalBytes) && s.totalBytes > 0).toBe(true);
+  for (const s of r.memory.perStage)
+    expect(Number.isFinite(s.totalBytes) && s.totalBytes > 0).toBe(true);
 }
 
 /** Σ over every block of the per-sequence state at `tokens` of context. Unit: bytes. */
 function sequenceStateBytes(model: ModelSpec, quant: QuantConfig, tokens: number): number {
-  const ctx: LoweringContext = { phase: 'decode', seqs: 1, qLen: 1, kvLen: tokens, quant, parallel: { tp: 1, pp: 1, dp: 1, ep: 1 } };
+  const ctx: LoweringContext = {
+    phase: 'decode',
+    seqs: 1,
+    qLen: 1,
+    kvLen: tokens,
+    quant,
+    parallel: { tp: 1, pp: 1, dp: 1, ep: 1 },
+  };
   let total = 0;
-  for (const layer of model.layers) for (const b of layer.blocks) total += blockSequenceStateBytes(b, ctx, tokens);
+  for (const layer of model.layers)
+    for (const b of layer.blocks) total += blockSequenceStateBytes(b, ctx, tokens);
   return total;
 }
 
@@ -303,13 +317,18 @@ describe('sequence-state growth per token, by hand', () => {
     // with bf16 RoPE dims and a ue8m0 scale per 64 (448 + 128 + 7 = 583 B); the 21 r = 4 indexers add a 128-element
     // mxfp4 key (68 B) per 4 tokens. The 128-token windows and the compressor tails are constant.
     const r = mapOk('deepseek-ai/DeepSeek-V4-Flash-0731');
-    expect(stateGrowthPerToken(r.model, r.quant.quant)).toBeCloseTo((21 / 4 + 20 / 128) * 583 + (21 / 4) * 68, 6);
+    expect(stateGrowthPerToken(r.model, r.quant.quant)).toBeCloseTo(
+      (21 / 4 + 20 / 128) * 583 + (21 / 4) * 68,
+      6,
+    );
   });
 
   it('GLM-5.3: 78 latents of 576 elements + 21 indexer keys of 128 elements per token', () => {
     const r = mapOk('zai-org/GLM-5.3');
     const q = r.quant.quant;
-    const expected = 78 * 576 * bytesPerElement(q.kvCache) + 21 * 128 * bytesPerElement(q.indexerKeyCache ?? q.kvCache);
+    const expected =
+      78 * 576 * bytesPerElement(q.kvCache) +
+      21 * 128 * bytesPerElement(q.indexerKeyCache ?? q.kvCache);
     expect(stateGrowthPerToken(r.model, q)).toBe(expected);
   });
 
@@ -326,11 +345,17 @@ describe('sequence-state growth per token, by hand', () => {
 
 describe('quant hints vs explicit repo metadata', () => {
   it("an explicit kv_cache_scheme beats DeepSeek's native kvCache hint; the other cache hints stay", () => {
-    const files = fixtureRepoFiles('intel-ai/DeepSeek-V4.1-Flash-MXFP4-Mixed-CT-AutoRound', { dir: 'quant' });
-    if (!isJsonObject(files.config) || !isJsonObject(files.config.quantization_config)) throw new Error('fixture shape');
+    const files = fixtureRepoFiles('intel-ai/DeepSeek-V4.1-Flash-MXFP4-Mixed-CT-AutoRound', {
+      dir: 'quant',
+    });
+    if (!isJsonObject(files.config) || !isJsonObject(files.config.quantization_config))
+      throw new Error('fixture shape');
     const config = {
       ...files.config,
-      quantization_config: { ...files.config.quantization_config, kv_cache_scheme: { num_bits: 8, type: 'float' } },
+      quantization_config: {
+        ...files.config.quantization_config,
+        kv_cache_scheme: { num_bits: 8, type: 'float' },
+      },
     };
     const r = mapHfModel({ ...files, config });
     if (r.kind !== 'ok') throw new Error(JSON.stringify(r));

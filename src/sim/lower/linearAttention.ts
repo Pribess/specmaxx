@@ -110,7 +110,12 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
     //          output gate: fullRankOutputGate ? g: n = vL·dv, k = h : (g_a: n = r, k = h; g_b: n = vL·dv, k = r)
     // See docs/simulation-model.md §5 "KDA"
     const m = { module: 'linear_attention' } as const;
-    ops.push(linearGemm('lin.qkv', { m: T, n: 2 * qkL * dk + vL * dv + vL, k: h }, ctx, { ...m, outParts: [qkL * dk, qkL * dk, vL * dv, vL] }));
+    ops.push(
+      linearGemm('lin.qkv', { m: T, n: 2 * qkL * dk + vL * dv + vL, k: h }, ctx, {
+        ...m,
+        outParts: [qkL * dk, qkL * dk, vL * dv, vL],
+      }),
+    );
     ops.push(linearGemm('lin.f_a', { m: T, n: r, k: h }, ctx, m));
     ops.push(linearGemm('lin.f_b', { m: T, n: vL * dk, k: r }, ctx, m));
     if (block.fullRankOutputGate === true) {
@@ -125,8 +130,19 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
     // Formula: in_proj: m = T, n = 2·qkL·dk + vL·dv·(gate ? 2 : 1) + g·vL, k = h
     // See docs/simulation-model.md §5 "Linear-attention sharding", "Mamba-2"
     const inN = 2 * qkL * dk + vL * dv * (block.outputGate ? 2 : 1) + g * vL;
-    const inParts = [qkL * dk, qkL * dk, vL * dv, ...(block.outputGate ? [vL * dv] : []), ...Array<number>(g).fill(vL)];
-    ops.push(linearGemm('lin.in_proj', { m: T, n: inN, k: h }, ctx, { module: 'linear_attention', outParts: inParts }));
+    const inParts = [
+      qkL * dk,
+      qkL * dk,
+      vL * dv,
+      ...(block.outputGate ? [vL * dv] : []),
+      ...Array<number>(g).fill(vL),
+    ];
+    ops.push(
+      linearGemm('lin.in_proj', { m: T, n: inN, k: h }, ctx, {
+        module: 'linear_attention',
+        outParts: inParts,
+      }),
+    );
   }
 
   if (K > 0) {
@@ -166,7 +182,8 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
     valueDim: dv,
     mode,
     // Formula: chunkLen = chunked ? min(chunkTokens ?? 64, qLen) : 1
-    chunkLen: mode === 'chunked' ? Math.min(block.chunkTokens ?? RECURRENT_CHUNK_TOKENS, ctx.qLen) : 1,
+    chunkLen:
+      mode === 'chunked' ? Math.min(block.chunkTokens ?? RECURRENT_CHUNK_TOKENS, ctx.qLen) : 1,
     stateFlopsPerElemPerToken: stateFlopsPerElemPerToken(block.variant, mode),
     // Formula: gate elems per token per head: KDA dk + 1 (per-channel decay + β), else 2
     gateElemsPerTokenPerHead: block.variant === 'kda' ? dk + 1 : 2,
@@ -184,7 +201,8 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
   if (block.outputGate) {
     // Formula: gated_rmsnorm over T·vL·dv: read 2·elems (o, z), write elems, gamma (Mamba2 vL·dv, else dv)·bpe(hp)
     // (Mamba2's grouped RMSNorm has one γ per channel; GatedDeltaNet shares one dv-wide γ across heads.)
-    const spansHeads = block.variant !== 'kda' && linearVariantConstants(block.variant).outNormSpansHeads;
+    const spansHeads =
+      block.variant !== 'kda' && linearVariantConstants(block.variant).outNormSpansHeads;
     const gammaElems = spansHeads ? vL * dv : dv;
     ops.push(
       elementwise(
@@ -205,7 +223,9 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
   }
 
   // Formula: out_proj: m = T, n = h, k = vL·dv
-  ops.push(linearGemm('lin.out_proj', { m: T, n: h, k: vL * dv }, ctx, { module: 'linear_attention' }));
+  ops.push(
+    linearGemm('lin.out_proj', { m: T, n: h, k: vL * dv }, ctx, { module: 'linear_attention' }),
+  );
   ops.push(...tpAllReduce('lin.tp_all_reduce', T, h, ctx));
   return ops;
 }
@@ -214,7 +234,10 @@ export function lowerLinearAttention(block: LinearAttentionBlock, ctx: LoweringC
  * Fixed per-sequence state of a linear-attention block on one device, independent of context length:
  * the recurrent state plus the conv1d rolling state. Unit: bytes.
  */
-export function linearAttentionSequenceStateBytes(block: LinearAttentionBlock, ctx: LoweringContext): number {
+export function linearAttentionSequenceStateBytes(
+  block: LinearAttentionBlock,
+  ctx: LoweringContext,
+): number {
   const { vL, convChannels: C } = linearShard(block, ctx.parallel.tp);
   const stateBpe = bytesPerElement({ dtype: ctx.quant.recurrentState ?? 'fp32' });
   const convTaps = Math.max(block.convKernel - 1, 0);

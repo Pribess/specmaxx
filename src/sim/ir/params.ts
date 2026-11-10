@@ -7,7 +7,14 @@
  * fe/fs routed/shared expert widths, S shared experts, l latent-MoE expert width, N residual streams, D stream width.
  */
 
-import type { BlockSpec, CsaSelection, IndexerSpec, ModelSpec, MoeBlock, ProjectionSpec } from './model';
+import type {
+  BlockSpec,
+  CsaSelection,
+  IndexerSpec,
+  ModelSpec,
+  MoeBlock,
+  ProjectionSpec,
+} from './model';
 
 /**
  * Per-variant shape constants of the linear-attention variants with ONE fused in_proj (all but `'kda'`), shared by
@@ -96,7 +103,8 @@ function moeParams(block: MoeBlock, routedExperts: number): number {
   // See docs/simulation-model.md §2 "Parameter counts"
   const routed = routedExperts * mlpParams(l, block.expertIntermediate, block.gated, false);
   const router = block.experts * h;
-  const latent = block.latentDim === undefined ? 0 : 2 * h * l + (block.latentNorm === true ? l : 0);
+  const latent =
+    block.latentDim === undefined ? 0 : 2 * h * l + (block.latentNorm === true ? l : 0);
   const shared = block.sharedExperts * mlpParams(h, block.sharedIntermediate, block.gated, false);
   return routed + router + latent + shared;
 }
@@ -131,8 +139,10 @@ export function blockParams(block: BlockSpec): number {
       const qkNorm = block.qkNorm ? 2 * hd : 0;
       const indexer = sparseParams(block.sparse, h, h);
       const rb = block.relativeBias;
-      const relBias = rb === undefined ? 0 : h * block.heads * rb.relDim + rb.relDim * rb.extentTokens;
-      const kvConv = block.kvConvKernel === undefined ? 0 : 2 * block.kvHeads * hd * block.kvConvKernel;
+      const relBias =
+        rb === undefined ? 0 : h * block.heads * rb.relDim + rb.relDim * rb.extentTokens;
+      const kvConv =
+        block.kvConvKernel === undefined ? 0 : 2 * block.kvHeads * hd * block.kvConvKernel;
       return qkv + o + qkvBias + outBias + qkNorm + indexer + relBias + kvConv;
     }
     case 'mla_attention': {
@@ -185,7 +195,8 @@ export function blockParams(block: BlockSpec): number {
       const qkDims = 2 * block.qkHeads * block.keyDim;
       const vDims = block.vHeads * block.valueDim;
       // Formula: conv = (2·qkH·dk + vH·dv)·K  [+ convBias: (2·qkH·dk + vH·dv)]
-      const conv = (qkDims + vDims) * block.convKernel + (block.convBias === true ? qkDims + vDims : 0);
+      const conv =
+        (qkDims + vDims) * block.convKernel + (block.convBias === true ? qkDims + vDims : 0);
       const outProj = vDims * h;
       const outNorm = block.valueDim;
       if (block.variant === 'kda') {
@@ -209,7 +220,8 @@ export function blockParams(block: BlockSpec): number {
         // Formula:        + 3·H (A_log, D, dt_bias) + H·P (grouped out-norm γ) + H·P·h (out_proj)
         // Formula:   with G = qkHeads, H = vHeads, N = keyDim, P = valueDim
         // See docs/simulation-model.md §2 "Parameter counts", §5 "Mamba-2"
-        const inProj = h * (qkDims + vDims * (block.outputGate ? 2 : 1) + vc.gateOutputsPerHead * H);
+        const inProj =
+          h * (qkDims + vDims * (block.outputGate ? 2 : 1) + vc.gateOutputsPerHead * H);
         const headVectors = vc.vectorsPerHead * H;
         const normGamma = vDims;
         return inProj + conv + headVectors + normGamma + outProj;
@@ -264,7 +276,9 @@ export function activeBlockParams(block: BlockSpec): number {
     case 'ngram_embedding':
       // Formula: P_active = P_ngram − tableRows·rowDim + rowsPerToken·rowDim
       // See docs/simulation-model.md §2 "Parameter counts"
-      return blockParams(block) - block.tableRows * block.rowDim + block.rowsPerToken * block.rowDim;
+      return (
+        blockParams(block) - block.tableRows * block.rowDim + block.rowsPerToken * block.rowDim
+      );
     default:
       return blockParams(block);
   }
@@ -293,6 +307,7 @@ export function countParams(model: ModelSpec): number {
  */
 export function activeParamsPerToken(model: ModelSpec): number {
   let total = outerParams(model);
-  for (const layer of model.layers) for (const block of layer.blocks) total += activeBlockParams(block);
+  for (const layer of model.layers)
+    for (const block of layer.blocks) total += activeBlockParams(block);
   return total;
 }

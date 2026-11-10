@@ -14,6 +14,6 @@
     // /specmaxx -> /specmaxx/, /specmaxx/about.html -> /specmaxx/about.
     "html_handling": "auto-trailing-slash",
     // Unknown paths are 404, no SPA fallback.
-    "not_found_handling": "none"
-  }
+    "not_found_handling": "none",
+  },
 }

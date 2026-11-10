@@ -46,7 +46,8 @@ const gemmNamed = (ops: Op[], name: string): GemmOp => {
   if (op === undefined || op.kind !== 'gemm') throw new Error(`no gemm ${name}`);
   return op;
 };
-const collectives = (ops: Op[]): CollectiveOp[] => ops.filter((o): o is CollectiveOp => o.kind === 'collective');
+const collectives = (ops: Op[]): CollectiveOp[] =>
+  ops.filter((o): o is CollectiveOp => o.kind === 'collective');
 
 describe('T4b MoE (E 8, k 2)', () => {
   it('mode A ep 1 tp 1, T 1 → a 2, mE 1', () => {
@@ -84,7 +85,9 @@ describe('T4b MoE (E 8, k 2)', () => {
     // Shared expert sharded by tp: n = 2·64/8
     expect(gemmNamed(ops, 'moe.shared.gate_up').n).toBe(16);
     // epImbalance 1 restores the perfectly balanced busiest device: mE = 1
-    expect(gemmNamed(lowerMoe(MOE, ctx(1, { tp: 8, ep: 8, epImbalance: 1 })), 'moe.gate_up').m).toBe(1);
+    expect(
+      gemmNamed(lowerMoe(MOE, ctx(1, { tp: 8, ep: 8, epImbalance: 1 })), 'moe.gate_up').m,
+    ).toBe(1);
   });
 
   it('EP imbalance: default 1.2 only at ep > 1; it scales the rows (FLOP), not the experts read', () => {
@@ -93,7 +96,10 @@ describe('T4b MoE (E 8, k 2)', () => {
     expect(DEFAULT_EP_IMBALANCE).toBe(1.2);
     // T 64, ep 2 mode B (tp 1, dp 2): Ts = 64, A = 128 on Eloc 4; ρ 1: mE 32; ρ 1.5: A_max 192, mE 48
     const flat = gemmNamed(lowerMoe(MOE, ctx(64, { dp: 2, ep: 2, epImbalance: 1 })), 'moe.gate_up');
-    const skew = gemmNamed(lowerMoe(MOE, ctx(64, { dp: 2, ep: 2, epImbalance: 1.5 })), 'moe.gate_up');
+    const skew = gemmNamed(
+      lowerMoe(MOE, ctx(64, { dp: 2, ep: 2, epImbalance: 1.5 })),
+      'moe.gate_up',
+    );
     expect([flat.batch, flat.m, skew.batch, skew.m]).toEqual([4, 32, 4, 48]);
     expect(opFlops(skew) / opFlops(flat)).toBe(1.5);
     // U_dev(A = 128) = 4 − 3·0.75¹²⁷ from the mean share either way: the same weight bytes
@@ -113,7 +119,9 @@ describe('T4b MoE (E 8, k 2)', () => {
     for (const topK of [1, 2]) {
       for (const epImbalance of [1.2, 2.56]) {
         const r = route({ ...MOE, topK }, 1, { tp: 8, ep: 8, epImbalance });
-        expect([r.assignments, r.busiestAssignments], `top-${topK} ρ ${epImbalance}`).toEqual([1, 1]);
+        expect([r.assignments, r.busiestAssignments], `top-${topK} ρ ${epImbalance}`).toEqual([
+          1, 1,
+        ]);
       }
     }
     // Mode B, T 1 on each of dp 8 × ep 8: the group routes T_g = 8 tokens, so 2 on one expert's device is possible:
@@ -150,9 +158,10 @@ describe('T4b MoE (E 8, k 2)', () => {
     expect(gemmNamed(ops, 'moe.shared.gate_up').n).toBe(128);
   });
 
-  it('epImbalanceScalesAllToAll: on, the all-to-alls carry the busiest device\'s A_max rows; off (default), the mean Ts·k', () => {
+  it("epImbalanceScalesAllToAll: on, the all-to-alls carry the busiest device's A_max rows; off (default), the mean Ts·k", () => {
     // T 1, dp 8 ep 8: A = Ts·k = 2, A_max = 3 at ρ 1.2
-    const bytes = (p: Partial<ParallelConfig>) => collectives(lowerMoe(MOE, ctx(1, { dp: 8, ep: 8, ...p }))).map((c) => c.messageBytes);
+    const bytes = (p: Partial<ParallelConfig>) =>
+      collectives(lowerMoe(MOE, ctx(1, { dp: 8, ep: 8, ...p }))).map((c) => c.messageBytes);
     expect(bytes({})).toEqual([256, 256]); // default: Ts·k·l·bpe = 2·64·2, unchanged
     expect(bytes({ epImbalance: 1.2 })).toEqual([256, 256]); // an explicit 1.2 is the default
     expect(bytes({ epImbalanceScalesAllToAll: false })).toEqual([256, 256]);
@@ -164,12 +173,15 @@ describe('T4b MoE (E 8, k 2)', () => {
     const strip = (ops: Op[]) => ops.filter((o) => o.kind !== 'collective');
     expect(strip(at({ epImbalanceScalesAllToAll: true }))).toEqual(strip(at({})));
     // Mode A has no all-to-all: the switch changes nothing
-    expect(lowerMoe(MOE, ctx(4, { tp: 8, ep: 8, epImbalanceScalesAllToAll: true }))).toEqual(lowerMoe(MOE, ctx(4, { tp: 8, ep: 8 })));
+    expect(lowerMoe(MOE, ctx(4, { tp: 8, ep: 8, epImbalanceScalesAllToAll: true }))).toEqual(
+      lowerMoe(MOE, ctx(4, { tp: 8, ep: 8 })),
+    );
   });
 
-  it('with the switch on, ρ scales the busiest device\'s expert rows and its all-to-all bytes alike, continuously; not the weights read', () => {
+  it("with the switch on, ρ scales the busiest device's expert rows and its all-to-all bytes alike, continuously; not the weights read", () => {
     // T 64, tp 1, dp 2, ep 2: Ts 64, A = 128; A_max = ceil(ρ·128)
-    const at = (epImbalance: number) => lowerMoe(MOE, ctx(64, { dp: 2, ep: 2, epImbalance, epImbalanceScalesAllToAll: true }));
+    const at = (epImbalance: number) =>
+      lowerMoe(MOE, ctx(64, { dp: 2, ep: 2, epImbalance, epImbalanceScalesAllToAll: true }));
     const rows = (ops: Op[]) => {
       const up = gemmNamed(ops, 'moe.gate_up');
       return up.batch * up.m;
@@ -182,7 +194,9 @@ describe('T4b MoE (E 8, k 2)', () => {
     const dispatch = (r: number) => collectives(at(r))[0].messageBytes / (64 * 2);
     expect([1.19, 1.2, 1.21].map(dispatch)).toEqual([153, 154, 155]);
     // U from the mean share: the weight reads stay
-    expect(opBytes(gemmNamed(at(1.5), 'moe.down')).weightBytes).toBe(opBytes(gemmNamed(at(1), 'moe.down')).weightBytes);
+    expect(opBytes(gemmNamed(at(1.5), 'moe.down')).weightBytes).toBe(
+      opBytes(gemmNamed(at(1), 'moe.down')).weightBytes,
+    );
   });
 
   it('mode B tp 2 dp 4 ep 4 ends with a TP all-gather of T·h', () => {
@@ -223,34 +237,61 @@ describe('T4b MoE (E 8, k 2)', () => {
 
   it('redundant experts (EPLB replicas) add r·W_expert per device per MoE layer, only at ep > 1', () => {
     // W_expert = 3·64·32·2 = 12,288 at etp 1 (mode B ep 8, mode A tp = ep = 8)
-    for (const p of [{ dp: 8, ep: 8 }, { tp: 8, ep: 8 }]) {
+    for (const p of [
+      { dp: 8, ep: 8 },
+      { tp: 8, ep: 8 },
+    ]) {
       const base = moeResidentWeightBytes(MOE, ctx(1, p));
       expect(expertWeightBytes(MOE, ctx(1, p))).toBe(12_288);
       for (const r of [1, 3]) {
-        expect(moeResidentWeightBytes(MOE, ctx(1, { ...p, redundantExpertsPerRank: r })) - base).toBe(r * 12_288);
+        expect(
+          moeResidentWeightBytes(MOE, ctx(1, { ...p, redundantExpertsPerRank: r })) - base,
+        ).toBe(r * 12_288);
       }
     }
     // Mode A tp 4 ep 2: the replica is sharded like the experts (etp 2): W_expert = 3·64·16·2 = 6144
     const a = ctx(1, { tp: 4, ep: 2 });
-    expect(moeResidentWeightBytes(MOE, { ...a, parallel: { ...a.parallel, redundantExpertsPerRank: 2 } }) - moeResidentWeightBytes(MOE, a)).toBe(
-      2 * 6144,
-    );
+    expect(
+      moeResidentWeightBytes(MOE, {
+        ...a,
+        parallel: { ...a.parallel, redundantExpertsPerRank: 2 },
+      }) - moeResidentWeightBytes(MOE, a),
+    ).toBe(2 * 6144);
     // 0 / absent: identical; ep 1: ignored (one device holds every expert)
-    expect(moeResidentWeightBytes(MOE, ctx(1, { dp: 8, ep: 8, redundantExpertsPerRank: 0 }))).toBe(37_888);
+    expect(moeResidentWeightBytes(MOE, ctx(1, { dp: 8, ep: 8, redundantExpertsPerRank: 0 }))).toBe(
+      37_888,
+    );
     expect(moeResidentWeightBytes(MOE, ctx(1, { redundantExpertsPerRank: 4 }))).toBe(123_904);
     // Replicas change neither the ops (routing, U, all-to-alls) nor the full local set on an offload tier
-    expect(lowerMoe(MOE, ctx(4, { dp: 8, ep: 8, redundantExpertsPerRank: 2 }))).toEqual(lowerMoe(MOE, ctx(4, { dp: 8, ep: 8 })));
-    expect(moeLocalExpertBytes(MOE, ctx(1, { dp: 8, ep: 8, redundantExpertsPerRank: 2 }))).toBe(12_288);
+    expect(lowerMoe(MOE, ctx(4, { dp: 8, ep: 8, redundantExpertsPerRank: 2 }))).toEqual(
+      lowerMoe(MOE, ctx(4, { dp: 8, ep: 8 })),
+    );
+    expect(moeLocalExpertBytes(MOE, ctx(1, { dp: 8, ep: 8, redundantExpertsPerRank: 2 }))).toBe(
+      12_288,
+    );
   });
 
   it('redundant experts stay resident on an offloaded layer (C·W_expert + r·W_expert)', () => {
     const offload: OffloadLowering = {
       prefetchAccuracy: 0,
-      routedExperts: [{ tier: 'host_ram', layers: { from: 0, to: 4 }, residentFraction: 0.5, hitRatio: 0.5, includeDraft: false }],
+      routedExperts: [
+        {
+          tier: 'host_ram',
+          layers: { from: 0, to: 4 },
+          residentFraction: 0.5,
+          hitRatio: 0.5,
+          includeDraft: false,
+        },
+      ],
     };
     const c: LoweringContext = { ...ctx(1, { tp: 2, ep: 2 }), offload };
-    const withReplicas: LoweringContext = { ...c, parallel: { ...c.parallel, redundantExpertsPerRank: 1 } };
-    expect(moeResidentWeightBytes(MOE, withReplicas, 0) - moeResidentWeightBytes(MOE, c, 0)).toBe(expertWeightBytes(MOE, c));
+    const withReplicas: LoweringContext = {
+      ...c,
+      parallel: { ...c.parallel, redundantExpertsPerRank: 1 },
+    };
+    expect(moeResidentWeightBytes(MOE, withReplicas, 0) - moeResidentWeightBytes(MOE, c, 0)).toBe(
+      expertWeightBytes(MOE, c),
+    );
   });
 });
 
@@ -258,7 +299,15 @@ describe('T4b MoE (E 8, k 2)', () => {
 const LAT: MoeBlock = { ...MOE, latentDim: 32 };
 
 /** Parallel configs covering mode A (ep 1, ep = tp, ep < tp) and mode B (tp 1, tp > 1). */
-const PARALLELS: Partial<ParallelConfig>[] = [{}, { tp: 2 }, { tp: 4 }, { tp: 8, ep: 8 }, { tp: 4, ep: 2 }, { dp: 8, ep: 8 }, { tp: 2, dp: 4, ep: 4 }];
+const PARALLELS: Partial<ParallelConfig>[] = [
+  {},
+  { tp: 2 },
+  { tp: 4 },
+  { tp: 8, ep: 8 },
+  { tp: 4, ep: 2 },
+  { dp: 8, ep: 8 },
+  { tp: 2, dp: 4, ep: 4 },
+];
 
 const elementwiseNamed = (ops: Op[], name: string): ElementwiseOp => {
   const op = ops.find((o) => o.name === name);
@@ -277,8 +326,13 @@ describe('latent MoE (latentDim)', () => {
         // Every other op already uses l: with l = h they are the plain block's ops exactly.
         const ops = lowerMoe(same, c);
         expect(ops.filter((o) => !o.name.startsWith('moe.latent_'))).toEqual(lowerMoe(MOE, c));
-        expect(ops.filter((o) => o.name.startsWith('moe.latent_')).map((o) => o.name)).toEqual(['moe.latent_in', 'moe.latent_out']);
-        expect(moeResidentWeightBytes(same, c) - moeResidentWeightBytes(MOE, c)).toBe(moeLatentWeightBytes(same, c));
+        expect(ops.filter((o) => o.name.startsWith('moe.latent_')).map((o) => o.name)).toEqual([
+          'moe.latent_in',
+          'moe.latent_out',
+        ]);
+        expect(moeResidentWeightBytes(same, c) - moeResidentWeightBytes(MOE, c)).toBe(
+          moeLatentWeightBytes(same, c),
+        );
         expect(moeLocalExpertBytes(same, c)).toBe(moeLocalExpertBytes(MOE, c));
       }
     }
@@ -310,7 +364,9 @@ describe('latent MoE (latentDim)', () => {
     expect(gemmNamed(ops, 'moe.shared.gate_up').k).toBe(64);
     const combine = elementwiseNamed(ops, 'moe.combine');
     // elems a·mE·l = 2·1·32; reads 64·2 B; writes T·l·reduceBpe = 1·32·2 B
-    expect([combine.elems, combine.activationReadBytes, combine.activationWriteBytes]).toEqual([64, 128, 64]);
+    expect([combine.elems, combine.activationReadBytes, combine.activationWriteBytes]).toEqual([
+      64, 128, 64,
+    ]);
     const coll = collectives(ops);
     expect(coll.map((c) => [c.collective, c.messageBytes])).toEqual([['all_reduce', 128]]); // T 1 · h 64 · 2 B
   });
@@ -347,7 +403,11 @@ describe('latent MoE (latentDim)', () => {
 
   it("latent projections use the 'moe_latent' format, experts keep theirs", () => {
     const c = ctx(1, {});
-    c.quant = { ...c.quant, weights: { dtype: 'nvfp4' }, modules: { moe_latent: { weights: { dtype: 'bf16' } } } };
+    c.quant = {
+      ...c.quant,
+      weights: { dtype: 'nvfp4' },
+      modules: { moe_latent: { weights: { dtype: 'bf16' } } },
+    };
     const ops = lowerMoe(LAT, c);
     expect(gemmNamed(ops, 'moe.latent_in').weight.dtype).toBe('bf16');
     expect(gemmNamed(ops, 'moe.latent_out').weight.dtype).toBe('bf16');
@@ -368,7 +428,15 @@ describe('latent MoE (latentDim)', () => {
   it('offloaded experts: the fetch moves experts at l; the latent projections stay resident', () => {
     const offload: OffloadLowering = {
       prefetchAccuracy: 0,
-      routedExperts: [{ tier: 'host_ram', layers: { from: 0, to: 4 }, residentFraction: 0.5, hitRatio: 0.5, includeDraft: false }],
+      routedExperts: [
+        {
+          tier: 'host_ram',
+          layers: { from: 0, to: 4 },
+          residentFraction: 0.5,
+          hitRatio: 0.5,
+          includeDraft: false,
+        },
+      ],
     };
     const c: LoweringContext = { ...ctx(1, {}), offload };
     // W_expert = 3·32·32·2 = 6144 (at h it would be 12,288)
@@ -451,7 +519,9 @@ describe('expert-output norm (expertOutputNorm)', () => {
     for (const p of PARALLELS) {
       const c = ctx(4, p);
       expect(lowerMoe({ ...LAT, expertOutputNorm: false }, c)).toEqual(lowerMoe(LAT, c));
-      expect(moeResidentWeightBytes({ ...LAT, expertOutputNorm: false }, c)).toBe(moeResidentWeightBytes(LAT, c));
+      expect(moeResidentWeightBytes({ ...LAT, expertOutputNorm: false }, c)).toBe(
+        moeResidentWeightBytes(LAT, c),
+      );
     }
   });
 
@@ -466,14 +536,29 @@ describe('expert-output norm (expertOutputNorm)', () => {
       'moe.latent_out',
     ]);
     // R = a·mE = 2 rows; reduce-scatter input R·l·reduceBpe = 2·32·2; sum of squares R·4 B (fp32)
-    expect(collectives(ops).map((c) => [c.name, c.collective, c.group, c.groupSize, c.messageBytes, c.dtype])).toEqual([
+    expect(
+      collectives(ops).map((c) => [
+        c.name,
+        c.collective,
+        c.group,
+        c.groupSize,
+        c.messageBytes,
+        c.dtype,
+      ]),
+    ).toEqual([
       ['moe.expert_out_reduce_scatter', 'reduce_scatter', 'etp', 4, 128, 'bf16'],
       ['moe.expert_norm_sumsq_all_reduce', 'all_reduce', 'etp', 4, 8, 'fp32'],
       ['moe.tp_all_reduce', 'all_reduce', 'tp', 4, 128, 'bf16'], // the single closing all-reduce, still T·h
     ]);
     const norm = elementwiseNamed(ops, 'moe.expert_norm');
     // elems R·l/4 = 16; read = write = 16·2 B; γ slice 8·2 B
-    expect([norm.fn, norm.elems, norm.activationReadBytes, norm.activationWriteBytes, norm.weightBytes]).toEqual(['rmsnorm', 16, 32, 32, 16]);
+    expect([
+      norm.fn,
+      norm.elems,
+      norm.activationReadBytes,
+      norm.activationWriteBytes,
+      norm.weightBytes,
+    ]).toEqual(['rmsnorm', 16, 32, 32, 16]);
     const combine = elementwiseNamed(ops, 'moe.combine');
     expect([combine.elems, combine.activationWriteBytes]).toEqual([16, 16]); // a·mE·l/4; T·l/4·2 B
     expect(shape(gemmNamed(ops, 'moe.latent_out'))).toEqual([1, 1, 64, 8]); // k-split: k = l/4, partial sums of h
@@ -499,7 +584,11 @@ describe('expert-output norm (expertOutputNorm)', () => {
     expect(elementwiseNamed(a, 'moe.expert_norm').elems).toBe(32); // a 1 · mE 1 (A_max capped at T·min(k, Eloc) = 1) · l 32
     expect(gemmNamed(a, 'moe.latent_out').k).toBe(32);
     const b = lowerMoe(NRM, ctx(1, { dp: 8, ep: 8 }));
-    expect(b.map((o) => o.name).slice(6, 9)).toEqual(['moe.down', 'moe.expert_norm', 'moe.combine_a2a']);
+    expect(b.map((o) => o.name).slice(6, 9)).toEqual([
+      'moe.down',
+      'moe.expert_norm',
+      'moe.combine_a2a',
+    ]);
     expect(collectives(b).map((c) => c.messageBytes)).toEqual([128, 128]); // the a2a only
     expect(elementwiseNamed(b, 'moe.expert_norm').elems).toBe(96); // a 1 · mE ceil(1.2·2) = 3 · l 32
   });
@@ -523,7 +612,9 @@ describe('expert-output norm (expertOutputNorm)', () => {
     expect(moeResidentWeightBytes(NRM, ctx(1, {}))).toBe(83_008);
     // resident latent bytes = the latent GEMMs' weight bytes (bf16: n·k·2)
     const ops = lowerMoe(NRM, ctx(1, { tp: 4 }));
-    const latentStreamed = ['moe.latent_in', 'moe.latent_out'].map((n) => gemmNamed(ops, n)).reduce((s, g) => s + g.n * g.k * 2, 0);
+    const latentStreamed = ['moe.latent_in', 'moe.latent_out']
+      .map((n) => gemmNamed(ops, n))
+      .reduce((s, g) => s + g.n * g.k * 2, 0);
     expect(latentStreamed).toBe(5120);
   });
 });

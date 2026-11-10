@@ -6,17 +6,32 @@ import { describe, expect, it } from 'vitest';
 import { decoderLayer, decoderModel } from '../ir/builders';
 import type { QuantConfig } from '../ir/model';
 import { tpAllReduce } from './common';
-import { embeddingFetchOp, embeddingResidentWeightBytes, embeddingShardBytes, lowerEmbedding } from './embedding';
+import {
+  embeddingFetchOp,
+  embeddingResidentWeightBytes,
+  embeddingShardBytes,
+  lowerEmbedding,
+} from './embedding';
 import type { LoweringContext, OffloadLowering } from './lower';
 
-const BF16: QuantConfig = { weights: { dtype: 'bf16' }, activations: 'bf16', kvCache: { dtype: 'bf16' } };
+const BF16: QuantConfig = {
+  weights: { dtype: 'bf16' },
+  activations: 'bf16',
+  kvCache: { dtype: 'bf16' },
+};
 /** A Qwen-27B-sized embedding: h 5120, V 248,320 (not divisible by 3), bf16 → 10,240 B per row. */
 const MODEL = decoderModel({
   name: 'emb',
   hidden: 5120,
   vocab: 248_320,
   tieEmbeddings: false,
-  layers: [decoderLayer({ hidden: 5120, mixer: { kind: 'gqa', heads: 40, kvHeads: 8, headDim: 128 }, ffn: { kind: 'dense', intermediate: 17_408 } })],
+  layers: [
+    decoderLayer({
+      hidden: 5120,
+      mixer: { kind: 'gqa', heads: 40, kvHeads: 8, headDim: 128 },
+      ffn: { kind: 'dense', intermediate: 17_408 },
+    }),
+  ],
 });
 
 function ctx(
@@ -55,8 +70,13 @@ describe('lowerEmbedding', () => {
       ]);
     }
     // Another group's placement does not place the embedding.
-    const other: OffloadLowering = { prefetchAccuracy: 0.8, lookupTables: [{ tier: 'nvme', layers: { from: 0, to: 1 }, scaleLayout: 'pinned_host' }] };
-    expect(lowerEmbedding(MODEL, ctx('prefill', { offload: other }))).toEqual(lowerEmbedding(MODEL, ctx('prefill')));
+    const other: OffloadLowering = {
+      prefetchAccuracy: 0.8,
+      lookupTables: [{ tier: 'nvme', layers: { from: 0, to: 1 }, scaleLayout: 'pinned_host' }],
+    };
+    expect(lowerEmbedding(MODEL, ctx('prefill', { offload: other }))).toEqual(
+      lowerEmbedding(MODEL, ctx('prefill')),
+    );
   });
 
   it('host RAM, tp 1, prefill T 8192: the row fetch comes first, 8192 rows of 10,240 B = 83,886,080 B, q = 1', () => {
@@ -77,16 +97,28 @@ describe('lowerEmbedding', () => {
 
   it('decode: q = 0 at any p (the row is the token just sampled); p = 0: q = 0 in prefill too', () => {
     for (const p of [0.8, 1]) {
-      const op = embeddingFetchOp('embed', 1, 5120, ctx('decode', { offload: { ...RAM, prefetchAccuracy: p } }));
+      const op = embeddingFetchOp(
+        'embed',
+        1,
+        5120,
+        ctx('decode', { offload: { ...RAM, prefetchAccuracy: p } }),
+      );
       expect(op).toMatchObject({ reads: [{ count: 1, bytesEach: 10_240 }], prefetchedFraction: 0 });
     }
-    const off = embeddingFetchOp('embed', 8192, 5120, ctx('prefill', { offload: { ...RAM, prefetchAccuracy: 0 } }));
+    const off = embeddingFetchOp(
+      'embed',
+      8192,
+      5120,
+      ctx('prefill', { offload: { ...RAM, prefetchAccuracy: 0 } }),
+    );
     expect(off?.prefetchedFraction).toBe(0);
   });
 
   it('nvme: the source is the SSD; no rows, no op', () => {
     const nvme: OffloadLowering = { prefetchAccuracy: 0.8, embeddings: { tier: 'nvme' } };
-    expect(embeddingFetchOp('embed', 1, 5120, ctx('decode', { offload: nvme }))?.source).toBe('nvme');
+    expect(embeddingFetchOp('embed', 1, 5120, ctx('decode', { offload: nvme }))?.source).toBe(
+      'nvme',
+    );
     expect(embeddingFetchOp('embed', 0, 5120, ctx('decode', { offload: nvme }))).toBeUndefined();
     expect(embeddingFetchOp('embed', 1, 5120, ctx('decode'))).toBeUndefined();
   });

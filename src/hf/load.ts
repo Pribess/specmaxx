@@ -11,7 +11,10 @@ import type { HfFetchOptions } from './types';
  * @param options revision, token and injectable fetch/storage.
  * @returns the mapping result (which itself may be `unsupported` / `invalid_config`), or a fetch {@link HfError}.
  */
-export async function loadHfModel(id: string, options: HfFetchOptions = {}): Promise<HfMapResult | HfError> {
+export async function loadHfModel(
+  id: string,
+  options: HfFetchOptions = {},
+): Promise<HfMapResult | HfError> {
   const files = await fetchHfRepoFiles(id, options);
   if (isHfError(files)) return files;
   return mapHfModel(files);

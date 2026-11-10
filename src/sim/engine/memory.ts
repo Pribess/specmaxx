@@ -11,7 +11,11 @@ import { opBytes } from '../ir/metrics';
 import type { DraftSpec, LayerSpec, ModelSpec } from '../ir/model';
 import type { TransferOp } from '../ir/ops';
 import { draftResidentWeightBytes, draftSequenceStateBytes } from '../lower/draft';
-import { embeddingFormat, embeddingResidentWeightBytes, embeddingShardBytes } from '../lower/embedding';
+import {
+  embeddingFormat,
+  embeddingResidentWeightBytes,
+  embeddingShardBytes,
+} from '../lower/embedding';
 import { lmHeadFormat, lmHeadResidentWeightBytes, lmHeadVocabShard } from '../lower/head';
 import {
   blockResidentWeightBytes,
@@ -164,7 +168,11 @@ export function stageWeightBytes(model: ModelSpec, ctx: LoweringContext, s: numb
   ) {
     // The shared matrix is already counted by the embedding (its ceil(vocab/tp) rows hold the head's
     // ceil(vocab/G) shard: G = tp, or G = ep ≥ tp = 1 with denseTpGroup 'ep'); keep only the final-norm part.
-    const headMatrixBytes = matrixStoredBytes(lmHeadFormat(ctx), lmHeadVocabShard(model, ctx), model.hidden);
+    const headMatrixBytes = matrixStoredBytes(
+      lmHeadFormat(ctx),
+      lmHeadVocabShard(model, ctx),
+      model.hidden,
+    );
     headBytes -= headMatrixBytes;
   }
   // Formula: W_s = Σ_{blocks of s} W_block + [s = 0 ∧ emb on device] W_emb + [s = pp−1] W_head
@@ -270,7 +278,9 @@ export function stageStagingBytes(
     // agrees with the stage time's (`pipeline.ts: stageTransfer`).
     const transfers = [
       ...stageTransferOps(lowered[phase], s).filter((op) => op.group !== 'token_embedding'),
-      ...stageTransferOps(embeddingLowered[phase], s).filter((op) => op.group === 'token_embedding'),
+      ...stageTransferOps(embeddingLowered[phase], s).filter(
+        (op) => op.group === 'token_embedding',
+      ),
     ];
     for (const op of transfers) {
       // Formula: slots = q > 0 ? 2 : 1   (double buffer for a prefetched transfer)
@@ -362,11 +372,7 @@ export function stageTierBreakdown(
   // Spec-dec with includeDraft: the drafter's own MoE experts (last stage) live on the tier of the one rule that sets
   // includeDraft (design §3.8).
   const draftExperts = draftExpertPlacement(ctx.offload);
-  if (
-    s === ctx.parallel.pp - 1 &&
-    ctx.speculative !== undefined &&
-    draftExperts !== undefined
-  ) {
+  if (s === ctx.parallel.pp - 1 && ctx.speculative !== undefined && draftExperts !== undefined) {
     for (const layer of draftLayerSpecs(ctx.speculative.draft)) {
       for (const block of layer.blocks) {
         // Formula: tier += E_loc·W_expert per drafter MoE block

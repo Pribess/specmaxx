@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { blockResidentWeightBytes, blockSequenceStateBytes, lowerBlock, type LoweringContext } from './lower';
+import {
+  blockResidentWeightBytes,
+  blockSequenceStateBytes,
+  lowerBlock,
+  type LoweringContext,
+} from './lower';
 import type { MlaAttentionBlock } from '../ir/model';
 import type { AttentionOp, GemmOp, IndexerOp, Op } from '../ir/ops';
 import { blockParams } from '../ir/params';
