@@ -15,7 +15,8 @@
     "format:check": "oxfmt --check",
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.sim.json && tsc -p tsconfig.node.json",
-    "check": "bun run format:check && bun run typecheck && bun run lint && bun run test && bun run build && bun run e2e",
+    "check:bundle": "node scripts/check-bundle-size.mjs",
+    "check": "bun run format:check && bun run typecheck && bun run lint && bun run test && bun run build && bun run check:bundle && bun run e2e",
     "e2e": "playwright test --project=smoke",
     "screenshots": "bun run build && playwright test --project=screenshots",
     "screenshots:redesign": "bun run build && playwright test --project=redesign"

@@ -15,6 +15,20 @@ The only public URL is https://cro.sh/specmaxx/ (route `cro.sh/specmaxx*` in zon
 - `/specmaxx` redirects to `/specmaxx/` and `/specmaxx/about.html` to `/specmaxx/about`
   (`html_handling: "auto-trailing-slash"`). Unknown paths return 404 (`not_found_handling: "none"`, no SPA fallback).
 
+## Bundle-size budget
+
+`bun run check:bundle` ([scripts/check-bundle-size.mjs](../scripts/check-bundle-size.mjs)) runs after `bun run build`
+in `bun run check` and in CI. It prints the raw and gzip size of every JS chunk in `dist/assets/` and fails when the
+raw size of a group goes over its limit: `main` (estimator entry chunk), `worker` (simulation worker), `about` (About
+page chunk) or `total` (all JS). The limits are about 10% above the sizes when they were set. To raise one on purpose,
+edit `LIMITS_KB` in the script in the same change and say why in the commit message.
+
+`vite.config.ts` marks `src/sim/` and `src/ui/state/` as free of side effects (`treeshake.moduleSideEffects`, for the
+app and for the worker build), so the bundler drops the unused parts of barrel files. Without it the worker also
+bundled the whole preset catalog, which it never reads. A module there that must run for its side effects (a registry
+filled by importing it) has to be taken out of that rule. (`package.json` `sideEffects` is not used: it also drops
+CSS imports unless every pattern matches.)
+
 ## Release
 
 ```sh

@@ -42,3 +42,4 @@ jobs:
       # The Playwright e2e step of `bun run check` is skipped here: installing Chromium costs more than the rest of
       # the job, and e2e already runs locally in `bun run check` before every change lands.
       - run: bun run build
+      - run: bun run check:bundle
