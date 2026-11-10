@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { ResultHero, BreakdownTable, MemoryFit, BatchSweepChart, RooflineChart } from './Results';
 import { specDecChipText } from './components/ResultHero';
 import { HeroMemoryWarning } from './components/MemoryWarning';
-import { DEFAULT_STATE, buildSimInput, formatTokensPerSec, reduce } from './state';
+import { DEFAULT_STATE, buildSimInput, formatSeconds, formatTokensPerSec, reduce } from './state';
 import { BUNDLED_DEFAULT_MODEL } from './state/bundledModel';
 import { inlineRunner } from './sim/runner';
 
@@ -798,4 +798,56 @@ it('writes the spec-dec chip: off, MTP, DSpark with a use case, hypothetical dra
   expect(
     specDecChipText({ method: 'dspark', draftLength: 7, hypothetical: true }, { useCase: 'code' }),
   ).toBe('spec-dec: DSpark, k=7 · code · hypothetical drafter');
+});
+it('chunked PP prefill shows the time to first token with and without chunking; off shows neither', async () => {
+  let state = reduce(DEFAULT_STATE, { type: 'setCounts', devicesPerNode: 4 });
+  state = reduce(state, { type: 'setParallel', parallel: { pp: 4 } });
+  state = reduce(state, { type: 'setWorkload', workload: { promptLen: 32768 } });
+  const plain = buildSimInput(state, BUNDLED_DEFAULT_MODEL);
+  if (plain.kind !== 'ok') throw new Error(JSON.stringify(plain.issues));
+  const { summary: off } = await inlineRunner.run(plain.input, plain.notes);
+  expect(off.prefill.chunkedPipeline).toBeUndefined();
+  render(
+    <ResultHero
+      state={state}
+      loaded={BUNDLED_DEFAULT_MODEL}
+      built={plain}
+      result={off}
+      pending={false}
+    />,
+  );
+  expect(screen.queryByTestId('prefill-ttft')).toBeNull();
+  expect(screen.queryByTestId('prefill-ttft-unchunked')).toBeNull();
+  expect(screen.getByRole('heading', { level: 1 }).textContent).not.toContain('chunked PP');
+  cleanup();
+
+  state = reduce(state, { type: 'setParallel', parallel: { chunkedPipelinePrefill: true } });
+  const built = buildSimInput(state, BUNDLED_DEFAULT_MODEL);
+  if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));
+  const { summary } = await inlineRunner.run(built.input, built.notes);
+  const cpp = summary.prefill.chunkedPipeline!;
+  expect(cpp.chunks).toBe(4);
+  // The unchunked what-if is exactly the run with the switch off.
+  expect(cpp.unchunkedLatencySec).toBeCloseTo(off.prefill.latencySec, 12);
+  expect(summary.prefill.latencySec).toBeLessThan(cpp.unchunkedLatencySec);
+  render(
+    <ResultHero
+      state={state}
+      loaded={BUNDLED_DEFAULT_MODEL}
+      built={built}
+      result={summary}
+      pending={false}
+    />,
+  );
+  const ttft = screen.getByTestId('prefill-ttft');
+  expect(ttft.textContent).toContain(
+    `Time to first token: ${formatSeconds(summary.prefill.latencySec)} @ 32k`,
+  );
+  expect(within(ttft).getByRole('button')).toBeTruthy();
+  const unchunked = screen.getByTestId('prefill-ttft-unchunked');
+  expect(unchunked.textContent).toContain(
+    `Without chunking: ${formatSeconds(cpp.unchunkedLatencySec)} @ 32k`,
+  );
+  expect(within(unchunked).getByRole('button')).toBeTruthy();
+  expect(screen.getByRole('heading', { level: 1 }).textContent).toContain(', chunked PP');
 });

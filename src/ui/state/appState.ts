@@ -131,7 +131,9 @@ export interface AppState {
    * off, 0 replicas; {@link normalizeEpBalance}); the engine reads them only on MoE models at EP > 1.
    * `dispatchFormat`, `combineFormat` (all-to-all wire formats) and `allToAllEfficiency` (η) are set by Hardware →
    * Advanced → "Expert all-to-all" and kept only when set / below 1 ({@link normalizeAllToAll}); the engine reads
-   * them only in MoE mode B (EP > TP).
+   * them only in MoE mode B (EP > TP). `chunkedPipelinePrefill` (Parallelism → Advanced → "Chunked PP prefill") is
+   * present only as `true` and only while PP > 1 ({@link normalizeChunkedPipeline}): off, the state is the one from
+   * before the switch.
    */
   parallel: ParallelConfig;
   /**
@@ -254,6 +256,17 @@ export function normalizeEpBalance(parallel: ParallelConfig): ParallelConfig {
   if (out.redundantExpertsPerRank === undefined || out.redundantExpertsPerRank === 0)
     out = without(out, 'redundantExpertsPerRank');
   return out;
+}
+
+/**
+ * `parallel` with `chunkedPipelinePrefill` normalized: kept only as `true` and only while PP > 1 (with one stage
+ * there is nothing to pipeline; the switch is hidden then), else removed, so off leaves the state, the URL and the
+ * input as before the switch.
+ */
+export function normalizeChunkedPipeline(parallel: ParallelConfig): ParallelConfig {
+  return parallel.chunkedPipelinePrefill === true && parallel.pp > 1
+    ? parallel
+    : without(parallel, 'chunkedPipelinePrefill');
 }
 
 /**
@@ -699,9 +712,11 @@ export function reduce(state: AppState, action: AppAction): AppState {
           : { ...state, parallelLayout: layout };
       return {
         ...next,
-        parallel: normalizeDcp(
-          normalizeAllToAll(normalizeEpBalance(normalizeDenseTp(parallel, layout))),
-          layout,
+        parallel: normalizeChunkedPipeline(
+          normalizeDcp(
+            normalizeAllToAll(normalizeEpBalance(normalizeDenseTp(parallel, layout))),
+            layout,
+          ),
         ),
       };
     }
@@ -716,9 +731,11 @@ export function reduce(state: AppState, action: AppAction): AppState {
       const devices = hw.devicesPerNode * hw.nodes;
       const pp = devices % state.parallel.pp === 0 ? state.parallel.pp : 1;
       const n = devices / pp;
-      const parallel = normalizeDcp(
-        normalizeDenseTp({ ...state.parallel, tp: 1, pp, dp: n, ep: n }, action.layout),
-        action.layout,
+      const parallel = normalizeChunkedPipeline(
+        normalizeDcp(
+          normalizeDenseTp({ ...state.parallel, tp: 1, pp, dp: n, ep: n }, action.layout),
+          action.layout,
+        ),
       );
       return { ...state, parallelLayout: action.layout, parallel };
     }

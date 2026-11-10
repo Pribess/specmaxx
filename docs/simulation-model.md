@@ -1821,6 +1821,10 @@ including node crossings and ring/chain hop counts.
 With speculative decoding, a block drafter's target features ride on these sends, `S = T·(N_live + F_s)·h·bpe(act)`
 (§13 ["Pipeline parallelism"](#pipeline-parallelism), `simulate.ts: withDrafter`).
 
+With chunked pipeline prefill on (`ParallelConfig.chunkedPipelinePrefill`), the stages pass each prompt on in
+chunks of C tokens instead of whole; the split and the sends per token are as above
+(§7 ["Chunked pipeline prefill"](#chunked-pipeline-prefill)).
+
 ### DP
 
 DP replicas are independent and not lowered separately: `B_r = batch/dp` (must divide), aggregate tok/s = dp ×
@@ -2656,7 +2660,8 @@ sums of numbers the engine already computes, so no rate depends on them (design 
   `latency = cycle`.
 - **Prefill** (a steady stream of replica batches; the bottleneck resource bounds it): `cycle = m·b`,
   `tokensPerSec = dp·B_r·promptLen/cycle`, `latency (TTFT of a replica batch) = Σ t_s + Σ p2p + (m−1)·b`,
-  `perSequenceTokensPerSec = promptLen/latency`.
+  `perSequenceTokensPerSec = promptLen/latency`. With chunked pipeline prefill on, the latency and cycle of the
+  chunked schedule replace these ("Chunked pipeline prefill" below).
 - Example (`pipeline.test.ts`): TINY_DENSE, pp 2, batch 2, prompt 128 over a 1 B/s link: each microbatch sends
   128·256·2 = 65,536 B, so `cycle = 2·65,536 s = 131,072 s` and TTFT ≈ 131,072 s; decode sends 512 B per
   microbatch → `cycle = 1,024 s`.
@@ -2670,6 +2675,140 @@ sums of numbers the engine already computes, so no rate depends on them (design 
     (`2·seqs·heads·(N + 1)·(qk + v)`) and KV reads (`seqs·(N + 1)·elemsPerToken·bpe(kv)`) grow linearly in N
     (full attention; a window or top-k selection caps both, §3 "Attended pairs").
     Decode tok/s @ N = `1/cycle` per sequence (`dp·B_r/cycle` aggregate). Test: `simulate.test.ts`.
+
+### Chunked pipeline prefill
+
+`src/sim/engine/chunkedPipeline.ts: prefillPipelineChunks, chunkedPipelinePlan, chunkedPipelineLatencySec,
+chunkedPipelineCycleSec, mergeChunkStages, chunkedPipelinePhase`; `src/sim/engine/simulate.ts: simulate` (step 4a);
+`ParallelConfig.chunkedPipelinePrefill` → `PhaseResult.chunkedPipeline`. Tests: `engine/chunkedPipeline.test.ts`,
+`engine/identity.test.ts` (ID-7). Design note: `docs/design/chunked-pipeline-prefill.md`.
+
+With whole-prompt microbatches (above) stage s + 1 waits for stage s to finish a microbatch's whole prompt, so a
+single long prompt at batch 1 (m = 1) keeps one stage busy at a time: TTFT = Σ_s t_s. Chunked pipeline prefill
+(CPP; Mooncake's "chunked pipeline parallelism", [arXiv 2407.00079](https://arxiv.org/html/2407.00079) §5.1; the
+SGLang GB300 long-context setup, [LMSYS](https://www.lmsys.org/blog/2026-02-19-gb300-longctx/)) splits each
+microbatch's prompt into chunks that flow through the stages one after another. It is a switch,
+`ParallelConfig.chunkedPipelinePrefill`, off by default; it applies only with pp > 1 and K > 1 chunks (with pp = 1
+it is ignored with a warning, `CHUNKED_PIPELINE_SINGLE_STAGE_WARNING`). Off, or with K = 1, the code path and every
+result are those of before (bit for bit, ID-7).
+
+**Chunks.** C = `Workload.prefillChunkTokens` (default 8192, §8 "Activation peak") new tokens per sequence per
+chunk, over the prefix-cache split of "Prefix cache" below:
+
+```
+cached = floor(P·h),  P_new = P − cached
+K      = ceil(P_new / C)                                    chunks per microbatch
+q_j    = min(C, P_new − j·C),  kv_j = cached + j·C + q_j     j = 0..K−1   (Σ_j q_j = P_new, kv_{K−1} = P)
+```
+
+Chunk j is lowered as its own prefill step `{ seqs: b_mb, qLen: q_j, kvLen: kv_j }`: its tokens attend over every
+earlier key, the shape the prefix cache already uses, so every block kind lowers it as it is (recurrent and conv
+layers start from the prior state, `hasPriorState`). Two-batch overlap splits each chunk, the drafter runs on each
+chunk, and chunks j < K−1 have no `head` layer (prefill computes logits for each sequence's last position only, which
+the last chunk holds; `simulate.ts: withoutHead`). Each chunk is costed like a microbatch (§7 "Stage time and
+overlap"): t_{s,j} = its stage time, p_{s,j} = the full time (α + β) of its send after stage s, β_{s,j} its
+bandwidth term.
+
+**Schedule.** Every stage and every boundary link is a machine that serves the units u = (i, j) (microbatch i =
+0..m−1, chunk j) in order, microbatch-major and chunk-minor. A send leaves the share f_pp of its time outside the stage
+("Stage time and overlap"); of that, the link is busy for its β share and the α share is a pure delay:
+
+```
+λ_s(u) = f_pp·β_{s,j}           link occupancy             δ_s(u) = f_pp·(p_{s,j} − β_{s,j})   delay (α)
+F(u, 0)   = F(u−1, 0) + t_{0,j}
+G(u, s)   = max(G(u−1, s), F(u, s)) + λ_s(u)
+F(u, s+1) = max(F(u−1, s+1), G(u, s) + δ_s(u)) + t_{s+1,j}           F(−1, ·) = G(−1, ·) = 0
+latency (TTFT of a replica batch) = F(last unit, pp−1)
+cycle = m · max( max_s Σ_j t_{s,j},  max_s Σ_j β_{s,j} )
+tokens/s = dp·B_r·P / cycle;  computed tokens/s (h > 0) = dp·B_r·P_new / cycle;  per sequence P / latency
+```
+
+F(u, s) is when unit u leaves stage s, G(u, s) when its send after stage s has left the link
+(`chunkedPipelineLatencySec`, `chunkedPipelineCycleSec`). Properties (pinned in `chunkedPipeline.test.ts`):
+
+- K = 1 with identical microbatches gives `Σ_s t_s + Σ p2p + (m − 1)·b` and `m·b`, the whole-prompt formulas of
+  "Pipeline and DP", at f_pp ∈ {0, 1} (the machines are a deterministic flow line). The engine never runs the
+  recursion at K = 1: it takes the whole-prompt path. At a fractional f_pp with m > 1 the two differ slightly (the
+  whole-prompt formula's `b` counts the full β occupancy, the recursion only f_pp·β).
+- Equal chunk times t on every stage and no sends: TTFT = (K + pp − 1)·t against pp·K·t whole-prompt, so the TTFT
+  falls by up to pp× as K grows. The steady-stream rate (the cycle) gets no such gain: whole-prompt prefill already
+  pipelines m microbatches.
+- Conservation: Σ_j attention pairs = `P_new·cached + P_new(P_new+1)/2`, the unchunked pairs (§3 "Attended
+  pairs"); Σ_j GEMM rows = P_new (so Σ GEMM FLOP are equal); Σ_j PP send bytes = the unchunked send.
+- What does change, from the per-op model: each chunk reads every weight once (K weight reads instead of 1), its
+  GEMMs have m = b_mb·q_j rows (lower shape efficiency for small C), its attention re-reads the KV of every earlier
+  chunk, and each send pays α once per chunk. The MLA dense-prefill `kv_b` GEMM has m = seqs·kv_j (§5 "MLA forms": it
+  decompresses every visible key), so its rows grow from P to Σ_j kv_j ≈ P·(K + 1)/2.
+
+**Result.** `PhaseResult.latencySec` and `cycleSec` are the chunked ones; `stages` hold the per-stage sums over the K
+chunks of one microbatch (`mergeChunkStages`: time fields summed; per layer, the same op of every chunk merged into
+one `OpResult` with its FLOP, bytes and times summed and the last chunk's shape, keyed by op name, occurrence and
+bound, so the result is about as large as a whole-prompt one; sends summed). `comm` and `transfer` follow from them
+as before. `PhaseResult.chunkedPipeline = { chunkTokens: C, chunks: K, unchunked }`, with `unchunked` the rates of
+the same prefill with whole-prompt microbatches. "Prefill without overlap" is the chunked schedule under every
+fraction 0 on the same chunks (without two-batch overlap). Decode and the warnings are unchanged. The memory fit's
+activation peak counts a pipeline chunk of `{ seqs: b_mb, qLen: C, kvLen: P }` (§8 "Activation peak"); the KV per
+stage is the whole prompt's, as before. `simulate(input, { skipChunkedPrefillSchedule: true })`
+(`SimulateRunOptions`) skips the chunk lowerings and the schedule but keeps this fit, for a caller that reads only
+decode and the memory fit (the UI's batch sweep).
+
+**Offload.** Offloaded weights are re-streamed per chunk (each chunk is a pass over the layers). The stages of a node
+that stream from the same tier share its bandwidth (§12 "Sharing": `transfer.ts: streamSlots`, `stageNStream`), and
+the K chunks of each microbatch occupy stages at the same time, so each chunk is costed with m·K units in flight
+instead of m: without prefetching, `min(m·K, |S_tier|)` stages stream together (`simulate.ts: simulatePhase`,
+`unitsInFlight`). With the streaming stages on one node (one device each) this gives
+`TTFT ≥ max_s Σ_j xfer_{s,j} ≥ Σ_s Σ_j bytes_{s,j} / B_tier`, the node tier's time for all the bytes, since each
+stage's chunk transfers already share B_tier |S_tier| ways (also during pipeline fill and drain, so the TTFT is
+conservative there).
+Test (`chunkedPipeline.test.ts`, review P1): REF_MOE_30B_A3B with every routed expert in host RAM (DDR4-3200 × 2,
+51.2 GB/s), pp 4 on one node, P = 32,768, C = 1024: 1.855e12 B need ≥ 36.24 s; costed with m = 1 per chunk the TTFT
+was 12.04 s.
+
+**KV-cache offload** (§12 "KV cache off-device", "Remote KV pool"; `LoweringContext.prefixCacheTokens`,
+`lower/kvOffload.ts: kvMisses`). A chunk's past `kv_j − q_j = cached + j·C` has two parts, each placed as the memory
+fit places it. The prefix-cache hit has the share f_pre on the device; the earlier chunks of this prefill are live KV,
+which the fit keeps on the device at the share f_dev (§8, `stageResidentSequenceStateBytesPerSeq`), like every
+sequence's KV. Every chunk reads the off-device part of both again:
+
+```
+past_pre = min(past, cached),  past_live = past − past_pre = j·C
+N_res = f_pre·past_pre + f_dev·past_live;   M = (1 − f_pre)·past_pre + (1 − f_dev)·past_live
+Σ_j M = K·(1 − f_pre)·cached + (1 − f_dev)·C·K(K − 1)/2      (whole prompt: (1 − f_pre)·cached, once)
+```
+
+So a chunk never holds more of this sequence's KV on the device than the fit counts (f_dev·j·C ≤ f_dev·P); with
+f_dev = 1 the earlier chunks are not fetched. Re-reading per chunk follows the per-layer staging of §12 (a layer's
+fetch is staged, consumed and dropped); keeping the fetched KV resident across the K chunks would read it once but
+need device memory the fit does not count, so it is not modelled. The re-reads are KV fetches like any other: they
+share the node's host RAM and SSD with m·K units in flight (above), and the pool per device. A slow tier then costs
+about K·(1 − f_pre)·cached + (1 − f_dev)·P·K/2 tokens of reads per layer; `f_pre = f_dev = 1` avoids them. Staging:
+the last chunk fetches the most (the whole prefix and every earlier chunk), so the fit takes it as one more phase of
+`stageStagingBytes` (`simulate.ts` step 6, also on the `skipChunkedPrefillSchedule` path, which lowers just that
+chunk): its per-layer buffer `b_mb·((1 − f_pre)·cached + (1 − f_dev)·(K − 1)·C)·kvB`, ×2 when q > 0. Its activations
+and weight fetches are within the other steps. The tiers hold the same KV as before. (The whole-prompt prefill has no
+past besides the prefix, so it fetches only the prefix.)
+Tests (`chunkedPipeline.test.ts`, REF_DENSE_8B, pp 4, P = 65,536, host RAM DDR4-3200 × 2):
+
+- live KV 25% on the device (review repro, 6 GB devices), K = 8: the prefill fetches 0.75·28·8192 tokens × 36 layers ×
+  4096 B; the fit's resident KV per device is unchanged (0.25·65,536 tokens per layer); the staging buffer is
+  2·0.75·57,344·4096 = 352,321,536 B per device, so the fit fails (it passes with the flag off, whose prefill fetches
+  nothing), the same on the sweep path; TTFT ≥ bytes / B_ram;
+- prefix in host RAM (h = 0.5, `deviceFraction 1, prefixDeviceFraction 0`), K = 4: 4 × 36 × 32,768 × 4096 B against
+  36 × 32,768 × 4096 B whole-prompt, and TTFT ≥ those bytes / B_ram.
+
+**Worked example** (`chunkedPipeline.test.ts`). REF_DENSE_8B on `SYNTH_CLUSTER` (synthetic GPU), pp 4, batch 1,
+P = 65,536, C = 8192 → K = 8. Whole-prompt: t_s ≈ 5.574 s per stage, TTFT 22.31 s, cycle 5.574 s, 11,757 tok/s @ 64k.
+Chunked: TTFT 8.74 s (the ideal (K + pp − 1)/(pp·K) = 11/32 of 22.31 s is 7.67 s; later chunks see more keys, so the
+last chunk, which crosses pp − 1 stages after the others, is the longest), cycle 5.596 s (+0.4%: K weight reads, KV
+re-reads), 11,711 tok/s @ 64k.
+
+At 1M (measured; `chunkedPipeline.test.ts` pins K, the fit and TTFT below whole-prompt), the Kimi-K3 fixture on 4 × 8 B300, tp 8, pp 4, ep 8, batch 1, K = 128: TTFT
+69.06 s → 20.01 s, prefill 55,086 → 52,784 tok/s @ 1M (−4.2%: mostly the dense-MLA `kv_b` recompute, 0.04 s → 2.27 s
+of 69.7 s summed stage time). MiniMax-M3 (GQA) on the same nodes: TTFT 22.64 s → 7.49 s, 145,680 → 143,978 tok/s
+@ 1M (−1.2%). One such `simulate` takes about 0.6–0.8 s.
+
+Not modelled (§9): the engine's chunk scheduling and mixing of chunks of other requests, and a chunk size per stage.
+Ring context parallelism (prompt sharded over extra devices) is not modelled; its math is in the design note.
 
 ### Prefix cache
 
@@ -2801,9 +2940,11 @@ the one that holds the most tokens under a budget of C per microbatch of `b_mb` 
 
 Every op's activations grow with the step's tokens `seqs·qLen`, so this step bounds all chunks. Its KV reads are
 cache state, already counted in `state_s`. C = `Workload.prefillChunkTokens`, default 8192 (SGLang's default and
-vLLM's for its `LLM` class and H100-class API servers; smaller budgets only lower the peak). Only the fit uses it:
-prefill tok/s @ P is still the whole prompt in one pass (§7). With `prefillChunkTokens ≥ b_mb·P` the fit is the
-one-pass peak of before.
+vLLM's for its `LLM` class and H100-class API servers; smaller budgets only lower the peak). Without chunked
+pipeline prefill only the fit uses it: prefill tok/s @ P is still the whole prompt in one pass (§7). With it on
+(and pp > 1, §7 "Chunked pipeline prefill") C is also the pipeline chunk, per sequence; a chunk then holds `b_mb`
+sequences, so the fit counts the step `{ seqs: b_mb, qLen: C, kvLen: P }` (the step above when `b_mb = 1`). With
+`prefillChunkTokens ≥ b_mb·P` the fit is the one-pass peak of before.
 
 With two-batch overlap (§7 "Two-batch overlap") the decode step and this chunk are lowered as two halves, so the
 peak is the larger half's largest op: about half (exactly half for a dense op at even `b_mb`).
@@ -2846,7 +2987,8 @@ stage's total. No vendor publishes it, and it depends on the engine and driver, 
 Excluded on purpose (only hardware and math limits are modeled):
 
 - **Inference-engine knobs**: paged attention, continuous batching, chunked prefill (the rate; the memory fit's
-  activation peak assumes a chunk, §8 "Activation peak"), scheduler overhead,
+  activation peak assumes a chunk, §8 "Activation peak"; chunked pipeline prefill, §7, is an opt-in PP schedule,
+  off by default), scheduler overhead,
   kernel launch overhead of a specific engine, CUDA graphs. The exception: speculative decoding and weight / expert /
   lookup-table offloading are **opt-in deployment-scenario knobs, off by default** ([§12](#12-offloading),
   [§13](#13-speculative-decoding); design `docs/design/offload-specdec-latency.md`). Off, results are bit-identical;
@@ -2908,6 +3050,11 @@ Documented approximations (each isolated in one constant or rule):
 - Row-parallel biases are counted on every TP rank.
 - Reductions travel as bf16 when activations are narrower than 16 bits.
 - Prefill computes LM-head logits for one position per sequence (`Tout = seqs`).
+- Chunked pipeline prefill (§7 "Chunked pipeline prefill"): in the TTFT recursion a PP link is occupied for
+  f_pp·β per chunk (the share of the send outside the stage) while the cycle counts its full β, as the whole-prompt
+  rule does; the drafter runs its own head on every chunk; every chunk of a microbatch has the same C (no per-stage
+  or adaptive chunk size); no engine scheduling, no mixing of chunks of other requests or of decode steps into a
+  chunk; the memory fit takes the largest chunk at `kvLen = P`.
 - Balanced MoE routing on the busiest device (ceilings), with the EP load imbalance ρ (`DEFAULT_EP_IMBALANCE`
   1.2, a user input; §5 "EP load imbalance"); the load balancer (EPLB) is not modelled, its redundant experts
   only add memory (§5 "Redundant experts"); the expert weights read are the expected distinct experts under
@@ -3579,7 +3726,9 @@ q        = p = 0: 0;  full, prefill: 1;  top-k decode: max(p, M/(past − N_res)
 - **Approximations** (§9): KV writes to the tiers are not costed; a layer reading another layer's latent
   (`kvCacheFromLayer`) fetches its misses again (no cross-layer reuse, conservative); the per-layer staging buffer
   holds a whole layer's fetch (chunked streaming with an online softmax would need less); with DCP the prefill (not
-  token-sharded) fetches the whole cached prefix on every rank; the remote pool's own approximations are below.
+  token-sharded) fetches the whole cached prefix on every rank; under chunked pipeline prefill every chunk re-reads
+  the off-device part of the prefix and of the earlier chunks' KV (§7 "Chunked pipeline prefill"); the remote pool's
+  own approximations are below.
 
 ### Remote KV pool
 

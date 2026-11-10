@@ -34,6 +34,16 @@ function atBatch(input: SimInput, batch: number): SimInput {
   return { ...input, workload: { ...input.workload, batch } };
 }
 
+/**
+ * `simulate` for a sweep run: the sweep reads only decode and the memory fit, so the chunked pipeline prefill
+ * schedule (K chunk lowerings, K = 128 at a 1M prompt) is skipped. Decode and the memory fit stay bit-identical to
+ * a full run, the fit included with several sequences per microbatch (its pipeline chunk of b_mb × C tokens; docs/
+ * simulation-model.md §8 "Activation peak"). Without chunked pipeline prefill it is `simulate` as is.
+ */
+function simulateForSweep(input: SimInput): SimResult {
+  return simulate(input, { skipChunkedPrefillSchedule: true });
+}
+
 /** The sweep point of one simulated batch; the spec-dec fields only when speculative decoding is on. */
 function sweepPoint(input: SimInput, batch: number, r: SimResult): SweepPoint {
   const point: SweepPoint = {
@@ -60,7 +70,7 @@ export function batchSweep(input: SimInput): SweepPoint[] {
   for (let k = 0; k < SWEEP_STEPS; k++) {
     const batch = input.parallel.dp * 2 ** k;
     try {
-      points.push(sweepPoint(input, batch, simulate(atBatch(input, batch))));
+      points.push(sweepPoint(input, batch, simulateForSweep(atBatch(input, batch))));
     } catch {
       // Invalid at this batch: no point.
     }
@@ -97,7 +107,7 @@ export function speculativeBreakEvenBatch(
     const mid = Math.floor((lo + hi) / 2);
     let pays = true;
     try {
-      const speedup = simulate(atBatch(input, mid * dp)).decode.speculative?.speedup;
+      const speedup = simulateForSweep(atBatch(input, mid * dp)).decode.speculative?.speedup;
       pays = speedup === undefined || speedup >= 1;
     } catch {
       pays = true;

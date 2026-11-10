@@ -47,6 +47,15 @@ export interface LoweringContext {
    * no `draft.*` layers, no snapshot overrides).
    */
   speculative?: SpeculativeLowering;
+  /**
+   * Prefill under chunked pipeline prefill only (docs/simulation-model.md §7 "Chunked pipeline prefill"): of this
+   * step's `kvLen − qLen` past tokens, the first `prefixCacheTokens` are the prefix-cache hit (`cached = floor(P·h)`,
+   * placed by `prefixDeviceFraction`) and the rest are the earlier chunks of the same prefill, live KV placed by
+   * `deviceFraction` as the memory fit keeps it. KV-cache offload fetches the off-device part of both
+   * (`lower/kvOffload.ts: kvMisses`). Absent = every past token is prefix-cache hit (the whole-prompt prefill, where
+   * `kvLen − qLen = cached`). Unit: tokens.
+   */
+  prefixCacheTokens?: number;
 }
 
 /** One resolved routed-expert placement rule (`RoutedExpertRule` with every default filled in). */

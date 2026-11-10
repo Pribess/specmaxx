@@ -36,6 +36,13 @@ export function parallelText(state: AppState, moe: boolean): string {
   ].join(', ');
 }
 
+/** `', chunked PP'` when chunked pipeline prefill is on (it is stored only with PP > 1), else `''`. */
+function chunkedPpText(state: AppState): string {
+  return state.parallel.chunkedPipelinePrefill === true && state.parallel.pp > 1
+    ? ', chunked PP'
+    : '';
+}
+
 /**
  * The rig line of a disaggregated deployment: both pools' device sets and layouts, e.g. `GLM-5.3-Flash on 32 × H100
  * SXM prefill and 144 × H100 SXM decode, with DP attention + EP 32 / 144`.
@@ -73,6 +80,8 @@ function PdRig({
       ) : (
         pools.map((p) => `${parallelText(p.state, moe)} ${p.name}`).join(', ')
       )}
+      {/* Chunked PP prefill changes only the prefill pool's run. */}
+      {chunkedPpText(pools.find((p) => p.name === 'prefill')?.state ?? pools[0].state)}
     </h1>
   );
 }
@@ -272,6 +281,11 @@ export function ResultHero({
               )}
             </>
           )}
+          {chunkedPpText(state) && (
+            <>
+              , <span className="keep-together">chunked PP</span>
+            </>
+          )}
         </h1>
       )}
       {result && prefillSrc && decodeSrc ? (
@@ -372,6 +386,48 @@ export function ResultHero({
                           </HelpIcon>
                         </span>
                       </div>
+                    )}
+                    {phase === 'prefill' && src.prefill.chunkedPipeline && (
+                      <>
+                        <div
+                          className="what-if"
+                          data-testid="prefill-ttft"
+                          data-seconds={src.prefill.latencySec}
+                        >
+                          <span>Time to first token: </span>
+                          <span className="what-if-value">
+                            <span>
+                              <Num>{formatSeconds(src.prefill.latencySec)}</Num>
+                              {` @ ${formatContextTokens(src.prefill.contextTokens)}`}
+                            </span>
+                            <HelpIcon term="Time to first token">
+                              {helpLines([
+                                "Time until one prompt's first token: its last chunk leaves the last stage.",
+                              ])}
+                            </HelpIcon>
+                          </span>
+                        </div>
+                        <div
+                          className="what-if"
+                          data-testid="prefill-ttft-unchunked"
+                          data-seconds={src.prefill.chunkedPipeline.unchunkedLatencySec}
+                        >
+                          <span>Without chunking: </span>
+                          <span className="what-if-value">
+                            <span>
+                              <Num>
+                                {formatSeconds(src.prefill.chunkedPipeline.unchunkedLatencySec)}
+                              </Num>
+                              {` @ ${formatContextTokens(src.prefill.contextTokens)}`}
+                            </span>
+                            <HelpIcon term="Time to first token without chunking">
+                              {helpLines([
+                                'Time to first token when each stage finishes the whole prompt before handing it on.',
+                              ])}
+                            </HelpIcon>
+                          </span>
+                        </div>
+                      </>
                     )}
                     {phase === 'decode' && src.decode.withDispatch && (
                       <div className="what-if" data-testid="decode-dispatch">

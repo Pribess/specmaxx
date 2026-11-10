@@ -26,6 +26,8 @@ import {
 } from '../models/__fixtures__/fixtures.testutil';
 import { mapHfModel } from '../models/hf/index';
 import * as references from '../models/reference';
+import { CHUNKED_PIPELINE_SINGLE_STAGE_WARNING } from './chunkedPipeline';
+import { DEFAULT_PREFILL_CHUNK_TOKENS } from './memory';
 import { simulate } from './simulate';
 import type { KvCacheOffloadConfig, PhaseResult, SimInput, SimResult } from './types';
 import { validateInput } from './validate';
@@ -638,6 +640,39 @@ describe('deployment identity, knobs absent (after latency audit G1–G8, G6 exc
         expect(mismatches(fixture[key], pin(r))).toEqual([]);
         if (value.deployment?.offload === undefined) expect(r.memory.tiers).toEqual([]);
       }
+    },
+  );
+  it.each(Object.entries(inputs))(
+    'ID-7 %s: chunked pipeline prefill false, on at pp = 1 (but its warning) and on with one chunk (P_new ≤ C) deep-equal the run without it',
+    (key, value) => {
+      const absent = simulate(value);
+      expect(mismatches(fixture[key], pin(absent))).toEqual([]);
+      const withFlag = (on: boolean, v: SimInput = value): SimInput => ({
+        ...v,
+        parallel: { ...v.parallel, chunkedPipelinePrefill: on },
+      });
+      expect(simulate(withFlag(false))).toEqual(absent);
+      if (value.parallel.pp === 1) {
+        const on = simulate(withFlag(true));
+        expect(on.warnings).toContain(CHUNKED_PIPELINE_SINGLE_STAGE_WARNING);
+        expect(on.warnings.filter((w) => w !== CHUNKED_PIPELINE_SINGLE_STAGE_WARNING)).toEqual(
+          absent.warnings,
+        );
+        expect({ ...on, warnings: absent.warnings }).toEqual(absent);
+        return;
+      }
+      // pp > 1: a chunk budget of the whole prompt gives K = 1, the whole-prompt path.
+      const oneChunk: SimInput = {
+        ...value,
+        workload: {
+          ...value.workload,
+          prefillChunkTokens: Math.max(
+            value.workload.prefillChunkTokens ?? DEFAULT_PREFILL_CHUNK_TOKENS,
+            value.workload.promptLen,
+          ),
+        },
+      };
+      expect(simulate(withFlag(true, oneChunk))).toEqual(simulate(oneChunk));
     },
   );
 });

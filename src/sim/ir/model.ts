@@ -844,4 +844,14 @@ export interface ParallelConfig {
    * for bit. See docs/simulation-model.md §5 "Decode context parallelism (DCP)".
    */
   dcp?: number;
+  /**
+   * Chunked pipeline prefill (CPP; Mooncake's "chunked pipeline parallelism", arXiv 2407.00079 §5.1): with pp > 1,
+   * each microbatch's prompt is split into chunks of `Workload.prefillChunkTokens` (C, default 8192) new tokens per
+   * sequence that flow through the pipeline stages one after another, so stage s + 1 starts on chunk j while stage s
+   * runs chunk j + 1. Changes the prefill time to first token (`PhaseResult.latencySec`) and, a little, the cycle;
+   * decode is unchanged. Absent or false = whole-prompt microbatches, results bit for bit as before; also when the
+   * prompt is a single chunk (P_new ≤ C). pp = 1: ignored, with a warning. See docs/simulation-model.md §7
+   * "Chunked pipeline prefill".
+   */
+  chunkedPipelinePrefill?: boolean;
 }

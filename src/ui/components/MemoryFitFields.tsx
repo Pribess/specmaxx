@@ -5,7 +5,8 @@ import type { PanelProps } from './types';
 
 /**
  * Hardware → Advanced → "Memory fit": the GPU memory limit (unified memory only), the runtime reserve per device and
- * the prefill chunk of the fit. Each one changes only the fit verdict, never a rate.
+ * the prefill chunk of the fit. Each one changes only the fit verdict, never a rate; except that the prefill chunk is
+ * also the pipeline chunk of chunked PP prefill (`ParallelConfig.chunkedPipelinePrefill`) when that is on.
  */
 export function MemoryFitFields({ state, dispatch, built }: PanelProps) {
   const memory = built.hardware?.device.device.memory;
@@ -67,8 +68,9 @@ export function MemoryFitFields({ state, dispatch, built }: PanelProps) {
           })
         }
         help={helpLines([
-          'Prompt tokens the engine processes per prefill step.',
-          'Sets the activation memory of long prompts; speed is not affected.',
+          'Prompt tokens the engine processes per prefill step; sets the activation memory of long prompts.',
+          'With chunked PP prefill on, it is also the pipeline chunk and changes the time to first token.',
+          'Otherwise speed is not affected.',
         ])}
       />
     </fieldset>

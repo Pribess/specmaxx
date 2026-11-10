@@ -10,6 +10,9 @@
  * 4. For each phase: lower the model (`seqs = b_mb`; with two-batch overlap as two merged halves, `twoBatch.ts`) →
  *    per-op times (transfer ops on their stage's tier paths) → per-stage times under the resolved overlap fractions
  *    (`overlap.ts: resolveOverlap, coreTime`) → pipeline + DP.
+ * 4a. Chunked pipeline prefill (docs §7 "Chunked pipeline prefill"), when on with pp > 1 and a prompt of K > 1
+ *    chunks: each chunk lowered and costed as above, then the chunked schedule (`chunkedPipeline.ts`); the
+ *    whole-prompt prefill stays as `prefill.chunkedPipeline.unchunked`.
  * 4b. Labelled what-if figures next to the headline (docs §7): prefill with every overlap fraction 0 and two-batch
  *    overlap off when some fraction is above 0 and there is inter-device communication, and decode with the engine
  *    dispatch overlay when it is on. Neither changes the
@@ -37,6 +40,12 @@ import {
   type LoweringContext,
 } from '../lower/lower';
 import type { AllReduceAlgorithm, CollectivePath } from './collectives';
+import {
+  CHUNKED_PIPELINE_SINGLE_STAGE_WARNING,
+  chunkedPipelinePhase,
+  chunkedPipelinePlan,
+  type ChunkedPipelinePlan,
+} from './chunkedPipeline';
 import {
   offloadTiers,
   remotePoolPath,
@@ -75,7 +84,7 @@ import { resolveSpeculative } from './specdec';
 import { resolveHostStaging, type HostStaging } from './staging';
 import { stageNStream, type TransferPaths } from './transfer';
 import { mergeTwoBatch, twoBatchHalves, TWO_BATCH_NOTHING_TO_SPLIT_WARNING } from './twoBatch';
-import { computedPromptTokens } from './types';
+import { cachedPrefixTokens, computedPromptTokens } from './types';
 import type {
   PhaseRates,
   PhaseResult,
@@ -250,7 +259,18 @@ function simulatePhase(
   options: SimOptions,
   /** Resolved overlap fractions of the run (`overlap.ts: resolveOverlap`). */
   overlap: OverlapFractions,
-  shape: { sequencesPerReplica: number; microbatches: number; microbatchSize: number },
+  shape: {
+    sequencesPerReplica: number;
+    microbatches: number;
+    microbatchSize: number;
+    /**
+     * Work units circulating through the stages at once, for the offload stream sharing (`transfer.ts: streamSlots`,
+     * which bounds the stages streaming at the same time by it). Absent = `microbatches` (m). Chunked pipeline
+     * prefill passes m·K: every chunk of every microbatch occupies a stage (docs §7 "Chunked pipeline prefill").
+     * Count.
+     */
+    unitsInFlight?: number;
+  },
   offload: PhaseOffload | undefined,
   tokensPerStep?: number,
   dispatchSecPerKernel?: number,
@@ -313,7 +333,7 @@ function simulatePhase(
         offload,
         input,
         topology,
-        shape.microbatches,
+        shape.unitsInFlight ?? shape.microbatches,
       );
     }
     const layers = stage.layers.map((l) =>
@@ -461,11 +481,75 @@ function phaseRates(p: PhaseResult): PhaseRates {
 }
 
 /**
+ * The lowering of a chunk before the last under chunked pipeline prefill: the same, without the last stage's `head`
+ * layer (prefill computes logits only for each sequence's last position, which the last chunk holds;
+ * `lower/head.ts: headTokens`). Draft layers are added after this (`withDrafter`).
+ */
+function withoutHead(lowered: LoweredModel): LoweredModel {
+  const last = lowered.stages.length - 1;
+  return {
+    stages: lowered.stages.map((stage, s) =>
+      s === last ? { ...stage, layers: stage.layers.filter((l) => l.name !== 'head') } : stage,
+    ),
+  };
+}
+
+/**
+ * The prefill {@link PhaseShape} of a run (as `simulatePhase` builds it), for the chunked schedule
+ * (`chunkedPipeline.ts: chunkedPipelinePhase`) under overlap fractions `overlap`.
+ */
+function prefillPhaseShape(
+  input: SimInput,
+  shape: { sequencesPerReplica: number; microbatches: number; microbatchSize: number },
+  overlap: OverlapFractions,
+): PhaseShape {
+  return {
+    phase: 'prefill',
+    dp: input.parallel.dp,
+    sequencesPerReplica: shape.sequencesPerReplica,
+    microbatches: shape.microbatches,
+    microbatchSize: shape.microbatchSize,
+    promptLen: input.workload.promptLen,
+    computedTokens: computedPromptTokens(input.workload),
+    overlap,
+  };
+}
+
+/** `PhaseResult.chunkedPipeline` of a chunked prefill: C, K and the whole-prompt prefill's rates. */
+function chunkedPipelineSummary(
+  plan: ChunkedPipelinePlan,
+  wholePrompt: PhaseResult,
+): NonNullable<PhaseResult['chunkedPipeline']> {
+  return {
+    chunkTokens: plan.chunkTokens,
+    chunks: plan.chunks.length,
+    unchunked: phaseRates(wholePrompt),
+  };
+}
+
+/**
+ * Per-call options of {@link simulate} that are not part of the input (no URL, no validation): how much of the result
+ * a caller needs.
+ */
+export interface SimulateRunOptions {
+  /**
+   * With chunked pipeline prefill in effect (`ParallelConfig.chunkedPipelinePrefill`, pp > 1, K > 1): skip the K chunk
+   * lowerings and the chunked schedule, for a caller that reads only decode and the memory fit (the UI's batch
+   * sweep). `memory` and `decode` are then bit-identical to the full run (the fit still counts the pipeline chunk,
+   * §8 "Activation peak"); `prefill` and `prefillWithoutOverlap` are the whole-prompt ones, without
+   * `prefill.chunkedPipeline`, and `warnings` may lack a line only the chunk costing raises. Absent or false = the
+   * full run. No effect without chunked pipeline prefill.
+   */
+  skipChunkedPrefillSchedule?: boolean;
+}
+
+/**
  * Simulate one input: validate, apply modifiers, cost prefill (the whole prompt from an empty KV cache) and decode
  * (one new token with `decodeContextLen` tokens already cached; with speculative decoding a `k + 1`-token verify plus
- * the drafter), and check the memory fit. Throws `Error(errors.join('\n'))` on an invalid input.
+ * the drafter), and check the memory fit. Throws `Error(errors.join('\n'))` on an invalid input. `run`: see
+ * {@link SimulateRunOptions}.
  */
-export function simulate(input: SimInput): SimResult {
+export function simulate(input: SimInput, run: SimulateRunOptions = {}): SimResult {
   const errors = validateInput(input);
   if (errors.length > 0) throw new Error(errors.join('\n'));
   const options: SimOptions = { ...DEFAULT_SIM_OPTIONS, ...input.options };
@@ -644,7 +728,7 @@ export function simulate(input: SimInput): SimResult {
       lowerDraftDecode(model, draft, decodeCtx, contextRows, draftLength),
     );
   }
-  const prefill = simulatePhase(
+  const wholePromptPrefill = simulatePhase(
     prefillLowered,
     'prefill',
     base,
@@ -655,6 +739,76 @@ export function simulate(input: SimInput): SimResult {
     shape,
     phaseOffload,
   );
+  // 4a. Chunked pipeline prefill (docs §7 "Chunked pipeline prefill"). Only with the flag on, pp > 1 and K > 1 chunks;
+  // otherwise `prefill` is the whole-prompt result above, untouched. Chunk j is lowered as its own step
+  // { qLen: q_j, kvLen: kv_j } (the prefix-cache shape: its tokens over every earlier key), with two-batch overlap
+  // and the drafter as for a whole prompt; chunks before the last have no LM head (no token is sampled yet).
+  if (parallel.chunkedPipelinePrefill === true && parallel.pp === 1) {
+    warnings.push(CHUNKED_PIPELINE_SINGLE_STAGE_WARNING);
+  }
+  const cpp = chunkedPipelinePlan(parallel, workload);
+  // The chunks costed and scheduled: none when the caller skips the schedule (the memory fit below still uses `cpp`).
+  const schedule = run.skipChunkedPrefillSchedule === true ? undefined : cpp;
+  // Each chunk's past = the prefix-cache hit (`prefixCacheTokens`, placed by f_pre) + the earlier chunks (live KV,
+  // placed by f_dev): with KV-cache offload every chunk fetches the off-device part of both (docs §7 "Chunked
+  // pipeline prefill").
+  const prefixCacheTokens = cachedPrefixTokens(workload);
+  const chunkContexts: LoweringContext[] =
+    schedule?.chunks.map((chunk) => ({
+      ...prefillCtx,
+      qLen: chunk.qLen,
+      kvLen: chunk.kvLen,
+      prefixCacheTokens,
+    })) ?? [];
+  // One chunk's lowering: the target (without the head before the last chunk), then the drafter.
+  const lowerPrefillChunk = (
+    ctx: LoweringContext,
+    isLast: boolean,
+    lower: (ctx: LoweringContext) => LoweredModel,
+  ): LoweredModel => {
+    const target = lower(ctx);
+    const lowered = isLast ? target : withoutHead(target);
+    if (spec === undefined) return lowered;
+    const { draft } = spec.lowering;
+    return withDrafter(lowered, model, draft, ctx, lowerDraftPrefill(model, draft, ctx));
+  };
+  const lowerPrefillChunks = (lower: (ctx: LoweringContext) => LoweredModel): LoweredModel[] =>
+    chunkContexts.map((ctx, j) => lowerPrefillChunk(ctx, j === chunkContexts.length - 1, lower));
+  // Each chunk costed as one microbatch step, under the given options and overlap fractions, then scheduled. The
+  // offload streams are shared as with m·K units in flight: the K chunks of each microbatch occupy stages at the same
+  // time, so up to min(m·K, |S_tier|) stages of a node stream together (docs §7 "Chunked pipeline prefill").
+  const chunkShape = { ...shape, unitsInFlight: shape.microbatches * chunkContexts.length };
+  const chunkedPrefill = (
+    chunkLowerings: readonly LoweredModel[],
+    chunkOptions: SimOptions,
+    overlapOf: (ctx: LoweringContext) => OverlapFractions,
+    scheduleOverlap: OverlapFractions,
+  ): PhaseResult =>
+    chunkedPipelinePhase(
+      chunkLowerings.map(
+        (lowered, j) =>
+          simulatePhase(
+            lowered,
+            'prefill',
+            base,
+            input,
+            hw.topology,
+            chunkOptions,
+            overlapOf(chunkContexts[j]),
+            chunkShape,
+            phaseOffload,
+          ).stages,
+      ),
+      prefillPhaseShape(input, shape, scheduleOverlap),
+    );
+  const prefillChunkLowerings = schedule === undefined ? [] : lowerPrefillChunks(lowerStep);
+  const prefill: PhaseResult =
+    schedule === undefined
+      ? wholePromptPrefill
+      : {
+          ...chunkedPrefill(prefillChunkLowerings, options, overlapFor, prefillOverlap),
+          chunkedPipeline: chunkedPipelineSummary(schedule, wholePromptPrefill),
+        };
   const decode = simulatePhase(
     decodeLowered,
     'decode',
@@ -691,30 +845,45 @@ export function simulate(input: SimInput): SimResult {
     anyOverlap(prefillOverlap) &&
     (prefill.comm.latencySec > 0 || prefill.comm.bandwidthSec > 0)
   ) {
-    let fullPrefillLowered = prefillLowered;
-    if (twoBatch) {
-      fullPrefillLowered = lowerModel(model, prefillCtx);
-      if (spec !== undefined)
-        fullPrefillLowered = withDrafter(
-          fullPrefillLowered,
-          model,
-          spec.lowering.draft,
-          prefillCtx,
-          lowerDraftPrefill(model, spec.lowering.draft, prefillCtx),
-        );
+    if (schedule !== undefined) {
+      // Chunked pipeline prefill: the same chunks under every fraction 0, without two-batch overlap (the full-batch
+      // chunk lowerings; without TBO they are the headline's, reused).
+      const noneLowerings = twoBatch
+        ? lowerPrefillChunks((ctx) => lowerModel(model, ctx))
+        : prefillChunkLowerings;
+      const none = chunkedPrefill(
+        noneLowerings,
+        { ...options, overlap: 'none' },
+        () => NO_OVERLAP,
+        NO_OVERLAP,
+      );
+      prefillWithoutOverlap = phaseRates(none);
+    } else {
+      let fullPrefillLowered = prefillLowered;
+      if (twoBatch) {
+        fullPrefillLowered = lowerModel(model, prefillCtx);
+        if (spec !== undefined)
+          fullPrefillLowered = withDrafter(
+            fullPrefillLowered,
+            model,
+            spec.lowering.draft,
+            prefillCtx,
+            lowerDraftPrefill(model, spec.lowering.draft, prefillCtx),
+          );
+      }
+      const none = simulatePhase(
+        fullPrefillLowered,
+        'prefill',
+        base,
+        input,
+        hw.topology,
+        { ...options, overlap: 'none' },
+        NO_OVERLAP,
+        shape,
+        phaseOffload,
+      );
+      prefillWithoutOverlap = phaseRates(none);
     }
-    const none = simulatePhase(
-      fullPrefillLowered,
-      'prefill',
-      base,
-      input,
-      hw.topology,
-      { ...options, overlap: 'none' },
-      NO_OVERLAP,
-      shape,
-      phaseOffload,
-    );
-    prefillWithoutOverlap = phaseRates(none);
   }
   // Engine dispatch overlay (review F1b; docs §7 "Engine dispatch overlay"): t_s' = t_s + n_s·τ per decode stage.
   let decodeWithDispatch: SimResult['decodeWithDispatch'];
@@ -743,12 +912,22 @@ export function simulate(input: SimInput): SimResult {
 
   // 6. Memory fit. The activation peak counts the decode step and the LAST prefill chunk (chunked prefill, docs §8
   // "Activation peak"); the prefill rate above is unaffected. A microbatch within the budget reuses the prefill lowering.
-  const chunk = prefillChunkShape(
-    workload.promptLen,
-    prefillCtx.seqs,
-    workload.prefillChunkTokens ?? DEFAULT_PREFILL_CHUNK_TOKENS,
-    prefillCtx.qLen,
-  );
+  // With chunked pipeline prefill a pipeline chunk holds b_mb sequences of C new tokens each, so its largest step is
+  // { seqs: b_mb, qLen: C, kvLen: P } (the step of the budget rule when b_mb = 1).
+  const chunk =
+    cpp === undefined
+      ? prefillChunkShape(
+          workload.promptLen,
+          prefillCtx.seqs,
+          workload.prefillChunkTokens ?? DEFAULT_PREFILL_CHUNK_TOKENS,
+          prefillCtx.qLen,
+        )
+      : {
+          seqs: prefillCtx.seqs,
+          qLen: cpp.chunkTokens,
+          kvLen: workload.promptLen,
+          prefixCacheTokens: cachedPrefixTokens(workload),
+        };
   let chunkLowered = prefillLowered;
   if (chunk.seqs !== prefillCtx.seqs || chunk.qLen !== prefillCtx.qLen) {
     const chunkCtx: LoweringContext = { ...prefillCtx, ...chunk };
@@ -762,6 +941,22 @@ export function simulate(input: SimInput): SimResult {
         lowerDraftPrefill(model, spec.lowering.draft, chunkCtx),
       );
   }
+  // Chunked pipeline prefill: the last chunk is one more phase of the fit, for its staging buffers. It fetches the most
+  // off-device KV of any chunk (the whole prefix and every earlier chunk at (1 − f_dev); docs §7 "Chunked pipeline
+  // prefill", §12 "KV cache off-device"); its activations and weight fetches are within the steps above. It is the
+  // schedule's own lowering, or (schedule skipped) the same lowering made here, so the fit is the same either way.
+  const lastChunkPhase: LoweredModel[] = [];
+  if (cpp !== undefined) {
+    const last = cpp.chunks[cpp.chunks.length - 1];
+    lastChunkPhase.push(
+      prefillChunkLowerings.at(-1) ??
+        lowerPrefillChunk(
+          { ...prefillCtx, qLen: last.qLen, kvLen: last.kvLen, prefixCacheTokens },
+          true,
+          lowerStep,
+        ),
+    );
+  }
   const capacityBytes = input.hardware.memCapacityBytes ?? device.memory.capacityOptionsBytes[0];
   const gpuUsableFraction = resolveGpuUsableFraction(
     device.memory,
@@ -774,8 +969,8 @@ export function simulate(input: SimInput): SimResult {
     // The cache must hold the prompt after prefill and N + 1 tokens after the decode step (docs §8); with
     // speculative decoding the verify appends k + 1 rows, so N + k + 1 (docs §13 "Draft memory").
     contextTokens: Math.max(workload.promptLen, decodeCtx.kvLen),
-    lowered: [prefillLowered, decodeLowered],
-    activationLowered: [chunkLowered, decodeLowered],
+    lowered: [prefillLowered, decodeLowered, ...lastChunkPhase],
+    activationLowered: [chunkLowered, decodeLowered, ...lastChunkPhase],
     capacityBytes,
     kind: device.memory.kind,
     gpuUsableFraction,

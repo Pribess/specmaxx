@@ -117,6 +117,11 @@ export interface KvMisses {
  * - top-k decode: `U = min(past, topK·qLen)` selected past tokens, `hits = clamp(U·h, max(0, U + N_res − past),
  *   min(U, N_res))` (the expert hit rule of `engine/transfer.ts: expertHitsMisses`, past tokens for experts);
  * then `M = U − hits`. `past = kvLen − qLen`, this rank's `ceil(past/d)` when the op is DCP-sharded.
+ * A chunk of chunked pipeline prefill (`ctx.prefixCacheTokens` set, docs §7 "Chunked pipeline prefill") splits its
+ * past into the prefix-cache hit `past_pre = min(past, prefixCacheTokens)` (placed by f_pre) and the earlier chunks of
+ * the same prefill `past_live = past − past_pre`, live KV placed by f_dev like any other (the memory fit counts only
+ * that share on the device): `N_res = f_pre·past_pre + f_dev·past_live`,
+ * `M = (1 − f_pre)·past_pre + (1 − f_dev)·past_live`.
  */
 export function kvMisses(
   attention: AttentionOp,
@@ -129,6 +134,23 @@ export function kvMisses(
   // Formula: f = decode ? f_dev : f_pre
   const f = ctx.phase === 'decode' ? placement.deviceFraction : placement.prefixDeviceFraction;
   const topK = ctx.phase === 'decode' && attention.kvSelection.kind === 'topk';
+  if (ctx.phase === 'prefill' && ctx.prefixCacheTokens !== undefined) {
+    // Formula: past_pre = min(past, cached);  past_live = past − past_pre
+    //          N_res = f_pre·past_pre + f_dev·past_live;  M = (1 − f_pre)·past_pre + (1 − f_dev)·past_live
+    // See docs/simulation-model.md §7 "Chunked pipeline prefill" (KV-cache offload)
+    const prefixTokens = Math.min(pastTokens, dcpKvTokens(ctx.prefixCacheTokens, shards));
+    const liveTokens = pastTokens - prefixTokens;
+    const fLive = placement.deviceFraction;
+    const prefix = expertHitsMisses(prefixTokens, f, f, prefixTokens);
+    const live = expertHitsMisses(liveTokens, fLive, fLive, liveTokens);
+    return {
+      pastTokens,
+      residentTokens: prefix.residentExperts + live.residentExperts,
+      attendedTokens: pastTokens,
+      misses: prefix.misses + live.misses,
+      topK: false,
+    };
+  }
   // Formula: U = full / prefill: past;  top-k decode: min(past, topK·qLen)
   const attendedTokens =
     attention.kvSelection.kind === 'topk' && topK

@@ -206,6 +206,10 @@ export function validateInput(input: SimInput): string[] {
       `parallel.epImbalanceScalesAllToAll must be true or false (got ${String(scalesA2a)})`,
     );
   }
+  const cpp = parallel.chunkedPipelinePrefill;
+  if (cpp !== undefined && typeof cpp !== 'boolean') {
+    errors.push(`parallel.chunkedPipelinePrefill must be true or false (got ${String(cpp)})`);
+  }
   for (const field of ['dispatchFormat', 'combineFormat'] as const) {
     const format = parallel[field];
     if (format !== undefined && !isA2aFormat(format)) {

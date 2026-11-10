@@ -11,7 +11,8 @@ import { defineConfig, devices } from '@playwright/test';
  *   expert offload; the layout test checks the desktop split (splitter drag, keyboard, reset, persistence) and the
  *   phone stacking order; the gated-mirror test loads a gated shortlist model from its mirror without a token; the
  *   disaggregation test runs prefill and decode pools in DeepSeek's 32 : 144 shape with a KV link; the
- *   memory-fixes test clicks the memory card's one-click fixes, alone and per pool under disaggregation.
+ *   memory-fixes test clicks the memory card's one-click fixes, alone and per pool under disaggregation; the
+ *   chunked-pipeline test turns on chunked PP prefill for one 1M-token prompt (Kimi-K3, TP 8 × PP 4 on 4 × 8 B300).
  * - `screenshots` (`bun run screenshots`): writes docs/screenshots/*.png (or to `$SCREENSHOTS_DIR`).
  * - `redesign` (`bun run screenshots:redesign`): viewport-only before/after states (`$REDESIGN_DIR`).
  * The HF Hub is mocked per test (no real network). `@playwright/test` is pinned to 1.64.1, whose
@@ -32,7 +33,7 @@ export default defineConfig({
     {
       name: 'smoke',
       testMatch:
-        /(smoke|fabric|network|rack-scale|dp-attention|dcp|deployment|kv-offload|layout|help|gated-mirror|disaggregation|memory-fixes)\.spec\.ts/,
+        /(smoke|fabric|network|rack-scale|dp-attention|dcp|deployment|kv-offload|layout|help|gated-mirror|disaggregation|memory-fixes|chunked-pipeline)\.spec\.ts/,
     },
     { name: 'screenshots', testMatch: /screenshots\.spec\.ts/ },
     { name: 'redesign', testMatch: /redesign\.spec\.ts/ },

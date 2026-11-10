@@ -83,6 +83,12 @@ export interface PhaseSummary {
    */
   withoutOverlap?: { tokensPerSec: number; perSequenceTokensPerSec: number };
   /**
+   * Prefill only, with chunked pipeline prefill on (`PhaseResult.chunkedPipeline`); absent otherwise. `chunkTokens`:
+   * chunk size C (tokens); `chunks`: chunks per microbatch K (count); `unchunkedLatencySec`: the time to first token
+   * with whole-prompt microbatches (seconds), next to this phase's `latencySec` (the chunked one).
+   */
+  chunkedPipeline?: { chunkTokens: number; chunks: number; unchunkedLatencySec: number };
+  /**
    * Decode only: the rates with the engine dispatch overlay on (`SimResult.decodeWithDispatch`), engine overhead
    * outside the theoretical maximum; absent when the overlay is off. Rates in tokens/s; `kernelsPerStep` count;
    * `perKernelSec` seconds.
@@ -291,6 +297,13 @@ function phaseSummary(p: PhaseResult, contextTokens: number): PhaseSummary {
     comm: { ...p.comm },
     ...(p.transfer && { transfer: { ...p.transfer } }),
     ...(p.speculative && { speculative: { ...p.speculative } }),
+    ...(p.chunkedPipeline && {
+      chunkedPipeline: {
+        chunkTokens: p.chunkedPipeline.chunkTokens,
+        chunks: p.chunkedPipeline.chunks,
+        unchunkedLatencySec: p.chunkedPipeline.unchunked.latencySec,
+      },
+    }),
   };
 }
 

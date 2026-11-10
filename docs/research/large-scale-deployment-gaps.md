@@ -120,6 +120,7 @@ Effort: S ≈ a day or less, M ≈ days, L ≈ a week+.
 - **Evidence of use:** research/blogs; **0 vLLM recipes** (prefill CP "under active development" in vLLM docs).
 - **Fit:** legitimate math. Grade B for long-context scenarios, kept low priority; chunked-PP prefill overlaps with existing PP model (microbatching a single long prompt) and could be cheaper.
 - **Effort: M–L.**
+- **Status: chunked PP prefill done; ring CP deferred.** `ParallelConfig.chunkedPipelinePrefill` (pp > 1) splits each prompt into chunks of `Workload.prefillChunkTokens` (C, default 8192) new tokens per sequence, each lowered as its own step over every earlier key (the prefix-cache shape, so every block kind works), and schedules them through the stages and PP links; TTFT falls by up to pp× while the steady-stream prefill rate moves only by the chunking costs (K weight reads, KV re-reads, smaller GEMMs, MLA `kv_b` recompute). Kimi-K3 at 1M on 4 × 8 B300 (tp 8, pp 4): TTFT 69.1 s → 20.0 s, prefill 55.1k → 52.8k tok/s @ 1M. Off, or with one chunk, results are unchanged. Ring CP needs a new rank dimension and a sharded-KV decode mode; its math is in `docs/design/chunked-pipeline-prefill.md` §4 for a follow-up. See `docs/simulation-model.md` §7 "Chunked pipeline prefill".
 
 ### G10. KV-cache tiering/offload (host RAM, SSD, remote) — **B**, in scope (reuses offload machinery)
 

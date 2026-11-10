@@ -28,11 +28,14 @@ export interface Workload {
    */
   decodeContextLen: number;
   /**
-   * Prefill chunk C for the MEMORY FIT only: the most prompt tokens one prefill step processes per microbatch
-   * (chunked prefill, vLLM `max_num_batched_tokens`, SGLang `--chunked-prefill-size`). The fit's prefill activation
-   * peak is the one of the LAST chunk (`qLen = min(C, P)`, `kvLen = P`), not of the whole prompt in one pass. The
-   * prefill RATE is unaffected (it is always the whole prompt). Absent = `DEFAULT_PREFILL_CHUNK_TOKENS` (8192,
-   * `engine/memory.ts`, sourced there); an integer ≥ 1. Unit: tokens. See docs/simulation-model.md §8.
+   * Prefill chunk C: the most prompt tokens one prefill step processes per microbatch (chunked prefill, vLLM
+   * `max_num_batched_tokens`, SGLang `--chunked-prefill-size`). Two uses:
+   * - memory fit: the fit's prefill activation peak is the one of the LAST chunk (`qLen = min(C, P)`, `kvLen = P`),
+   *   not of the whole prompt in one pass (docs/simulation-model.md §8 "Activation peak");
+   * - with `ParallelConfig.chunkedPipelinePrefill` on and pp > 1: the pipeline chunk, C new tokens per sequence per
+   *   chunk (docs §7 "Chunked pipeline prefill"). Only then does it change the prefill rate and time to first
+   *   token; otherwise the prefill rate is always the whole prompt in one pass.
+   * Absent = `DEFAULT_PREFILL_CHUNK_TOKENS` (8192, `engine/memory.ts`, sourced there); an integer ≥ 1. Unit: tokens.
    */
   prefillChunkTokens?: number;
   /**
@@ -644,6 +647,23 @@ export interface PhaseResult {
     stepCostRatio: number;
     /** `tokensPerSec / offTokensPerSec` (= E[τ] / stepCostRatio). Dimensionless. */
     speedup: number;
+  };
+  /**
+   * Prefill with chunked pipeline prefill in effect (`ParallelConfig.chunkedPipelinePrefill`, pp > 1, K > 1 chunks);
+   * absent otherwise. Then `latencySec` is the chunked time to first token of a replica batch, `cycleSec` the
+   * chunked cycle, and `stages` hold the per-stage sums over the K chunks of one microbatch
+   * (`engine/chunkedPipeline.ts`; docs/simulation-model.md §7 "Chunked pipeline prefill").
+   */
+  chunkedPipeline?: {
+    /** Chunk size C: new prompt tokens per sequence per chunk (the last chunk may be shorter). Unit: tokens. */
+    chunkTokens: number;
+    /** Chunks per microbatch, K = ceil(P_new / C). Count. */
+    chunks: number;
+    /**
+     * The same prefill with whole-prompt microbatches (chunked pipeline prefill off; the result of before). Rates
+     * in tokens/s, times in seconds.
+     */
+    unchunked: PhaseRates;
   };
 }
 

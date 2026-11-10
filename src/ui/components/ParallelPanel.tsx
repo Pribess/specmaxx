@@ -92,9 +92,10 @@ export function ParallelPanel({ state, dispatch, loaded, built, pool }: Props) {
   const fields = moe ? (['tp', 'pp', 'dp', 'ep'] as const) : (['tp', 'pp', 'dp'] as const);
   const { tp, pp, dp, ep, dcp } = state.parallel;
   const denseTp = state.parallel.denseTpGroup === 'ep';
+  const chunkedPp = state.parallel.chunkedPipelinePrefill === true && pp > 1 ? ', chunked PP' : '';
   const value = dep
-    ? `DP attention + EP ${ep}${pp > 1 ? `, PP ${pp}` : ''}${denseTp ? ', dense TP' : ''}`
-    : `TP ${tp}, PP ${pp}, DP ${dp}${moe ? `, EP ${ep}` : ''}${dcp !== undefined && dcp > 1 ? `, DCP ${dcp}` : ''}`;
+    ? `DP attention + EP ${ep}${pp > 1 ? `, PP ${pp}` : ''}${denseTp ? ', dense TP' : ''}${chunkedPp}`
+    : `TP ${tp}, PP ${pp}, DP ${dp}${moe ? `, EP ${ep}` : ''}${dcp !== undefined && dcp > 1 ? `, DCP ${dcp}` : ''}${chunkedPp}`;
   const topology = built.hardware?.topology;
   const devices = state.hw.devicesPerNode * state.hw.nodes;
   const checked =
@@ -262,8 +263,8 @@ export function ParallelPanel({ state, dispatch, loaded, built, pool }: Props) {
           {balance}
         </>
       )}
-      {/* DCP splits the KV cache over TP ranks: none in DP attention + EP (TP 1). */}
-      {!dep && (
+      {/* DCP splits the KV cache over TP ranks: none in DP attention + EP (TP 1). Chunked PP prefill: PP > 1 only. */}
+      {(!dep || pp > 1) && (
         <details className="advanced">
           <summary>Advanced</summary>
           <ParallelAdvancedFields
@@ -271,8 +272,9 @@ export function ParallelPanel({ state, dispatch, loaded, built, pool }: Props) {
             dispatch={dispatch}
             loaded={loaded}
             built={built}
+            showDcp={!dep}
             hint={
-              checked
+              checked && !dep
                 ? `Valid DCP: ${validDegrees('dcp', checked.model, checked.quant, checked.parallel, state.workload, checked.topology).join(', ')}`
                 : undefined
             }

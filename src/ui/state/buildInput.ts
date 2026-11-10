@@ -172,7 +172,8 @@ export function buildSimInput(
     // The user's degrees; EP is the user's on a MoE model, else 1. `denseTpGroup` only when dense TP over the EP
     // group is on (MoE, DP attention + EP), so without it the input is exactly the one from before the layout. The
     // EP balance knobs (ρ, EPLB replicas) only when the user set a non-default value on a MoE model. `dcp` likewise
-    // only when DCP is on (> 1): with DCP off the input is exactly the one from before DCP.
+    // only when DCP is on (> 1): with DCP off the input is exactly the one from before DCP. `chunkedPipelinePrefill`
+    // only when on and PP > 1 (the engine ignores it at PP 1, with a warning the UI need not show).
     parallel: {
       tp: parallel.tp,
       pp: parallel.pp,
@@ -185,6 +186,9 @@ export function buildSimInput(
         ? { redundantExpertsPerRank: parallel.redundantExpertsPerRank }
         : {}),
       ...(parallel.dcp !== undefined && parallel.dcp > 1 ? { dcp: parallel.dcp } : {}),
+      ...(parallel.chunkedPipelinePrefill === true && parallel.pp > 1
+        ? { chunkedPipelinePrefill: true }
+        : {}),
       ...(parallel.dispatchFormat !== undefined ? { dispatchFormat: parallel.dispatchFormat } : {}),
       ...(parallel.combineFormat !== undefined ? { combineFormat: parallel.combineFormat } : {}),
       ...(parallel.allToAllEfficiency !== undefined

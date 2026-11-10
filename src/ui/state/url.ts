@@ -18,6 +18,7 @@
  * | `x`, `xi`, `xe` | spec edits on device / intra link / inter link, `path:value` comma list, SI units | `x=memory.bandwidthBytesPerSec:2e12` |
  * | `tp`, `pp`, `dp`, `ep` | parallel degrees (`ep` applies to MoE models only; old URLs with `dp` load it as written) | `tp=2&dp=2` |
  * | `dcp` | decode context parallel degree: the KV cache split by token over `dcp` of the TP ranks (absent or 1: off; dropped with `lay=dep`) | `tp=8&dcp=8` |
+ * | `cpp` | chunked pipeline prefill on: `1` (absent: off; dropped unless `pp` > 1) | `pp=4&cpp=1` |
  * | `lay` | parallel layout: `dep` = DP attention + EP (TP 1, DP = EP; MoE models only; absent: custom; dropped unless `tp` is 1 and `dp` equals `ep`) | `dp=72&ep=72&lay=dep` |
  * | `dn` | (with `lay=dep`) dense FFN layers and LM head: `tp` = TP over the EP group (absent: DP) | `dn=tp` |
  * | `epi` | EP load imbalance ρ (busiest EP rank's routed load ÷ mean), 1–{@link MAX_EP_IMBALANCE} (default 1.2, `DEFAULT_EP_IMBALANCE`; read by the engine only on MoE models at EP > 1) | `epi=1.5` |
@@ -208,6 +209,7 @@ export const URL_KEYS = [
   'dp',
   'ep',
   'dcp',
+  'cpp',
   'lay',
   'dn',
   'epi',
@@ -300,6 +302,7 @@ export const POOL_URL_KEYS = [
   'dp',
   'ep',
   'dcp',
+  'cpp',
   'lay',
   'dn',
   'epi',
@@ -437,6 +440,8 @@ function encodeParallel(
   for (const key of ['tp', 'pp', 'dp', 'ep'] as const)
     if (parallel[key] !== 1) put(key, parallel[key]);
   if (parallel.dcp !== undefined && parallel.dcp > 1) put('dcp', parallel.dcp);
+  // Kept in the state only as true with PP > 1 (`normalizeChunkedPipeline`).
+  if (parallel.chunkedPipelinePrefill === true && parallel.pp > 1) put('cpp', '1');
   if (layout === 'dpAttentionEp') put('lay', 'dep');
   if (layout === 'dpAttentionEp' && parallel.denseTpGroup === 'ep') put('dn', 'tp');
   // Kept in the state only when not the default (`normalizeEpBalance`).
@@ -946,6 +951,12 @@ function decodeParallel(
     const parsed = parseInteger(dcp, 1, MAX_VALUE);
     if (parsed === undefined || dep) drop('dcp', dcp);
     else if (parsed > 1) parallel.dcp = parsed;
+  }
+  // Chunked pipeline prefill: only `1`, and only with more than one pipeline stage.
+  const cpp = get('cpp');
+  if (cpp !== undefined) {
+    if (cpp === '1' && parallel.pp > 1) parallel.chunkedPipelinePrefill = true;
+    else drop('cpp', cpp);
   }
   // EP load imbalance ρ and EPLB replicas; a default value stays absent (`normalizeEpBalance`).
   const epi = get('epi');

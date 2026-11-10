@@ -42,6 +42,7 @@ export * from './engine/opTime';
 export * from './engine/pipeline';
 export * from './engine/overlap';
 export * from './engine/twoBatch';
+export * from './engine/chunkedPipeline';
 export * from './engine/dispatch';
 export * from './engine/memory';
 export * from './engine/validate';

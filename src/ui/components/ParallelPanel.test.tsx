@@ -193,3 +193,44 @@ describe('ParallelPanel: decode context parallelism', () => {
     expect(screen.queryByText('Advanced')).toBeNull();
   });
 });
+
+describe('ParallelPanel: chunked PP prefill', () => {
+  const QWEN_ID = 'Qwen/Qwen3.8-27B';
+  const q = mapHfModel(fixtureRepoFiles(QWEN_ID));
+  if (q.kind !== 'ok') throw new Error(q.kind);
+  const QWEN = loadedFromHf({ kind: 'hf', id: QWEN_ID }, q);
+  const toggle = () => screen.queryByRole('radiogroup', { name: 'Chunked PP prefill' });
+
+  it('is absent at PP 1', () => {
+    panel('d=b200&n=8&tp=8', QWEN);
+    expect(toggle()).toBeNull();
+    expect(screen.queryByTestId('parallel-chunked-pp')).toBeNull();
+  });
+
+  it('at PP > 1 it is off with its help; turning it on dispatches the flag', () => {
+    const dispatch = panel('d=b200&n=8&tp=2&pp=4', QWEN);
+    const group = toggle()!;
+    expect((group.querySelector('input[value="off"]') as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByRole('button', { name: /Chunked PP prefill/ })).toBeTruthy();
+    expect(screen.getByText('TP 2, PP 4, DP 1')).toBeTruthy();
+    fireEvent.click(group.querySelector('input[value="on"]')!);
+    expect(dispatch.mock.calls.map((c) => c[0])).toEqual([
+      { type: 'setParallel', parallel: { chunkedPipelinePrefill: true } },
+    ]);
+  });
+
+  it('on: the panel value names it; Off dispatches undefined', () => {
+    const dispatch = panel('d=b200&n=8&tp=2&pp=4&cpp=1', QWEN);
+    expect(screen.getByText('TP 2, PP 4, DP 1, chunked PP')).toBeTruthy();
+    fireEvent.click(toggle()!.querySelector('input[value="off"]')!);
+    expect(dispatch.mock.calls.map((c) => c[0])).toEqual([
+      { type: 'setParallel', parallel: { chunkedPipelinePrefill: undefined } },
+    ]);
+  });
+
+  it('DP attention + EP with PP > 1 has an Advanced with the switch but no DCP', () => {
+    panel(`m=${ID}&d=gb200&n=72&b=72&pp=2&dp=36&ep=36&lay=dep`);
+    expect(toggle()).toBeTruthy();
+    expect(screen.queryByTestId('parallel-advanced')).toBeNull();
+  });
+});
