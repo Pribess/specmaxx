@@ -9,11 +9,17 @@
  * Inter-node fabric (`TopologySpec.interNodeFabric`, docs §6 "Fabric shapes"): node i of a ring or chain is cabled to
  * node i ± 1 in this rank order. A path carries a fabric only when the topology's is not the non-blocking switch, so
  * every pre-fabric topology gets exactly its old paths.
+ *
+ * Multi-NIC nodes and in-network reduction (docs §6 "Multi-NIC nodes", "In-network reduction (NVLS, SHARP)"): every
+ * inter-node path carries the device's share of the node's NICs (`hw/nics.ts: interNodeLinkPerDevice`, the topology's
+ * own link object with one NIC per device), and a path carries an in-network reduction only when the run switches it
+ * on and the level's link has one, so every topology without them gets exactly its old paths.
  */
 
 import type { ParallelConfig } from '../ir/model';
-import type { TopologySpec } from '../hw/types';
+import type { InNetworkReduction, LinkSpec, TopologySpec } from '../hw/types';
 import { groupFabric, isNonBlockingSwitched, nodeHops } from '../hw/fabric';
+import { interNodeLinkPerDevice } from '../hw/nics';
 import type { CollectivePath } from './collectives';
 import type { HostStaging } from './staging';
 
@@ -91,16 +97,32 @@ export function expertTpGroupSpan(
   return { n: etp, devicesPerNodeInGroup: 1, nodesSpanned: etp, nodeStride: ep / dpn };
 }
 
+/** The run's in-network reduction switch (`SimOptions.inNetworkReduction`): `'off'` (default) or `'on'`. */
+export type InNetworkSwitch = 'off' | 'on';
+
+/**
+ * The in-network reduction a path on `link` may use: the link's `inNetworkReduction` capability when the switch is
+ * `'on'`, else undefined (also for an absent link or a link without the capability).
+ */
+export function inNetworkCapability(
+  link: LinkSpec | undefined,
+  inNetwork: InNetworkSwitch,
+): InNetworkReduction | undefined {
+  return inNetwork === 'on' ? link?.inNetworkReduction : undefined;
+}
+
 /**
  * The {@link CollectivePath} of the expert-TP group ({@link expertTpGroupSpan}), built like a contiguous group's by
  * {@link collectivePath}: within a node the intra-node link, across nodes the inter-node link (hierarchical when
  * both). Members on non-adjacent nodes (`nodeStride > 1`) are modeled on a switched or full-mesh fabric (one hop
- * between any two nodes) and rejected on a ring or chain, whose hop counts assume adjacent nodes.
+ * between any two nodes) and rejected on a ring or chain, whose hop counts assume adjacent nodes. `inNetwork` as for
+ * {@link collectivePath}.
  */
 export function expertTpCollectivePath(
   par: Pick<ParallelConfig, 'tp' | 'ep'>,
   topo: TopologySpec,
   staging?: HostStaging,
+  inNetwork: InNetworkSwitch = 'off',
 ): CollectivePath {
   const span = expertTpGroupSpan(par, topo);
   const shape = topo.interNodeFabric;
@@ -109,7 +131,7 @@ export function expertTpCollectivePath(
       `expert-TP group of ${span.n} nodes ${span.nodeStride} apart on a ${shape.kind} fabric is not modeled (needs ep ≤ devices per node, or a switched or full-mesh fabric)`,
     );
   }
-  return collectivePath(span, topo, staging);
+  return collectivePath(span, topo, staging, inNetwork);
 }
 
 /**
@@ -141,29 +163,43 @@ export function ppBoundaryIsInterNode(
  * is the non-blocking switch; a hierarchical path carries an oversubscribed switch (the only shape allowed with
  * several devices per node). `staging` (the run's inter-node host staging, `staging.ts`) is attached to the
  * inter-node level only (`interStaging`); absent = the path without staging, exactly as before.
+ * The inter-node link is the device's share of the node's NICs (`hw/nics.ts: interNodeLinkPerDevice`; the
+ * topology's own link object when `nicsPerNode` is absent).
+ * `inNetwork` (`SimOptions.inNetworkReduction`, default `'off'`): when `'on'`, a level whose link has an
+ * `inNetworkReduction` capability gets it on the path (flat `inNetworkReduction`, hierarchical
+ * `intraInNetworkReduction` / `interInNetworkReduction`); the inter-node level only without host staging and,
+ * when flat, without a fabric shape (switchless shapes and an oversubscribed flat switch keep ring / tree).
  */
 export function collectivePath(
   span: GroupSpan,
   topo: TopologySpec,
   staging?: HostStaging,
+  inNetwork: InNetworkSwitch = 'off',
 ): CollectivePath {
   if (span.n <= 1) return { kind: 'none' };
   const needIntra = span.devicesPerNodeInGroup > 1;
   const needInter = span.nodesSpanned > 1;
   if (needIntra && topo.intraNode === undefined)
     throw new Error(`topology ${topo.id} has no intraNode link`);
-  if (needInter && topo.interNode === undefined)
+  const interNode = interNodeLinkPerDevice(topo);
+  if (needInter && interNode === undefined)
     throw new Error(`topology ${topo.id} has no interNode link`);
   const shape = topo.interNodeFabric;
   const interStaging = staging === undefined ? {} : { interStaging: staging };
-  if (needIntra && needInter && topo.intraNode !== undefined && topo.interNode !== undefined) {
+  const intraInSwitch = inNetworkCapability(topo.intraNode, inNetwork);
+  // Host staging bounces every message through host memory: no in-switch reduction on a staged inter-node level.
+  const interInSwitch =
+    staging === undefined ? inNetworkCapability(interNode, inNetwork) : undefined;
+  if (needIntra && needInter && topo.intraNode !== undefined && interNode !== undefined) {
     const path: CollectivePath = {
       kind: 'hierarchical',
       devicesPerNode: span.devicesPerNodeInGroup,
       nodes: span.nodesSpanned,
       intra: topo.intraNode,
-      inter: topo.interNode,
+      inter: interNode,
       ...interStaging,
+      ...(intraInSwitch !== undefined ? { intraInNetworkReduction: intraInSwitch } : {}),
+      ...(interInSwitch !== undefined ? { interInNetworkReduction: interInSwitch } : {}),
     };
     if (isNonBlockingSwitched(shape) || shape === undefined) return path;
     if (shape.kind !== 'switched')
@@ -173,13 +209,25 @@ export function collectivePath(
       interFabric: { kind: 'switched', oversubscription: shape.oversubscription ?? 1 },
     };
   }
-  if (needInter && topo.interNode !== undefined) {
+  if (needInter && interNode !== undefined) {
     const fabric = groupFabric(shape, span.nodesSpanned, topo.nodes);
     if (isNonBlockingSwitched(fabric) || fabric === undefined)
-      return { kind: 'flat', level: 'inter', link: topo.interNode, ...interStaging };
-    return { kind: 'flat', level: 'inter', link: topo.interNode, fabric, ...interStaging };
+      return {
+        kind: 'flat',
+        level: 'inter',
+        link: interNode,
+        ...interStaging,
+        ...(interInSwitch !== undefined ? { inNetworkReduction: interInSwitch } : {}),
+      };
+    return { kind: 'flat', level: 'inter', link: interNode, fabric, ...interStaging };
   }
-  if (topo.intraNode !== undefined) return { kind: 'flat', level: 'intra', link: topo.intraNode };
+  if (topo.intraNode !== undefined)
+    return {
+      kind: 'flat',
+      level: 'intra',
+      link: topo.intraNode,
+      ...(intraInSwitch !== undefined ? { inNetworkReduction: intraInSwitch } : {}),
+    };
   throw new Error(`topology ${topo.id} has no link for a group of ${span.n}`);
 }
 
@@ -215,7 +263,8 @@ export function ppSendHops(
  * missing. An inter-node send carries the topology's fabric unless it is the non-blocking switch, and `sendHops`
  * ({@link ppSendHops}) when that is not 1.
  * `destinationStage` is a zero-based stage index (default stage + 1); use 0 for the decode return. `staging` (the
- * run's inter-node host staging) is attached only when the send crosses nodes.
+ * run's inter-node host staging) is attached only when the send crosses nodes. An inter-node send runs at the
+ * device's share of the node's NICs (`hw/nics.ts: interNodeLinkPerDevice`).
  */
 export function ppSendPath(
   par: ParallelConfig,
@@ -225,7 +274,7 @@ export function ppSendPath(
   staging?: HostStaging,
 ): CollectivePath {
   const inter = ppBoundaryIsInterNode(par, topo, stage, destinationStage);
-  const link = inter ? topo.interNode : topo.intraNode;
+  const link = inter ? interNodeLinkPerDevice(topo) : topo.intraNode;
   if (link === undefined)
     throw new Error(
       `topology ${topo.id} has no ${inter ? 'interNode' : 'intraNode'} link for the PP boundary after stage ${stage}`,

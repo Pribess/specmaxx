@@ -14,6 +14,7 @@
  * | `n`, `nodes` | devices per node, nodes | `n=2` |
  * | `il`, `xl` | intra / inter link preset ids (`linkPresetId`; renamed ids load through `LEGACY_LINK_IDS`) | `il=pcie-5-0-x16-direct-p2p` |
  * | `fab` | cabling between machines: `switched`, `mesh`, `mesh2` (2 cables per pair), `ring`, `chain` (absent: the default for the link and counts) | `fab=ring` |
+ * | `nic` | inter-node NICs per machine, a divisor of `n` or 2·`n` or 4·`n` (only with several machines of `n` > 1 on a switch; absent: one per device, `n`) | `n=8&nodes=2&nic=4` |
  * | `x`, `xi`, `xe` | spec edits on device / intra link / inter link, `path:value` comma list, SI units | `x=memory.bandwidthBytesPerSec:2e12` |
  * | `tp`, `pp`, `dp`, `ep` | parallel degrees (`ep` applies to MoE models only; old URLs with `dp` load it as written) | `tp=2&dp=2` |
  * | `dcp` | decode context parallel degree: the KV cache split by token over `dcp` of the TP ranks (absent or 1: off; dropped with `lay=dep`) | `tp=8&dcp=8` |
@@ -27,6 +28,7 @@
  * | `b`, `p`, `c` | batch, prefill length (default 8192), decode context (default 8192) | `b=8` |
  * | `pc` | prefill chunk of the memory fit, tokens (default 8192) | `pc=2048` |
  * | `ov`, `fu`, `ar` | overlap, elementwise fusion, all-reduce algorithm | `ov=none` |
+ * | `inr` | in-network reduction (NVLS, SHARP) as a candidate of the `best` all-reduce: `on` (absent: `off`) | `inr=on` |
  * | `ovt`, `ove`, `ovp` | overlap of the TP / EP / PP class (`overlapByClass`) in percent, 0–100 (absent: the default, which follows `ov` and `tbo`) | `ove=50` |
  * | `tbo` | two-batch overlap on: `1` (absent: off) | `tbo=1` |
  * | `lf` | per-op latency floor in µs, 0–1000 (default 0: off) | `lf=1` |
@@ -109,6 +111,8 @@ import {
   cablingOptions,
   isEditableDevicePath,
   normalizeCabling,
+  normalizeNics,
+  nicOptions,
   normalizeLocalLink,
   resolveDevice,
   resolveLinks,
@@ -139,6 +143,7 @@ const OPTION_KEYS: [string, keyof SimOptions, readonly string[]][] = [
   ['ov', 'overlap', ['ideal', 'none']],
   ['fu', 'elementwiseFusion', ['none', 'ideal']],
   ['ar', 'collectiveAlgorithm', ['best', 'ring', 'tree']],
+  ['inr', 'inNetworkReduction', ['off', 'on']],
 ];
 
 /** URL key of each overlap class's fraction (`SimOptions.overlapByClass`), in percent. */
@@ -182,6 +187,7 @@ export const URL_KEYS = [
   'il',
   'xl',
   'fab',
+  'nic',
   'x',
   'xi',
   'xe',
@@ -216,6 +222,7 @@ export const URL_KEYS = [
   'tbo',
   'fu',
   'ar',
+  'inr',
   'lf',
   'ed',
   'oo',
@@ -265,6 +272,7 @@ export const POOL_URL_KEYS = [
   'il',
   'xl',
   'fab',
+  'nic',
   'x',
   'xi',
   'xe',
@@ -386,6 +394,8 @@ function encodeHardware(put: Put, hw: HardwareChoice): void {
   put('xl', hw.interLinkId);
   // Absent when it is the default (the state keeps only a non-default cabling, `normalizeCabling`).
   put('fab', normalizeCabling(hw).cabling);
+  // Absent when it is the default or no longer offered (`normalizeNics`).
+  put('nic', normalizeNics(hw).nicsPerNode);
   if (Object.keys(hw.deviceEdits).length > 0) put('x', encodeEdits(hw.deviceEdits));
   if (Object.keys(hw.intraEdits).length > 0) put('xi', encodeEdits(hw.intraEdits));
   if (Object.keys(hw.interEdits).length > 0) put('xe', encodeEdits(hw.interEdits));
@@ -697,7 +707,7 @@ function decodeDeployment(
 }
 
 /**
- * The hardware choice of the device, unlock, engine, capacity, count, link, cabling and edit keys (`d` … `xe`,
+ * The hardware choice of the device, unlock, engine, capacity, count, link, cabling, NIC and edit keys (`d` … `xe`,
  * see the module table), checked against the decoded device and links, and the unlocked device it resolved to
  * (for {@link decodeHardwareMemory}). Shared by the state's own hardware and the decode pool's (`dec.` keys).
  */
@@ -787,6 +797,14 @@ function decodeHardware(get: Get, drop: Drop): { hw: HardwareChoice; unlocked: D
       const normalized = normalizeCabling({ ...hw, cabling });
       if (normalized.cabling !== undefined) hw.cabling = normalized.cabling;
     } else drop('fab', fab);
+  }
+  // NICs per machine: only a count the decoded counts, link and cabling offer (`nicOptions`); the default is absent.
+  const nic = get('nic');
+  if (nic !== undefined) {
+    const parsed = parseInteger(nic, 1, 4 * MAX_COUNT);
+    if (parsed !== undefined && nicOptions(hw).includes(parsed)) {
+      if (parsed !== hw.devicesPerNode) hw.nicsPerNode = parsed;
+    } else drop('nic', nic);
   }
   // Link edits are checked against the link in use at their level (preset + unlock modifiers).
   const links = resolveLinks(hw, resolveDevice({ ...hw, deviceEdits: {} }));

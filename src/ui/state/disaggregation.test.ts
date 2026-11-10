@@ -499,6 +499,55 @@ describe('all-to-all options per pool', () => {
   });
 });
 
+describe('network options with two pools (NICs per pool, in-network reduction shared)', () => {
+  it("NICs per machine are pool-level: only the decode pool's topology and run change", () => {
+    // Without overlap, so the all-to-all between machines shows in the decode step.
+    const base = reduce(PD, { type: 'setOptions', options: { overlap: 'none' } });
+    const s = reduce(base, inPool({ type: 'setNics', nicsPerNode: 4 }));
+    expect(s.hw).toEqual(PREFILL.hw);
+    expect(s.disaggregation!.decodePool.hw.nicsPerNode).toBe(4);
+    const r = buildDisaggregatedInput(s, GLM);
+    if (r?.kind !== 'ok') throw new Error(JSON.stringify(r?.issues));
+    expect(r.input.decodePool.hardware.topology.nicsPerNode).toBe(4);
+    expect(r.input.prefillPool.hardware.topology.nicsPerNode).toBeUndefined();
+    const before = buildDisaggregatedInput(base, GLM);
+    if (before?.kind !== 'ok') throw new Error(JSON.stringify(before?.issues));
+    expect(r.input.prefillPool).toEqual(before.input.prefillPool);
+    // Half the NIC speed per GPU slows the decode pool's all-to-all between machines.
+    const decodeStep = (pd: typeof r.input) =>
+      simulate(poolInput(pd.shared, pd.decodePool, 'decode')).decode.cycleSec;
+    expect(decodeStep(r.input)).toBeGreaterThan(decodeStep(before.input));
+  });
+  it('URL: dec.nic after dec.nodes, round trip; inr is shared (no dec.inr)', () => {
+    const s = apply(
+      PD,
+      inPool({ type: 'setNics', nicsPerNode: 4 }),
+      inPool({ type: 'setOptions', options: { inNetworkReduction: 'on' } }),
+    );
+    expect(s.options.inNetworkReduction).toBe('on');
+    const q = encodeState(s);
+    expect(q).toBe(
+      `${PREFILL_QUERY}&inr=on&pd=1` +
+        '&dec.d=h100-sxm&dec.n=8&dec.nodes=18&dec.nic=4&dec.dp=144&dec.ep=144&dec.lay=dep&dec.b=144',
+    );
+    expect(decoded(q)).toEqual(s);
+    expect(POOL_URL_KEYS).toContain('nic');
+    // A count the decode pool does not offer (one machine) is dropped with its dec. key.
+    const bad = decodeState(`${PREFILL_QUERY}&pd=1&dec.d=h100-sxm&dec.n=8&dec.nic=4`);
+    expect(bad.dropped).toEqual(['dec.nic=4']);
+  });
+  it('in-network reduction reaches the shared options, so both pools run with it', () => {
+    const s = reduce(PD, { type: 'setOptions', options: { inNetworkReduction: 'on' } });
+    const r = buildDisaggregatedInput(s, GLM);
+    if (r?.kind !== 'ok') throw new Error(JSON.stringify(r?.issues));
+    expect(r.input.shared.options?.inNetworkReduction).toBe('on');
+    for (const pool of ['prefill', 'decode'] as const) {
+      const input = poolInput(r.input.shared, r.input[`${pool}Pool`], pool);
+      expect(input.options?.inNetworkReduction).toBe('on');
+    }
+  });
+});
+
 describe('communication overlap with two pools (shared options, per-pool effect)', () => {
   it('per-class overlap: each pool sees the classes its own layout has', () => {
     // Prefill DEP 32 has only the EP class; a decode pool at TP 8 × DP 18, EP 144 has TP and EP.

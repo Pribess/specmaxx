@@ -763,3 +763,22 @@ describe('per-collective overlap and two-batch overlap (docs §7 "Stage time and
     ).toEqual([]);
   });
 });
+
+describe('network options (docs §6 "In-network reduction (NVLS, SHARP)", "Multi-NIC nodes")', () => {
+  it("inNetworkReduction must be 'off' or 'on'", () => {
+    expect(validateInput(input({}, { options: { inNetworkReduction: 'on' } }))).toEqual([]);
+    expect(validateInput(input({}, { options: { inNetworkReduction: 'off' } }))).toEqual([]);
+    expect(
+      validateInput(input({}, { options: { inNetworkReduction: 'yes' as unknown as 'on' } })),
+    ).toEqual(["options.inNetworkReduction ('yes') must be 'off' or 'on'"]);
+  });
+
+  it('an invalid nicsPerNode is a topology error', () =>
+    expectError(
+      input(
+        {},
+        { hardware: { device: SYNTH_GPU, topology: { ...SYNTH_CLUSTER, nicsPerNode: 3 } } },
+      ),
+      /nicsPerNode \(3\) must divide devicesPerNode/,
+    ));
+});

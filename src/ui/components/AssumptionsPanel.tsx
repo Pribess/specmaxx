@@ -40,6 +40,7 @@ const SWITCHES = [
     help: [
       'How GPUs combine their partial results (all-reduce).',
       'Best uses the faster of ring and tree for each message size.',
+      'With in-network reduction on (Hardware, Advanced), best also tries NVLS or SHARP.',
     ],
     options: [
       { value: 'best', label: 'best' },

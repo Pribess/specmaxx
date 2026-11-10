@@ -267,4 +267,33 @@ describe('reduce', () => {
     const hw = { ...DEFAULT_STATE.hw, deviceId: 'rtx-3090', devicesPerNode: 2, intraLinkId: 'x' };
     expect(reduce(DEFAULT_STATE, { type: 'setHardware', hw }).hw).toEqual(hw);
   });
+
+  it('NICs per machine: kept while offered and not one per GPU; count and device changes drop it', () => {
+    const h100 = apply(
+      DEFAULT_STATE,
+      { type: 'setDevice', deviceId: 'h100-sxm' },
+      { type: 'setCounts', devicesPerNode: 8, nodes: 2 },
+    );
+    const four = reduce(h100, { type: 'setNics', nicsPerNode: 4 });
+    expect(four.hw.nicsPerNode).toBe(4);
+    expect(resolveHardware(four.hw).topology.nicsPerNode).toBe(4);
+    // One per GPU is the default: stored as absent; so is undefined.
+    expect(reduce(four, { type: 'setNics', nicsPerNode: 8 }).hw).toEqual(h100.hw);
+    expect(reduce(four, { type: 'setNics', nicsPerNode: undefined }).hw).toEqual(h100.hw);
+    // Not offered (not rail-symmetric): refused.
+    expect(reduce(h100, { type: 'setNics', nicsPerNode: 3 }).hw).toEqual(h100.hw);
+    // More machines keep it; one machine drops it; 4 GPUs make 4 the default.
+    expect(reduce(four, { type: 'setCounts', nodes: 4 }).hw.nicsPerNode).toBe(4);
+    expect(reduce(four, { type: 'setCounts', nodes: 1 }).hw.nicsPerNode).toBeUndefined();
+    expect(reduce(four, { type: 'setCounts', devicesPerNode: 4 }).hw.nicsPerNode).toBeUndefined();
+    const sixteen = reduce(h100, { type: 'setNics', nicsPerNode: 16 });
+    expect(reduce(sixteen, { type: 'setCounts', devicesPerNode: 4 }).hw.nicsPerNode).toBe(16);
+    expect(
+      reduce(four, { type: 'setDevice', deviceId: 'rtx-4090' }).hw.nicsPerNode,
+    ).toBeUndefined();
+    // A link change keeps it (still a switch).
+    expect(
+      reduce(four, { type: 'setLink', level: 'inter', linkId: undefined }).hw.nicsPerNode,
+    ).toBe(4);
+  });
 });

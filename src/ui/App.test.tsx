@@ -599,6 +599,46 @@ describe('estimator inputs', () => {
     HEAVY_APP_TEST_TIMEOUT_MS,
   );
   it(
+    'network in Advanced: NICs for 2 × 8 H100 write nic; in-network reduction writes inr; hidden on one RTX 5090',
+    async () => {
+      mount();
+      await screen.findByTestId('decode-tps');
+      expect(screen.queryByTestId('network-advanced')).toBeNull();
+      cleanup();
+      history.replaceState(
+        null,
+        '',
+        '/?m=zai-org/GLM-5.3-Flash&d=h100-sxm&n=8&nodes=2&tp=16&ov=none',
+      );
+      mount();
+      await screen.findByTestId('decode-tps');
+      const section = screen.getByTestId('network-advanced');
+      const nics = within(section).getByRole('combobox', { name: 'NICs per machine' });
+      expect(nics.textContent).toContain('8 (1 per GPU)');
+      // Without overlap the prefill all-reduces between the machines show: half the NIC speed per GPU slows them.
+      const prefillBefore = screen.getByTestId('prefill-tps').textContent;
+      fireEvent.click(nics);
+      fireEvent.click(await screen.findByRole('option', { name: '4 (1 per 2 GPUs)' }));
+      await waitFor(() => expect(location.search).toContain('nic=4'));
+      await waitFor(() =>
+        expect(document.querySelector('.rig')?.textContent).toContain('(4 NICs per machine)'),
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId('prefill-tps').textContent).not.toBe(prefillBefore),
+      );
+      const inr = within(section).getByRole('combobox', { name: 'In-network reduction' });
+      expect(inr.textContent).toContain('Off');
+      fireEvent.click(inr);
+      fireEvent.click(await screen.findByRole('option', { name: 'On (NVLS, SHARP)' }));
+      await waitFor(() => expect(location.search).toContain('inr=on'));
+      // Back to one NIC per GPU: the default, nothing in the URL.
+      fireEvent.click(nics);
+      fireEvent.click(await screen.findByRole('option', { name: '8 (1 per GPU)' }));
+      await waitFor(() => expect(location.search).not.toContain('nic='));
+    },
+    HEAVY_APP_TEST_TIMEOUT_MS,
+  );
+  it(
     'communication overlap in Advanced: rows for the classes the run has; writes ove and tbo=1',
     async () => {
       mount();

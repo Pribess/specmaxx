@@ -230,7 +230,9 @@ export interface LinkSpec {
   name: string;
   /**
    * Per-device, per-direction bandwidth. On a multi-port inter-node fabric shape (`full_mesh`, `ring`, `chain` of
-   * {@link FabricShape}) it is the bandwidth of ONE port (one cable), per direction. Unit: B/s.
+   * {@link FabricShape}) it is the bandwidth of ONE port (one cable), per direction. As a switched inter-node link it
+   * is ONE NIC, per direction; the topology's `nicsPerNode` (absent = one NIC per device) sets how many NICs the
+   * node's devices share (`hw/nics.ts`). Unit: B/s.
    */
   bandwidthPerDirectionBytesPerSec: number;
   /**
@@ -251,9 +253,10 @@ export interface LinkSpec {
   };
   /**
    * Cap on the sum over all ports of this link that one device drives at once, per direction (egress and ingress
-   * each), e.g. the NIC's host PCIe attachment (DGX Spark: two ConnectX-7 ports share ~25 GB/s). Used only by the
-   * multi-port fabric shapes (`full_mesh`, `ring`, `chain` of {@link FabricShape}); bytes a node relays count
-   * against it. Absent = the ports add up (e.g. Apple Thunderbolt 5: one controller per port). Must be ≥
+   * each), e.g. the NIC's host PCIe attachment (DGX Spark: two ConnectX-7 ports share ~25 GB/s). Used by the
+   * multi-port fabric shapes (`full_mesh`, `ring`, `chain` of {@link FabricShape}), where bytes a node relays count
+   * against it, and by multi-NIC nodes (`TopologySpec.nicsPerNode`, `hw/nics.ts`), where it caps one device's share
+   * of the node's NICs. Absent = the ports add up (e.g. Apple Thunderbolt 5: one controller per port). Must be ≥
    * `bandwidthPerDirectionBytesPerSec`. Unit: B/s.
    */
   allPortsCapPerDirectionBytesPerSec?: number;
@@ -285,6 +288,14 @@ export interface LinkSpec {
    * (`LINK_MEDIA` in `presets/links.ts`, checked by a test). No unit.
    */
   transport?: 'rdma' | 'tcp';
+  /**
+   * In-switch reduction the switch of this link level offers for all-reduce ({@link InNetworkReduction}): `'nvls'` on
+   * an NVLink Switch (intra-node), `'sharp'` on an InfiniBand switch (inter-node). Used only when
+   * `SimOptions.inNetworkReduction` is `'on'`, as one more candidate of `collectiveAlgorithm: 'best'`
+   * (docs/simulation-model.md §6 "In-network reduction (NVLS, SHARP)"). Absent = no in-network reduction, the
+   * convention before it was modelled. A capability flag, no unit; its `sources[]` entry names the field.
+   */
+  inNetworkReduction?: InNetworkReduction;
   /** Citations covering the numeric fields. */
   sources: SourceRef[];
   /** Numbers no vendor publishes, with reasons. */
@@ -293,6 +304,18 @@ export interface LinkSpec {
   appliedModifiers?: LinkModifier[];
 }
 
+/**
+ * In-switch (in-network) reduction for all-reduce: the switch itself adds up the devices' buffers, so each device
+ * sends its buffer about once and receives the result about once, instead of the ≈ 2× of a ring or tree.
+ * - `'nvls'`: NVLink SHARP (NVLS) of an NVLink Switch (3rd-gen NVSwitch, Hopper, and later): each GPU reads its
+ *   reduced shard from the switch with a multimem load-reduce (`multimem.ld_reduce`) and writes it back to every GPU
+ *   with one multicast store (`multimem.st`); cost `engine/collectives.ts: nvlsAllReduceSec`.
+ * - `'sharp'`: InfiniBand SHARP (Scalable Hierarchical Aggregation and Reduction Protocol) of a Quantum-class IB
+ *   switch: each NIC streams its buffer up the switch's aggregation tree and gets the reduced buffer back; cost
+ *   `engine/collectives.ts: sharpAllReduceSec`.
+ * See docs/simulation-model.md §6 "In-network reduction (NVLS, SHARP)".
+ */
+export type InNetworkReduction = 'nvls' | 'sharp';
 /**
  * Shape of the network between nodes (docs/simulation-model.md §6 "Fabric shapes"; geometry in `hw/fabric.ts`).
  *
@@ -355,8 +378,21 @@ export interface TopologySpec {
   nodes: number;
   /** Link between devices of one node; required when a parallel group spans > 1 device of a node. */
   intraNode?: LinkSpec;
-  /** Link between nodes; required when a parallel group spans > 1 node. */
+  /**
+   * Link between nodes; required when a parallel group spans > 1 node. On a switched network it describes ONE NIC
+   * (per direction); the default is one NIC per device (see `nicsPerNode`).
+   */
   interNode?: LinkSpec;
+  /**
+   * Inter-node NICs (rails) per node, each an `interNode` link, integer ≥ 1. The node's devices all communicate at
+   * once and share these NICs evenly, so one device gets B_dev = min(N_nic · B_nic / devicesPerNode, C) per direction
+   * (`hw/nics.ts: interNodeBandwidthPerDeviceBytesPerSec`; B_nic = `interNode.bandwidthPerDirectionBytesPerSec`,
+   * C = `interNode.allPortsCapPerDirectionBytesPerSec` ?? ∞). Absent = one NIC per device (= `devicesPerNode`), the
+   * convention of every topology before multi-NIC nodes. Allowed only with `interNode`, `nodes > 1`, and a switched
+   * fabric (absent or `'switched'`); N_nic must divide `devicesPerNode` or be a multiple of it (rail symmetry,
+   * `validateTopology`). See docs/simulation-model.md §6 "Multi-NIC nodes". Count.
+   */
+  nicsPerNode?: number;
   /**
    * Shape of the inter-node network; absent = `{ kind: 'switched' }`, non-blocking (the pre-fabric convention).
    * Allowed only when `interNode` is present and `nodes > 1`; shapes other than `'switched'` need

@@ -177,11 +177,18 @@ export function ResultHero({
     ? `${link.name.replace(/ \(host bounce\)/, '')}${link.p2p === 'direct' ? ' with direct P2P' : ' with host staging'}`
     : undefined;
   // Between machines: the catalog's short name of the network (else the link's name), and the cabling when it is
-  // not a switch, e.g. "over ConnectX-7 (ring)".
+  // not a switch, e.g. "over ConnectX-7 (ring)", or a NIC count that is not one per GPU, e.g. "(4 NICs per machine)".
   const inter = built.hardware?.links.inter?.link;
   const cabling = built.hardware?.cabling;
+  const nics = built.hardware?.topology.nicsPerNode;
+  const interNote =
+    cabling !== undefined && cabling !== 'switched'
+      ? ` (${cablingName(cabling, state.hw.nodes).toLowerCase()})`
+      : nics !== undefined
+        ? ` (${nics} NICs per machine)`
+        : '';
   const interName = inter
-    ? `${built.hardware?.network?.shortName ?? inter.name}${cabling !== undefined && cabling !== 'switched' ? ` (${cablingName(cabling, state.hw.nodes).toLowerCase()})` : ''}`
+    ? `${built.hardware?.network?.shortName ?? inter.name}${interNote}`
     : undefined;
   const linkName = [intraName, interName].filter((n) => n !== undefined).join(' and ');
   const offload = result?.offload ?? [];

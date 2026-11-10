@@ -587,4 +587,33 @@ describe('deployment identity, knobs absent (after latency audit G1–G8, G6 exc
       ).toEqual(ideal);
     },
   );
+  it.each(Object.entries(inputs))(
+    'ID-5 %s: in-network reduction off, on without a capable link, and nicsPerNode = devicesPerNode deep-equal the run without them',
+    (key, value) => {
+      const absent = simulate(value);
+      expect(mismatches(fixture[key], pin(absent))).toEqual([]);
+      const options = value.options ?? {};
+      expect(simulate({ ...value, options: { ...options, inNetworkReduction: 'off' } })).toEqual(
+        absent,
+      );
+      const topo = value.hardware.topology;
+      const capable = [topo.intraNode, topo.interNode].some(
+        (l) => l?.inNetworkReduction !== undefined,
+      );
+      if (!capable)
+        expect(simulate({ ...value, options: { ...options, inNetworkReduction: 'on' } })).toEqual(
+          absent,
+        );
+      const nicsAllowed =
+        topo.nodes > 1 &&
+        topo.interNode !== undefined &&
+        (topo.interNodeFabric === undefined || topo.interNodeFabric.kind === 'switched');
+      if (nicsAllowed) {
+        const sameNics = { ...topo, nicsPerNode: topo.devicesPerNode };
+        expect(simulate({ ...value, hardware: { ...value.hardware, topology: sameNics } })).toEqual(
+          absent,
+        );
+      }
+    },
+  );
 });

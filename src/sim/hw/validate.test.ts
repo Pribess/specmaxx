@@ -77,6 +77,55 @@ describe('validateTopology: interNodeFabric', () => {
   });
 });
 
+describe('validateTopology: nicsPerNode', () => {
+  it('accepts divisors and multiples of devicesPerNode on a switched network', () => {
+    for (const nicsPerNode of [1, 2, 4, 8, 16])
+      expect(validateTopology({ ...SYNTH_CLUSTER, nicsPerNode })).toEqual([]);
+    expect(
+      validateTopology({
+        ...SYNTH_CLUSTER,
+        nicsPerNode: 4,
+        interNodeFabric: { kind: 'switched', oversubscription: 2 },
+      }),
+    ).toEqual([]);
+  });
+
+  it('3 NICs on 8 GPUs is an error (rail symmetry)', () => {
+    const errors = validateTopology({ ...SYNTH_CLUSTER, nicsPerNode: 3 });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/must divide devicesPerNode \(8\)/);
+    expect(validateTopology({ ...SYNTH_CLUSTER, nicsPerNode: 0 })).toHaveLength(1);
+  });
+
+  it('without an interNode link, on one node, or on a switchless fabric, is an error', () => {
+    const { interNode: _dropped, ...noLink } = SYNTH_CLUSTER;
+    void _dropped;
+    expect(validateTopology({ ...noLink, nicsPerNode: 4 })).toEqual([
+      'topology synth-cluster: nicsPerNode needs an interNode link',
+    ]);
+    expect(validateTopology({ ...SYNTH_CLUSTER, nodes: 1, nicsPerNode: 4 })).toEqual([
+      'topology synth-cluster: nicsPerNode needs nodes > 1 (got 1)',
+    ]);
+    expect(
+      validateTopology({ ...FOUR_NODES, nicsPerNode: 2, interNodeFabric: { kind: 'ring' } }),
+    ).toEqual([
+      'topology four: nicsPerNode needs a switched fabric (got ring, whose ports are its cables)',
+    ]);
+  });
+});
+
+describe('validateLink: inNetworkReduction', () => {
+  it("accepts 'nvls' and 'sharp', rejects anything else", () => {
+    expect(validateLink({ ...SYNTH_IB, inNetworkReduction: 'sharp' })).toEqual([]);
+    expect(validateLink({ ...SYNTH_IB, inNetworkReduction: 'nvls' })).toEqual([]);
+    expect(
+      validateLink({ ...SYNTH_IB, inNetworkReduction: 'shrap' as unknown as 'sharp' }),
+    ).toEqual([
+      "link Synthetic InfiniBand: inNetworkReduction must be 'nvls' or 'sharp' (got 'shrap')",
+    ]);
+  });
+});
+
 describe('validateLink: the new fabric fields', () => {
   const sourced = (l: Partial<LinkSpec>): LinkSpec => ({
     ...SYNTH_IB,

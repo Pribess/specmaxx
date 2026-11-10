@@ -322,11 +322,12 @@ describe('T19 e2e: memoryBandwidth modifier', () => {
 
 /** Not a plan test: documents the default options so a change to them is a visible diff. */
 describe('defaults', () => {
-  it("overlap 'ideal', fusion 'none', all-reduce 'best', no per-op latency floor", () => {
+  it("overlap 'ideal', fusion 'none', all-reduce 'best', in-network reduction 'off', no per-op latency floor", () => {
     const expected: SimOptions = {
       overlap: 'ideal',
       elementwiseFusion: 'none',
       collectiveAlgorithm: 'best',
+      inNetworkReduction: 'off',
       perOpLatencyFloorSec: 0,
     };
     expect(DEFAULT_SIM_OPTIONS).toEqual(expected);

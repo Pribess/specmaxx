@@ -563,6 +563,28 @@ export const NVLINK_2_PAIR: LinkSpec = {
     },
   ],
 };
+/** NVLS (NVLink SHARP) on the third-generation NVSwitch (Hopper): the in-network reduction of {@link NVLINK_4}. */
+const NVSWITCH_GEN3_NVLS_SOURCE: SourceRef = {
+  url: 'https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/',
+  title: 'NVIDIA Hopper architecture in depth',
+  fields: ['inNetworkReduction'],
+  note:
+    '"The new third-generation NVSwitch also provides hardware acceleration of collective operations with multicast and ' +
+    'NVIDIA SHARP in-network reductions"; NCCL_NVLS_ENABLE (NCCL 2.17+, ' +
+    'https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html): "NVLink SHARP is available in ' +
+    'third-generation NVSwitch systems (NVLink4) with Hopper and later GPU architectures".',
+};
+
+/** SHARP engines in every NVLink Switch (Hopper and later): the in-network reduction of {@link NVLINK_5}. */
+const NVLINK_SWITCH_SHARP_SOURCE: SourceRef = {
+  url: 'https://www.nvidia.com/en-us/data-center/nvlink/',
+  title: 'NVIDIA NVLink and NVLink Switch',
+  fields: ['inNetworkReduction'],
+  note:
+    '"Each NVLink Switch has engines for NVIDIA Scalable Hierarchical Aggregation and Reduction Protocol (SHARP) for ' +
+    'in-network reductions and multicast acceleration"; NCCL_NVLS_ENABLE: "third-generation NVSwitch systems ' +
+    '(NVLink4) with Hopper and later GPU architectures".',
+};
 /** H100/H200 NVLink4 switched injection ceiling: 900 GB/s bidirectional / 2 = 450 GB/s per direction. */
 export const NVLINK_4: LinkSpec = {
   kind: 'nvlink',
@@ -570,7 +592,9 @@ export const NVLINK_4: LinkSpec = {
   bandwidthPerDirectionBytesPerSec: 18 * 25e9,
   latencySec: 0.8e-6,
   p2p: 'direct',
+  inNetworkReduction: 'nvls',
   sources: [
+    NVSWITCH_GEN3_NVLS_SOURCE,
     {
       url: 'https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/',
       title: 'NVIDIA Hopper architecture in depth',
@@ -602,7 +626,9 @@ export const NVLINK_5: LinkSpec = {
   bandwidthPerDirectionBytesPerSec: 18 * 50e9,
   latencySec: 0.8e-6,
   p2p: 'direct',
+  inNetworkReduction: 'nvls',
   sources: [
+    NVLINK_SWITCH_SHARP_SOURCE,
     {
       url: 'https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf',
       title: 'NVIDIA Blackwell architecture technical overview',
@@ -622,17 +648,27 @@ export const NVLINK_5: LinkSpec = {
   estimated: [],
 };
 
-/** ConnectX-7 NDR400: one 400 Gb/s NIC per GPU, 50 GB/s injection per direction. */
+/**
+ * ConnectX-7 NDR400: ONE 400 Gb/s NIC, 50 GB/s per direction (topologies default to one per GPU,
+ * `TopologySpec.nicsPerNode`). Quantum-2 switches: SHARP in-network reduction.
+ */
 export const IB_NDR_400: LinkSpec = {
   kind: 'infiniband',
   name: 'InfiniBand NDR400 (one NIC per GPU)',
   bandwidthPerDirectionBytesPerSec: 400e9 / 8,
   latencySec: 1e-6,
   p2p: 'direct',
+  inNetworkReduction: 'sharp',
   gpuDirectRdma: true,
   transport: 'rdma',
   sources: [
     IB_SOURCE,
+    {
+      url: 'https://www.nvidia.com/en-us/networking/quantum2/',
+      title: 'NVIDIA Quantum-2 InfiniBand platform',
+      fields: ['inNetworkReduction'],
+      note: 'NDR switches: "In-Network Computing with ... the third generation of NVIDIA Scalable Hierarchical Aggregation and Reduction Protocol (SHARPv3)".',
+    },
     {
       url: 'https://www.nvidia.com/en-us/data-center/dgx-b200/',
       title: 'DGX B200 specifications',
@@ -655,13 +691,22 @@ export const IB_NDR_400: LinkSpec = {
   ],
 };
 
-/** DGX A100 ConnectX-6 HDR200: one NIC per GPU, 25 GB/s per direction; fits the Gen4 host path. */
+/**
+ * DGX A100 ConnectX-6 HDR200: ONE NIC, 25 GB/s per direction (one per GPU by default); fits the Gen4 host path.
+ * Quantum HDR switches: SHARP in-network reduction (inherited from {@link IB_NDR_400}, cited here).
+ */
 export const IB_HDR_200: LinkSpec = {
   ...IB_NDR_400,
   name: 'InfiniBand HDR200 (one NIC per GPU)',
   bandwidthPerDirectionBytesPerSec: 200e9 / 8,
   sources: [
     IB_SOURCE,
+    {
+      url: 'https://www.nvidia.com/en-us/networking/infiniband/qm8700/',
+      title: 'NVIDIA Quantum QM8700 HDR InfiniBand switch',
+      fields: ['inNetworkReduction'],
+      note: 'HDR switch: "SHARP In-Network Computing offloads collective communication operations from the CPU to the switch network".',
+    },
     {
       url: 'https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/nvidia-dgx-a100-datasheet.pdf',
       title: 'DGX A100 datasheet',
@@ -678,17 +723,27 @@ export const IB_HDR_200: LinkSpec = {
     },
   ],
 };
-/** ConnectX-8 XDR800: one 800 Gb/s NIC per GPU, 100 GB/s injection per direction. */
+/**
+ * ConnectX-8 XDR800: ONE 800 Gb/s NIC, 100 GB/s per direction (one per GPU by default). Quantum-X800 switches:
+ * SHARP in-network reduction.
+ */
 export const IB_XDR_800: LinkSpec = {
   kind: 'infiniband',
   name: 'InfiniBand XDR800 (one NIC per GPU)',
   bandwidthPerDirectionBytesPerSec: 800e9 / 8,
   latencySec: 1e-6,
   p2p: 'direct',
+  inNetworkReduction: 'sharp',
   gpuDirectRdma: true,
   transport: 'rdma',
   sources: [
     IB_SOURCE,
+    {
+      url: 'https://www.nvidia.com/en-us/networking/products/infiniband/quantum-x800/',
+      title: 'NVIDIA Quantum-X800 InfiniBand switch',
+      fields: ['inNetworkReduction'],
+      note: 'XDR switch: "hardware-based In-Network Computing with SHARP v4".',
+    },
     {
       url: 'https://networking-docs.nvidia.com/connectx8hw/specifications',
       title: 'ConnectX-8 hardware specifications',
@@ -1265,11 +1320,20 @@ export const NVLINK_5_NVL72: LinkSpec = {
     },
   ],
 };
+
+/** `link` without its in-network reduction capability (a link built from a switched one that has no switch). */
+function withoutInNetworkReduction(link: LinkSpec): LinkSpec {
+  const copy = { ...link };
+  delete copy.inNetworkReduction;
+  return copy;
+}
+
 /** NVL4 bridge: 7.2 TB/s bidirectional / 4 / 2 = 900 GB/s per GPU per direction aggregate; optimistic for subgroups.
+ * A bridge has no NVLink Switch, so no NVLS (`inNetworkReduction` absent, not inherited from {@link NVLINK_5}).
  * See docs/simulation-model.md §4 "Scale-up domains".
  */
 export const NVLINK_5_NVL4: LinkSpec = {
-  ...NVLINK_5,
+  ...withoutInNetworkReduction(NVLINK_5),
   kind: 'nvlink_bridge',
   name: 'NVLink5 / NVL4 bridge (mesh estimate)',
   sources: [

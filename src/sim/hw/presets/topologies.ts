@@ -99,6 +99,17 @@ export function fabricWord(fabric: FabricShape | undefined): string | undefined 
   }
 }
 
+/** Topology-id suffix for a NIC count (`TopologySpec.nicsPerNode`), e.g. `'-nics4'`; `''` for the default (absent). */
+export function nicsIdSuffix(nicsPerNode: number | undefined): string {
+  return nicsPerNode === undefined ? '' : `-nics${nicsPerNode}`;
+}
+
+/** Words for a NIC count in a topology name, e.g. `'4 NICs'`, `'1 NIC'`; undefined for the default (absent). */
+export function nicsWord(nicsPerNode: number | undefined): string | undefined {
+  if (nicsPerNode === undefined) return undefined;
+  return nicsPerNode === 1 ? '1 NIC' : `${nicsPerNode} NICs`;
+}
+
 /** Arguments of {@link nodeTopology}. */
 export interface NodeTopologyArgs {
   /** Devices per node (scale-up domain), integer ≥ 1. Count. */
@@ -114,6 +125,12 @@ export interface NodeTopologyArgs {
    * result when it is the default (absent or non-blocking switched), so pre-fabric topologies are unchanged.
    */
   fabric?: FabricShape;
+  /**
+   * Inter-node NICs per node (`TopologySpec.nicsPerNode`), integer ≥ 1; kept only when `nodes > 1`, `interNode` is
+   * present and it differs from `devicesPerNode` (one NIC per device is the default and is stored as absent), so
+   * topologies built without it are unchanged. Count.
+   */
+  nicsPerNode?: number;
   /** Device that supplies the display name and the id part; omitted: a generic "device". */
   device?: Pick<DeviceSpec, 'id' | 'name'>;
 }
@@ -124,7 +141,8 @@ export interface NodeTopologyArgs {
  * `intraNode` when `devicesPerNode > 1`, `interNode` when `nodes > 1`; a link given for an absent level is dropped. A
  * level that exists but has no link is left without one, so a parallel group that needs it fails placement
  * (`engine/placement.ts`). The fabric shape follows the inter-node link (dropped with it, and when default). Counts are
- * user configuration and cite no source. The id ends in `fabricIdSuffix`; the name carries `fabricWord`.
+ * user configuration and cite no source. The id ends in `fabricIdSuffix` then `nicsIdSuffix`; the name carries
+ * `fabricWord` and `nicsWord`.
  */
 export function nodeTopology(args: NodeTopologyArgs): TopologySpec {
   const { devicesPerNode, nodes } = args;
@@ -132,26 +150,29 @@ export function nodeTopology(args: NodeTopologyArgs): TopologySpec {
   const interNode = nodes > 1 ? args.interNode : undefined;
   const fabric =
     interNode !== undefined && !isNonBlockingSwitched(args.fabric) ? args.fabric : undefined;
+  const nicsPerNode =
+    interNode !== undefined && args.nicsPerNode !== devicesPerNode ? args.nicsPerNode : undefined;
   const deviceId = args.device?.id ?? 'device';
   const deviceName = args.device?.name ?? 'device';
   const idParts = [`node-${devicesPerNode}x${nodes}`, deviceId];
   if (intraNode !== undefined) idParts.push(`intra-${linkPresetId(intraNode)}`);
   if (interNode !== undefined) idParts.push(`inter-${linkPresetId(interNode)}`);
   const inNode = `${devicesPerNode} × ${deviceName}${intraNode !== undefined ? ` / ${intraNode.name}` : ''}`;
-  const shape = fabricWord(fabric);
+  const words = [fabricWord(fabric), nicsWord(nicsPerNode)].filter((w) => w !== undefined);
   const network =
     interNode !== undefined
-      ? ` / ${interNode.name}${shape !== undefined ? ` (${shape})` : ''}`
+      ? ` / ${interNode.name}${words.length > 0 ? ` (${words.join(', ')})` : ''}`
       : '';
   const name = nodes > 1 ? `${nodes} nodes × (${inNode})${network}` : inNode;
   return {
-    id: idParts.join('-') + fabricIdSuffix(fabric),
+    id: idParts.join('-') + fabricIdSuffix(fabric) + nicsIdSuffix(nicsPerNode),
     name,
     devicesPerNode,
     nodes,
     ...(intraNode !== undefined ? { intraNode } : {}),
     ...(interNode !== undefined ? { interNode } : {}),
     ...(fabric !== undefined ? { interNodeFabric: fabric } : {}),
+    ...(nicsPerNode !== undefined ? { nicsPerNode } : {}),
     sources: [],
   };
 }

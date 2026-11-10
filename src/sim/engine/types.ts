@@ -104,8 +104,19 @@ export interface SimOptions {
    * `'ideal'`: elementwise activation traffic is 0 (fused into neighbours); weight and state bytes stay.
    */
   elementwiseFusion: 'none' | 'ideal';
-  /** All-reduce algorithm: `'best'` (default; min of ring and tree), `'ring'` or `'tree'`. */
+  /**
+   * All-reduce algorithm: `'best'` (default; min of ring and tree, plus the in-network reduction of
+   * {@link SimOptions.inNetworkReduction} when on), `'ring'` or `'tree'`.
+   */
   collectiveAlgorithm: 'best' | 'ring' | 'tree';
+  /**
+   * In-network reduction (docs/simulation-model.md §6 "In-network reduction (NVLS, SHARP)"): `'on'` lets an
+   * all-reduce use the in-switch reduction its link level offers (`LinkSpec.inNetworkReduction`: NVLS on an NVLink
+   * Switch, SHARP on an InfiniBand switch) as one more candidate of `collectiveAlgorithm: 'best'`; the fastest of
+   * ring, tree and the in-network algorithm wins. Explicit `'ring'` / `'tree'`, links without the capability, and
+   * every other collective are unchanged. `'off'` (default) = results bit-identical to before.
+   */
+  inNetworkReduction: 'off' | 'on';
   /**
    * Per-op latency floor L (a what-if sensitivity setting, docs/simulation-model.md §7 "Per-op latency floor"):
    * every IR op (on-device ops, collectives incl. PP sends, off-device transfers) costs at least L on the critical

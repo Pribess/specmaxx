@@ -8,7 +8,12 @@ import { describe, expect, it } from 'vitest';
 import {
   A100_NVLINK_BRIDGE,
   IB_HDR_200,
+  IB_XDR_800,
   NVLINK_3,
+  NVLINK_4,
+  NVLINK_5,
+  NVLINK_5_NVL4,
+  NVLINK_5_NVL72,
   NVLINK_2_HCM_8,
   NVLINK_2_MESH_4,
   NVLINK_2_PAIR,
@@ -126,5 +131,32 @@ describe('Ampere and Volta links', () => {
     );
     expect(PCIE_3_X16_DIRECT.p2p).toBe('direct');
     expect(PCIE_3_X16.p2p).toBe('host_bounce');
+  });
+});
+
+describe('in-network reduction capability (docs/simulation-model.md §4 "Links and topologies")', () => {
+  /** Exactly these presets have a switch that reduces in the network; every other preset has none. */
+  const CAPABLE = new Map<LinkSpec, 'nvls' | 'sharp'>([
+    [NVLINK_4, 'nvls'],
+    [NVLINK_5, 'nvls'],
+    [NVLINK_5_NVL72, 'nvls'],
+    [IB_HDR_200, 'sharp'],
+    [IB_NDR_400, 'sharp'],
+    [IB_XDR_800, 'sharp'],
+  ]);
+
+  it('is set on exactly the six switched presets, and absent on the NVL4 bridge', () => {
+    for (const link of LINK_PRESETS) expect(link.inNetworkReduction).toBe(CAPABLE.get(link));
+    for (const link of CAPABLE.keys()) expect(LINK_PRESETS).toContain(link);
+    expect(NVLINK_5_NVL4).not.toHaveProperty('inNetworkReduction');
+    expect(NVLINK_3).not.toHaveProperty('inNetworkReduction');
+  });
+
+  it('every capable preset cites a source for the field', () => {
+    for (const link of CAPABLE.keys()) {
+      const sources = link.sources.filter((s) => s.fields.includes('inNetworkReduction'));
+      expect(sources.length, link.name).toBeGreaterThan(0);
+      for (const s of sources) expect(s.url).toMatch(/^https:\/\//);
+    }
   });
 });

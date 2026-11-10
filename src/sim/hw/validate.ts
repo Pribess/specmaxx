@@ -13,6 +13,7 @@ import {
   linkModifierErrors,
 } from './modifiers';
 import { fabricShapeErrors } from './fabric';
+import { nicCountErrors } from './nics';
 import type { DeviceModifier, LinkModifier } from './modifiers';
 import type {
   ComputeEngine,
@@ -365,7 +366,8 @@ export function validateHost(h: HostSpec, label = 'host'): string[] {
  * Errors of a link spec; empty = valid. Checks: numbers finite and ≥ 0 and sourced; bandwidth > 0;
  * `hostBounce` present iff `p2p === 'host_bounce'`, with host memory bandwidth > 0; an
  * `allPortsCapPerDirectionBytesPerSec` at least the per-port bandwidth; `transport: 'tcp'` only with
- * `gpuDirectRdma: false` (a socket takes host pointers only).
+ * `gpuDirectRdma: false` (a socket takes host pointers only); `inNetworkReduction`, when present, one of `'nvls'`,
+ * `'sharp'`.
  */
 export function validateLink(l: LinkSpec, label = `link ${l.name}`): string[] {
   const errors = [
@@ -391,6 +393,10 @@ export function validateLink(l: LinkSpec, label = `link ${l.name}`): string[] {
       `${label}: transport 'tcp' needs gpuDirectRdma: false (a socket takes host pointers only)`,
     );
   }
+  const inNetwork: string | undefined = l.inNetworkReduction;
+  if (inNetwork !== undefined && inNetwork !== 'nvls' && inNetwork !== 'sharp') {
+    errors.push(`${label}: inNetworkReduction must be 'nvls' or 'sharp' (got '${inNetwork}')`);
+  }
   return errors;
 }
 
@@ -400,7 +406,9 @@ export function validateLink(l: LinkSpec, label = `link ${l.name}`): string[] {
  * Whether a link is REQUIRED depends on the parallelism (checked by `engine/placement.ts`).
  * An `interNodeFabric` needs `interNode` and `nodes > 1`, and must pass the structural rules of
  * `fabricShapeErrors` (one device per node for every shape but `'switched'`, a ring of ≥ 3 nodes, valid
- * `cablesPerPair` / `oversubscription`). Port counts are a machine property the topology does not record; the
+ * `cablesPerPair` / `oversubscription`). A `nicsPerNode` needs `interNode`, `nodes > 1` and a switched fabric (absent
+ * or `'switched'`: a switchless shape fixes its ports itself), and must pass `nicCountErrors` (integer ≥ 1, divides
+ * `devicesPerNode` or is a multiple of it). Port counts are a machine property the topology does not record; the
  * setup catalog checks them.
  */
 export function validateTopology(t: TopologySpec): string[] {
@@ -420,6 +428,15 @@ export function validateTopology(t: TopologySpec): string[] {
       devicesPerNode: t.devicesPerNode,
     });
     errors.push(...shapeErrors.map((e) => `${label}.interNodeFabric: ${e}`));
+  }
+  if (t.nicsPerNode !== undefined) {
+    if (t.interNode === undefined) errors.push(`${label}: nicsPerNode needs an interNode link`);
+    if (t.nodes <= 1) errors.push(`${label}: nicsPerNode needs nodes > 1 (got ${t.nodes})`);
+    if (t.interNodeFabric !== undefined && t.interNodeFabric.kind !== 'switched')
+      errors.push(
+        `${label}: nicsPerNode needs a switched fabric (got ${t.interNodeFabric.kind}, whose ports are its cables)`,
+      );
+    errors.push(...nicCountErrors(t.nicsPerNode, t.devicesPerNode).map((e) => `${label}: ${e}`));
   }
   return errors;
 }

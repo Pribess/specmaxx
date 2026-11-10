@@ -18,6 +18,7 @@ import { CustomSpecEditor } from './CustomSpecEditor';
 import { SetupRow } from './SetupRow';
 import { OffloadAdvancedFields, OffloadSection } from './OffloadSection';
 import { AllToAllFields } from './AllToAllFields';
+import { NetworkFields } from './NetworkFields';
 import { OverlapFields } from './OverlapFields';
 import { MemoryFitFields } from './MemoryFitFields';
 import { PerOpCostFields } from './PerOpCostFields';
@@ -74,7 +75,9 @@ export function HardwarePanel(props: Props) {
   const label = (() => {
     if (setup) return setup.name;
     try {
-      const name = setupLabel(setupChoiceOf(state.hw, built.hardware?.memCapacityBytes));
+      const base = setupLabel(setupChoiceOf(state.hw, built.hardware?.memCapacityBytes));
+      const nics = built.hardware?.topology.nicsPerNode;
+      const name = nics !== undefined ? `${base} · ${nics} NICs per machine` : base;
       return built.hardware?.edited ? `${name} (edited)` : name;
     } catch {
       return `${total} × ${device?.base.name ?? state.hw.deviceId}`;
@@ -116,6 +119,7 @@ export function HardwarePanel(props: Props) {
         <OffloadAdvancedFields {...props} />
         <MemoryFitFields {...props} />
         <AllToAllFields {...props} />
+        <NetworkFields {...props} />
         <OverlapFields {...props} />
         <PerOpCostFields {...props} />
         {device &&

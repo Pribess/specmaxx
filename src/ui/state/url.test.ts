@@ -212,9 +212,54 @@ const STATES: [string, AppState][] = [
       engineDispatchOverlay: true,
     }),
   ],
+  [
+    '2 × 8 H100 with 4 NICs per machine and in-network reduction',
+    state({
+      hw: { deviceId: 'h100-sxm', devicesPerNode: 8, nodes: 2, nicsPerNode: 4 },
+      parallel: { tp: 16, pp: 1, dp: 1, ep: 1 },
+      options: { inNetworkReduction: 'on' },
+    }),
+  ],
 ];
 
 describe('URL codec', () => {
+  it('network: nic (NICs per machine, only where offered; the default absent), inr=on; invalid values dropped', () => {
+    const base = 'd=h100-sxm&n=8&nodes=2';
+    const nic4 = state({
+      hw: { deviceId: 'h100-sxm', devicesPerNode: 8, nodes: 2, nicsPerNode: 4 },
+    });
+    expect(encodeState(nic4)).toBe(`${base}&nic=4`);
+    expect(decodeState(`${base}&nic=4`)).toEqual({ state: nic4, dropped: [] });
+    expect(decodeState(`${base}&nic=32`).state.hw.nicsPerNode).toBe(32);
+    // One per GPU is the default: accepted, not stored.
+    expect(decodeState(`${base}&nic=8`)).toEqual({ state: decodeState(base).state, dropped: [] });
+    // Not rail-symmetric, not a number, or not offered (one machine; one GPU per machine): dropped.
+    expect(decodeState(`${base}&nic=3`).dropped).toEqual(['nic=3']);
+    expect(decodeState(`${base}&nic=0`).dropped).toEqual(['nic=0']);
+    expect(decodeState(`${base}&nic=x`).dropped).toEqual(['nic=x']);
+    expect(decodeState('d=h100-sxm&n=8&nic=4').dropped).toEqual(['nic=4']);
+    expect(decodeState('d=dgx-spark&nodes=4&nic=2').dropped).toEqual(['nic=2']);
+    // A switchless cabling has no NICs to choose.
+    expect(decodeState('d=dgx-spark&nodes=4&fab=ring&nic=1').dropped).toEqual(['nic=1']);
+    // In-network reduction: an option key; off is the default.
+    const on = reduce(DEFAULT_STATE, { type: 'setOptions', options: { inNetworkReduction: 'on' } });
+    expect(encodeState(on)).toBe('inr=on');
+    expect(decodeState('inr=on')).toEqual({ state: on, dropped: [] });
+    expect(decodeState('inr=off')).toEqual({ state: DEFAULT_STATE, dropped: [] });
+    expect(decodeState('inr=yes').dropped).toEqual(['inr=yes']);
+    expect(
+      encodeState(reduce(on, { type: 'setOptions', options: { inNetworkReduction: 'off' } })),
+    ).toBe('');
+    // Keys come in URL_KEYS order: nic after fab, inr after ar.
+    expect(
+      encodeState(
+        reduce(nic4, {
+          type: 'setOptions',
+          options: { inNetworkReduction: 'on', collectiveAlgorithm: 'ring' },
+        }),
+      ),
+    ).toBe(`${base}&nic=4&ar=ring&inr=on`);
+  });
   it('per-op costs: lf (µs, 0 = off), ed=1 (dispatch overlay); invalid values dropped', () => {
     const on = reduce(
       reduce(DEFAULT_STATE, {

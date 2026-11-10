@@ -80,13 +80,14 @@ import { DEFAULT_DISPATCH_SEC_PER_KERNEL, stageKernelCount, withDispatch } from 
 import { validateInput } from './validate';
 
 /**
- * The defaults of {@link SimOptions}: no elementwise fusion, ideal comm/compute overlap, best all-reduce. (Offload
- * prefetching is a deployment knob, `OffloadConfig.prefetchAccuracy`.)
+ * The defaults of {@link SimOptions}: no elementwise fusion, ideal comm/compute overlap, best all-reduce, in-network
+ * reduction off. (Offload prefetching is a deployment knob, `OffloadConfig.prefetchAccuracy`.)
  */
 export const DEFAULT_SIM_OPTIONS: SimOptions = {
   overlap: 'ideal',
   elementwiseFusion: 'none',
   collectiveAlgorithm: 'best',
+  inNetworkReduction: 'off',
   perOpLatencyFloorSec: 0,
 };
 
@@ -248,7 +249,14 @@ function simulatePhase(
     st.layers.some((l) => l.ops.some((op) => op.kind === 'collective' && op.group === 'etp')),
   );
   const etpPath = usesExpertTp
-    ? { etp: expertTpCollectivePath(input.parallel, topology, base.interStaging) }
+    ? {
+        etp: expertTpCollectivePath(
+          input.parallel,
+          topology,
+          base.interStaging,
+          options.inNetworkReduction,
+        ),
+      }
     : {};
   // Decode context-parallel collectives (parallel.dcp > 1, decode) run over the d consecutive ranks of a TP group, a
   // contiguous group placed like TP (docs/simulation-model.md §5 "Decode context parallelism (DCP)"); a phase
@@ -262,6 +270,7 @@ function simulatePhase(
           groupSpan(input.parallel.dcp ?? 1, topology),
           topology,
           base.interStaging,
+          options.inNetworkReduction,
         ),
       }
     : {};
@@ -478,8 +487,19 @@ export function simulate(input: SimInput): SimResult {
     collectiveAlgorithm: algorithm,
     elementwiseFusion: options.elementwiseFusion,
     warnings,
-    tpPath: collectivePath(groupSpan(parallel.tp, hw.topology), hw.topology, interStaging),
-    epPath: collectivePath(groupSpan(parallel.ep, hw.topology), hw.topology, interStaging),
+    // In-network reduction (docs §6 "In-network reduction (NVLS, SHARP)"): 'off' builds exactly the paths of before.
+    tpPath: collectivePath(
+      groupSpan(parallel.tp, hw.topology),
+      hw.topology,
+      interStaging,
+      options.inNetworkReduction,
+    ),
+    epPath: collectivePath(
+      groupSpan(parallel.ep, hw.topology),
+      hw.topology,
+      interStaging,
+      options.inNetworkReduction,
+    ),
     ...(interStaging === undefined ? {} : { interStaging }),
     // The per-op latency floor only when set: with 0 the op contexts are exactly as before.
     ...(options.perOpLatencyFloorSec > 0

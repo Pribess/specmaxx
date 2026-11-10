@@ -21,6 +21,7 @@ import {
   nearestCount,
   normalizeCabling,
   normalizeLocalLink,
+  normalizeNics,
   setupOptionsOf,
 } from './hardware';
 import {
@@ -85,6 +86,12 @@ export interface HardwareChoice {
    * counts allow it and it differs from the default (`normalizeCabling`).
    */
   cabling?: CablingId;
+  /**
+   * Inter-node NICs per machine (`TopologySpec.nicsPerNode`, Hardware → Advanced → Network); absent = one per device
+   * (the default). Kept only while offered (several machines of more than one device each, on a switch) and different
+   * from `devicesPerNode` (`normalizeNics`). Count.
+   */
+  nicsPerNode?: number;
   /** Edits on the device spec, applied after the unlocks (the user's number wins). */
   deviceEdits: SpecEdits;
   /** Edits on the intra-node link, applied after the unlock link modifiers. */
@@ -360,6 +367,11 @@ export type AppAction =
   | { type: 'setLink'; level: 'intra' | 'inter'; linkId: string | undefined }
   /** Choose the cabling between machines (undefined: the default); a default value is stored as absent. */
   | { type: 'setCabling'; cabling: CablingId | undefined }
+  /**
+   * Choose the inter-node NICs per machine (undefined: the default, one per device); kept only while offered and
+   * not the default (`normalizeNics`).
+   */
+  | { type: 'setNics'; nicsPerNode: number | undefined }
   /** Set (value, SI) or clear (undefined) one spec edit. */
   | { type: 'setEdit'; target: EditTarget; path: string; value: number | undefined }
   /** Clear the edits of one target, or of all three when `target` is absent. */
@@ -600,7 +612,9 @@ export function reduce(state: AppState, action: AppAction): AppState {
       // An unlock change can change the PCIe host interface (CMP 170HX): a local link it no longer runs is dropped.
       return {
         ...state,
-        hw: normalizeCabling(normalizeLocalLink({ ...hw, unlocks, capacityIndex: 0 })),
+        hw: normalizeNics(
+          normalizeCabling(normalizeLocalLink({ ...hw, unlocks, capacityIndex: 0 })),
+        ),
       };
     }
     case 'setEngine': {
@@ -626,7 +640,7 @@ export function reduce(state: AppState, action: AppAction): AppState {
       let next: HardwareChoice = { ...hw, devicesPerNode, nodes };
       if (devicesPerNode <= 1) next = { ...without(next, 'intraLinkId'), intraEdits: {} };
       if (nodes <= 1) next = { ...without(next, 'interLinkId'), interEdits: {} };
-      return { ...state, hw: normalizeCabling(normalizeLocalLink(next)) };
+      return { ...state, hw: normalizeNics(normalizeCabling(normalizeLocalLink(next))) };
     }
     case 'setLink': {
       const idKey = action.level === 'intra' ? 'intraLinkId' : 'interLinkId';
@@ -640,15 +654,24 @@ export function reduce(state: AppState, action: AppAction): AppState {
       // A local link the (unlocked) PCIe host interface cannot run is refused: the default stays.
       return {
         ...state,
-        hw: normalizeCabling(
-          normalizeLocalLink({ ...base, devicesPerNode, [editsKey(action.level)]: {} }),
+        hw: normalizeNics(
+          normalizeCabling(
+            normalizeLocalLink({ ...base, devicesPerNode, [editsKey(action.level)]: {} }),
+          ),
         ),
       };
     }
     case 'setCabling': {
       const base =
         action.cabling === undefined ? without(hw, 'cabling') : { ...hw, cabling: action.cabling };
-      return { ...state, hw: normalizeCabling(base) };
+      return { ...state, hw: normalizeNics(normalizeCabling(base)) };
+    }
+    case 'setNics': {
+      const base =
+        action.nicsPerNode === undefined
+          ? without(hw, 'nicsPerNode')
+          : { ...hw, nicsPerNode: action.nicsPerNode };
+      return { ...state, hw: normalizeNics(base) };
     }
     case 'setEdit': {
       const key = editsKey(action.target);

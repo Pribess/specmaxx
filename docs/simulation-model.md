@@ -981,13 +981,45 @@ costed in §6
   `'pcie-5-0-x16-host-bounce'`), unique over `LINK_PRESETS`. Builder ids and the UI's URL use it.
 - **Multi-port links and fabric shapes** (`src/sim/hw/types.ts: LinkSpec, FabricShape, TopologySpec.interNodeFabric`):
   on a switchless inter-node shape (full mesh, ring, chain; §6 "Fabric shapes") `bandwidthPerDirectionBytesPerSec`
-  is ONE port (one cable). Two optional link fields serve those shapes only, so no switched result depends on them:
+  is ONE port (one cable). Two optional link fields serve those shapes (and C also caps a device's NIC share on
+  multi-NIC nodes, next bullet), so no switched result with one NIC per device depends on them:
   `allPortsCapPerDirectionBytesPerSec` (C, B/s: the most one node can send, and separately receive, over all its
   ports at once, relayed bytes included, e.g. a NIC's host PCIe attachment; absent = the ports add up; must be ≥ the
   per-port bandwidth) and `forwardingLatencySec` (α_f, s: the extra latency of a node relaying a message to the next
   hop; absent = 0). Like every number, both are sourced or `estimated`. `TopologySpec.interNodeFabric` absent means
   a non-blocking switch, the convention of every topology before fabric shapes; shapes other than `'switched'` need
   one device per node (`validateTopology`).
+- **NICs per node** (`src/sim/hw/types.ts: TopologySpec.nicsPerNode`, `src/sim/hw/nics.ts`; §6 "Multi-NIC nodes"):
+  on a switched network the inter-node `LinkSpec` is ONE NIC, per direction; `nicsPerNode` = N_nic says how many a
+  node has, and absent means one per device (`devicesPerNode`), the convention of every topology and preset so far
+  (DGX / HGX: 8 ConnectX per 8 GPUs; NVL72: one per GPU). One device then gets
+  `B_dev = min(N_nic · B_nic / dpn, C)` per direction (C = `allPortsCapPerDirectionBytesPerSec` ?? ∞). Absent, or
+  equal to `devicesPerNode`, every path keeps the topology's own link object, so results are bit-identical. Only with
+  `interNode`, `nodes > 1` and a switched fabric; N_nic must divide `devicesPerNode` or be a multiple of it
+  (`validateTopology`). The IB link names keep "(one NIC per GPU)": they are URL ids (`linkPresetId`).
+- **In-network reduction capability** (`src/sim/hw/types.ts: LinkSpec.inNetworkReduction, InNetworkReduction`;
+  §6 "In-network reduction (NVLS, SHARP)"): the switch of a link level that reduces all-reduce data itself. A
+  capability flag cited in the link's `sources[]` (field `inNetworkReduction`), pinned by `links.test.ts`:
+
+  | preset                                   | value     | source                                                                                     |
+  | ---------------------------------------- | --------- | ------------------------------------------------------------------------------------------ |
+  | `NVLINK_4` (HGX H100 / H200)             | `'nvls'`  | 3rd-gen NVSwitch: "NVIDIA SHARP in-network reductions" (Hopper architecture in depth)      |
+  | `NVLINK_5` (HGX B200 / B300)             | `'nvls'`  | "each NVLink Switch has engines for … SHARP" (nvidia.com NVLink page); `NCCL_NVLS_ENABLE`  |
+  | `NVLINK_5_NVL72`                         | `'nvls'`  | as `NVLINK_5` (NVL72 NVLink Switch tray)                                                   |
+  | `IB_HDR_200`                             | `'sharp'` | Quantum QM8700 HDR: "SHARP In-Network Computing"                                           |
+  | `IB_NDR_400`                             | `'sharp'` | Quantum-2: "SHARPv3"                                                                       |
+  | `IB_XDR_800`                             | `'sharp'` | Quantum-X800: "SHARP v4"                                                                   |
+  | `NVLINK_5_NVL4`                          | absent    | a bridge, no switch (explicitly not inherited from `NVLINK_5`)                             |
+  | `NVLINK_3`, NVLink 2, xGMI, PCIe         | absent    | SHARP was "introduced with the third-generation NVLink Switch" (A100's 2nd gen has none)   |
+  | `UALOE_MI455X`                           | absent    | UALink 1.0 has none; the Common 2.0 spec adds in-network compute (no product to model yet) |
+  | Ethernet, RoCE, Thunderbolt, USB4, Spark | absent    | no in-network reduction (Spectrum-X claims none; NCCL CollNet's only plugin is IB SHARP)   |
+
+  URLs: https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/,
+  https://www.nvidia.com/en-us/data-center/nvlink/, https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html,
+  https://www.nvidia.com/en-us/networking/infiniband/qm8700/, https://www.nvidia.com/en-us/networking/quantum2/,
+  https://www.nvidia.com/en-us/networking/products/infiniband/quantum-x800/,
+  https://developer.nvidia.com/blog/scaling-ai-inference-performance-and-flexibility-with-nvidia-nvlink-and-nvlink-fusion/,
+  https://ualinkconsortium.org/specification/.
 
 ### Scale-up domains
 
@@ -1853,14 +1885,14 @@ bandwidth, α latency. Each result splits α terms (`latencySec`) from β terms 
 `ringAllReduceSec, treeAllReduceSec, allReduceSec, ringAllGatherSec, ringReduceScatterSec, allToAllSec,
 sendRecvSec`.
 
-| Collective                                                | Time                                                            |
-| --------------------------------------------------------- | --------------------------------------------------------------- |
-| ring all-reduce                                           | `2(n−1)·α + 2(n−1)/n·S/B`                                       |
-| tree all-reduce                                           | `2⌈log2 n⌉·α + 2·S/B`                                           |
-| all-reduce `'best'` (per-op candidate)                    | min(ring, tree); stage-aware selection under ideal overlap (§7) |
-| ring all-gather (S = output) / reduce-scatter (S = input) | `(n−1)·α + (n−1)/n·S/B`                                         |
-| all-to-all (direct, concurrent)                           | `α + (n−1)/n·S/B`                                               |
-| send/recv                                                 | `α + S/B`                                                       |
+| Collective                                                | Time                                                                                                             |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| ring all-reduce                                           | `2(n−1)·α + 2(n−1)/n·S/B`                                                                                        |
+| tree all-reduce                                           | `2⌈log2 n⌉·α + 2·S/B`                                                                                            |
+| all-reduce `'best'` (per-op candidate)                    | min(ring, tree), + NVLS / SHARP when on ("In-network reduction"); stage-aware selection under ideal overlap (§7) |
+| ring all-gather (S = output) / reduce-scatter (S = input) | `(n−1)·α + (n−1)/n·S/B`                                                                                          |
+| all-to-all (direct, concurrent)                           | `α + (n−1)/n·S/B`                                                                                                |
+| send/recv                                                 | `α + S/B`                                                                                                        |
 
 ### All-to-all efficiency
 
@@ -1892,10 +1924,119 @@ with no backend choice:
 `hierarchicalAllReduceSec, hierarchicalAllGatherSec, hierarchicalReduceScatterSec, hierarchicalAllToAllSec`.
 A group of n1 devices per node × n2 nodes:
 
-- all-reduce = `RS_intra(S, n1) + AR_inter(S/n1, n2, algorithm) + AG_intra(S, n1)`
+- all-reduce = `RS_intra(S, n1) + AR_inter(S/n1, n2, algorithm) + AG_intra(S, n1)` (with in-network reduction on,
+  NVLS may replace the RS + AG pair and SHARP joins AR_inter: "In-network reduction (NVLS, SHARP)" below)
 - all-gather = `AG_inter(S/n1, n2) + AG_intra(S, n1)`; reduce-scatter = `RS_intra(S, n1) + RS_inter(S/n1, n2)`
 - all-to-all = `max(α_intra,eff, α_inter,eff) + max((n1−1)/n·S/B_intra, (n−n1)/n·S/B_inter)`
   (audit G3: concurrent messages retain the larger effective latency floor, including host bounce).
+
+### Multi-NIC nodes
+
+`src/sim/hw/nics.ts: nicsPerNodeOf, interNodeBandwidthPerDeviceBytesPerSec, interNodeLinkPerDevice,
+nicCountErrors`; applied by `src/sim/engine/placement.ts: collectivePath, ppSendPath` (every inter-node path:
+hierarchical `inter`, flat inter `link`, the PP send). `TopologySpec.nicsPerNode` = N_nic NICs (rails) per node,
+each the inter-node `LinkSpec` (B_nic per direction). Every device of a node communicates at once (each collective of
+the rank layout does: the n1 shards of the hierarchical inter phase, all TP groups of a stage) and the NICs are
+shared evenly, so the collective formulas get the per-device rate
+
+```
+B_dev = min(N_nic · B_nic / dpn, C)        dpn = devicesPerNode, C = allPortsCapPerDirectionBytesPerSec ?? ∞
+```
+
+in place of B; α and every other field of the link stay. Absent N_nic = one NIC per device (B_dev = B_nic): placement
+then hands the topology's own link object to the path (`interNodeLinkPerDevice` returns it, also when N_nic = dpn
+or B_dev = B_nic), so results are bit-identical (identity ID-5). Worked numbers (`nics.test.ts`), the inter phase of a
+TP16 all-reduce on 2 × 8 H100 over NDR400 (B_nic 50 GB/s, α 1 µs), S = 8e6 B, shard S/n1 = 1e6 B, n2 = 2, ring:
+
+| N_nic per node        | B_dev                         | inter phase `2·α + 2·(1/2)·1e6/B_dev` |
+| --------------------- | ----------------------------- | ------------------------------------- |
+| 4 (one per 2 GPUs)    | 4 · 50 / 8 = 25 GB/s          | 2 + 40 µs                             |
+| 8 (default)           | 50 GB/s                       | 2 + 20 µs                             |
+| 16 (two per GPU)      | 100 GB/s                      | 2 + 10 µs                             |
+| 4 × DGX Spark, 2 NICs | min(2 · 25, C = 25) = 25 GB/s | identical to absent                   |
+
+Real nodes: DGX B200, 8 single-port ConnectX-7 at 400 Gb/s for 8 GPUs (https://www.nvidia.com/en-us/data-center/dgx-b200/);
+AWS p5.48xlarge, 32 network cards and 3,200 Gb/s EFA for 8 H100, i.e. 4 × 100 Gb/s per GPU
+(https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-acc-inst-types.html: model it as N_nic = 32 with a
+100 Gb/s link); p4d.24xlarge, 4 × 100 Gb/s for 8 A100 (one per two GPUs); Mooncake's 4 × 200 and 8 × 400 Gb/s RoCE
+nodes (KV-cache transfer, https://github.com/kvcache-ai/Mooncake).
+
+Approximations: a device uses only its share of the NICs, never an idle NIC of another device (no PXN; a lone PP
+sender on a node with shared NICs is pessimistic); the GPU's own PCIe path to its NIC is not a cap (only C is).
+
+**Rail-optimized fabric.** No separate knob: the default non-blocking switch with one NIC per GPU is the
+rail-optimized fat-tree at full bisection. Every collective of the rank layout stays on its rail (GPU i of each node
+talks to GPU i of the others: the hierarchical inter phase, the strided expert-TP group, PP when tp·dp is a multiple
+of dpn), so rails matter only for cross-rail traffic under oversubscription (`interNodeFabric.oversubscription`, which
+the UI does not set). The follow-up formula is an open item in `docs/research/large-scale-deployment-gaps.md` §G15.
+
+### In-network reduction (NVLS, SHARP)
+
+`src/sim/engine/collectives.ts: nvlsAllReduceSec, sharpAllReduceSec, inNetworkAllReduceSec, allReduceSec,
+hierarchicalAllReduceSec`; capability `LinkSpec.inNetworkReduction` (§4 "Links and topologies", table there); switch
+`SimOptions.inNetworkReduction` (`'off'` default, `'on'`); attached by `src/sim/engine/placement.ts: collectivePath,
+expertTpCollectivePath, inNetworkCapability`.
+
+The switch adds up the devices' buffers itself. **NVLS** (NVLink SHARP, 3rd-gen NVSwitch and later): GPU c reads its
+reduced 1/n shard with one multimem load-reduce (`multimem.ld_reduce`: "loading of data from all of the multiple
+memory locations … reduction operation", PTX ISA), then stores it once with a multicast store (`multimem.st`: "a store
+operation … to all the memory locations"), which the switch copies to all n GPUs. NCCL fuses both per chunk in one
+loop (`src/device/all_reduce.h`, NVLS kernel: "Reduce, broadcast through NVLS"), so the two phases are pipelined.
+**SHARP** (InfiniBand, Quantum switches): each NIC streams its buffer up the switch's aggregation tree and receives
+the reduced buffer back, "reducing the volume of data as it goes up the tree" (Graham et al., SHArP, COM-HPC 2016).
+
+```
+NVLS all-reduce (n GPUs on one NVLink Switch):
+  reduce-scatter in the switch (ld_reduce):  egress S,   ingress S/n
+  multicast all-gather (multimem.st):         egress S/n, ingress S
+  t_nvls  = 2·α + (n+1)/n · S/B                    (busier direction, both phases pipelined; 2 steps)
+SHARP all-reduce (n NICs through an IB switch):
+  t_sharp = 2·α + S/B                              (S up the tree, S back, full duplex; 2 steps)
+flat 'best':   t = min(t_ring, t_tree, t_in)        ties keep ring, then tree
+hierarchical (n1 × n2), 'best':
+  t = min(RS_intra + AG_intra, t_in(S, n1)) + AR_inter(S/n1, n2)        intra NVLS
+  AR_inter = min(ring, tree, t_sharp(S/n1, n2))                          inter SHARP
+```
+
+The (n+1)/n · S is **derived**, not quoted: no primary source states NVLS's byte count. It follows from the
+multimem semantics above with the GPU's own shard crossing its link (the safe bound; S per direction if NVLS skipped
+the self shard) and NCCL's fused per-chunk loop. Against the ring's 2(n−1)/n · S it is a 2(n−1)/(n+1) gain (1.56× at
+n = 8, → 2× for large n), matching NVIDIA's "up to 2x throughput gain" (Hopper architecture in depth). The
+hierarchical intra rule is how NCCL runs NVLS across nodes: NVLS reduce in the node, CollNet (SHARP) across nodes,
+NVLS broadcast (NCCL disables multi-node NVLS without CollNet, `tuning.cc`).
+
+Rules: the in-network algorithm is one more candidate of `collectiveAlgorithm: 'best'` only; explicit `'ring'` /
+`'tree'` run exactly as before (so the stage-aware ring / tree re-costing of §7 needs no change). All-reduce only:
+all-gather, reduce-scatter, all-to-all and send/recv are unchanged. Placement attaches the capability only with the
+switch `'on'` and a capable link: a flat intra path (`inNetworkReduction`), a flat inter path without `fabric` and
+without `interStaging`, a hierarchical path's `intraInNetworkReduction` and (without `interStaging`)
+`interInNetworkReduction`; an oversubscribed hierarchical switch keeps SHARP at the divided B/o. Staged and
+switchless paths get none. With the switch `'off'` (default) the paths and results are bit-identical (ID-5).
+
+Worked numbers (`collectivesInNetwork.test.ts`), S = 8e6 B; NVLink4 B 450 GB/s, α 0.8 µs; NDR400 B 50 GB/s, α 1 µs:
+
+| case                              | ring                         | tree           | in-network                          | `'best'` |
+| --------------------------------- | ---------------------------- | -------------- | ----------------------------------- | -------- |
+| NVLS, n = 8                       | 11.2 + 31.11 µs              | 4.8 + 35.56 µs | 1.6 + (9/8)·8e6/450e9 = 1.6 + 20 µs | NVLS     |
+| NVLS, n = 2                       | 1.6 + 17.78 µs               | 1.6 + 35.56 µs | 1.6 + 26.67 µs                      | ring     |
+| SHARP, n = 4                      | 6 + 240 µs                   | 4 + 320 µs     | 2 + 160 µs                          | SHARP    |
+| SHARP, n = 2                      | 2 + 160 µs                   | 2 + 320 µs     | 2 + 160 µs (tie)                    | ring     |
+| hierarchical 8 × 4, intra phases  | RS + AG 2 × (5.6 + 15.56) µs | —              | NVLS 1.6 + 20 µs                    | NVLS     |
+| hierarchical 8 × 4, inter (1e6 B) | 6 + 30 µs                    | 4 + 40 µs      | SHARP 2 + 20 µs                     | SHARP    |
+
+Approximations and caveats:
+
+- **2·α is the hardware floor.** NCCL's tuning model charges NVLS about 25 µs latency (+18 µs across nodes) and an
+  algorithm bandwidth of 5/6 of the channel bandwidth, fitted to measurements (`src/graph/tuning.cc`, NCCL 2.23), so at
+  small (decode-sized) messages the sim favours NVLS more than real NCCL does. This is the upper bound by the
+  project's rule (hardware and math limits only).
+- NVLS's multicast buffer memory is not counted in the memory fit.
+- SHARP's resource limits (aggregation trees, outstanding operations, group size) and multi-level switch hops are not
+  modelled: one switch traversal sits in the link's α.
+- SHARP across nodes needs NCCL's CollNet plugin (`nccl-rdma-sharp-plugins`, SHARP aggregation manager) and
+  GPUDirect RDMA, and is off by default in NCCL (`NCCL_COLLNET_ENABLE=0`); hence an opt-in switch. NVLS is on by
+  default where supported (`NCCL_NVLS_ENABLE=2`, NCCL 2.17+).
+- UALink 1.0 has no in-network compute; the UALink Common 2.0 spec adds it (no product or semantics to model yet).
 
 ### Host bounce
 
@@ -1911,8 +2052,7 @@ Flat host-bounce all-to-all without an explicit fabric uses `n−1` serialized p
 Ring/chain paths already use `lat(maxHops)` below; no second hop multiplier is added.
 PCIe switch / shared-uplink topologies are not modeled.
 
-Also not modeled: NVLS / SHARP in-switch reduction, the memory traffic of collectives, and contention between
-communication and compute for memory.
+Also not modeled: the memory traffic of collectives, and contention between communication and compute for memory.
 
 ### Inter-node host staging
 
@@ -2713,8 +2853,10 @@ Excluded on purpose (only hardware and math limits are modeled):
 - Dequantization compute of weight-only quantized GEMMs (they run at the wider format's peak, §2).
 - Split-K / stream-K; L2 / cache reuse beyond compulsory traffic.
 - Clock throttling beyond an explicit `clockScale` modifier.
-- NVLS / SHARP in-switch reduction; PCIe switch / shared-uplink contention; the memory traffic of collectives
-  and comm/compute contention for memory.
+- PCIe switch / shared-uplink contention; the memory traffic of collectives and comm/compute contention for memory.
+- NCCL's software latency for NVLS / SHARP (the in-network all-reduce costs its 2-step hardware floor), NVLS buffer
+  memory, SHARP tree / resource limits, and PXN (a device never borrows another device's NIC; §6 "Multi-NIC nodes",
+  "In-network reduction (NVLS, SHARP)").
 - Sequence parallelism; full-logits gather (small sampling exchange is included); attention sinks; skewed or
   correlated MoE routing (expert weights follow the iid-uniform expectation, §5 "Expected distinct experts"); the
   framework / driver memory reserve (0 unless set, §8 "Runtime reserve").

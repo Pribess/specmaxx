@@ -20,6 +20,7 @@ import type {
   HostSpec,
   LinkSpec,
   NvmeSpec,
+  InNetworkReduction,
   TopologySpec,
 } from '../../sim/hw/types';
 import type { LinkModifier } from '../../sim/hw/modifiers';
@@ -293,6 +294,42 @@ export function normalizeCabling(hw: HardwareChoice): HardwareChoice {
   return rest;
 }
 
+/**
+ * The NIC counts per machine the choice can take (`TopologySpec.nicsPerNode`, docs/simulation-model.md §6 "Multi-NIC
+ * nodes"): the divisors of the devices per machine (dpn), then 2·dpn and 4·dpn, ascending, so every device gets the
+ * same share. Offered only between several machines of more than one device each, joined by a switch (a switchless
+ * cabling's ports are its cables); else `[]`. dpn itself is the default (one NIC per device). Counts.
+ */
+export function nicOptions(hw: HardwareChoice): number[] {
+  const dpn = hw.devicesPerNode;
+  if (hw.nodes <= 1 || dpn <= 1) return [];
+  if (effectiveCabling(hw) !== 'switched') return [];
+  const divisors: number[] = [];
+  for (let k = 1; k <= dpn; k++) if (dpn % k === 0) divisors.push(k);
+  return [...divisors, 2 * dpn, 4 * dpn];
+}
+
+/**
+ * The picker label of a NIC count on machines of `devicesPerNode` GPUs: the count and the share per GPU, e.g.
+ * "4 (1 per 2 GPUs)", "8 (1 per GPU)", "16 (2 per GPU)".
+ */
+export function nicLabel(nics: number, devicesPerNode: number): string {
+  if (nics >= devicesPerNode) return `${nics} (${nics / devicesPerNode} per GPU)`;
+  return `${nics} (1 per ${devicesPerNode / nics} GPUs)`;
+}
+
+/**
+ * The choice with `nicsPerNode` normalized: kept only while it is offered ({@link nicOptions}) and differs from the
+ * default (one per device, `devicesPerNode`), so equal setups are equal states and the URL omits a default `nic`.
+ */
+export function normalizeNics(hw: HardwareChoice): HardwareChoice {
+  if (hw.nicsPerNode === undefined) return hw;
+  if (hw.nicsPerNode !== hw.devicesPerNode && nicOptions(hw).includes(hw.nicsPerNode)) return hw;
+  const { nicsPerNode: _n, ...rest } = hw;
+  void _n;
+  return rest;
+}
+
 /** True if two host interfaces are the same generation and width (both absent counts as the same). */
 function sameInterface(
   a: HostInterfaceSpec | undefined,
@@ -369,7 +406,8 @@ export function matchingPopularSetup(hw: HardwareChoice): PopularSetup | undefin
     hw.engineId === undefined &&
     Object.keys(hw.deviceEdits).length === 0 &&
     Object.keys(hw.intraEdits).length === 0 &&
-    Object.keys(hw.interEdits).length === 0;
+    Object.keys(hw.interEdits).length === 0 &&
+    normalizeNics(hw).nicsPerNode === undefined;
   if (!stock || findDevice(hw.deviceId) === undefined) return undefined;
   const links = effectiveLinkIds(hw);
   const cabling = effectiveCabling(hw);
@@ -667,6 +705,7 @@ export function resolveHardware(hw: HardwareChoice, offDevice = false): Resolved
   const links = resolveLinks(hw, device);
   const cabling = effectiveCabling(hw);
   const network = hw.nodes > 1 ? networkOptionOf(hw) : undefined;
+  const nics = normalizeNics(hw).nicsPerNode;
   // The fabric is passed for every cabling; nodeTopology omits a non-blocking switch, so the switched
   // topologies are exactly the ones from before fabric shapes (fabric-identity.test.ts).
   const topology = nodeTopology({
@@ -676,6 +715,8 @@ export function resolveHardware(hw: HardwareChoice, offDevice = false): Resolved
     ...(links.intra !== undefined ? { intraNode: links.intra.link } : {}),
     ...(links.inter !== undefined ? { interNode: links.inter.link } : {}),
     ...(cabling !== undefined && links.inter !== undefined ? { fabric: fabricOf(cabling) } : {}),
+    // Only a non-default count the choice still offers; nodeTopology drops it otherwise too.
+    ...(nics !== undefined ? { nicsPerNode: nics } : {}),
   });
   const capacities = device.device.memory.capacityOptionsBytes;
   const memCapacityBytes = capacities[hw.capacityIndex] ?? capacities[0];
@@ -704,6 +745,23 @@ export function resolveHardware(hw: HardwareChoice, offDevice = false): Resolved
     edited: device.edited || (links.intra?.edited ?? false) || (links.inter?.edited ?? false),
     notes: [...device.notes, ...(links.intra?.notes ?? [])],
   };
+}
+
+/**
+ * The in-network reductions (docs/simulation-model.md §6 "In-network reduction (NVLS, SHARP)") the resolved links
+ * offer to an all-reduce, in level order: the intra-node link's (`LinkSpec.inNetworkReduction`, e.g. NVLS on an
+ * NVLink Switch) when a machine has more than one device, and the inter-node link's (e.g. SHARP on InfiniBand) when
+ * the machines are joined by a switch (a switchless cabling has no switch to reduce in). Duplicates removed; `[]` when
+ * nothing offers one, so the UI hides the switch.
+ */
+export function inNetworkReductionsOf(resolved: ResolvedHardware): InNetworkReduction[] {
+  const out: InNetworkReduction[] = [];
+  const intra = resolved.links.intra?.link.inNetworkReduction;
+  if (resolved.topology.devicesPerNode > 1 && intra !== undefined) out.push(intra);
+  const inter = resolved.links.inter?.link.inNetworkReduction;
+  if (resolved.topology.nodes > 1 && resolved.cabling === 'switched' && inter !== undefined)
+    if (!out.includes(inter)) out.push(inter);
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------------------

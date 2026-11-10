@@ -241,6 +241,10 @@ export function validateInput(input: SimInput): string[] {
   if (floor !== undefined && !(Number.isFinite(floor) && floor >= 0)) {
     errors.push(`options.perOpLatencyFloorSec (${floor}) must be a finite number ≥ 0`);
   }
+  const inNetwork: string | undefined = input.options?.inNetworkReduction;
+  if (inNetwork !== undefined && inNetwork !== 'off' && inNetwork !== 'on') {
+    errors.push(`options.inNetworkReduction ('${inNetwork}') must be 'off' or 'on'`);
+  }
   const dispatchSec = input.overlays?.engineDispatch?.perKernelSec;
   if (dispatchSec !== undefined && !(Number.isFinite(dispatchSec) && dispatchSec >= 0)) {
     errors.push(

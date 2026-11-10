@@ -30,7 +30,11 @@ import {
   effectiveCabling,
   findDevice,
   fromDisplay,
+  inNetworkReductionsOf,
   matchingPopularSetup,
+  nicLabel,
+  nicOptions,
+  normalizeNics,
   nearestCount,
   normalizeCabling,
   popularSetupChoice,
@@ -405,5 +409,62 @@ describe('editable fields', () => {
       label: 'Relay latency per hop',
       unit: UNITS.us,
     });
+  });
+});
+
+describe('network: NICs per machine and in-network reduction', () => {
+  const h100 = (over: Partial<HardwareChoice> = {}) =>
+    hw({ deviceId: 'h100-sxm', devicesPerNode: 8, nodes: 2, ...over });
+
+  it('offers the divisors of the GPUs per machine and 2 and 4 per GPU, only between switched multi-GPU machines', () => {
+    expect(nicOptions(h100())).toEqual([1, 2, 4, 8, 16, 32]);
+    expect(nicOptions(h100({ devicesPerNode: 4 }))).toEqual([1, 2, 4, 8, 16]);
+    expect(nicOptions(h100({ nodes: 1 }))).toEqual([]);
+    expect(nicOptions(h100({ devicesPerNode: 1 }))).toEqual([]);
+    expect(nicOptions(hw({ deviceId: 'dgx-spark', nodes: 4 }))).toEqual([]);
+  });
+
+  it('labels a count with its share per GPU', () => {
+    expect(nicLabel(4, 8)).toBe('4 (1 per 2 GPUs)');
+    expect(nicLabel(1, 8)).toBe('1 (1 per 8 GPUs)');
+    expect(nicLabel(8, 8)).toBe('8 (1 per GPU)');
+    expect(nicLabel(16, 8)).toBe('16 (2 per GPU)');
+  });
+
+  it('normalizes away the default and counts no longer offered; the topology carries the rest', () => {
+    expect(normalizeNics(h100({ nicsPerNode: 8 })).nicsPerNode).toBeUndefined();
+    expect(normalizeNics(h100({ nicsPerNode: 3 })).nicsPerNode).toBeUndefined();
+    expect(normalizeNics(h100({ nicsPerNode: 4 })).nicsPerNode).toBe(4);
+    const four = resolveHardware(h100({ nicsPerNode: 4 })).topology;
+    expect(four.nicsPerNode).toBe(4);
+    expect(four.id).toMatch(/-nics4$/);
+    expect(validateTopology(four)).toEqual([]);
+    // The default is exactly the topology from before NIC counts.
+    expect(resolveHardware(h100({ nicsPerNode: 8 })).topology).toEqual(
+      resolveHardware(h100()).topology,
+    );
+    expect(resolveHardware(h100()).topology.nicsPerNode).toBeUndefined();
+  });
+
+  it('lists the in-network reductions of the links in use: NVLS on NVLink 4, SHARP on InfiniBand', () => {
+    expect(inNetworkReductionsOf(resolveHardware(h100()))).toEqual(['nvls', 'sharp']);
+    expect(inNetworkReductionsOf(resolveHardware(h100({ nodes: 1 })))).toEqual(['nvls']);
+    expect(inNetworkReductionsOf(resolveHardware(h100({ devicesPerNode: 1 })))).toEqual(['sharp']);
+    // A100's NVSwitch has none; its HDR network has SHARP.
+    expect(
+      inNetworkReductionsOf(
+        resolveHardware(hw({ deviceId: 'a100-sxm4-80gb', devicesPerNode: 8, nodes: 1 })),
+      ),
+    ).toEqual([]);
+    expect(
+      inNetworkReductionsOf(
+        resolveHardware(hw({ deviceId: 'a100-sxm4-80gb', devicesPerNode: 8, nodes: 2 })),
+      ),
+    ).toEqual(['sharp']);
+    // One RTX 5090 and a DGX Spark cluster: none.
+    expect(inNetworkReductionsOf(resolveHardware(SINGLE_DEVICE_HW))).toEqual([]);
+    expect(inNetworkReductionsOf(resolveHardware(hw({ deviceId: 'dgx-spark', nodes: 4 })))).toEqual(
+      [],
+    );
   });
 });

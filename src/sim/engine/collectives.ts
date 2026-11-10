@@ -12,20 +12,27 @@
  * Inter-node fabric shapes other than a non-blocking switch (oversubscribed switch, full mesh, ring, chain) are
  * costed in `fabricCollectives.ts`; a path without a fabric runs the formulas of this file unchanged.
  *
- * Not modeled (documented): NVLS/SHARP in-switch reduction, PCIe switch / shared-uplink contention, the HBM
- * traffic of collectives, contention between communication and compute for HBM, and intra-node shapes (an
- * intra-node link is always treated as switched; e.g. the MI300X xGMI mesh is encoded as aggregate injection).
+ * In-network reduction (NVLS on an NVLink Switch, SHARP on an InfiniBand switch; `LinkSpec.inNetworkReduction`) is
+ * one more all-reduce candidate of `'best'` when the path carries it ({@link nvlsAllReduceSec},
+ * {@link sharpAllReduceSec}); a path without it runs exactly the ring / tree code of before.
+ *
+ * Not modeled (documented): PCIe switch / shared-uplink contention, the HBM traffic of collectives, contention
+ * between communication and compute for HBM, and intra-node shapes (an intra-node link is always treated as
+ * switched; e.g. the MI300X xGMI mesh is encoded as aggregate injection).
  */
 
 import type { CollectiveOp } from '../ir/ops';
-import type { FabricShape, LinkSpec } from '../hw/types';
+import type { FabricShape, InNetworkReduction, LinkSpec } from '../hw/types';
 import { fabricCollectiveTime } from './fabricCollectives';
 import type { HostStaging } from './staging';
 
 /** The kinds of collective (same as `CollectiveOp.collective`). */
 export type CollectiveKind = CollectiveOp['collective'];
 
-/** All-reduce algorithm choice: `'best'` = the faster of ring and tree for this message. */
+/**
+ * All-reduce algorithm choice: `'best'` = the fastest of ring, tree and (when the path carries one) the link's
+ * in-network reduction for this message; `'ring'` and `'tree'` force that algorithm.
+ */
 export type AllReduceAlgorithm = 'best' | 'ring' | 'tree';
 
 /** Cost of one collective on one device. */
@@ -36,8 +43,12 @@ export interface CollectiveTime {
   bandwidthSec: number;
   /** latencySec + bandwidthSec. Unit: seconds. */
   totalSec: number;
-  /** Algorithm used: `'ring'`, `'tree'`, `'direct'` (all-to-all, send/recv), `'hierarchical'`, or `'none'` (n = 1). */
-  algorithm: 'ring' | 'tree' | 'direct' | 'hierarchical' | 'none';
+  /**
+   * Algorithm used: `'ring'`, `'tree'`, `'nvls'` / `'sharp'` (in-network all-reduce, {@link InNetworkReduction}),
+   * `'direct'` (all-to-all, send/recv), `'hierarchical'` (two link levels, whatever each phase used), or `'none'`
+   * (n = 1).
+   */
+  algorithm: 'ring' | 'tree' | 'nvls' | 'sharp' | 'direct' | 'hierarchical' | 'none';
 }
 
 /** The α and β parameters one link level offers to a collective, after host-bounce and host-staging effects. */
@@ -54,8 +65,9 @@ export interface EffectiveLink {
  * - `'flat'`: every member on one link level (`'intra'` = one node, `'inter'` = one device per node);
  * - `'hierarchical'`: `devicesPerNode` (n1) members in each of `nodes` (n2) nodes, n = n1 · n2.
  *
- * The optional fabric fields are set only when they differ from the pre-fabric default (placement emits them only
- * then), so an absent field always means the switched, non-blocking formulas of this file.
+ * The optional fabric, staging and in-network fields are set only when they differ from the default (placement
+ * emits them only then), so an absent field always means the switched, non-blocking, ring / tree formulas of this
+ * file. Inter-node links are already the per-device share of the node's NICs (`hw/nics.ts: interNodeLinkPerDevice`).
  */
 export type CollectivePath =
   | { kind: 'none' }
@@ -81,6 +93,12 @@ export type CollectivePath =
        * modelled). Only on `level: 'inter'`.
        */
       interStaging?: HostStaging;
+      /**
+       * In-network all-reduce this path may use as a `'best'` candidate (`SimOptions.inNetworkReduction: 'on'` and a
+       * capable link); absent = ring / tree only. Placement sets it on an intra-node path, and on an inter-node path
+       * only without `fabric` and without `interStaging`.
+       */
+      inNetworkReduction?: InNetworkReduction;
     }
   | {
       kind: 'hierarchical';
@@ -98,6 +116,16 @@ export type CollectivePath =
        * The intra-node phase never stages.
        */
       interStaging?: HostStaging;
+      /**
+       * In-network all-reduce of the intra-node phase (NVLS: replaces the RS_intra + AG_intra pair when faster);
+       * absent = ring phases only.
+       */
+      intraInNetworkReduction?: InNetworkReduction;
+      /**
+       * In-network all-reduce of the inter-node phase (SHARP: one more candidate of AR_inter); absent = ring / tree
+       * only. Placement never sets it with `interStaging`.
+       */
+      interInNetworkReduction?: InNetworkReduction;
     };
 
 /** A zero cost (group of one). */
@@ -307,9 +335,77 @@ export function treeAllReduceSec(
 }
 
 /**
+ * NVLS (NVLink SHARP) all-reduce of S bytes over n GPUs on one NVLink Switch. Two phases, pipelined over chunks:
+ * 1. reduce-scatter in the switch: GPU c reads its reduced 1/n shard with a multimem load-reduce
+ *    (`multimem.ld_reduce`); the switch reads that shard from all n GPUs, adds it up and returns S/n to c. Over
+ *    all n shards each GPU's link sends its whole buffer once (egress S) and receives its shard (ingress S/n);
+ * 2. multicast all-gather: GPU c writes its reduced shard once with a multicast store (`multimem.st`), which the
+ *    switch copies to all n GPUs (egress S/n, ingress S).
+ * Each direction of a GPU's link carries S + S/n = (n+1)/n · S, and both phases stream concurrently over chunks, so
+ * the β term is the busier direction once; the α term is the two dependent steps (vs ring 2(n−1), tree 2⌈log2 n⌉).
+ * `link`: the per-device, per-direction B and the α of the NVLink level. n = 1 costs nothing.
+ */
+export function nvlsAllReduceSec(
+  messageBytes: number,
+  n: number,
+  link: EffectiveLink,
+): CollectiveTime {
+  if (n <= 1) return NO_TIME;
+  // Formula: t = 2·α + (n+1)/n · S/B
+  // See docs/simulation-model.md §6 ("In-network reduction")
+  const steps = 2;
+  const bytesPerDirection = ((n + 1) / n) * messageBytes;
+  const latencySec = steps * link.latencySec;
+  const bandwidthSec = bytesPerDirection / link.bandwidthBytesPerSec;
+  return time(latencySec, bandwidthSec, 'nvls');
+}
+
+/**
+ * SHARP (InfiniBand in-network aggregation) all-reduce of S bytes over n NICs through an IB switch: each NIC streams
+ * its S bytes up the switch's aggregation tree (egress S) and receives the reduced S back (ingress S), the two
+ * directions at once (full duplex), so the β term is S/B once; the α term is the two dependent steps (up the tree,
+ * back down). `link`: the per-device, per-direction B and the α of the inter-node level. n = 1 costs nothing.
+ */
+export function sharpAllReduceSec(
+  messageBytes: number,
+  n: number,
+  link: EffectiveLink,
+): CollectiveTime {
+  if (n <= 1) return NO_TIME;
+  // Formula: t = 2·α + S/B
+  // See docs/simulation-model.md §6 ("In-network reduction")
+  const steps = 2;
+  const bytesPerDirection = messageBytes;
+  const latencySec = steps * link.latencySec;
+  const bandwidthSec = bytesPerDirection / link.bandwidthBytesPerSec;
+  return time(latencySec, bandwidthSec, 'sharp');
+}
+
+/** The in-network all-reduce of `kind` ({@link nvlsAllReduceSec} or {@link sharpAllReduceSec}) of S bytes over n. */
+export function inNetworkAllReduceSec(
+  kind: InNetworkReduction,
+  messageBytes: number,
+  n: number,
+  link: EffectiveLink,
+): CollectiveTime {
+  switch (kind) {
+    case 'nvls':
+      return nvlsAllReduceSec(messageBytes, n, link);
+    case 'sharp':
+      return sharpAllReduceSec(messageBytes, n, link);
+    default: {
+      const _never: never = kind;
+      throw new Error(`unknown in-network reduction ${String(_never)}`);
+    }
+  }
+}
+
+/**
  * Flat all-reduce with the chosen algorithm (`'best'` = the faster of ring and tree; a tie keeps ring). `treeLink`
  * (default `link`) is the link the tree runs on when it differs from the ring's: on a host-staged path the per-step
  * message differs (ring S/n, tree S), so each algorithm gets its own staged α before the comparison.
+ * `inNetwork` (the path's in-network reduction, absent = none) adds {@link inNetworkAllReduceSec} on `link` as a
+ * third candidate of `'best'` only (a tie keeps ring or tree); explicit `'ring'` / `'tree'` ignore it.
  */
 export function allReduceSec(
   messageBytes: number,
@@ -317,6 +413,7 @@ export function allReduceSec(
   link: EffectiveLink,
   algorithm: AllReduceAlgorithm,
   treeLink: EffectiveLink = link,
+  inNetwork?: InNetworkReduction,
 ): CollectiveTime {
   if (n <= 1) return NO_TIME;
   const ring = ringAllReduceSec(messageBytes, n, link);
@@ -326,9 +423,15 @@ export function allReduceSec(
       return ring;
     case 'tree':
       return tree;
-    case 'best':
+    case 'best': {
       // Formula: t = min(t_ring, t_tree)
-      return tree.totalSec < ring.totalSec ? tree : ring;
+      const ringOrTree = tree.totalSec < ring.totalSec ? tree : ring;
+      if (inNetwork === undefined) return ringOrTree;
+      // Formula: t = min(t_ring, t_tree, t_in)   (ties keep ring / tree)
+      // See docs/simulation-model.md §6 ("In-network reduction")
+      const inSwitch = inNetworkAllReduceSec(inNetwork, messageBytes, n, link);
+      return inSwitch.totalSec < ringOrTree.totalSec ? inSwitch : ringOrTree;
+    }
     default: {
       const _never: never = algorithm;
       throw new Error(`unknown all-reduce algorithm ${String(_never)}`);
@@ -392,6 +495,12 @@ function sumPhases(phases: CollectiveTime[]): CollectiveTime {
 /**
  * Hierarchical all-reduce over n1 devices per node × n2 nodes: reduce-scatter inside each node, all-reduce of
  * the 1/n1 shard across nodes (the n1 shards in parallel, one per device), all-gather inside each node.
+ * `inNetwork` (the path's in-network reductions per level, absent = none; used by `'best'` only):
+ * - `intra` (NVLS): the RS_intra + AG_intra pair becomes one NVLS all-reduce of S over n1 when that is faster (its
+ *   in-switch reduce-scatter and multicast all-gather bracket the inter-node step and pipeline over chunks as in
+ *   the flat case, {@link nvlsAllReduceSec});
+ * - `inter` (SHARP): one more candidate of AR_inter ({@link allReduceSec}).
+ * Without either, exactly the ring / tree phases of before.
  */
 export function hierarchicalAllReduceSec(
   messageBytes: number,
@@ -401,13 +510,29 @@ export function hierarchicalAllReduceSec(
   inter: EffectiveLink,
   algorithm: AllReduceAlgorithm,
   interTree: EffectiveLink = inter,
+  inNetwork: { intra?: InNetworkReduction; inter?: InNetworkReduction } = {},
 ): CollectiveTime {
   // Formula: t = RS_intra(S, n1) + AR_inter(S/n1, n2) + AG_intra(S, n1)
   // See docs/simulation-model.md §6 ("Hierarchical collectives")
   const reduceScatterIntra = ringReduceScatterSec(messageBytes, n1, intra);
-  const allReduceInter = allReduceSec(messageBytes / n1, n2, inter, algorithm, interTree);
+  const allReduceInter = allReduceSec(
+    messageBytes / n1,
+    n2,
+    inter,
+    algorithm,
+    interTree,
+    inNetwork.inter,
+  );
   const allGatherIntra = ringAllGatherSec(messageBytes, n1, intra);
-  return sumPhases([reduceScatterIntra, allReduceInter, allGatherIntra]);
+  const ringPhases = sumPhases([reduceScatterIntra, allReduceInter, allGatherIntra]);
+  if (algorithm !== 'best' || inNetwork.intra === undefined) return ringPhases;
+  // Formula: t = min(RS_intra + AG_intra, t_in(S, n1)) + AR_inter(S/n1, n2)   (a tie keeps the ring pair)
+  // See docs/simulation-model.md §6 ("In-network reduction")
+  const inSwitchIntra = inNetworkAllReduceSec(inNetwork.intra, messageBytes, n1, intra);
+  const ringIntraSec = reduceScatterIntra.totalSec + allGatherIntra.totalSec;
+  return inSwitchIntra.totalSec < ringIntraSec
+    ? sumPhases([inSwitchIntra, allReduceInter])
+    : ringPhases;
 }
 
 /**
@@ -474,6 +599,9 @@ export function hierarchicalAllToAllSec(
  * inter-node level with the message one step of each algorithm really moves, before ring and tree are compared:
  * ring all-reduce, all-gather, reduce-scatter and all-to-all S/n; tree all-reduce S; send/recv S; the hierarchical
  * inter phase S/n (ring, = (S/n1)/n2) or S/n1 (tree). Staging is not host bounce: an all-to-all keeps one α.
+ * A path's in-network fields (`inNetworkReduction`, `intraInNetworkReduction`, `interInNetworkReduction`) add the
+ * in-switch all-reduce as a `'best'` candidate on that level (docs §6 "In-network reduction (NVLS, SHARP)"); the
+ * other collectives ignore them.
  */
 export function collectiveTime(
   kind: CollectiveKind,
@@ -505,7 +633,14 @@ export function collectiveTime(
     const link = linkFor(kind === 'send_recv' ? messageBytes : ringStepBytes);
     switch (kind) {
       case 'all_reduce':
-        return allReduceSec(messageBytes, groupSize, link, algorithm, linkFor(messageBytes));
+        return allReduceSec(
+          messageBytes,
+          groupSize,
+          link,
+          algorithm,
+          linkFor(messageBytes),
+          path.inNetworkReduction,
+        );
       case 'all_gather':
         return ringAllGatherSec(messageBytes, groupSize, link);
       case 'reduce_scatter':
@@ -557,6 +692,7 @@ export function collectiveTime(
         inter,
         algorithm,
         interFor(messageBytes / n1),
+        { intra: path.intraInNetworkReduction, inter: path.interInNetworkReduction },
       );
     case 'all_gather':
       return hierarchicalAllGatherSec(messageBytes, n1, n2, intra, inter);
