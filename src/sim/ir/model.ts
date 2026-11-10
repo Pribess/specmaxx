@@ -787,4 +787,14 @@ export interface ParallelConfig {
    * Default `DEFAULT_EP_IMBALANCE` (lower/moe.ts, 1.2). Engine-level only: the UI keeps ep = 1. Dimensionless.
    */
   epImbalance?: number;
+  /**
+   * Group the dense FFN layers (`mlp` blocks) and the LM head are tensor-parallel over; size G (count).
+   * - `'tp'` (default, also when absent): the replica's own tp ranks, G = tp. At tp = 1 they are whole on every
+   *   device, i.e. data-parallel (vLLM DEP; SGLang `--moe-dense-tp-size 1 --enable-dp-lm-head`).
+   * - `'ep'`: the whole EP group, G = ep devices spanning ep / tp replicas (SGLang's default under
+   *   `--enable-dp-attention`). Each device's tokens are all-gathered over the group before the sharded GEMMs and
+   *   reduce-scattered back after. Requires tp = 1 and no speculative decoding (validate.ts).
+   * The embedding stays per replica either way. See docs/simulation-model.md §5 "DP attention + EP".
+   */
+  denseTpGroup?: 'tp' | 'ep';
 }

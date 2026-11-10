@@ -12,7 +12,7 @@ import type { DraftSpec, LayerSpec, ModelSpec } from '../ir/model';
 import type { TransferOp } from '../ir/ops';
 import { draftResidentWeightBytes, draftSequenceStateBytes } from '../lower/draft';
 import { embeddingFormat, embeddingResidentWeightBytes, embeddingShardBytes } from '../lower/embedding';
-import { lmHeadFormat, lmHeadResidentWeightBytes } from '../lower/head';
+import { lmHeadFormat, lmHeadResidentWeightBytes, lmHeadVocabShard } from '../lower/head';
 import {
   blockResidentWeightBytes,
   blockSequenceStateBytes,
@@ -162,12 +162,9 @@ export function stageWeightBytes(model: ModelSpec, ctx: LoweringContext, s: numb
     ctx.offload?.embeddings === undefined &&
     sameStoredFormat(embeddingFormat(ctx), lmHeadFormat(ctx))
   ) {
-    // The shared matrix is already counted by the embedding; keep only the final-norm part of the head.
-    const headMatrixBytes = matrixStoredBytes(
-      lmHeadFormat(ctx),
-      Math.ceil(model.vocab / ctx.parallel.tp),
-      model.hidden,
-    );
+    // The shared matrix is already counted by the embedding (its ceil(vocab/tp) rows hold the head's
+    // ceil(vocab/G) shard: G = tp, or G = ep ≥ tp = 1 with denseTpGroup 'ep'); keep only the final-norm part.
+    const headMatrixBytes = matrixStoredBytes(lmHeadFormat(ctx), lmHeadVocabShard(model, ctx), model.hidden);
     headBytes -= headMatrixBytes;
   }
   // Formula: W_s = Σ_{blocks of s} W_block + [s = 0 ∧ emb on device] W_emb + [s = pp−1] W_head

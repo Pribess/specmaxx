@@ -54,6 +54,9 @@ export function HardwarePanel(props: Props) {
         parallel: chooseDegrees(loaded.model, quant, next.workload, topology, {
           dp: next.parallel.dp,
           ep: next.parallel.ep,
+          pp: next.parallel.pp,
+          layout: next.parallelLayout,
+          denseTpGroup: next.parallel.denseTpGroup,
         }),
       });
     } catch {

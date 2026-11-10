@@ -9,8 +9,9 @@
  * spans `ep/tp` replicas. A valid EP also divides the expert count. See {@link effectiveParallel}.
  *
  * Attribution of engine messages relies on their wording (pinned by parallelism.test.ts):
- * - `blockShardingErrors` lines are `'<layer>: <message>'`; a message naming `ep (` goes to EP, else TP. The two
- *   MoE EP rules are reworded in UI words ({@link uiShardingMessage}).
+ * - `blockShardingErrors` lines are `'<layer>: <message>'`; a message naming `dense TP group` goes to the dense-layers
+ *   control (`denseTp`), one naming `ep (` to EP, else TP. The two MoE EP rules and the dense-TP rule are reworded
+ *   in UI words ({@link uiShardingMessage}).
  * - `checkPlacement` errors are prefixed `tp:`, `ep:` or `pp:`; the world-size error starts `tp·pp·dp =`.
  */
 
@@ -20,13 +21,15 @@ import { blockShardingErrors } from '../../sim/engine/validate';
 import type { ModelSpec, ParallelConfig, QuantConfig } from '../../sim/ir/model';
 import type { TopologySpec } from '../../sim/hw/types';
 import { hasMoe } from './deploymentInput';
+import type { AppState } from './appState';
 
 /**
- * A field the UI can mark. `devices` is the device/node count; `offload` and `specDec` are the deployment sections
- * (offloading, speculative decoding); `general` is anything else.
+ * A field the UI can mark. `devices` is the device/node count; `denseTp` is the "Dense layers" DP | TP control of
+ * the DP attention + EP layout; `offload` and `specDec` are the deployment sections (offloading, speculative
+ * decoding); `general` is anything else.
  */
 export type IssueField =
-  | 'tp' | 'pp' | 'dp' | 'ep' | 'batch' | 'promptLen' | 'decodeContextLen' | 'devices' | 'bpw' | 'headBpw'
+  | 'tp' | 'pp' | 'dp' | 'ep' | 'denseTp' | 'batch' | 'promptLen' | 'decodeContextLen' | 'devices' | 'bpw' | 'headBpw'
   | 'offload' | 'specDec' | 'general';
 
 /** One problem with the inputs. Errors stop the simulation; warnings do not. */
@@ -60,20 +63,27 @@ function stripLayer(message: string): string {
   return i < 0 ? message : message.slice(i + 2);
 }
 
-/** Field of a sharding message: EP when it names the expert-parallel degree, else TP. */
-export function shardingField(message: string): 'tp' | 'ep' {
+/**
+ * Field of a sharding message: the dense-layers control (`denseTp`) when it names the dense TP group (dense FFN
+ * layers TP over the EP group), EP when it names the expert-parallel degree, else TP.
+ */
+export function shardingField(message: string): 'tp' | 'ep' | 'denseTp' {
+  if (/dense TP group/.test(message)) return 'denseTp';
   return /\bep \(/.test(message) ? 'ep' : 'tp';
 }
 
 /**
  * A sharding message in UI words. The engine's two MoE EP rules (`moeParallelErrors`) become
  * "EP 3 must divide the 512 experts." and "EP 3 must divide TP 2."; with DP > 1 the second names the engine's mode-B
- * alternative too: "EP 3 must divide TP 2, or be a multiple of TP 2 that divides TP × DP = 4.". Any other message is
- * kept as is.
+ * alternative too: "EP 3 must divide TP 2, or be a multiple of TP 2 that divides TP × DP = 4.". The dense-TP rule
+ * (`lowerMlp`: the intermediate width must split over the dense TP group) becomes "Dense layers on TP need EP 72
+ * to divide their width 12288. Use DP." (that group is the EP group). Any other message is kept as is.
  */
 export function uiShardingMessage(message: string): string {
   const experts = message.match(/experts \((\d+)\) must be divisible by ep \((\d+)\)/);
   if (experts) return `EP ${experts[2]} must divide the ${experts[1]} experts.`;
+  const dense = message.match(/\((\d+)\) must be divisible by the dense TP group \((\d+)\)/);
+  if (dense) return `Dense layers on TP need EP ${dense[2]} to divide their width ${dense[1]}. Use DP.`;
   const divide = message.match(/ep \((\d+)\) must divide tp \((\d+)\)(?:, or be a multiple of tp that divides tp·dp \((\d+)\))?/);
   if (divide) {
     const [, ep, tp, tpDp] = divide;
@@ -91,22 +101,41 @@ export function placementField(message: string): IssueField {
 }
 
 /**
- * The parallel config the UI simulates from the user's degrees: EP is the user's only on a MoE model (a dense model
- * runs with EP 1, whatever the state or URL holds). Every other field, DP included, is kept.
+ * `parallel` as the checks and the engine see it on `model`: on a dense model EP is 1 and `denseTpGroup` is dropped
+ * (there is no EP group), whatever the state or URL holds. Every other field is kept.
  */
-export function effectiveParallel(parallel: ParallelConfig, model: ModelSpec): ParallelConfig {
-  return { ...parallel, ep: hasMoe(model) ? parallel.ep : 1 };
+function onModel(parallel: ParallelConfig, model: ModelSpec): ParallelConfig {
+  if (hasMoe(model)) return parallel;
+  const dense: ParallelConfig = { ...parallel, ep: 1 };
+  delete dense.denseTpGroup;
+  return dense;
 }
 
 /**
- * The problems of a parallelism + workload on a model and topology, by field. `parallel` is the user's; it is
- * checked as {@link effectiveParallel} makes it (EP 1 on dense models):
+ * The parallel config the UI simulates from the user's degrees and layout: EP is the user's only on a MoE model (a
+ * dense model runs with EP 1, whatever the state or URL holds), and `denseTpGroup` (`'ep'`: dense layers TP over the
+ * EP group) only on a MoE model in the DP attention + EP layout. Every other field, DP included, is kept, so with
+ * no layout and no `denseTpGroup` the result is exactly the one from before the layout existed.
+ */
+export function effectiveParallel(
+  parallel: ParallelConfig,
+  model: ModelSpec,
+  layout?: AppState['parallelLayout'],
+): ParallelConfig {
+  const { denseTpGroup, ...rest } = onModel(parallel, model);
+  return layout === 'dpAttentionEp' && denseTpGroup === 'ep' ? { ...rest, denseTpGroup } : rest;
+}
+
+/**
+ * The problems of a parallelism + workload on a model and topology, by field. `parallel` is the one to simulate
+ * ({@link effectiveParallel} of the user's); on a dense model it is checked with EP 1 and no `denseTpGroup`:
  * - every degree (EP only on MoE models) and workload value is an integer ≥ 1 (if not, nothing else is checked);
  * - `tp·pp·dp` ≠ devices is an error on `devices` (the device count must equal TP × PP × DP: EP uses the TP and DP
- *   devices);
+ *   devices); in the DP attention + EP `layout` on a MoE model (TP 1, DP = EP, so TP and DP are not shown) it is
+ *   worded as EP × PP;
  * - `batch % dp == 0` (on `batch`: each replica serves `batch / dp` sequences), `pp ≤ layers` (on `pp`);
  * - the engine's sharding rules (`blockShardingErrors`; one message per distinct rule, layer prefix dropped;
- *   EP rules such as "EP must divide TP" on `ep`);
+ *   EP rules such as "EP must divide TP" on `ep`; the dense-TP rule on `denseTp`);
  * - the engine's placement rules (`checkPlacement`) by their prefix;
  * - the expert-TP group path (MoE with an expert-output norm and `tp/ep > 1`), on `ep`.
  */
@@ -116,10 +145,11 @@ export function fieldIssues(
   parallel: ParallelConfig,
   workload: Workload,
   topology: TopologySpec,
+  layout?: AppState['parallelLayout'],
 ): FieldIssue[] {
   const issues: FieldIssue[] = [];
   const error = (field: IssueField, message: string) => issues.push({ field, level: 'error', message });
-  const effective = effectiveParallel(parallel, model);
+  const effective = onModel(parallel, model);
   const degrees = hasMoe(model) ? (['tp', 'pp', 'dp', 'ep'] as const) : (['tp', 'pp', 'dp'] as const);
   for (const key of degrees) {
     if (!isPositiveInteger(effective[key])) error(key, `${DEGREE_LABEL[key]} must be a whole number ≥ 1.`);
@@ -134,7 +164,10 @@ export function fieldIssues(
   const world = tp * pp * dp;
   const devices = topology.devicesPerNode * topology.nodes;
   if (world !== devices) {
-    error('devices', `TP × PP × DP = ${world}, but the rig has ${devices} ${devices === 1 ? 'device' : 'devices'}. They must be equal.`);
+    const rig = `the rig has ${devices} ${devices === 1 ? 'device' : 'devices'}. They must be equal.`;
+    // In DP attention + EP, TP is 1 and DP = EP: world = EP × PP, in the words of the fields shown.
+    const named = layout === 'dpAttentionEp' && hasMoe(model) && tp === 1 && dp === ep;
+    error('devices', named ? `EP × PP = ${world}, but ${rig}` : `TP × PP × DP = ${world}, but ${rig}`);
   }
   // Each DP replica serves B_r = batch / dp sequences, so the batch must split evenly. The batch is what to change.
   if (workload.batch % dp !== 0) {
@@ -212,6 +245,46 @@ export function validDegrees(
   return valid;
 }
 
+/** One split of the rig in the DP attention + EP layout: TP 1, `pp` stages of `n` devices each, DP = EP = `n`. */
+export interface DpAttentionEpSplit {
+  /** Pipeline stages. Count. */
+  pp: number;
+  /** Devices per stage, each its own DP rank and EP member (DP = EP = n). Count. */
+  n: number;
+}
+
+/**
+ * The coherent splits of the rig in the DP attention + EP layout, by increasing PP: every PP in
+ * 1..min(devices, layers, {@link MAX_DEGREE_CANDIDATES}) that divides the device count, with N = devices / PP
+ * (formula: EP × PP = devices), that gives no error with TP 1, DP = EP = N and `parallel.denseTpGroup` (so N
+ * divides the experts, is placeable, and with dense TP divides the dense FFN width). The batch split is not part of
+ * the check (it is shown on the batch field). Empty on a dense model.
+ * The layout's EP and PP fields move between exactly these (EP n sets PP = devices / n, PP p sets EP = devices / p),
+ * so their hints "Valid EP: …" and "Valid PP: …" list the `n` and `pp` of these splits.
+ */
+export function dpAttentionEpSplits(
+  model: ModelSpec,
+  quant: QuantConfig,
+  parallel: ParallelConfig,
+  workload: Workload,
+  topology: TopologySpec,
+): DpAttentionEpSplit[] {
+  if (!hasMoe(model)) return [];
+  const devices = topology.devicesPerNode * topology.nodes;
+  if (!Number.isSafeInteger(devices) || devices < 1) return [];
+  const dense = parallel.denseTpGroup === 'ep' ? { denseTpGroup: 'ep' as const } : {};
+  const splits: DpAttentionEpSplit[] = [];
+  for (let pp = 1; pp <= Math.min(devices, model.layers.length, MAX_DEGREE_CANDIDATES); pp++) {
+    if (devices % pp !== 0) continue;
+    // Formula: n = devices / pp
+    const n = devices / pp;
+    const candidate: ParallelConfig = { tp: 1, pp, dp: n, ep: n, ...dense };
+    const errors = fieldIssues(model, quant, candidate, workload, topology).filter((i) => i.level === 'error' && i.field !== 'batch');
+    if (errors.length === 0) splits.push({ pp, n });
+  }
+  return splits;
+}
+
 /**
  * TP, PP, DP and EP for this model and topology, used when a hardware choice changes the device count:
  * - DP is never raised on its own: the user's `current.dp` is kept when it is > 1, divides the device count, and a
@@ -221,14 +294,25 @@ export function validDegrees(
  *   PP = 1, DP = 1 when no split is valid (the device-count error is then shown).
  * - EP is never raised on its own either: the user's `current.ep` is kept when it is > 1, the model is MoE, and the
  *   chosen TP, PP and DP give no error with it; otherwise EP is 1.
+ * - In the DP attention + EP layout (`current.layout`, MoE models only) the result keeps that shape: TP = 1 and
+ *   DP = EP = N = devices / PP. It is the user's `current.pp` when that is one of the {@link dpAttentionEpSplits}
+ *   (checked with `current.denseTpGroup`; the batch split aside: it is shown on the batch field), else the split with
+ *   the smallest PP; with no split at all, the user's PP when it divides the devices, else 1.
  */
 export function chooseDegrees(
   model: ModelSpec,
   quant: QuantConfig,
   workload: Workload,
   topology: TopologySpec,
-  current: { dp?: number; ep?: number } = {},
+  current: {
+    dp?: number;
+    ep?: number;
+    pp?: number;
+    layout?: AppState['parallelLayout'];
+    denseTpGroup?: ParallelConfig['denseTpGroup'];
+  } = {},
 ): { tp: number; pp: number; dp: number; ep: number } {
+  if (current.layout === 'dpAttentionEp' && hasMoe(model)) return chooseDpAttentionEp(model, quant, workload, topology, current);
   const currentDp = current.dp ?? 1;
   const currentEp = current.ep ?? 1;
   const keptDp = currentDp > 1 ? chooseTpPp(model, quant, workload, topology, currentDp) : undefined;
@@ -240,6 +324,25 @@ export function chooseDegrees(
     if (!hasErrors(fieldIssues(model, quant, kept, workload, topology))) return { tp, pp, dp, ep: currentEp };
   }
   return { tp, pp, dp, ep: 1 };
+}
+
+/** The DP attention + EP branch of {@link chooseDegrees}: TP 1, DP = EP = devices / PP. */
+function chooseDpAttentionEp(
+  model: ModelSpec,
+  quant: QuantConfig,
+  workload: Workload,
+  topology: TopologySpec,
+  current: { pp?: number; denseTpGroup?: ParallelConfig['denseTpGroup'] },
+): { tp: number; pp: number; dp: number; ep: number } {
+  const devices = topology.devicesPerNode * topology.nodes;
+  // Formula: N = devices / pp; dp = ep = N, tp = 1
+  const shape = (pp: number) => ({ tp: 1, pp, dp: devices / pp, ep: devices / pp });
+  const dense: Partial<ParallelConfig> = current.denseTpGroup === 'ep' ? { denseTpGroup: 'ep' } : {};
+  const splits = dpAttentionEpSplits(model, quant, { tp: 1, pp: 1, dp: 1, ep: 1, ...dense }, workload, topology);
+  const currentPp = current.pp ?? 1;
+  const kept = splits.find((s) => s.pp === currentPp) ?? splits[0];
+  if (kept) return shape(kept.pp);
+  return shape(Number.isSafeInteger(currentPp) && currentPp >= 1 && devices % currentPp === 0 ? currentPp : 1);
 }
 
 /**

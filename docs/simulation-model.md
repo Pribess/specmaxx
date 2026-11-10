@@ -1111,7 +1111,10 @@ offloaded no result depends on them.
 ## 5. Parallelism
 
 `src/sim/lower/` (`lower.ts: lowerModel, lowerBlock`; one file per block kind; shared rules in `common.ts`).
-`ParallelConfig { tp, pp, dp, ep }`, world = `tp·pp·dp` (ep groups live inside it).
+`ParallelConfig { tp, pp, dp, ep, epImbalance?, denseTpGroup? }`, world = `tp·pp·dp` (ep groups live inside it).
+`denseTpGroup` picks the group the dense FFN layers and the LM head are tensor-parallel over: the replica's tp
+ranks (absent / `'tp'`, the rule everywhere below) or the whole EP group (`'ep'`, tp = 1 only; [DP attention +
+EP](#dp-attention--ep)).
 The divisibility rules (heads, KV heads, widths over tp; experts and MoE modes over ep) are checked by lowering
 each block once for a one-token step: `src/sim/engine/validate.ts: blockShardingErrors` (called by
 `validateInput`; exported so the UI can attribute TP / EP errors to their fields).
@@ -1156,11 +1159,13 @@ gamma `dim·bpe(hp)` (×2 for layernorm); replicated on every TP rank (no sequen
 ### Embedding and LM head
 
 `lower/embedding.ts: lowerEmbedding, embeddingResidentWeightBytes, embeddingShardBytes`; `lower/head.ts: lowerHead, headTokens,
-lmHeadResidentWeightBytes`. Embedding (stage 0) is vocab-parallel: `ceil(vocab/tp)` rows per rank, then an
+lmHeadVocabShard, lmHeadResidentWeightBytes`. Embedding (stage 0) is vocab-parallel: `ceil(vocab/tp)` rows per rank, then an
 `all_reduce` of `T·h`. Head (last stage): final norm, then `lm_head m = Tout, n = ceil(vocab/tp), k = h`.
 **Prefill computes logits only for the last position** (`Tout = seqs`); decode `Tout = seqs·qLen`.
 No full-logits gather: when tp > 1, cross-shard sampling adds one `all_gather(tp)` after `lm_head`,
 with full output `S = Tout·tp·8 B` (one fp32 score + uint32 token ID per rank and output position).
+With `denseTpGroup: 'ep'` the head (not the embedding) is sharded `ceil(vocab/ep)` over the EP group instead
+([DP attention + EP](#dp-attention--ep)).
 Both phases and every draft head use `lower/head.ts: samplingExchangeOps` (`lowerHead` and
 `lower/draft.ts: sharedLmHeadOps`; audit G1). Block-drafter prefill has no head, hence no exchange.
 The embedding table may live in host RAM or on the SSD instead (`OffloadConfig.embeddings`, untied models only): a
@@ -1177,7 +1182,10 @@ row fetch then goes in front of the gather (§12 "Token embedding off-device").
   (`heads Hl, kvHeads 1, qk rkv+dr, v rkv, kvRead = kvWrite = {kvCache, rkv+dr}`) → `v_absorb (batch Hl, n dv, k rkv)`.
 - **MHA** (dense prefill): `kv_b (m = seqs·kvLen, n = Hl·(dn+dv), k = rkv)` reading the latent → attention
   (`kvHeads Hl, qk dn+dr, v dv, kvRead {act, Hl·(dn+dv)+dr}, kvWrite {kvCache, rkv+dr}`).
-- Then `o_proj (n = h, k = Hl·dv)` → all_reduce. The latent cache is replicated on every TP rank.
+- Then `o_proj (n = h, k = Hl·dv)` → all_reduce. The latent cache is replicated on every attention-TP rank (the
+  tp ranks of a replica all hold the same `B_r` sequences' latent). It is never replicated across DP replicas:
+  each replica holds only its own `B_r = batch/dp` sequences, so at tp = 1 (DP attention, [DP attention +
+  EP](#dp-attention--ep)) each device holds one copy of its own sequences' latent.
 - Why per phase: per (query, key, head) the MHA form costs `2·(dn+dr+dv)` FLOP against `2·(2·rkv+dr)` absorbed,
   so MHA is cheaper for long dense prefill; decode is memory-bound and reads only the latent. This is a
   documented choice, not a knob.
@@ -1506,6 +1514,63 @@ that alternative trades the bytes for 92 small collectives and is not modeled). 
 - Module class `moe_latent` (falls back to `shared_experts`). Kimi K3 stores these BF16 next to MXFP4 experts; K3's
   compressed-tensors `ignore` list misses them, so their probes carry `nativeHighPrecision` (`quant/moduleClass.ts`).
 
+### DP attention + EP
+
+`lower/common.ts: denseOverEp, denseTpGroupSize`; `lower/mlp.ts: lowerMlp, lowerDenseFfnOverEp,
+denseGroupWidthError`; `lower/head.ts: lowerHead, lmHeadVocabShard`; `engine/validate.ts: denseTpGroupErrors`;
+tests `src/sim/engine/dpAttention.test.ts`, `src/sim/lower/mlp.test.ts`, `src/sim/lower/head.test.ts`.
+
+The layout of vLLM's DEP (`--data-parallel-size N --enable-expert-parallel`) and SGLang's
+`--enable-dp-attention`: **tp = 1, dp = ep = N** (per pipeline stage). It is MoE mode B with tp = 1, so it needs
+no new rule for attention or experts:
+
+- Attention is data-parallel: each device runs attention for its own `B_r = batch/N` sequences and holds only
+  their KV. MLA's latent is one copy per device for its own sequences, `B_r·ctx·(rkv+dr)·bpe(kv)` per layer
+  ([MLA forms](#mla-forms); DeepSeek-V3 at DEP32: `(B/32)·ctx·61·576·bpe`). Attention TP 8 over the same 32
+  devices (tp8·dp4·ep32) holds 8× that, since the 8 ranks of a replica share its sequences.
+- The routed experts are spread over all N devices (`Eloc = E/N`), with the mode-B dispatch and combine
+  all-to-alls over the EP group ([MoE modes A/B](#moe-modes-ab)). Shared experts run whole on each device's tokens.
+
+The dense FFN layers (`mlp` blocks) and the LM head have two placements (`ParallelConfig.denseTpGroup`):
+
+- **DP** (absent or `'tp'`, the default): whole on every device, no communication (vLLM DEP; SGLang
+  `--moe-dense-tp-size 1 --enable-dp-lm-head`). Results are exactly those of mode B before the field existed.
+- **TP over the EP group** (`'ep'`, SGLang's default under `--enable-dp-attention`): G = ep devices share each
+  dense layer and the head. Each device gathers the group's tokens, computes its slice, and gets its own rows
+  back. With T this device's tokens and `Tout` its head rows ("Embedding and LM head"):
+
+  ```
+  G = (denseTpGroup = 'ep' ∧ ep > 1) ? ep : tp                        denseTpGroupSize
+  dense FFN (lowerDenseFfnOverEp):
+    mlp.dense_all_gather      all_gather(ep, G)       S = G·T·h·bpe(act)      (full output)
+    mlp.gate_up → act → down  m = G·T, n = (gated?2:1)·f/G | n = h, k = f/G
+    mlp.dense_reduce_scatter  reduce_scatter(ep, G)   S = G·T·h·reduceBpe    (full input; each keeps T·h)
+  LM head (lowerHead):
+    final_norm                elems = Tout·h                               (own rows, before the gather)
+    head.dense_all_gather     all_gather(ep, G)       S = G·Tout·h·bpe(act)
+    lm_head                   m = G·Tout, n = ceil(V/G), k = h             (lmHeadVocabShard)
+    head.sample_all_to_all    all_to_all(ep, G)       S = G·Tout·8 B         (fp32 score + uint32 ID per row,
+                                                                            back to the row's owner)
+  resident: dense (gated?3:2)·h·f/G·bpe(w) per layer;  head ceil(V/G)·h·bpe(head) + final norm
+  ```
+
+  Message sizes follow §1 (all_gather: full output; reduce_scatter: full input; all_to_all: the total sent,
+  self included). The gather and the scatter together move the bytes of one all-reduce of `G·T·h`, the
+  minimum for this split; SGLang's gather + all-reduce + scatter implementation is an engine detail (§9). The
+  all-to-all replaces the tp sampling all-gather (absent at tp = 1); each row's owner picks the best of its G
+  candidates. The embedding stays per replica (whole at tp = 1). A tied head's `ceil(V/G)` shard is part of the
+  whole embedding table on the device, so it is counted once (`memory.ts: stageWeightBytes`). The activation peak
+  follows from the wider `G·T` rows (prefill: G·B_r·prompt rows).
+
+Trade-off: DP keeps the dense weights whole on every device (each reads `3·h·f` per dense layer and `V·h` for
+the head per step) and needs no traffic; TP over the group cuts both by G for two collectives per dense layer and
+two for the head. Under ideal overlap the rate difference is small when the dense layers are few (DeepSeek-V3: 3 of
+61 plus the head); the memory difference is `3·h·f·bpe·(1 − 1/G)` per dense layer plus `(V − ceil(V/G))·h·bpe`.
+
+Rules (`denseTpGroupErrors`, `blockShardingErrors`): `'ep'` needs tp = 1, rejects speculative decoding when ep > 1
+(the draft heads would need the same split), and needs `f % G == 0` for every dense `mlp` block (no hidden padding;
+the error reads `mlp intermediate (f) must be divisible by the dense TP group (G)`). With ep = 1 `'ep'` changes
+nothing. These limits are listed in §9.
 ### PP split
 
 `lower/lower.ts: lowerModel, stageLayerRange, ppBoundaryResidualVectors`. Stage s holds layers
@@ -2226,7 +2291,8 @@ Per device of stage s:
   streamed weights agree by construction; MoE: all local experts; n-gram: the table shard `ceil(rows/tp)·d·bpe(lookup)`
   plus its projections and vectors) + the embedding shard on stage 0 while it is on the device
   (`[s = 0 ∧ on device] W_emb`, `W_emb = ceil(vocab/tp)·h·bpe(emb)`; §12 "Token embedding off-device") + the LM-head
-  shard and final norm on the last stage. A tied head shares the
+  shard and final norm on the last stage (`W_head = ceil(vocab/G)·h·bpe(head) + norm`, G = tp, or ep with
+  `denseTpGroup: 'ep'`; `lower/head.ts: lmHeadResidentWeightBytes`, §5 "DP attention + EP"). A tied head shares the
   embedding allocation only with pp = 1 and an identical stored format (dtype and `extraBitsPerElem`,
   `memory.ts: sameStoredFormat`); a tied head stored differently (e.g. bf16 embeddings, int4 head) is a second
   copy and counted in full.
@@ -2320,6 +2386,12 @@ Excluded on purpose (only hardware and math limits are modeled):
 - Sequence parallelism; full-logits gather (small sampling exchange is included); attention sinks; skewed or
   correlated MoE routing (expert weights follow the iid-uniform expectation, §5 "Expected distinct experts"); the
   framework / driver memory reserve (0 unless set, §8 "Runtime reserve").
+- DP attention + EP (§5 "DP attention + EP"): dense TP over the EP group only at tp = 1 (attention TP > 1 with a
+  group-wide dense split would need a slice and re-gather, rejected); not combined with speculative decoding (the
+  draft heads would need the same split, rejected); the embedding stays per replica; no non-aligned dense shards
+  (`f % G ≠ 0` is rejected rather than split unevenly); the minimal gather + reduce-scatter instead of SGLang's gather +
+  all-reduce + scatter; no all-to-all deduplication or DeepEP-specific kernels (the mode-B dispatch sends each
+  (token, expert) pair); every device holds the same number of tokens (no DP load imbalance).
 
 Documented approximations (each isolated in one constant or rule):
 

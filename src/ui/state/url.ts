@@ -16,6 +16,8 @@
  * | `fab` | cabling between machines: `switched`, `mesh`, `mesh2` (2 cables per pair), `ring`, `chain` (absent: the default for the link and counts) | `fab=ring` |
  * | `x`, `xi`, `xe` | spec edits on device / intra link / inter link, `path:value` comma list, SI units | `x=memory.bandwidthBytesPerSec:2e12` |
  * | `tp`, `pp`, `dp`, `ep` | parallel degrees (`ep` applies to MoE models only; old URLs with `dp` load it as written) | `tp=2&dp=2` |
+ * | `lay` | parallel layout: `dep` = DP attention + EP (TP 1, DP = EP; MoE models only; absent: custom; dropped unless `tp` is 1 and `dp` equals `ep`) | `dp=72&ep=72&lay=dep` |
+ * | `dn` | (with `lay=dep`) dense FFN layers and LM head: `tp` = TP over the EP group (absent: DP) | `dn=tp` |
  * | `b`, `p`, `c` | batch, prefill length (default 8192), decode context (default 8192) | `b=8` |
  * | `pc` | prefill chunk of the memory fit, tokens (default 8192) | `pc=2048` |
  * | `ov`, `fu`, `ar` | overlap, elementwise fusion, all-reduce algorithm | `ov=none` |
@@ -101,7 +103,7 @@ export function latencyFloorSecFromMicros(us: number): number {
  */
 export const URL_KEYS = [
   'm', 'rev', 'w', 'bpw', 'hbpw', 'a', 'kv', 'lt', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'fab', 'x', 'xi', 'xe',
-  'hr', 'hrc', 'ssd', 'hl', 'gpu', 'rr', 'tp', 'pp', 'dp', 'ep', 'b', 'p', 'c', 'pc', 'ph', 'ov', 'fu', 'ar', 'lf', 'ed', 'oo',
+  'hr', 'hrc', 'ssd', 'hl', 'gpu', 'rr', 'tp', 'pp', 'dp', 'ep', 'lay', 'dn', 'b', 'p', 'c', 'pc', 'ph', 'ov', 'fu', 'ar', 'lf', 'ed', 'oo',
   'ox', 'oxl', 'oxf', 'oxh', 'odl', 'odt', 'olt', 'ols', 'oet', 'oqd', 'osr', 'opf', 'sd', 'sdr', 'sdk', 'sdu', 'sda',
   'oxr', 'oxe',
   'olr', 'ole',
@@ -218,6 +220,8 @@ export function encodeState(s: AppState): string {
   if (hw.gpuUsableFraction !== undefined) put('gpu', Math.round(hw.gpuUsableFraction * 1e6) / 1e4);
   if (hw.runtimeReserveBytes !== undefined) put('rr', hw.runtimeReserveBytes / 1e9);
   for (const key of ['tp', 'pp', 'dp', 'ep'] as const) if (s.parallel[key] !== 1) put(key, s.parallel[key]);
+  if (s.parallelLayout === 'dpAttentionEp') put('lay', 'dep');
+  if (s.parallelLayout === 'dpAttentionEp' && s.parallel.denseTpGroup === 'ep') put('dn', 'tp');
   const w = s.workload;
   const dw = DEFAULT_STATE.workload;
   if (w.batch !== dw.batch) put('b', w.batch);
@@ -513,6 +517,15 @@ export function decodeState(search: string): DecodedState {
     if (parsed !== undefined) parallel[key] = parsed;
     else drop(key, v);
   }
+  // The layout only with its shape (TP 1, DP = EP); dense TP only within the layout.
+  const lay = get('lay');
+  const dep = lay === 'dep' && parallel.tp === 1 && parallel.dp === parallel.ep;
+  if (lay !== undefined && !dep) drop('lay', lay);
+  const dn = get('dn');
+  if (dn !== undefined) {
+    if (dep && dn === 'tp') parallel.denseTpGroup = 'ep';
+    else drop('dn', dn);
+  }
   const workload = { ...DEFAULT_STATE.workload };
   for (const [key, field] of [['b', 'batch'], ['p', 'promptLen'], ['c', 'decodeContextLen'], ['pc', 'prefillChunkTokens']] as const) {
     const v = get(key);
@@ -565,6 +578,7 @@ export function decodeState(search: string): DecodedState {
   const deployment = decodeDeployment(get, drop);
 
   const state: AppState = { model, quant, hw, parallel, workload, options: normalizeOptions(options), deployment };
+  if (dep) state.parallelLayout = 'dpAttentionEp';
   if (engineDispatchOverlay) state.engineDispatchOverlay = true;
   return { state, dropped };
 }

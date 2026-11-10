@@ -99,7 +99,8 @@ describe('estimator inputs', () => {
     expect(screen.getByText('Valid EP: 1, 2, 4')).toBeTruthy();
     expect(screen.getByRole('heading', { level: 1 }).textContent).not.toMatch(/DP/);
     // DP 2 on top of TP 4: 8 devices for a rig of 4.
-    fireEvent.change(screen.getByLabelText(/^DP/), { target: { value: '2' } });
+    // Exactly "DP": a MoE model also has the "DP attention + EP" layout radio.
+    fireEvent.change(screen.getByLabelText(/^DP$/), { target: { value: '2' } });
     await waitFor(() => expect(screen.queryByTestId('prefill-tps')).toBeNull());
     expect(screen.getAllByText(/TP × PP × DP = 8, but the rig has 4 devices/).length).toBeGreaterThan(0);
     fireEvent.change(screen.getByLabelText(/^TP/), { target: { value: '2' } });

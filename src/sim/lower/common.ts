@@ -135,6 +135,27 @@ export function shardWidth(width: number, parts: number, what: string): number {
   return width / parts;
 }
 
+/**
+ * True when the dense FFN layers and the LM head are sharded over the EP group with more than one device in it
+ * (`ParallelConfig.denseTpGroup === 'ep'` and ep > 1): their lowering then gathers the group's tokens before the
+ * sharded GEMM and scatters the result after. With ep = 1 it is false and every op is exactly as without the field.
+ * See docs/simulation-model.md §5 "DP attention + EP".
+ */
+export function denseOverEp(ctx: LoweringContext): boolean {
+  return ctx.parallel.denseTpGroup === 'ep' && ctx.parallel.ep > 1;
+}
+
+/**
+ * Size G of the group the dense FFN layers (`mlp` blocks) and the LM head are tensor-parallel over: ep when
+ * {@link denseOverEp} (the whole EP group, spanning ep / tp replicas; validation requires tp = 1 then), else tp
+ * (the replica's own TP ranks; `denseTpGroup` absent or `'tp'`, the rule of before). Count.
+ * See docs/simulation-model.md §5 "DP attention + EP".
+ */
+export function denseTpGroupSize(ctx: LoweringContext): number {
+  // Formula: G = (denseTpGroup = 'ep' ∧ ep > 1) ? ep : tp
+  return denseOverEp(ctx) ? ctx.parallel.ep : ctx.parallel.tp;
+}
+
 /** Math format and accumulator of the attention-like cores (attentionMath ?? activations). */
 export function attentionMath(ctx: LoweringContext): { math: MathFormat; accumulate: AccumulateType } {
   const math = mathFormatOf(ctx.quant.attentionMath ?? ctx.quant.activations);

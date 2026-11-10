@@ -10,6 +10,7 @@ import {
   type ResolvedHardware,
   type OffloadPlacement,
   cablingName,
+  hasMoe,
 } from '../state';
 import { RooflineChart } from './RooflineChart';
 import { MemoryFit } from './MemoryFit';
@@ -128,10 +129,16 @@ export function ResultHero({
         {deviceRest.length > 0 && ` ${deviceRest.join(' ')}`}
         {built.hardware?.edited && !built.hardware.device.edited ? ' (edited)' : ''}
         {linkName ? ` over ${linkName}` : ''}, with{' '}
-        <span className="keep-together">TP {state.parallel.tp}</span>
-        {state.parallel.dp > 1 && (
+        {loaded && hasMoe(loaded.model) && state.parallelLayout === 'dpAttentionEp' ? (
+          <span className="keep-together">DP attention + EP {state.parallel.ep}</span>
+        ) : (
           <>
-            , <span className="keep-together">DP {state.parallel.dp}</span>
+            <span className="keep-together">TP {state.parallel.tp}</span>
+            {state.parallel.dp > 1 && (
+              <>
+                , <span className="keep-together">DP {state.parallel.dp}</span>
+              </>
+            )}
           </>
         )}
       </h1>

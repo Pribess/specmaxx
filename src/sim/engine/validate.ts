@@ -39,6 +39,33 @@ export const TIED_EMBEDDINGS_OFFLOAD_ERROR =
 /** Largest draft length k accepted (design doc §3.5). Count. */
 export const MAX_DRAFT_LENGTH = 16;
 
+/**
+ * The exact error for `denseTpGroup: 'ep'` with attention TP > 1: dense TP over the EP group is modelled only at
+ * tp = 1 (docs/simulation-model.md §5 "DP attention + EP", §9).
+ */
+export const DENSE_TP_EP_NEEDS_TP1_ERROR = "parallel.denseTpGroup 'ep' needs tp = 1";
+
+/**
+ * The exact error for `denseTpGroup: 'ep'` (ep > 1) with speculative decoding: the draft heads would need the same
+ * group-wide sharding, which is not modelled (docs/simulation-model.md §5 "DP attention + EP", §9).
+ */
+export const DENSE_TP_EP_SPEC_DEC_ERROR = "parallel.denseTpGroup 'ep' with speculative decoding is not supported yet";
+
+/**
+ * Errors of `ParallelConfig.denseTpGroup`: an unknown value, `'ep'` with tp ≠ 1, and `'ep'` over a real group
+ * (ep > 1) with speculative decoding. The width rule (G divides every dense `mlp` intermediate) comes from
+ * {@link blockShardingErrors}. Absent: none. See docs/simulation-model.md §5 "DP attention + EP".
+ */
+export function denseTpGroupErrors(input: Pick<SimInput, 'parallel' | 'deployment'>): string[] {
+  const group = input.parallel.denseTpGroup;
+  if (group === undefined || group === 'tp') return [];
+  if (group !== 'ep') return [`parallel.denseTpGroup must be 'tp' or 'ep' (got ${String(group)})`];
+  const errors: string[] = [];
+  if (input.parallel.tp !== 1) errors.push(DENSE_TP_EP_NEEDS_TP1_ERROR);
+  if (input.parallel.ep > 1 && input.deployment?.speculative !== undefined) errors.push(DENSE_TP_EP_SPEC_DEC_ERROR);
+  return errors;
+}
+
 /** Errors for a field that must be an integer ≥ 1. */
 function positiveIntegerErrors(value: number, label: string): string[] {
   return Number.isInteger(value) && value >= 1 ? [] : [`${label} must be an integer ≥ 1 (got ${value})`];
@@ -125,6 +152,7 @@ export function validateInput(input: SimInput): string[] {
   }
   const hasMoe = model.layers.some((l) => l.blocks.some((b) => b.kind === 'moe'));
   if (parallel.ep > 1 && !hasMoe) errors.push(`ep (${parallel.ep}) > 1 but the model has no MoE block`);
+  errors.push(...denseTpGroupErrors(input));
   errors.push(...modelSpecErrors(model));
   errors.push(...blockShardingErrors(input));
 

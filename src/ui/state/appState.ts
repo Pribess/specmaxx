@@ -105,8 +105,18 @@ export interface AppState {
   quant: QuantOverrides;
   /** Hardware choice. */
   hw: HardwareChoice;
-  /** Parallelism degrees (each an integer ≥ 1 once valid; the state may hold invalid values while editing). */
+  /**
+   * Parallelism degrees (each an integer ≥ 1 once valid; the state may hold invalid values while editing).
+   * `denseTpGroup` is present only as `'ep'` (dense layers TP over the EP group), and only with
+   * {@link AppState.parallelLayout} set; `epImbalance` is never set by the UI.
+   */
   parallel: ParallelConfig;
+  /**
+   * The named parallel layout; absent = `'custom'` (TP, PP, DP and EP set one by one). `'dpAttentionEp'` (DP
+   * attention + EP, vLLM's DEP): only while TP = 1 and DP = EP (the reducer and the URL decoder drop it otherwise).
+   * Applies to MoE models only (`effectiveParallel`).
+   */
+  parallelLayout?: 'dpAttentionEp';
   /** Batch size, prefill length (prompt tokens from an empty KV cache) and decode context (tokens already cached). */
   workload: Workload;
   /** Assumption switches that differ from `DEFAULT_SIM_OPTIONS` (a default value is never stored). */
@@ -118,6 +128,31 @@ export interface AppState {
    * with a per-kernel dispatch cost, next to the unchanged headline. Absent = off (never stored as `false`).
    */
   engineDispatchOverlay?: true;
+}
+
+/**
+ * A named parallel layout of the Parallelism panel. `'custom'`: TP, PP, DP and EP as the user sets them.
+ * `'dpAttentionEp'` (DP attention + EP; vLLM DEP, SGLang `--enable-dp-attention`): TP 1, DP = EP = N devices per
+ * pipeline stage, so each device runs attention on its own batch / N sequences (its own KV only) and the routed
+ * experts are spread over all N; the dense FFN layers and LM head run DP (whole on every device) or, opted in, TP
+ * over the N devices (`ParallelConfig.denseTpGroup = 'ep'`).
+ */
+export type ParallelLayout = 'custom' | 'dpAttentionEp';
+
+/**
+ * True when the degrees fit the DP attention + EP layout: TP 1 and DP = EP (the N devices of a stage). The state
+ * keeps `parallelLayout` only while this holds.
+ */
+export function isDpAttentionEpShape(parallel: ParallelConfig): boolean {
+  return parallel.tp === 1 && parallel.dp === parallel.ep;
+}
+
+/**
+ * `parallel` with `denseTpGroup` normalized for the layout: kept only as `'ep'` and only in DP attention + EP (an
+ * absent field is the default, so `'tp'` and `undefined` are removed).
+ */
+function normalizeDenseTp(parallel: ParallelConfig, layout: AppState['parallelLayout']): ParallelConfig {
+  return layout === 'dpAttentionEp' && parallel.denseTpGroup === 'ep' ? parallel : without(parallel, 'denseTpGroup');
 }
 
 /** Device of the default state. */
@@ -203,8 +238,16 @@ export type AppAction =
   | { type: 'setEdit'; target: EditTarget; path: string; value: number | undefined }
   /** Clear the edits of one target, or of all three when `target` is absent. */
   | { type: 'resetEdits'; target?: EditTarget }
-  /** Change some parallel degrees. */
+  /**
+   * Change some parallel degrees (and `denseTpGroup`: `'ep'` sets dense TP, undefined clears it). In DP attention +
+   * EP, degrees that leave its shape (TP ≠ 1 or DP ≠ EP) drop the layout and `denseTpGroup`.
+   */
   | { type: 'setParallel'; parallel: Partial<ParallelConfig> }
+  /**
+   * Pick the parallel layout. To DP attention + EP: TP 1, DP = EP = devices / PP (PP kept when it divides the
+   * device count, else 1). To custom: the degrees are kept, `denseTpGroup` is dropped.
+   */
+  | { type: 'setParallelLayout'; layout: ParallelLayout }
   /** Change some workload fields. */
   | { type: 'setWorkload'; workload: Partial<Workload> }
   /** Change assumption switches; a value equal to the default (or undefined) is removed. */
@@ -342,9 +385,25 @@ export function reduce(state: AppState, action: AppAction): AppState {
       return action.target === undefined
         ? { ...state, hw: { ...hw, deviceEdits: {}, intraEdits: {}, interEdits: {} } }
         : { ...state, hw: { ...hw, [editsKey(action.target)]: {} } };
-    case 'setParallel':
-      // Every degree is kept as given; dense models simulate with EP 1 (effectiveParallel).
-      return { ...state, parallel: { ...state.parallel, ...action.parallel } };
+    case 'setParallel': {
+      // Every degree is kept as given; dense models simulate with EP 1 (effectiveParallel). Degrees that leave the
+      // DP attention + EP shape (TP 1, DP = EP) leave the layout too.
+      const parallel = { ...state.parallel, ...action.parallel };
+      const layout = state.parallelLayout !== undefined && isDpAttentionEpShape(parallel) ? state.parallelLayout : undefined;
+      const next = layout === undefined ? without(state, 'parallelLayout') : { ...state, parallelLayout: layout };
+      return { ...next, parallel: normalizeDenseTp(parallel, layout) };
+    }
+    case 'setParallelLayout': {
+      if (action.layout === 'custom') {
+        return { ...without(state, 'parallelLayout'), parallel: without(state.parallel, 'denseTpGroup') };
+      }
+      // Formula: N = devices / pp (dp = ep = N, tp = 1), with pp kept when it divides the device count.
+      const devices = hw.devicesPerNode * hw.nodes;
+      const pp = devices % state.parallel.pp === 0 ? state.parallel.pp : 1;
+      const n = devices / pp;
+      const parallel = normalizeDenseTp({ ...state.parallel, tp: 1, pp, dp: n, ep: n }, action.layout);
+      return { ...state, parallelLayout: action.layout, parallel };
+    }
     case 'setWorkload':
       return { ...state, workload: { ...state.workload, ...action.workload } };
     case 'setEngineDispatchOverlay':

@@ -1,11 +1,23 @@
 /**
  * Lowering of dense MLP blocks (also used for MoE shared experts): column-parallel gate/up projection,
- * activation, row-parallel down projection, TP all-reduce. See docs/simulation-model.md §5 "TP sharding".
+ * activation, row-parallel down projection, TP all-reduce. See docs/simulation-model.md §5 "TP sharding"; with
+ * the dense FFN sharded over the EP group, §5 "DP attention + EP".
  */
 
 import type { ElementwiseOp, Op } from '../ir/ops';
 import type { FfnActivation, MlpBlock } from '../ir/model';
-import { actBpe, elementwise, linearGemm, shardWidth, stepTokens, tpAllReduce } from './common';
+import {
+  actBpe,
+  denseOverEp,
+  denseTpGroupSize,
+  elementwise,
+  linearGemm,
+  reduceBpe,
+  reduceDtype,
+  shardWidth,
+  stepTokens,
+  tpAllReduce,
+} from './common';
 import type { LoweringContext } from './lower';
 
 /** The shape of a dense feed-forward network to lower. */
@@ -96,11 +108,68 @@ export function lowerDenseFfn(
   ];
 }
 
-/** A dense MLP block: {@link lowerDenseFfn} sharded by tp, then the TP all-reduce of `T·h`. */
+/**
+ * A dense MLP block. Default: {@link lowerDenseFfn} sharded by tp, then the TP all-reduce of `T·h`.
+ * With the dense FFN sharded over the EP group ({@link denseOverEp}, tp = 1): {@link lowerDenseFfnOverEp}.
+ */
 export function lowerMlp(block: MlpBlock, ctx: LoweringContext): Op[] {
   const T = stepTokens(ctx);
+  if (denseOverEp(ctx)) return lowerDenseFfnOverEp(block, T, ctx);
   return [
     ...lowerDenseFfn('mlp', block, T, ctx.parallel.tp, 'dense_mlp', ctx),
     ...tpAllReduce('mlp.tp_all_reduce', T, block.hidden, ctx),
+  ];
+}
+
+/**
+ * The error when the intermediate width f does not split evenly over the dense TP group G. Its wording is stable:
+ * the UI attributes it to the dense-layers control by matching it.
+ */
+export function denseGroupWidthError(intermediate: number, groupSize: number): string {
+  return `mlp intermediate (${intermediate}) must be divisible by the dense TP group (${groupSize})`;
+}
+
+/**
+ * A dense MLP block tensor-parallel over the whole EP group of G = ep devices (`denseTpGroup: 'ep'`, tp = 1;
+ * SGLang's dense TP under `--enable-dp-attention`). Each device holds `T` own tokens and an `f/G` slice:
+ *
+ * ```
+ * mlp.dense_all_gather      all_gather(ep, G)       S = G·T·h·bpe(act)     (full output: every device's T rows)
+ * mlp.gate_up / act / down  m = G·T, n = (gated?2:1)·f/G | k = f/G   (lowerDenseFfn, shards = G)
+ * mlp.dense_reduce_scatter  reduce_scatter(ep, G)   S = G·T·h·reduceBpe   (full input; each keeps its T·h)
+ * ```
+ *
+ * This is the minimal traffic: the gather and scatter together move the bytes of one all-reduce of `G·T·h`.
+ * Throws {@link denseGroupWidthError} unless G divides f. See docs/simulation-model.md §5 "DP attention + EP".
+ */
+export function lowerDenseFfnOverEp(block: MlpBlock, T: number, ctx: LoweringContext): Op[] {
+  const G = denseTpGroupSize(ctx);
+  if (block.intermediate % G !== 0) throw new Error(denseGroupWidthError(block.intermediate, G));
+  // Formula: T_G = G·T   (rows after the gather: the tokens of every device in the group)
+  const groupTokens = G * T;
+  // Formula: S_gather = G·T·h·bpe(act);  S_scatter = G·T·h·reduceBpe
+  // See docs/simulation-model.md §5 "DP attention + EP"
+  const gatherBytes = groupTokens * block.hidden * actBpe(ctx);
+  const scatterBytes = groupTokens * block.hidden * reduceBpe(ctx);
+  return [
+    {
+      kind: 'collective',
+      name: 'mlp.dense_all_gather',
+      collective: 'all_gather',
+      group: 'ep',
+      groupSize: G,
+      messageBytes: gatherBytes,
+      dtype: ctx.quant.activations,
+    },
+    ...lowerDenseFfn('mlp', block, groupTokens, G, 'dense_mlp', ctx),
+    {
+      kind: 'collective',
+      name: 'mlp.dense_reduce_scatter',
+      collective: 'reduce_scatter',
+      group: 'ep',
+      groupSize: G,
+      messageBytes: scatterBytes,
+      dtype: reduceDtype(ctx),
+    },
   ];
 }

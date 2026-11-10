@@ -100,14 +100,24 @@ export function buildSimInput(state: AppState, loaded: LoadedModel | null, draft
     return { kind: 'issues', issues: [{ field: 'general', level: 'error', message: (e as Error).message }] };
   }
   const quant = applyQuantOverride(loaded.quant.quant, state.quant, loaded.quant.exl3);
-  const parallel = effectiveParallel(state.parallel, loaded.model);
-  const issues = [...fieldIssues(loaded.model, quant, parallel, state.workload, hardware.topology), ...deployment.issues];
+  const parallel = effectiveParallel(state.parallel, loaded.model, state.parallelLayout);
+  const issues = [
+    ...fieldIssues(loaded.model, quant, parallel, state.workload, hardware.topology, state.parallelLayout),
+    ...deployment.issues,
+  ];
   if (hasErrors(issues)) return { kind: 'issues', issues, hardware };
   const input: SimInput = {
     model: loaded.model,
     quant,
-    // The user's degrees; EP is the user's on a MoE model, else 1.
-    parallel: { tp: parallel.tp, pp: parallel.pp, dp: parallel.dp, ep: parallel.ep },
+    // The user's degrees; EP is the user's on a MoE model, else 1. `denseTpGroup` only when dense TP over the EP
+    // group is on (MoE, DP attention + EP), so without it the input is exactly the one from before the layout.
+    parallel: {
+      tp: parallel.tp,
+      pp: parallel.pp,
+      dp: parallel.dp,
+      ep: parallel.ep,
+      ...(parallel.denseTpGroup !== undefined ? { denseTpGroup: parallel.denseTpGroup } : {}),
+    },
     workload: state.workload,
     hardware: hardware.stack,
     ...(Object.keys(state.options).length > 0 ? { options: state.options } : {}),
