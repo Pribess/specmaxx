@@ -170,6 +170,7 @@ export interface DeepseekConfig {
   sinkhornIters: number;
   engramLayers: number[];
   engramRows: number[];
+  engramHeadRows: number[][];
   engramRowDim: number;
   engramRowsPerToken: number;
 }
@@ -249,6 +250,7 @@ function deepseekLayer(
           ngram: {
             name: 'engram',
             tableRows: c.engramRows[engramIndex],
+            headRows: c.engramHeadRows[engramIndex],
             rowDim: c.engramRowDim,
             rowsPerToken: c.engramRowsPerToken,
             // Formula: wkv: rowsPerToken·rowDim → (N + 1)·D (one key per stream + a shared value)
@@ -269,6 +271,26 @@ function deepseekLayer(
         }
       : {}),
   });
+}
+
+/**
+ * Contiguous Engram hash-head buckets: successive distinct primes ≥ engram_vocab_size, never reused across
+ * layers. vLLM EngramLayout (7c9a2fa2, common/engram.py); the checkpoint's tableRows remains authoritative.
+ */
+function engramHeadRows(base: number, heads: number, layers: number): number[][] {
+  const prime = (n: number): boolean => {
+    if (n < 2) return false;
+    if (n % 2 === 0) return n === 2;
+    for (let d = 3; d * d <= n; d += 2) if (n % d === 0) return false;
+    return true;
+  };
+  let next = base;
+  return Array.from({ length: layers }, () =>
+    Array.from({ length: heads }, () => {
+      while (!prime(next)) next++;
+      return next++;
+    }),
+  );
 }
 
 /** Read the config fields the layers need; `n` = `num_hidden_layers` (for the V4 list defaults). */
@@ -315,6 +337,14 @@ function readDeepseekConfig(r: ConfigReader, n: number): DeepseekConfig {
     sinkhornIters: r.optInt('hc_sinkhorn_iters') ?? 0,
     engramLayers,
     engramRows: engramLayers.length > 0 ? r.numArray('engram_num_embeddings') : [],
+    engramHeadRows:
+      engramLayers.length > 0
+        ? engramHeadRows(
+            r.int('engram_vocab_size'),
+            (r.int('engram_max_ngram_size') - 1) * r.int('engram_n_heads'),
+            engramLayers.length,
+          )
+        : [],
     engramRowDim: engramLayers.length > 0 ? r.int('engram_head_dim') : 0,
     // Formula: rowsPerToken = (engram_max_ngram_size − 1) · engram_n_heads
     engramRowsPerToken:

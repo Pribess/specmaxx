@@ -1372,6 +1372,33 @@ forward pass, like activations). A PP boundary carries the running sum AND the s
 Resident weights have their own formula (a step reads only the gathered rows): `ceil(rows/tp)·rowDim·bpe(lookup)` +
 projections + vectors + conv taps.
 
+#### Lookup tables across DP
+
+`deployment.offload.lookupTables = { acrossDp: true, placements? }` shares target n-gram tables. Missing
+placements = Device; legacy `rule | rule[]` inputs remain valid. Only Device permits sharing: UI changes to RAM,
+SSD or mixed placement clear the flag; direct invalid engine inputs are rejected. Expert/embedding offload is
+independent. Sharing alone needs no offload host. Absent/false or DP 1 keeps existing results; URL: `ltdp=1`.
+
+Distribution follows vLLM [Engram](https://github.com/vllm-project/vllm/blob/7c9a2fa2b3c9e012384fecd40f50c614016e1d35/vllm/models/deepseek_v41/common/engram.py)
+and [PLE](https://github.com/vllm-project/vllm/blob/7c9a2fa2b3c9e012384fecd40f50c614016e1d35/vllm/models/qwen4_exp/common/ngram_embedding.py).
+With `D = dp`, local tokens T, g rows/token, row width d, a activation bytes/element:
+
+- **Engram:** `h = ceil(g/(tp·D))` contiguous hash heads per rank; resident bytes use the largest sum of actual
+  head buckets, not total rows divided by tp·D. DP gathers int32 IDs (`4·T·D·g` bytes), each rank reads `T·D·h`
+  rows, DP gathers results (`T·D²·h·d·a` bytes), selects local tokens, then TP gathers heads (`T·D·tp·h·d·a`).
+- **Engram TP 1, direct NVLink:** row shards; each gather serves T·g rows under uniform ownership, with remote
+  payload `T·g·rowBytes·(D−1)/D`. Its memory time is `max(HBM service, remote payload / B_link)`. No extra op,
+  collective or dispatch. Remote-load latency, headers and routing skew are unmeasured and excluded (warning).
+- **PLE:** `ceil(tableRows/(tp·D))` resident rows; DP gathers int64 IDs (`8·T·D·g` bytes), reads `T·g/tp` owned
+  rows into a masked full-token output, then TP×DP all-reduces `T·D·g·d·a` bytes. Local selection is a view.
+
+DP peers are strided by TP; TP×DP is contiguous. Existing link and host-staging costs apply. Engram currently
+requires all replicas in one modeled node; node-local subgroups, cross-node NVLink domains and empty head owners
+are rejected. Exchanges are per layer with balanced token slots; runtime padding and async prefetch are excluded.
+Live exchange buffers enter the existing activation peak (decode/verify and last prefill chunk). Selection copies
+remain under ideal fusion; collective HBM traffic follows §6. Projections, sequence state, drafter tables and
+pipeline throughput formulas are unchanged.
+
 ### Short convs
 
 `lower/shortConv.ts`, `lower/common.ts: causalConvOp`. `short_conv`: `causal_conv1d` over `T·dim` with the
@@ -1827,7 +1854,8 @@ chunks of C tokens instead of whole; the split and the sends per token are as ab
 
 ### DP
 
-DP replicas are independent and not lowered separately: `B_r = batch/dp` (must divide), aggregate tok/s = dp ×
+DP replicas are independent unless lookup-table sharing is enabled (above), and not lowered separately:
+`B_r = batch/dp` (must divide), aggregate tok/s = dp ×
 the per-replica rate, per-sequence rates unchanged (§7 "Pipeline and DP").
 
 ### Rank layout
@@ -3252,7 +3280,7 @@ to move**:
   each step, which hid the much cheaper expert offload. Partial offload of dense layers would come back as the
   CPU-compute mode (`OffloadConfig.mode 'cpu_compute'`, review F3), not as streaming. Validation rejects an input
   that still carries `denseLayers`.
-- **Rules by layer range** (mixed placement, design doc §2.11): `routedExperts` and `lookupTables` each take one
+- **Rules by layer range** (mixed placement, design doc §2.11): `routedExperts` and `lookupTables.placements` each take one
   rule or a list of rules over disjoint layer ranges, e.g. experts of layers 0–23 in host RAM and 24–47 on the SSD, or
   Engram's table of layer 1 in RAM and layer 14 on the SSD. The single object is the one-rule list (`offloadRules.ts`);
   `[]` offloads nothing. `resolveOffload` sorts the rules by `layers.from` (list order never changes a result),

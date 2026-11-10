@@ -13,7 +13,7 @@
 import { bytesPerElement, DTYPE_INFO, type TensorFormat } from '../ir/dtype';
 import { opBytes } from '../ir/metrics';
 import type { NgramEmbeddingBlock } from '../ir/model';
-import type { EmbeddingOp, Op, TransferOp } from '../ir/ops';
+import type { CollectiveOp, EmbeddingOp, Op, TransferOp } from '../ir/ops';
 import {
   actBpe,
   causalConvOp,
@@ -110,6 +110,128 @@ export function tableFetchOp(
   };
 }
 
+/** Rows of the largest resident shard, using the same distribution as shared lookup lowering. */
+function tableShardRows(block: NgramEmbeddingBlock, ctx: LoweringContext): number {
+  const dp = ctx.lookupTables === undefined ? 1 : ctx.parallel.dp;
+  const shards = ctx.parallel.tp * dp;
+  if (dp === 1 || block.headRows === undefined) return Math.ceil(block.tableRows / shards);
+  if (ctx.lookupTables?.peerReads) {
+    return Math.ceil(block.headRows.reduce((a, b) => a + b, 0) / shards);
+  }
+  const perShard = Math.ceil(block.rowsPerToken / shards);
+  if ((shards - 1) * perShard >= block.rowsPerToken)
+    throw new Error('lookup-table sharding leaves ranks without hash heads');
+  let rows = 0;
+  for (let start = 0; start < block.headRows.length; start += perShard) {
+    rows = Math.max(
+      rows,
+      block.headRows.slice(start, start + perShard).reduce((a, b) => a + b, 0),
+    );
+  }
+  return rows;
+}
+
+/**
+ * Shared device-table retrieval (docs §5, "Lookup tables across DP"). Balanced replica token counts:
+ * Engram owns complete hash heads; row-layout tables own a fraction of rows. The result is always local T·g·d.
+ * Direct NVLink peer reads stay inside the gather, not an invented collective.
+ */
+function sharedTableLookup(
+  block: NgramEmbeddingBlock,
+  ctx: LoweringContext,
+  gather: EmbeddingOp,
+): Op[] {
+  const { tp, dp } = ctx.parallel;
+  const T = stepTokens(ctx),
+    g = block.rowsPerToken,
+    d = block.rowDim,
+    act = actBpe(ctx);
+  if (block.headRows !== undefined && ctx.lookupTables?.peerReads) {
+    // Uniform ownership: each device serves T·g rows in total, including requests from peers.
+    // Formula: remote payload = T·g·rowBytes·(dp−1)/dp, per device and per direction.
+    return [
+      {
+        ...gather,
+        peerReadBytes: (T * g * tableRowBytes(gather.weight, d).rowBytes * (dp - 1)) / dp,
+      },
+    ];
+  }
+  const idDtype = block.headRows === undefined ? 'int64' : 'int32';
+  const idBytes = block.headRows === undefined ? 8 : 4;
+  const ids = T * dp * g * idBytes;
+  const ops: Op[] = [
+    {
+      kind: 'collective',
+      name: `${block.name}.dp_ids`,
+      collective: 'all_gather',
+      group: 'dp',
+      groupSize: dp,
+      messageBytes: ids,
+      dtype: idDtype,
+      workspaceBytes: ids + T * g * idBytes,
+    },
+  ];
+  if (block.headRows === undefined) {
+    const elems = T * dp * g * d;
+    // Every DP token has a masked output, but only the owned 1/(tp·dp) of its rows are read.
+    ops.push(
+      { ...gather, tokens: T * dp * g, rowsRead: (T * g) / tp },
+      {
+        kind: 'collective',
+        name: `${block.name}.tp_dp_all_reduce`,
+        collective: 'all_reduce',
+        group: 'tp_dp',
+        groupSize: tp * dp,
+        messageBytes: elems * act,
+        dtype: ctx.quant.activations,
+        workspaceBytes: ids + 2 * elems * act,
+      },
+    );
+    // Selecting the local replica's contiguous token window is a view.
+    return ops;
+  }
+  const heads = Math.ceil(g / (tp * dp));
+  const stagedBytes = T * dp * heads * d * act;
+  const localElems = T * dp * heads * d;
+  ops.push({ ...gather, tokens: T * dp * heads });
+  const rows: CollectiveOp = {
+    kind: 'collective',
+    name: `${block.name}.dp_rows`,
+    collective: 'all_gather',
+    group: 'dp',
+    groupSize: dp,
+    messageBytes: dp * stagedBytes,
+    dtype: ctx.quant.activations,
+    // Rank-major output, persistent staged input, hash ids and the local-token selection coexist at the peak.
+    workspaceBytes: ids + stagedBytes + dp * stagedBytes + localElems * act,
+  };
+  ops.push(
+    rows,
+    elementwise(
+      `${block.name}.select_rows`,
+      'copy',
+      {
+        elems: localElems,
+        activationReadBytes: localElems * act,
+        activationWriteBytes: localElems * act,
+      },
+      ctx,
+    ),
+  );
+  if (tp > 1)
+    ops.push({
+      kind: 'collective',
+      name: `${block.name}.tp_heads`,
+      collective: 'all_gather',
+      group: 'tp',
+      groupSize: tp,
+      messageBytes: tp * localElems * act,
+      dtype: ctx.quant.activations,
+      workspaceBytes: ids + stagedBytes + (tp + 1) * localElems * act,
+    });
+  return ops;
+}
+
 /**
  * n-gram ops, in order: [row fetch, when the table is off-device] → the row gather (embedding op over T·g rows of d)
  * → [TP all-reduce of T·g·d] → each projection (m = T, module `ngram`) → `ngram_gate` over T·O (reads the
@@ -133,7 +255,7 @@ export function lowerNgram(
     name: `${block.name}.gather`,
     tokens: T * g,
     hidden: d,
-    vocabShard: Math.ceil(block.tableRows / ctx.parallel.tp),
+    vocabShard: tableShardRows(block, ctx),
     weight: lookupTableFormat(ctx),
     outputDtype: ctx.quant.activations,
   };
@@ -143,7 +265,9 @@ export function lowerNgram(
     const fetch = tableFetchOp(block, ctx, placement);
     if (fetch !== undefined) ops.push(fetch);
   }
-  ops.push(gather, ...tpAllReduce(`${block.name}.tp_all_reduce`, T * g, d, ctx));
+  if (ctx.lookupTables !== undefined && ctx.parallel.dp > 1)
+    ops.push(...sharedTableLookup(block, ctx, gather));
+  else ops.push(gather, ...tpAllReduce(`${block.name}.tp_all_reduce`, T * g, d, ctx));
   let projectedElems = 0;
   for (const p of block.projections) {
     ops.push(
@@ -176,11 +300,7 @@ export function lowerNgram(
  */
 export function ngramTableShardBytes(block: NgramEmbeddingBlock, ctx: LoweringContext): number {
   // Formula: W_table = ceil(rows/tp)·d·bpe(lookup)
-  return (
-    Math.ceil(block.tableRows / ctx.parallel.tp) *
-    block.rowDim *
-    bytesPerElement(lookupTableFormat(ctx))
-  );
+  return tableShardRows(block, ctx) * block.rowDim * bytesPerElement(lookupTableFormat(ctx));
 }
 
 /**

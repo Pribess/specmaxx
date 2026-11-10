@@ -275,9 +275,13 @@ export function stageActivationPeakBytes(lowered: LoweredModel[], s: number): nu
     for (const layer of model.stages[s].layers) {
       for (const op of layer.ops) {
         const b = opBytes(op);
-        // Formula: act_s = max_ops (activationRead + activationWrite)
+        // Formula: act_s = max_ops (activationRead + activationWrite, lookup exchange workspace)
         // See docs/simulation-model.md §8 ("Memory fit")
-        peak = Math.max(peak, b.activationReadBytes + b.activationWriteBytes);
+        peak = Math.max(
+          peak,
+          b.activationReadBytes + b.activationWriteBytes,
+          op.kind === 'collective' ? (op.workspaceBytes ?? 0) : 0,
+        );
       }
     }
   }

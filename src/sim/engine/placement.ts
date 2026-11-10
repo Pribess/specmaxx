@@ -135,6 +135,40 @@ export function expertTpCollectivePath(
 }
 
 /**
+ * DP peers have the same TP index: rank = tpIdx + tp·(dpIdx + dp·ppIdx). This is the same strided geometry
+ * as expertTpGroupSpan with parent size tp·dp and stride tp, NOT the same communication group as expert-TP.
+ */
+export function lookupTableCollectivePaths(
+  par: ParallelConfig,
+  topo: TopologySpec,
+  staging?: HostStaging,
+) {
+  const span = expertTpGroupSpan({ tp: par.tp * par.dp, ep: par.tp }, topo);
+  const shape = topo.interNodeFabric;
+  if (span.nodeStride > 1 && (shape?.kind === 'ring' || shape?.kind === 'chain')) {
+    throw new Error(
+      `DP group of ${span.n} nodes ${span.nodeStride} apart on a ${shape.kind} fabric is not modeled`,
+    );
+  }
+  return {
+    dp: collectivePath(span, topo, staging),
+    tp_dp: collectivePath(groupSpan(par.tp * par.dp, topo), topo, staging),
+  };
+}
+
+/** Direct peer-HBM lookup is modeled only for TP 1 inside a single direct NVLink domain. */
+export function lookupTablesUsePeerReads(par: ParallelConfig, topo: TopologySpec): boolean {
+  const link = topo.intraNode;
+  return (
+    par.tp === 1 &&
+    par.dp > 1 &&
+    groupSpan(par.dp, topo).nodesSpanned === 1 &&
+    link?.p2p === 'direct' &&
+    (link.kind === 'nvlink' || link.kind === 'nvlink_bridge')
+  );
+}
+
+/**
  * True if the boundary between pipeline stage `stage` and `stage + 1` crosses nodes: some rank r of the stage
  * sends to r + tp·dp in another node (`floor(r / dpn)` differs).
  * `destinationStage` is a zero-based stage index, default stage + 1; 0 selects the decode loop-back.
@@ -312,9 +346,14 @@ export function ppSendPath(
  * pipeline boundary (incl. the decode loop-back from the last stage to stage 0) is inter-node. Used to report host
  * staging only for runs that have inter-node messages. Assumes {@link checkPlacement} found no errors.
  */
-export function hasInterNodeTraffic(par: ParallelConfig, topo: TopologySpec): boolean {
+export function hasInterNodeTraffic(
+  par: ParallelConfig,
+  topo: TopologySpec,
+  sharedLookupTables = false,
+): boolean {
   if (groupSpan(par.tp, topo).nodesSpanned > 1 || groupSpan(par.ep, topo).nodesSpanned > 1)
     return true;
+  if (sharedLookupTables && par.tp * par.dp > topo.devicesPerNode) return true;
   for (let stage = 0; stage + 1 < par.pp; stage++) {
     if (ppBoundaryIsInterNode(par, topo, stage)) return true;
   }

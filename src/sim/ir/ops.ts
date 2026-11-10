@@ -330,7 +330,8 @@ export interface ElementwiseOp {
     | 'kv_pool'
     | 'residual_mix'
     | 'kv_cache_write'
-    | 'candidate_score';
+    | 'candidate_score'
+    | 'copy';
   /** Output elements computed on this device. Unit: elements. */
   elems: number;
   /** Vector FLOP per output element (e.g. rmsnorm 4; causal_conv1d 2·kernelWidth). Unit: FLOP/element. */
@@ -364,6 +365,10 @@ export interface EmbeddingOp {
   name: string;
   /** Tokens embedded on this device in this step. Unit: tokens. */
   tokens: number;
+  /** Actual table rows read; absent = tokens. Masked row-parallel lookups may read fewer rows than they output. */
+  rowsRead?: number;
+  /** Useful rows read from peer HBM within this gather, including scales. Absent = local only. Unit: bytes. */
+  peerReadBytes?: number;
   /** Hidden size (row length). Unit: elements. */
   hidden: number;
   /** Vocabulary rows held by this device (`ceil(vocab / tp)`). Count. */
@@ -398,13 +403,15 @@ export interface CollectiveOp {
    * consecutive ranks of a TP group that share one token-sharded KV cache; a contiguous group placed like TP,
    * `engine/placement.ts: groupSpan`; docs/simulation-model.md §5 "Decode context parallelism (DCP)").
    */
-  group: 'tp' | 'ep' | 'pp' | 'etp' | 'dcp';
+  group: 'tp' | 'ep' | 'pp' | 'etp' | 'dcp' | 'dp' | 'tp_dp';
   /** Devices in the group (send_recv: 2). Count. */
   groupSize: number;
   /** Per-device message size, by the convention above. Unit: bytes. */
   messageBytes: number;
-  /** Element dtype on the wire (informational; the size is already in `messageBytes`). */
-  dtype: Dtype;
+  /** Wire dtype (informational); int64 is for lookup IDs only, not a weight or compute format. */
+  dtype: Dtype | 'int64';
+  /** Live lookup exchange buffers at this op; capacity only, not additional HBM traffic. Absent = 0. Unit: bytes. */
+  workspaceBytes?: number;
 }
 
 /**

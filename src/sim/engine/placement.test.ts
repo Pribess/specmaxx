@@ -3,6 +3,8 @@ import { SYNTH_CLUSTER, SYNTH_IB, SYNTH_NVLINK } from '../__fixtures__/synthetic
 import {
   checkPlacement,
   collectivePath,
+  lookupTableCollectivePaths,
+  hasInterNodeTraffic,
   expertTpCollectivePath,
   expertTpGroupSpan,
   groupSpan,
@@ -28,6 +30,31 @@ describe('placement on SYNTH_CLUSTER (T8)', () => {
     const span = groupSpan(16, SYNTH_CLUSTER);
     expect(span).toEqual({ n: 16, devicesPerNodeInGroup: 8, nodesSpanned: 2 }); // 16 % 8 == 0
     expect(collectivePath(span, SYNTH_CLUSTER).kind).toBe('hierarchical');
+  });
+
+  it('DP groups are strided by TP, not contiguous groups of dp devices', () => {
+    expect(lookupTableCollectivePaths({ tp: 8, dp: 2, pp: 1, ep: 1 }, SYNTH_CLUSTER).dp).toEqual({
+      kind: 'flat',
+      level: 'inter',
+      link: SYNTH_IB,
+    });
+    expect(
+      lookupTableCollectivePaths({ tp: 4, dp: 4, pp: 1, ep: 1 }, SYNTH_CLUSTER).dp,
+    ).toMatchObject({ kind: 'hierarchical', devicesPerNode: 2, nodes: 2 });
+    const par = { tp: 1, dp: 2, pp: 1, ep: 1 };
+    const topo = { ...SYNTH_CLUSTER, devicesPerNode: 1 };
+    expect(hasInterNodeTraffic(par, topo)).toBe(false);
+    expect(hasInterNodeTraffic(par, topo, true)).toBe(true);
+    expect(() =>
+      lookupTableCollectivePaths(
+        { tp: 16, dp: 2, pp: 1, ep: 1 },
+        {
+          ...SYNTH_CLUSTER,
+          nodes: 4,
+          interNodeFabric: { kind: 'ring' },
+        },
+      ),
+    ).toThrow(/DP group.*2 apart/);
   });
 
   it('tp 3 is an error (3 ∤ 8 and 8 ∤ 3)', () => {

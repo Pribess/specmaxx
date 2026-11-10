@@ -551,7 +551,7 @@ function embeddingBytes(op: EmbeddingOp): ByteBreakdown {
   // Formula: W = tokens·hidden·bpe(w) (gathered rows, conservative); write = tokens·hidden·bpe(out)
   // See docs/simulation-model.md §3 "Embedding"
   return breakdown({
-    weightBytes: op.tokens * op.hidden * bytesPerElement(op.weight),
+    weightBytes: (op.rowsRead ?? op.tokens) * op.hidden * bytesPerElement(op.weight),
     activationReadBytes: 0,
     activationWriteBytes: op.tokens * op.hidden * bpeOf(op.outputDtype),
     kvReadBytes: 0,

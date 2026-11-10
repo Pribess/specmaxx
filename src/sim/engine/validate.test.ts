@@ -512,6 +512,55 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
     ).toEqual(["deployment.offload.lookupTables.scaleLayout 'pinned_host' needs tier 'nvme'"]);
   });
 
+  it('sharing requires device-only table placements, not device-only experts or embeddings', () => {
+    const lookupTables = { acrossDp: true };
+    expect(errorsOf(offload({ lookupTables }, TINY_HC_NGRAM))).toEqual([]);
+    expect(
+      errorsOf(input({}, { model: TINY_HC_NGRAM, deployment: { offload: { lookupTables } } })),
+    ).toEqual([]);
+    expect(
+      errorsOf(
+        offload(
+          { lookupTables: { ...lookupTables, placements: { tier: 'device' } } },
+          TINY_HC_NGRAM,
+        ),
+      ),
+    ).toEqual([]);
+    expect(
+      errorsOf(offload({ lookupTables, embeddings: { tier: 'host_ram' } }, TINY_HC_NGRAM)),
+    ).toEqual([]);
+    for (const tier of ['host_ram', 'nvme'] as const) {
+      expect(
+        errorsOf(
+          offload({ lookupTables: { ...lookupTables, placements: { tier } } }, TINY_HC_NGRAM),
+        ),
+      ).toContain(
+        'deployment.offload.lookupTables.acrossDp requires every lookup-table placement to be device',
+      );
+      expect(
+        errorsOf(
+          offload(
+            {
+              lookupTables: {
+                ...lookupTables,
+                placements: [
+                  { tier: 'device', layers: { from: 0, to: 1 } },
+                  { tier, layers: { from: 1, to: 2 } },
+                ],
+              },
+            },
+            TINY_HC_NGRAM,
+          ),
+        ),
+      ).toContain(
+        'deployment.offload.lookupTables.acrossDp requires every lookup-table placement to be device',
+      );
+    }
+    expect(errorsOf(offload({ lookupTables }, REF_DENSE_8B))).toEqual([
+      'deployment.offload.lookupTables.acrossDp: the model has no n-gram lookup table',
+    ]);
+  });
+
   it('an off-device group on a dedicated device without a host link (no host.link, no hostInterface) is rejected', () => {
     const noHost = input(
       {},

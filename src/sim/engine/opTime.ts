@@ -60,6 +60,8 @@ export interface OpTimeContext {
     pp: CollectivePath;
     etp?: CollectivePath;
     dcp?: CollectivePath;
+    dp?: CollectivePath;
+    tp_dp?: CollectivePath;
   };
   /** All-reduce algorithm (SimOptions.collectiveAlgorithm). */
   collectiveAlgorithm: AllReduceAlgorithm;
@@ -160,10 +162,11 @@ function opTimeByKind(op: Op, ctx: OpTimeContext): OpResult {
         ? tensorOpTime(op, recurrentChunkShape(op), op.math, op.accumulate, 'dense', ctx)
         : vectorOpTime(op, op.stateDtype, opBytes(op), ctx);
     case 'elementwise':
+      // Lookup selection copies are materialized data movement, not fusible arithmetic.
       return vectorOpTime(
         op,
         op.dtype,
-        elementwiseBytesUnderFusion(op, ctx.elementwiseFusion),
+        op.fn === 'copy' ? opBytes(op) : elementwiseBytesUnderFusion(op, ctx.elementwiseFusion),
         ctx,
       );
     case 'embedding':
@@ -403,7 +406,16 @@ function memoryOnlyOpTime(op: Op, ctx: OpTimeContext): OpResult {
   const bytes = opBytes(op);
   // Formula: t = bytes / memBW
   // See docs/simulation-model.md §7 ("Per-op time")
-  const memorySec = bytes.totalBytes / ctx.memBandwidthBytesPerSec;
+  let memorySec = bytes.totalBytes / ctx.memBandwidthBytesPerSec;
+  if (op.kind === 'embedding' && op.peerReadBytes !== undefined) {
+    const path = ctx.collectivePaths.dp;
+    if (path?.kind !== 'flat' || path.level !== 'intra') {
+      throw new Error(`peer lookup '${op.name}' needs a flat intra-node DP path`);
+    }
+    // One gather kernel: max(HBM service, peer bytes / fabric bandwidth), not another collective or launch.
+    // Remote-load latency is unmeasured; this is a bandwidth ceiling, not a collective's α.
+    memorySec = Math.max(memorySec, op.peerReadBytes / path.link.bandwidthPerDirectionBytesPerSec);
+  }
   return {
     op,
     flops: 0,

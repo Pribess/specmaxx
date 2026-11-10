@@ -248,7 +248,7 @@ export interface OffloadConfig {
    * one in host RAM, one on the SSD); layers no rule covers keep their tables on the device. The single object is the
    * one-rule list (same meaning, bit-identical results); `[]` = none. See design doc §2.11.
    */
-  lookupTables?: LookupTableRule | readonly LookupTableRule[];
+  lookupTables?: LookupTableConfig | LookupTableRule | readonly LookupTableRule[];
   /**
    * Token-embedding placement (a 1-gram lookup table: each token gathers one row of `h` elements, no matmul); absent
    * or `{ tier: 'device' }` = on the device (identity). The table is not layer-indexed: it lives on pipeline stage 0
@@ -359,6 +359,17 @@ export interface RoutedExpertRule {
    * At most one rule of a list may set it.
    */
   includeDraft?: boolean;
+}
+
+/**
+ * Target n-gram table policy. Missing placements keep every table on the device. The legacy single-rule and
+ * rule-list forms of `OffloadConfig.lookupTables` remain accepted and mean `{ placements }`, with sharing off.
+ */
+export interface LookupTableConfig {
+  /** Share device-resident tables across DP replicas; absent/false = off, dp 1 = identity. */
+  acrossDp?: boolean;
+  /** Per-layer storage placement; absent or [] = every table on the device. */
+  placements?: LookupTableRule | readonly LookupTableRule[];
 }
 
 /**
@@ -677,8 +688,8 @@ export interface DeviceMemory {
    */
   weightBytes: number;
   /**
-   * Bytes of n-gram lookup-table shards resident on this device (`ceil(rows/tp)·d·bpe(lookup)` per table of the
-   * stage), ALREADY INCLUDED in `weightBytes`; 0 when the tables are off-device or the model has none. Display only
+   * Bytes of n-gram lookup-table shards resident on this device (ngramTableShardBytes, including the selected
+   * DP distribution), ALREADY INCLUDED in `weightBytes`; 0 when the tables are off-device or the model has none. Display only
    * (the memory card's table segment). Unit: bytes.
    */
   lookupTableBytes: number;
@@ -690,7 +701,7 @@ export interface DeviceMemory {
   sequenceStateBytes: number;
   /**
    * Peak transient activations: the max over the ops of the decode step and of the LAST prefill chunk (chunked
-   * prefill, `Workload.prefillChunkTokens`) of activation read + write. Unit: bytes.
+   * prefill, `Workload.prefillChunkTokens`) of activation read + write or live lookup-exchange workspace. Unit: bytes.
    */
   activationPeakBytes: number;
   /**

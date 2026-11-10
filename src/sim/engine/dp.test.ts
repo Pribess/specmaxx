@@ -26,6 +26,7 @@ import { describe, expect, it } from 'vitest';
 import { ETHERNET_10G_TCP, PCIE_5_X16_DIRECT } from '../hw/presets/links';
 import { RTX_5090 } from '../hw/presets/nvidia';
 import { DDR5_6000_2CH } from '../hw/presets/storage';
+import { SYNTH_NVLINK } from '../__fixtures__/synthetic';
 import { nodeTopology } from '../hw/presets/topologies';
 import type { ModelSpec, ParallelConfig, QuantConfig } from '../ir/model';
 import { fixtureRepoFiles } from '../models/__fixtures__/fixtures.testutil';
@@ -49,6 +50,8 @@ function load(repo: string): { model: ModelSpec; quant: QuantConfig } {
   return { model: r.model, quant: r.quant.quant };
 }
 const FLASH_NEXT = load('Qwen/Qwen3.8-Flash-Next');
+const ENGRAM = load('deepseek-ai/DeepSeek-V4.1-Flash');
+const SHARED_TABLES: DeploymentConfig = { offload: { lookupTables: { acrossDp: true } } };
 
 /** n RTX 5090s in one box over direct PCIe 5.0 x16 P2P. */
 function box(n: number): SimInput['hardware'] {
@@ -180,6 +183,96 @@ describe('DP 2 against TP 2 on 2 GPUs (dense 8B, bf16)', () => {
 });
 
 describe('DP with speculative decoding, offload and MoE', () => {
+  it('sharing off or DP 1 is identical; legacy table placements and the wrapper simulate identically', () => {
+    for (const m of [FLASH_NEXT, ENGRAM]) {
+      expect(run(m, {}, 1, box(1), SHARED_TABLES)).toEqual(run(m, {}, 1, box(1)));
+      expect(
+        run(m, { dp: 2 }, 2, box(2), { offload: { lookupTables: { acrossDp: false } } }),
+      ).toEqual(run(m, { dp: 2 }, 2, box(2)));
+    }
+    const hardware = { ...box(2), host: { ram: DDR5_6000_2CH } };
+    const placements = { tier: 'host_ram' } as const;
+    const legacy = run(FLASH_NEXT, { dp: 2 }, 2, hardware, {
+      offload: { lookupTables: placements },
+    });
+    expect(
+      run(FLASH_NEXT, { dp: 2 }, 2, hardware, { offload: { lookupTables: [placements] } }),
+    ).toEqual(legacy);
+    expect(
+      run(FLASH_NEXT, { dp: 2 }, 2, hardware, { offload: { lookupTables: { placements } } }),
+    ).toEqual(legacy);
+  });
+
+  it('PLE sharing cuts only table residency, adds inter-node traffic, and needs no offload host', () => {
+    const hardware = overEthernet(2);
+    const one = run(FLASH_NEXT, { dp: 2 }, 2, hardware);
+    const shared = run(FLASH_NEXT, { dp: 2 }, 2, hardware, SHARED_TABLES);
+    const before = one.memory.perStage[0],
+      after = shared.memory.perStage[0];
+    expect(after.lookupTableBytes).toBe(before.lookupTableBytes / 2);
+    expect(after.weightBytes - after.lookupTableBytes).toBe(
+      before.weightBytes - before.lookupTableBytes,
+    );
+    expect(after.sequenceStateBytes).toBe(before.sequenceStateBytes);
+    expect(after.stagingBytes).toBe(0);
+    expect(shared.memory.tiers).toEqual([]);
+    expect(shared.devicesUsed).toBe(2);
+    for (const phase of [shared.prefill, shared.decode]) {
+      const exchange = phase.stages
+        .flatMap((s) => s.layers.flatMap((l) => l.ops))
+        .filter(
+          (o) => o.op.kind === 'collective' && (o.op.group === 'dp' || o.op.group === 'tp_dp'),
+        );
+      expect(exchange).toHaveLength(2);
+      expect(exchange.every((o) => o.linkLevel === 'inter' && o.commBandwidthSec > 0)).toBe(true);
+    }
+    expect(shared.decode.tokensPerSec).toBeLessThan(one.decode.tokensPerSec);
+  });
+
+  it('rejects unmodeled Engram domains and layouts with empty head owners instead of silently dividing by DP', () => {
+    const input: SimInput = {
+      ...ENGRAM,
+      parallel: { tp: 1, dp: 2, pp: 1, ep: 1 },
+      workload: { batch: 2, promptLen: 128, decodeContextLen: 256 },
+      hardware: overEthernet(2),
+      deployment: SHARED_TABLES,
+    };
+    expect(validateInput(input).some((e) => /Engram.*one node/.test(e))).toBe(true);
+    expect(
+      validateInput({
+        ...input,
+        parallel: { tp: 2, dp: 16, pp: 1, ep: 1 },
+        workload: { ...input.workload, batch: 16 },
+        hardware: box(32),
+      }).some((e) => e.includes('without hash heads')),
+    ).toBe(true);
+  });
+
+  it('Engram TP 1 over NVLink includes peer-HBM bandwidth in the gather, without another op or host tier', () => {
+    const hardware = box(2);
+    hardware.topology = { ...hardware.topology, intraNode: SYNTH_NVLINK };
+    const plain = run(ENGRAM, { dp: 2 }, 2, hardware);
+    const shared = run(ENGRAM, { dp: 2 }, 2, hardware, SHARED_TABLES);
+    expect(shared.memory.perStage[0].lookupTableBytes).toBe(
+      plain.memory.perStage[0].lookupTableBytes / 2,
+    );
+    expect(shared.memory.tiers).toEqual([]);
+    const ops = shared.decode.stages.flatMap((s) => s.layers.flatMap((l) => l.ops));
+    const peer = ops.filter((o) => o.op.kind === 'embedding' && o.op.peerReadBytes !== undefined);
+    expect(peer).toHaveLength(2);
+    for (const p of peer) {
+      expect(p.op).toMatchObject({ peerReadBytes: (24 * 264) / 2 });
+      expect(p.memorySec).toBe((24 * 264) / 2 / SYNTH_NVLINK.bandwidthPerDirectionBytesPerSec);
+      expect(p.commBandwidthSec).toBe(0);
+      expect(p.bound).toBe('memory');
+    }
+    expect(ops.length).toBe(
+      plain.decode.stages.flatMap((s) => s.layers.flatMap((l) => l.ops)).length,
+    );
+    expect(ops.some((o) => o.op.kind === 'collective' && o.op.group === 'dp')).toBe(false);
+    expect(shared.warnings.some((w) => w.includes('peer-HBM'))).toBe(true);
+  });
+
   it('MTP spec-dec at DP 2: each replica runs the draft and verify of its own sequences', () => {
     const mtp: DeploymentConfig = {
       speculative: { method: 'mtp', draftLength: 1, acceptance: { kind: 'iid', alpha: 0.8 } },
@@ -204,6 +297,19 @@ describe('DP with speculative decoding, offload and MoE', () => {
     expect(ram(one)).toBeGreaterThan(0);
     expect(ram(dp)).toBe(2 * ram(one));
     expect(dp.decode.tokensPerSec).toBeLessThanOrEqual(2 * one.decode.tokensPerSec * (1 + 1e-9));
+    const shared = run(
+      FLASH_NEXT,
+      { dp: 2 },
+      2,
+      { ...box(2), host },
+      {
+        offload: { ...offload.offload, lookupTables: { acrossDp: true } },
+      },
+    );
+    expect(shared.memory.tiers).toEqual(dp.memory.tiers);
+    expect(shared.memory.perStage[0].lookupTableBytes).toBe(
+      dp.memory.perStage[0].lookupTableBytes / 2,
+    );
   });
 
   it('MoE mode B: EP 2 at TP 1, DP 2 spans both replicas, with an all-to-all of tokens', () => {

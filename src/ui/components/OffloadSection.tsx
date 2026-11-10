@@ -689,6 +689,7 @@ function KvCacheFields(props: PanelProps) {
  * tables, the queue depth and the prefetch accuracy (with any offload on).
  */
 export function OffloadAdvancedFields(props: PanelProps) {
+  const { state } = props;
   const controls = offloadControls(props);
   if (controls === undefined) return null;
   const {
@@ -748,7 +749,9 @@ export function OffloadAdvancedFields(props: PanelProps) {
                 ...offload,
                 tables:
                   t === undefined
-                    ? undefined
+                    ? tables?.acrossDp === true
+                      ? { acrossDp: true }
+                      : undefined
                     : t === 'split'
                       ? {
                           tier: t,
@@ -778,6 +781,27 @@ export function OffloadAdvancedFields(props: PanelProps) {
           )}
         </div>
       )}
+      {hasLookupTables(model) && (
+        <Picker
+          label="Share lookup tables across DP"
+          value={tables?.tier === undefined && tables?.acrossDp === true ? 'on' : 'off'}
+          options={[
+            { value: 'off', label: 'off' },
+            { value: 'on', label: 'on' },
+          ]}
+          disabled={tables?.tier !== undefined}
+          onChange={(v) => setOffload({ ...offload, tables: { ...tables, acrossDp: v === 'on' } })}
+          help={helpLines([
+            'Shares the tables between DP replicas instead of storing one copy per replica.',
+            'Saves device memory but adds lookup traffic between devices.',
+            tables?.tier !== undefined
+              ? 'Available only with Lookup tables set to Device.'
+              : state.parallel.dp === 1
+                ? 'DP is 1, so this currently has no effect.'
+                : 'Token embeddings and projections are unchanged.',
+          ])}
+        />
+      )}
       {tables?.tier === 'split' && (
         <SplitFields
           split={tables.split}
@@ -785,7 +809,7 @@ export function OffloadAdvancedFields(props: PanelProps) {
           onChange={(split) => setOffload({ ...offload, tables: { ...tables, split } })}
         />
       )}
-      {tables !== undefined && (
+      {tables?.tier !== undefined && (
         <Picker
           label="Scale layout"
           value={

@@ -373,7 +373,9 @@ describe('buildSimInput: deployment', () => {
         ds,
       );
       if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));
-      return built.input.deployment?.offload?.lookupTables;
+      const policy = built.input.deployment?.offload?.lookupTables;
+      expect(policy).toHaveProperty('placements');
+      return policy !== undefined && 'placements' in policy ? policy.placements : undefined;
     };
     // 1 of the 2 table layers in host RAM (the default half): the boundary is the 2nd table layer, 14.
     expect(tables({ tier: 'split', scaleLayout: 'interleaved' })).toEqual([
@@ -403,6 +405,38 @@ describe('buildSimInput: deployment', () => {
       { tier: 'host_ram', layers: { from: 0, to: 14 }, scaleLayout: 'separate' },
       { tier: 'nvme', layers: { from: 14, to: L }, scaleLayout: 'separate' },
     ]);
+  });
+
+  it('shared device tables survive normalization without a host and are not auto-offloaded with experts', () => {
+    const shared = { tables: { acrossDp: true } };
+    const s = reduce(FLASH_STATE, {
+      type: 'setOffload',
+      offload: shared,
+      tablesOffDeviceByDesign: true,
+    });
+    expect(s.deployment.offload).toEqual(shared);
+    expect(
+      normalizeOffload({ ...shared, queueDepth: 8, prefetchAccuracy: 1, ssdReadRate: 'sustained' }),
+    ).toEqual(shared);
+    const built = buildSimInput(s, FLASH);
+    if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));
+    expect(built.input.deployment?.offload).toEqual({ lookupTables: { acrossDp: true } });
+    expect(built.input.hardware.host).toBeUndefined();
+    expect(offloadsAnything(s.deployment.offload)).toBe(false);
+    const experts = reduce(s, {
+      type: 'setOffload',
+      offload: { ...shared, experts: { tier: 'host_ram' } },
+      tablesOffDeviceByDesign: true,
+    });
+    expect(experts.deployment.offload?.tables).toEqual({ acrossDp: true });
+    expect(normalizeOffload({ tables: { acrossDp: false } })).toEqual({});
+    for (const tier of ['host_ram', 'nvme', 'split'] as const) {
+      const moved = reduce(s, {
+        type: 'setOffload',
+        offload: { tables: { tier, acrossDp: true } },
+      });
+      expect(moved.deployment.offload?.tables).toEqual({ tier });
+    }
   });
 
   it('MTP on the default model uses its head, the default k and the prose preset', () => {

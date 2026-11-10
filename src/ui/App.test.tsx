@@ -707,7 +707,12 @@ describe('estimator inputs', () => {
     {
       name: 'a lookup-table model',
       query: '?m=Qwen/Qwen3.8-Flash-Next',
-      offload: ['Token embeddings', 'Lookup tables', 'KV cache on GPU %'],
+      offload: [
+        'Token embeddings',
+        'Lookup tables',
+        'Share lookup tables across DP',
+        'KV cache on GPU %',
+      ],
     },
     {
       name: 'expert offload on a lookup-table model',
@@ -715,6 +720,7 @@ describe('estimator inputs', () => {
       offload: [
         'Token embeddings',
         'Lookup tables',
+        'Share lookup tables across DP',
         'KV cache on GPU %',
         'Queue depth',
         'Prefetch accuracy %',
@@ -726,6 +732,7 @@ describe('estimator inputs', () => {
       offload: [
         'Token embeddings',
         'Lookup tables',
+        'Share lookup tables across DP',
         'Layers in host RAM',
         'Host RAM holds',
         'Scale layout',
@@ -773,6 +780,34 @@ describe('estimator inputs', () => {
       expect(labels).toEqual(offload);
     },
   );
+  it('table sharing is available only for Device, and changing the tier clears the saved flag', async () => {
+    history.replaceState(null, '', '/?m=deepseek-ai/DeepSeek-V4.1-Flash&ltdp=1');
+    mount();
+    await screen.findByTestId('decode-tps');
+    const sharing = () =>
+      screen.getByRole('combobox', { name: 'Share lookup tables across DP' }) as HTMLButtonElement;
+    expect(sharing().disabled).toBe(false);
+    expect(sharing().textContent).toContain('on');
+    const placement = () =>
+      within(screen.getByTestId('offload-advanced')).getByRole('combobox', {
+        name: 'Lookup tables',
+      });
+    for (const tier of ['Host RAM', 'SSD', 'Host RAM + SSD']) {
+      fireEvent.click(placement());
+      fireEvent.click(await screen.findByRole('option', { name: tier }));
+      expect(sharing().disabled).toBe(true);
+      expect(sharing().textContent).toContain('off');
+      await waitFor(() => expect(location.search).not.toContain('ltdp'));
+    }
+    fireEvent.click(placement());
+    fireEvent.click(await screen.findByRole('option', { name: 'Device' }));
+    expect(sharing().disabled).toBe(false);
+    expect(sharing().textContent).toContain('off');
+    fireEvent.click(sharing());
+    fireEvent.click(await screen.findByRole('option', { name: 'on' }));
+    await waitFor(() => expect(location.search).toContain('ltdp=1'));
+  });
+
   it('token embeddings: Host RAM writes oet=ram and brings in the host controls; On GPU removes it', async () => {
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B');
     mount();

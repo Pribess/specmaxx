@@ -31,8 +31,13 @@ import {
 } from '../lower/dcp';
 import { modelHasOffloadableKv } from '../lower/kvOffload';
 import { moeParallelErrors } from '../lower/moe';
-import { checkPlacement, expertTpCollectivePath } from './placement';
-import { expertRules, lookupTableRules } from './offloadRules';
+import {
+  checkPlacement,
+  expertTpCollectivePath,
+  lookupTableCollectivePaths,
+  lookupTablesUsePeerReads,
+} from './placement';
+import { expertRules, lookupTableConfig, lookupTableRules } from './offloadRules';
 import type { KvCacheOffloadConfig, LayerRange, SimInput } from './types';
 
 /**
@@ -333,6 +338,40 @@ export function validateInput(input: SimInput): string[] {
       errors.push(`etp: ${(e as Error).message}`);
     }
   }
+  if (
+    lookupTableConfig(input.deployment?.offload).acrossDp === true &&
+    parallel.dp > 1 &&
+    placementErrors.length === 0
+  ) {
+    const label = 'deployment.offload.lookupTables.acrossDp';
+    try {
+      lookupTableCollectivePaths(parallel, topology);
+      const peer = lookupTablesUsePeerReads(parallel, topology);
+      const hasHeadTables = model.layers.some((l) =>
+        l.blocks.some((b) => b.kind === 'ngram_embedding' && b.headRows !== undefined),
+      );
+      if (hasHeadTables && parallel.tp * parallel.pp * parallel.dp > topology.devicesPerNode) {
+        errors.push(
+          `${label}: Engram currently requires all replicas in one node; node-local DP subgroups and cross-node peer-HBM domains are not modeled`,
+        );
+      }
+      if (!peer) {
+        const shards = parallel.tp * parallel.dp;
+        for (const layer of model.layers)
+          for (const block of layer.blocks) {
+            if (block.kind !== 'ngram_embedding' || block.headRows === undefined) continue;
+            const heads = block.rowsPerToken;
+            if ((shards - 1) * Math.ceil(heads / shards) >= heads) {
+              errors.push(
+                `${label}: ${layer.name} would leave a rank without hash heads (${heads} heads over ${shards} shards)`,
+              );
+            }
+          }
+      }
+    } catch (e) {
+      errors.push(`${label}: ${(e as Error).message}`);
+    }
+  }
   return errors;
 }
 
@@ -576,11 +615,33 @@ export function deploymentErrors(input: SimInput): string[] {
       );
     }
     const tables = lookupTableRules(offload);
+    const tableConfig = lookupTableConfig(offload);
+    if (tableConfig.acrossDp !== undefined && typeof tableConfig.acrossDp !== 'boolean') {
+      errors.push('deployment.offload.lookupTables.acrossDp must be a boolean');
+    }
+    if (tableConfig.acrossDp === true) {
+      if (!model.layers.some((l) => l.blocks.some((b) => b.kind === 'ngram_embedding'))) {
+        errors.push(
+          'deployment.offload.lookupTables.acrossDp: the model has no n-gram lookup table',
+        );
+      }
+      if (tables.some((rule) => rule.tier !== 'device')) {
+        errors.push(
+          'deployment.offload.lookupTables.acrossDp requires every lookup-table placement to be device',
+        );
+      }
+    }
+    // Preserve legacy error paths; the wrapper names its placements explicitly.
+    const wrapped =
+      offload.lookupTables !== undefined &&
+      !Array.isArray(offload.lookupTables) &&
+      !('tier' in offload.lookupTables);
+    const tablePrefix = wrapped
+      ? 'deployment.offload.lookupTables.placements'
+      : 'deployment.offload.lookupTables';
     // The object form keeps its original message paths; a list names the rule: `lookupTables[i].…`.
     const tableLabel = (i: number): string =>
-      Array.isArray(offload.lookupTables)
-        ? `deployment.offload.lookupTables[${i}]`
-        : 'deployment.offload.lookupTables';
+      Array.isArray(tableConfig.placements) ? `${tablePrefix}[${i}]` : tablePrefix;
     const offDeviceTables = tables.some((rule) => rule.tier !== 'device');
     if (offDeviceTables) {
       const hasNgram = model.layers.some((l) => l.blocks.some((b) => b.kind === 'ngram_embedding'));
@@ -598,7 +659,7 @@ export function deploymentErrors(input: SimInput): string[] {
         errors.push(`${label}.layers is required when there is more than one rule`);
       }
     });
-    errors.push(...overlapErrors(tables, 'deployment.offload.lookupTables'));
+    errors.push(...overlapErrors(tables, tablePrefix));
     // Token embedding (docs/simulation-model.md §12 "Token embedding off-device"): a tied table is also the LM head's
     // GEMM weight, read whole every step, so it must stay on the device; a duplicate copy is not modelled.
     const embeddingTier: unknown = offload.embeddings?.tier;

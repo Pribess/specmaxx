@@ -5,6 +5,7 @@
 
 import type { SimInput } from '../../sim/engine/types';
 import { validateInput } from '../../sim/engine/validate';
+import { hasOffDeviceWeights } from '../../sim/engine/offloadRules';
 import type { ModelSpec } from '../../sim/ir/model';
 import { REF_DENSE_8B } from '../../sim/models/reference';
 import type { HfMapResult, QuantDefaults } from '../../sim/models/hf/types';
@@ -125,7 +126,7 @@ export function buildSimInput(
   const deployment = deploymentConfig(state, loaded.model, drafter);
   let hardware: ResolvedHardware;
   try {
-    hardware = resolveHardware(state.hw, deployment.config?.offload !== undefined);
+    hardware = resolveHardware(state.hw, hasOffDeviceWeights(deployment.config?.offload));
   } catch (e) {
     return {
       kind: 'issues',

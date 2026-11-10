@@ -37,6 +37,11 @@ export interface LoweringContext {
   quant: QuantConfig;
   /** Parallelism degrees. */
   parallel: ParallelConfig;
+  /** Resolved target lookup-table sharing; absent = the existing per-replica path. */
+  lookupTables?: {
+    /** Head-layout tables may read peer HBM directly (TP 1 in a single direct NVLink domain). */
+    peerReads: boolean;
+  };
   /**
    * Resolved off-device placement (deployment `offload`, design doc §2.1); absent = everything on the device, and
    * lowering emits no `TransferOp` (identity).
