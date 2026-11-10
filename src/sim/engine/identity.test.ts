@@ -27,7 +27,7 @@ import {
 import { mapHfModel } from '../models/hf/index';
 import * as references from '../models/reference';
 import { simulate } from './simulate';
-import type { PhaseResult, SimInput, SimResult } from './types';
+import type { KvCacheOffloadConfig, PhaseResult, SimInput, SimResult } from './types';
 import { validateInput } from './validate';
 
 const { REF_DENSE_8B, REF_MOE_30B_A3B, TINY_HYBRID, TINY_MLA_SHARED } = references;
@@ -613,6 +613,30 @@ describe('deployment identity, knobs absent (after latency audit G1–G8, G6 exc
         expect(simulate({ ...value, hardware: { ...value.hardware, topology: sameNics } })).toEqual(
           absent,
         );
+      }
+    },
+  );
+  it.each(Object.entries(inputs))(
+    'ID-6 %s: a no-op KV-cache placement (deviceFraction 1, and no prefix share off the device) deep-equals the run without it',
+    (key, value) => {
+      const absent = simulate(value);
+      const noop: KvCacheOffloadConfig[] = [
+        { deviceFraction: 1 },
+        { deviceFraction: 1, hostRamFraction: 0 },
+        { deviceFraction: 1, hitRatio: { kind: 'custom', h: 0.5 } },
+      ];
+      // A prefix share off the device is a no-op only without a prefix-cache hit.
+      if ((value.workload.prefixCacheHitRatio ?? 0) === 0) {
+        noop.push({ deviceFraction: 1, prefixDeviceFraction: 0 });
+      }
+      for (const kvCache of noop) {
+        const r = simulate({
+          ...value,
+          deployment: { ...value.deployment, offload: { ...value.deployment?.offload, kvCache } },
+        });
+        expect(r).toEqual(absent);
+        expect(mismatches(fixture[key], pin(r))).toEqual([]);
+        if (value.deployment?.offload === undefined) expect(r.memory.tiers).toEqual([]);
       }
     },
   );

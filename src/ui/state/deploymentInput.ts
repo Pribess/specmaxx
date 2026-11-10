@@ -9,6 +9,7 @@
 
 import type {
   AcceptanceModel,
+  KvCacheOffloadConfig,
   LookupTableRule,
   DeploymentConfig,
   OffloadConfig,
@@ -17,12 +18,14 @@ import type {
 } from '../../sim/engine/types';
 import { defaultDraftLength, presetAcceptance, type SpecUseCase } from '../../sim/engine/specdec';
 import type { BlockDraftSpec, ModelSpec } from '../../sim/ir/model';
+import { modelHasOffloadableKv, modelHasTopKKv } from '../../sim/lower/kvOffload';
 import { hypotheticalDrafter, knownDrafters } from '../../sim/models/hf/drafter';
 import type { AppState } from './appState';
 import {
   HYPOTHETICAL_DRAFTER,
   splitTierRanges,
   type HitRatioChoice,
+  type KvCacheChoice,
   type PlacementChoice,
   type SpecDecChoice,
   type SpecDecMethod,
@@ -192,6 +195,42 @@ function placementRanges(
     : [{ tier, layers: { from, to: layerCount } }];
 }
 
+/**
+ * The engine's `KvCacheOffloadConfig` of a KV-cache choice, or undefined when it moves nothing (f_dev = 1, and f_pre =
+ * 1 or no prefix-cache hits), so a no-op choice adds nothing to the input:
+ * - host RAM: `hostRamFraction` absent (all off-device KV in RAM); SSD: 0; split: the choice's f_ram, absent = half of
+ *   `1 − f_dev`, clamped to `[0, 1 − f_dev]`;
+ * - a custom hit ratio only for a model with top-k attention (elsewhere it has no effect);
+ * - f_pre only with prefix-cache hits (`prefixHitRatio > 0`).
+ */
+export function kvCacheConfig(
+  kv: KvCacheChoice,
+  model: ModelSpec,
+  prefixHitRatio: number,
+): KvCacheOffloadConfig | undefined {
+  const deviceFraction = Math.min(1, Math.max(0, kv.deviceFraction ?? 1));
+  const prefix =
+    prefixHitRatio > 0 && kv.prefixDeviceFraction !== undefined
+      ? Math.min(1, Math.max(0, kv.prefixDeviceFraction))
+      : undefined;
+  if (deviceFraction >= 1 && (prefix ?? 1) >= 1) return undefined;
+  const offDevice = 1 - deviceFraction;
+  const hostRamFraction =
+    kv.tier === 'host_ram'
+      ? undefined
+      : kv.tier === 'nvme'
+        ? 0
+        : Math.min(offDevice, Math.max(0, kv.ramFraction ?? offDevice / 2));
+  return {
+    deviceFraction,
+    ...(hostRamFraction !== undefined ? { hostRamFraction } : {}),
+    ...(kv.hitRatio !== undefined && modelHasTopKKv(model)
+      ? { hitRatio: { kind: 'custom' as const, h: kv.hitRatio } }
+      : {}),
+    ...(prefix !== undefined ? { prefixDeviceFraction: prefix } : {}),
+  };
+}
+
 /** Result of {@link deploymentConfig}. */
 export interface DeploymentResult {
   /** The engine config; undefined when nothing applies (then `SimInput.deployment` is omitted). */
@@ -287,10 +326,22 @@ export function deploymentConfig(
     // by a shared URL is ignored without a notice (the picker is disabled and says why).
     if (o.embeddings !== undefined && !model.tieEmbeddings)
       out.embeddings = { tier: o.embeddings.tier };
+    if (o.kvCache !== undefined) {
+      if (!modelHasOffloadableKv(model))
+        warn(
+          'offload',
+          'The model has no KV cache that grows with the context; KV cache offload has no effect.',
+        );
+      else {
+        const kvCache = kvCacheConfig(o.kvCache, model, state.workload.prefixCacheHitRatio ?? 0);
+        if (kvCache !== undefined) out.kvCache = kvCache;
+      }
+    }
     const placed =
       out.routedExperts !== undefined ||
       out.lookupTables !== undefined ||
-      out.embeddings !== undefined;
+      out.embeddings !== undefined ||
+      out.kvCache !== undefined;
     if (placed)
       offload = {
         ...out,

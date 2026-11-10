@@ -45,6 +45,9 @@
  * | `olt`, `ols` | lookup-tables tier `ram`, `ssd`, `split` (host RAM + SSD) (absent: on the device); (with `olt`) scale layout `separate`, `pinned`, `interleaved` (default: the tier's; with `split`, each side's tier's) | `olt=ram` |
  * | `olr`, `ole` | (with `olt=split`) layers with a table kept in host RAM, integer ≥ 0 (default: half, rounded down), which end is in host RAM: `last` (default `first`, never written) | `olr=24` |
  * | `oet` | token-embedding table tier `ram`, `ssd` (absent: on the device; `split` is not allowed) | `oet=ssd` |
+ * | `okt` | KV-cache tier `ram`, `ssd`, `split` (host RAM + SSD) (absent: the whole KV cache on the device) | `okt=ram` |
+ * | `okd`, `okh`, `okp` | (with `okt`) KV cache on the device in percent 0–100 (default 100), custom hit ratio of top-k layers in percent 0–100 (default: uniform, h = the device share), cached prefix on the device in percent 0–100 (default: `okd`) | `okt=ram&okd=25` |
+ * | `okr` | (with `okt=split`) KV cache in host RAM in percent, 0 to 100 − `okd` (default: half of the off-device share) | `okt=split&okd=25&okr=50` |
  * | `oqd` | (with offload) queue depth, integer ≥ 1 (default: the tier's rated maximum) | `oqd=32` |
  * | `osr` | (with SSD offload) SSD read rate: `datasheet` (default), `sustained` | `osr=sustained` |
  * | `opf` | (with offload) prefetch accuracy p 0–1 (default 0.8) | `opf=0.9` |
@@ -90,6 +93,7 @@ import {
   HYPOTHETICAL_DRAFTER,
   offloadsToSsd,
   normalizeDeployment,
+  normalizeKvCache,
   normalizeHost,
   type DeploymentChoice,
   type HitRatioChoice,
@@ -235,6 +239,11 @@ export const URL_KEYS = [
   'olt',
   'ols',
   'oet',
+  'okt',
+  'okd',
+  'okr',
+  'okh',
+  'okp',
   'oqd',
   'osr',
   'opf',
@@ -501,6 +510,17 @@ export function encodeState(s: AppState): string {
     putSplit(put, 'olr', 'ole', o.tables.split);
   }
   if (o.embeddings !== undefined) put('oet', TIER_KEYS[o.embeddings.tier]);
+  const kv = o.kvCache;
+  if (kv !== undefined) {
+    // Percent with at most 4 decimals, so 0.25 encodes as 25.
+    const percent = (f: number | undefined) =>
+      f === undefined ? undefined : Math.round(f * 1e6) / 1e4;
+    put('okt', PLACEMENT_KEYS[kv.tier]);
+    put('okd', percent(kv.deviceFraction));
+    put('okr', percent(kv.ramFraction));
+    put('okh', percent(kv.hitRatio));
+    put('okp', percent(kv.prefixDeviceFraction));
+  }
   put('oqd', o.queueDepth);
   put('osr', o.ssdReadRate);
   put('opf', o.prefetchAccuracy);
@@ -620,8 +640,10 @@ function decodeHost(
 
 /**
  * The deployment choice of the offload (`ox`…`opf`, legacy `oo`) and spec-dec (`sd`…`sda`) parameters. A dependent key without
- * its parent (`oxf` without `ox`, `ols` without `olt`, `sdk` without `sd`, `oqd` or `opf` with nothing offloaded) is
- * dropped. The legacy `oo` (offload overlap) maps to the equivalent prefetch accuracy when something is offloaded and
+ * its parent (`oxf` without `ox`, `ols` without `olt`, `okd` without `okt`, `okr` without `okt=split`, `sdk` without
+ * `sd`, `oqd` or `opf` with nothing offloaded) is dropped. A KV-cache choice that keeps everything on the device
+ * (`okd` and `okp` at 100) is accepted and not stored. The legacy `oo` (offload overlap) maps to the equivalent
+ * prefetch accuracy when something is offloaded and
  * `opf` is absent (`ideal` → 1, `none` → 0); otherwise it is ignored without a notice (it was valid on its own).
  */
 function decodeDeployment(
@@ -679,8 +701,32 @@ function decodeDeployment(
     offload.tables = { tier: tablesTier, split: tablesSplit, scaleLayout };
   const embeddingsTier = read('oet', true, (r) => keyOf(TIER_KEYS, r));
   if (embeddingsTier !== undefined) offload.embeddings = { tier: embeddingsTier };
+  const kvTier = read('okt', true, placement);
+  const kvFraction = (key: string, allowed: boolean) =>
+    read(key, allowed, (r) => {
+      const percent = parseNumberIn(r, 0, 100);
+      return percent === undefined ? undefined : percent / 100;
+    });
+  const kvDevice = kvFraction('okd', kvTier !== undefined);
+  const kvRam = kvFraction('okr', kvTier === 'split');
+  const kvHit = kvFraction('okh', kvTier !== undefined);
+  const kvPrefix = kvFraction('okp', kvTier !== undefined);
+  if (kvTier !== undefined) {
+    const kvCache = normalizeKvCache({
+      tier: kvTier,
+      deviceFraction: kvDevice,
+      // f_ram ≤ 1 − f_dev: a larger share is clamped (written back clamped).
+      ramFraction: kvRam === undefined ? undefined : Math.min(kvRam, 1 - (kvDevice ?? 1)),
+      hitRatio: kvHit,
+      prefixDeviceFraction: kvPrefix,
+    });
+    if (kvCache !== undefined) offload.kvCache = kvCache;
+  }
   const any =
-    offload.experts !== undefined || offload.tables !== undefined || embeddingsTier !== undefined;
+    offload.experts !== undefined ||
+    offload.tables !== undefined ||
+    embeddingsTier !== undefined ||
+    offload.kvCache !== undefined;
   offload.queueDepth = read('oqd', any, (r) => parseInteger(r, 1, MAX_VALUE));
   offload.ssdReadRate = read('osr', offloadsToSsd(offload), (r) =>
     r === 'datasheet' || r === 'sustained' ? r : undefined,

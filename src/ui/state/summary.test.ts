@@ -228,7 +228,13 @@ describe('summarize', () => {
       {
         tier: 'host_ram',
         bytes: 16.3e9,
-        breakdown: { lookupTables: 0, routedExperts: 16.3e9, draftExperts: 0, tokenEmbeddings: 0 },
+        breakdown: {
+          lookupTables: 0,
+          routedExperts: 16.3e9,
+          draftExperts: 0,
+          tokenEmbeddings: 0,
+          kvCache: 0,
+        },
         capacityBytes: 96e9,
         fits: true,
       },

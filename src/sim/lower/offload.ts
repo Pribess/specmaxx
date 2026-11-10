@@ -59,12 +59,15 @@ export function tablePlacementAt(
 /**
  * What {@link prefetchedFraction} needs to know about one transfer op: its group and, for routed experts, the
  * expected misses `M` and the non-resident experts `E_loc − C` of the layer (both in experts, real); for token
- * embedding rows, the phase of the step.
+ * embedding rows, the phase of the step; for the KV cache, whether the reads follow a top-k selection made this step
+ * (`topK`, decode of a sparse layer), and then the missed tokens `M` and the non-resident past tokens `N_past − N_res`
+ * per sequence (tokens, real).
  */
 export type PrefetchTarget =
   | { group: 'routed_experts'; misses: number; nonResidentExperts: number }
   | { group: 'lookup_table' }
-  | { group: 'token_embedding'; phase: 'prefill' | 'decode' };
+  | { group: 'token_embedding'; phase: 'prefill' | 'decode' }
+  | { group: 'kv_cache'; topK: boolean; misses: number; nonResidentTokens: number };
 
 /**
  * q: the share of one transfer op's time that is prefetched, i.e. may hide behind the stage's compute
@@ -80,6 +83,9 @@ export type PrefetchTarget =
  * - token-embedding rows, p > 0: q = 1 in prefill (every prompt id is known before the step); q = 0 in decode (and
  *   in the drafter's decode passes): the row's id is the token the previous step just sampled, and the gather is
  *   the step's first op, so no compute is left to hide it behind.
+ * - KV cache, p > 0: q = 1 for full attention and for prefill (every non-resident past token is needed, and which
+ *   ones is known before the step); top-k decode: q = max(p, M/(N_past − N_res)), the expert rule with past tokens
+ *   for experts: predict the selection one layer ahead (InfiniGen, ShadowKV), or copy every non-resident token;
  * So p = 1 gives q = 1 everywhere except decode token-embedding rows (the former `'ideal'`). Dimensionless, in [0, 1].
  */
 export function prefetchedFraction(p: number, target: PrefetchTarget): number {
@@ -93,6 +99,13 @@ export function prefetchedFraction(p: number, target: PrefetchTarget): number {
   if (target.group === 'lookup_table') {
     // Formula: q = 1   (n-gram table rows; p > 0)
     return 1;
+  }
+  if (target.group === 'kv_cache') {
+    // Formula: q = 1   (KV cache, full attention or prefill; p > 0)
+    // Formula: q = max(p, M/(N_past − N_res))   (KV cache, top-k decode; p > 0)
+    // See docs/simulation-model.md §12 ("KV cache off-device")
+    if (!target.topK || !(target.nonResidentTokens > 0)) return 1;
+    return Math.min(1, Math.max(p, target.misses / target.nonResidentTokens));
   }
   const { misses: M, nonResidentExperts } = target;
   if (!(nonResidentExperts > 0)) return 1;

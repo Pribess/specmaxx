@@ -418,14 +418,19 @@ export interface CollectiveOp {
  */
 export interface TransferOp {
   kind: 'transfer';
-  /** Stable dotted name, e.g. `'moe.expert_fetch'`, `'ngram.row_fetch'`, `'embed.row_fetch'`. */
+  /**
+   * Stable dotted name, e.g. `'moe.expert_fetch'`, `'ngram.row_fetch'`, `'embed.row_fetch'`, `'attn.kv_fetch'`
+   * (KV from host RAM), `'attn.kv_fetch_ssd'` (KV from the SSD).
+   */
   name: string;
   /**
-   * What is streamed: missed routed experts, gathered n-gram table rows, or gathered token-embedding rows (the
-   * 1-gram table of `OffloadConfig.embeddings`; its own group because its prefetch share and staging differ,
-   * docs/simulation-model.md §12 "Token embedding off-device").
+   * What is streamed: missed routed experts, gathered n-gram table rows, gathered token-embedding rows (the 1-gram
+   * table of `OffloadConfig.embeddings`; its own group because its prefetch share and staging differ,
+   * docs/simulation-model.md §12 "Token embedding off-device"), or the off-device share of an attention layer's KV
+   * cache (`kv_cache`, `OffloadConfig.kvCache`: the past tokens' K/V or MLA latents the attention reads this step and
+   * that are not in device memory; docs §12 "KV cache off-device").
    */
-  group: 'routed_experts' | 'lookup_table' | 'token_embedding';
+  group: 'routed_experts' | 'lookup_table' | 'token_embedding' | 'kv_cache';
   /** Storage tier the bytes come from (`'host_ram'` on a unified-memory device is never emitted: it is device memory). */
   source: 'host_ram' | 'nvme';
   /**
@@ -433,7 +438,9 @@ export interface TransferOp {
    * read granularity). Experts: `[{ count: M, bytesEach: W_expert }]`; table rows per the scale layout of design
    * doc §2.10, e.g. separate value and scale reads
    * `[{ count: T·g, bytesEach: 256 }, { count: T·g, bytesEach: 8 }]`; token-embedding rows always as the separate
-   * layout (`[{ R, rowBytes }]`, or value and scale reads for a block-scaled format, R = T/tp). `Σ count` pays the
+   * layout (`[{ R, rowBytes }]`, or value and scale reads for a block-scaled format, R = T/tp); KV cache: one
+   * contiguous span per sequence for full attention and prefill (`[{ count: b, bytesEach: M_t·kvB }]`), one row per
+   * selected token for top-k decode (`[{ count: b·M_t, bytesEach: kvB }]`). `Σ count` pays the
    * per-request (IOPS, Little's-law) terms; each class is rounded up to the tier granularity for the tier-bandwidth
    * term.
    * Unit: `count` requests (expected, real), `bytesEach` bytes.
@@ -449,7 +456,9 @@ export interface TransferOp {
    * before the step, for table rows) and so eligible to hide behind the stage's compute
    * (docs/simulation-model.md §12 "Expert prefetch"). Routed experts: `q = max(p, M/(E_loc − C))`; n-gram table rows:
    * `q = 1` when prefetching is on (`p > 0`), `0` at `p = 0`; token-embedding rows: `q = 1` in prefill (`p > 0`),
-   * `q = 0` in decode (the row is the token the previous step just sampled, and its gather is the step's first op).
+   * `q = 0` in decode (the row is the token the previous step just sampled, and its gather is the step's first op);
+   * KV cache (`p > 0`): `q = 1` for full attention and prefill (every past token is needed, known before the step),
+   * `q = max(p, M/(N_past − N_res))` for top-k decode (the expert rule, with past tokens for experts).
    * Set by `lower/offload.ts: prefetchedFraction`.
    * Dimensionless, in [0, 1].
    */

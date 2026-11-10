@@ -65,6 +65,7 @@ const TIER_CATEGORIES = [
   },
   { field: 'routedExperts', key: 'tier-experts', label: 'MoE experts', group: 'routed_experts' },
   { field: 'draftExperts', key: 'tier-draft', label: 'Draft experts', group: undefined },
+  { field: 'kvCache', key: 'tier-kv', label: 'KV cache', group: 'kv_cache' },
 ] as const;
 
 /** A layer range `[from, to)` as the inclusive span users read, e.g. `0–23`. */

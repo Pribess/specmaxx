@@ -94,7 +94,35 @@ export function offloadChipText(p: OffloadPlacement): string {
       return `n-gram tables${span}: ${tierName(p.tier)}`;
     case 'token_embeddings':
       return `Token embeddings: ${tierName(p.tier)}`;
+    case 'kv_cache':
+      return kvChipText(p);
   }
+}
+
+/** A share as a percentage with at most one decimal, e.g. `25%`, `12.5%`. */
+function percentText(share: number): string {
+  return `${Number((share * 100).toFixed(1))}%`;
+}
+
+/**
+ * The KV-cache chip, e.g. `KV cache: 25% on device, 75% host RAM`, `KV cache: 25% on device, 50% host RAM, 25% SSD`,
+ * with `, cached prefix 50% on device` when the prefix share differs; a prefix-only placement reads
+ * `KV cache: cached prefix 50% on device, rest SSD`.
+ */
+function kvChipText(p: OffloadPlacement): string {
+  const shares = p.kvShares ?? { device: 1, hostRam: 0, ssd: 0 };
+  const prefix =
+    shares.prefixDevice === undefined
+      ? []
+      : [`cached prefix ${percentText(shares.prefixDevice)} on device`];
+  if (shares.device >= 1) return `KV cache: ${[...prefix, `rest ${tierName(p.tier)}`].join(', ')}`;
+  const parts = [
+    `${percentText(shares.device)} on device`,
+    ...(shares.hostRam > 0 ? [`${percentText(shares.hostRam)} ${tierName('host_ram')}`] : []),
+    ...(shares.ssd > 0 ? [`${percentText(shares.ssd)} ${tierName('nvme')}`] : []),
+    ...prefix,
+  ];
+  return `KV cache: ${parts.join(', ')}`;
 }
 
 /**

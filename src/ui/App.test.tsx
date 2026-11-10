@@ -694,21 +694,31 @@ describe('estimator inputs', () => {
     expect((container.querySelector('details.spec-editor') as HTMLDetailsElement).open).toBe(true);
   });
   it.each([
-    { name: 'offload off', query: '?m=Qwen/Qwen3.8-27B', offload: ['Token embeddings'] },
+    {
+      name: 'offload off',
+      query: '?m=Qwen/Qwen3.8-27B',
+      offload: ['Token embeddings', 'KV cache on GPU %'],
+    },
     {
       name: 'an old whole-layer offload URL (ignored)',
       query: '?m=Qwen/Qwen3.8-27B&odl=32',
-      offload: ['Token embeddings'],
+      offload: ['Token embeddings', 'KV cache on GPU %'],
     },
     {
       name: 'a lookup-table model',
       query: '?m=Qwen/Qwen3.8-Flash-Next',
-      offload: ['Token embeddings', 'Lookup tables'],
+      offload: ['Token embeddings', 'Lookup tables', 'KV cache on GPU %'],
     },
     {
       name: 'expert offload on a lookup-table model',
       query: '?m=Qwen/Qwen3.8-Flash-Next&ox=ram',
-      offload: ['Token embeddings', 'Lookup tables', 'Queue depth', 'Prefetch accuracy %'],
+      offload: [
+        'Token embeddings',
+        'Lookup tables',
+        'KV cache on GPU %',
+        'Queue depth',
+        'Prefetch accuracy %',
+      ],
     },
     {
       name: 'a lookup-table split',

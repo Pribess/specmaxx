@@ -178,6 +178,7 @@ describe('U-6 memory with routed experts offloaded (TINY_HYBRID on one RTX 5090,
           routedExperts: 6_291_456,
           draftExperts: 0,
           tokenEmbeddings: 0,
+          kvCache: 0,
         },
         capacityBytes: 96e9,
         fits: true,
@@ -227,6 +228,7 @@ describe('U-6 memory with routed experts offloaded (TINY_HYBRID on one RTX 5090,
           routedExperts: 6_291_456,
           draftExperts: 0,
           tokenEmbeddings: 0,
+          kvCache: 0,
         },
         capacityBytes: 96e9,
         fits: true,
@@ -327,6 +329,7 @@ describe('token embedding off-device: stage 0 drops exactly its shard, and the t
       routedExperts: 0,
       draftExperts: 0,
       tokenEmbeddings: shard,
+      kvCache: 0,
     });
     const other = tier === 'host_ram' ? 'nvme' : 'host_ram';
     expect(tiers[other].tokenEmbeddings).toBe(0);

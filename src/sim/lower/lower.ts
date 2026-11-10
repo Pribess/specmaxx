@@ -87,6 +87,34 @@ export interface EmbeddingPlacement {
 }
 
 /**
+ * The resolved KV-cache placement (`KvCacheOffloadConfig` with every default filled in, docs/simulation-model.md §12
+ * "KV cache off-device"): of each offloadable attention layer's per-sequence KV, a share `deviceFraction` is in device
+ * memory; the rest is split between host RAM and the SSD as `ramShare : nvmeShare` (shares of the off-device part,
+ * summing to 1). Every attention step reads its non-resident past tokens from those tiers (`lower/kvOffload.ts`).
+ */
+export interface KvCachePlacement {
+  /** f_dev ∈ [0, 1]: share of each offloadable layer's per-sequence KV in device memory (decode). Dimensionless. */
+  deviceFraction: number;
+  /**
+   * Share of the OFF-device KV in host RAM, `f_ram / (1 − f_dev)` (1 when f_dev = 1 and no split was given).
+   * Dimensionless, in [0, 1]; `ramShare + nvmeShare = 1`.
+   */
+  ramShare: number;
+  /** Share of the OFF-device KV on the SSD, `f_ssd / (1 − f_dev)`. Dimensionless, in [0, 1]. */
+  nvmeShare: number;
+  /**
+   * h: probability that an attended past token of a top-k (sparse) layer is device-resident, already evaluated by
+   * the hit model (`'uniform'` → f_dev), before the physical clamp. Unused by full-attention layers.
+   * Dimensionless, in [0, 1].
+   */
+  hitRatio: number;
+  /**
+   * f_pre ∈ [0, 1]: share of the prefix-cache hit's KV in device memory at prefill (default f_dev). Dimensionless.
+   */
+  prefixDeviceFraction: number;
+}
+
+/**
  * The off-device placement lowering applies, resolved from `OffloadConfig` with every default filled in (built once
  * per run by `simulate`). Each present group adds one `TransferOp` in front of the block that consumes it, only
  * when it has bytes to move. Layer ranges are `[from, to)` over `ModelSpec.layers` (zero-based indices).
@@ -115,6 +143,11 @@ export interface OffloadLowering {
    * rows from its `tier`. Absent = the table is on the device.
    */
   embeddings?: EmbeddingPlacement;
+  /**
+   * Off-device KV-cache placement (`OffloadConfig.kvCache` when it moves anything). Absent = the whole KV cache is on
+   * the device, and attention emits no `kv_cache` transfer.
+   */
+  kvCache?: KvCachePlacement;
   /**
    * Unified memory: host RAM is the device pool, so pinned-host table scales (and any host-RAM group) are device
    * bytes, never a separate tier. Absent/false = dedicated memory (host RAM is its own tier).

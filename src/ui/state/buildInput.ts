@@ -25,7 +25,7 @@ function engineIssueField(message: string): FieldIssue['field'] {
   if (/speculative|draft/i.test(message)) return 'specDec';
   if (/two-batch|twoBatch/i.test(message)) return 'twoBatchOverlap';
   if (
-    /offload|host link|host_ram|nvme|queue depth|resident|hit ratio|lookup|cpu_compute/i.test(
+    /offload|host link|host_ram|nvme|queue depth|resident|hit ratio|lookup|cpu_compute|kv cache/i.test(
       message,
     )
   )

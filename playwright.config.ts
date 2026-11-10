@@ -31,7 +31,7 @@ export default defineConfig({
     {
       name: 'smoke',
       testMatch:
-        /(smoke|fabric|network|rack-scale|dp-attention|dcp|deployment|layout|help|gated-mirror|disaggregation)\.spec\.ts/,
+        /(smoke|fabric|network|rack-scale|dp-attention|dcp|deployment|kv-offload|layout|help|gated-mirror|disaggregation)\.spec\.ts/,
     },
     { name: 'screenshots', testMatch: /screenshots\.spec\.ts/ },
     { name: 'redesign', testMatch: /redesign\.spec\.ts/ },

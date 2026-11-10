@@ -466,7 +466,8 @@ and the group selects the path (`engine/opTime.ts: OpTimeContext.collectivePaths
 
 `ir/ops.ts: TransferOp` (deployment knob `offload`, §12). A read of off-device weight bytes in front of the op
 that needs them: physical read classes `reads [{ count, bytesEach }]` (expected counts, real) and the `usefulBytes`
-that cross the host link. No FLOP and no device-memory traffic (`opBytes` returns zeros; the DMA write into device
+that cross the host link (groups: routed experts, n-gram table rows, token-embedding rows, and the KV cache of
+§12 "KV cache off-device"). No FLOP and no device-memory traffic (`opBytes` returns zeros; the DMA write into device
 memory is a documented approximation); its time is the tier/link model of §12 "Transfer path". Its
 `prefetchedFraction` q in [0, 1] is the share of that time that may hide behind the stage's compute (§12 "Expert
 prefetch").
@@ -2700,9 +2701,10 @@ prefill step: qLen = P_new, kvLen = P   (the new tokens attend over cached + new
   field is absent. Decode is unchanged.
 - Memory fit: the activation-peak step uses `P_new` as its token count with `kvLen = P`
   (`prefillChunkShape(P, seqs, C, P_new)`).
-- Not modelled: the cached KV is assumed resident in device memory. Fetching it from host RAM / SSD / a remote pool is
-  the KV-tiering task (§G10); `cachedPrefixTokens` is the hook where its fetch bytes (`cached · kvBytesPerToken`)
-  would attach. Radix/paging mechanics and routing are out of scope.
+- The cached KV is in device memory unless KV-cache offload (`OffloadConfig.kvCache`, §12 "KV cache off-device")
+  puts a share `1 − f_pre` of it in host RAM / on the SSD: then each offloadable layer first reads
+  `(1 − f_pre)·cached` tokens per sequence from its tier (`lower/kvOffload.ts: kvFetchOps`). A remote pool is not
+  modelled. Radix/paging mechanics and routing are out of scope.
 
 ### Engine dispatch overlay
 
@@ -2779,8 +2781,11 @@ Per device of stage s:
   capacity `cap = f·capacity` (see "GPU-usable capacity"; f = 1 on dedicated memory) and capacity =
   `memCapacityBytes ?? capacityOptionsBytes[0]` of the modified device. With weights offloaded, `W_s` keeps only the
   resident part, `staging_s` is the streaming buffer, and the off-device tiers are checked too (§12 "Memory tiers").
+  With KV-cache offload, `state_s` is the resident state only (`stageResidentSequenceStateBytesPerSeq`: the
+  offloadable KV at the share f_dev, §12 "KV cache off-device").
 - `maxSequencesPerReplica = floor(min_s (cap − W_s − act_s − reserve − staging_s)/state_s)` (Infinity when no
   stage keeps per-sequence state). The activation peak is the one at the evaluated batch, so this is an estimate.
+  With KV-cache offload, each tier's own bound caps it too (`tierMaxSequencesPerReplica`, §12).
 
 ### Activation peak
 
@@ -2981,6 +2986,13 @@ Shortlist-model approximations (sub-percent unless noted):
   sender splits its stage's bytes evenly over its tp ranks and the receivers spread evenly over the decode instance's
   devices (optimistic when the layouts differ); no re-sharding of the received cache into the decode layout, no
   RDMA-stack or memory-registration overhead; the exposed TTFT assumes equal layers and chunks (display only).
+- KV cache off-device (§12 "KV cache off-device"): writing newly computed KV to a tier (prefill's spill, decode's one
+  token per step) is not costed (it goes device → host, the opposite direction of the full-duplex link; SSD write
+  bandwidth and endurance are not modelled); a consumer layer of a shared latent fetches its misses again; the
+  staging buffer holds a whole layer's fetch from every tier at once (Σ over host RAM and the SSD, double-buffered
+  when prefetched); the top-k hit ratio h and the one-layer-ahead prefetch accuracy p of
+  top-k decode are scenario inputs, not derived; the prefix-cache pool's own capacity and a remote KV pool (Mooncake
+  store, LMCache remote) are not modelled.
 
 ---
 
@@ -3067,7 +3079,8 @@ default: absent, `{}`, `lookupTables: { tier: 'device' }` or `embeddings: { tier
 add no memory, never read `hardware.host`, and give bit-identical results (`engine/identity.test.ts`). With it on,
 the result is still the hardware/math bound given the stated hit ratio, queue depth and prefetch accuracy: only bytes
 crossing the host link and requests paying a latency are added. Worked examples W1, W3, W4 are tests in
-`engine/e2e-offload.test.ts`.
+`engine/e2e-offload.test.ts`. Besides the weight groups, the KV cache can be tiered too (`offload.kvCache`; "KV
+cache off-device" below).
 
 ### Placement
 
@@ -3365,12 +3378,14 @@ staging_s  = max_{phase, transfer op} (q > 0 ? 2 : 1)·buffer          (double b
              a phase prefetching from both tiers: also max_all buffer + max_{ram,q>0} buffer + max_{nvme,q>0} buffer
              (one read + one fill per source, "Overlap across tiers"); a phase's token-embedding ops are taken from
              the decode step and the LAST prefill chunk (buffer R·rowBytes per chunk, "Token embedding off-device"),
-             buffer = experts: Σ ceil(count)·bytes;  tables, token embedding: usefulBytes
+             buffer = experts: Σ ceil(count)·bytes;  tables, token embedding: usefulBytes;
+             KV cache: Σ_t usefulBytes_t of the layer (both tiers' fetches are one buffer, "KV cache off-device")
 total_s    = W_s + B_r·state_s + act_s + staging_s ≤ capacity
 tier bytes = max over nodes of Σ_{devices of the node} (full groups: E_loc·W_expert per offloaded layer,
              table shards, the stage-0 token-embedding shard ceil(vocab/tp)·h·bpe(emb) (`tokenEmbeddings`);
              NVMe tables with scaleLayout 'pinned_host' put ceil(rows/tp)·scaleBytes on host RAM —
-             dedicated memory only; unified memory has no host_ram tier, the scales are in W_s)
+             dedicated memory only; unified memory has no host_ram tier, the scales are in W_s);
+             KV-cache offload: B_r·f_t·Σ_s S_off,s per device (`kvCache`, "KV cache off-device")
 fits       = ∀ s total_s ≤ capacity  ∧  ∀ tiers bytes ≤ capacityBytes
 ```
 
@@ -3458,6 +3473,110 @@ staging_0   ≥ (q > 0 ? 2 : 1)·R·rowBytes          over the decode step and t
   ([`src/models/llama.cpp` L37–46](https://github.com/ggml-org/llama.cpp/blob/a4d4f2fd4ec85ec6a0a9ece4870416c1b6cc24f5/src/models/llama.cpp#L37-L46),
   [`src/llama-model-loader.cpp` L1175–1181](https://github.com/ggml-org/llama.cpp/blob/a4d4f2fd4ec85ec6a0a9ece4870416c1b6cc24f5/src/llama-model-loader.cpp#L1175-L1181));
   that duplicate is what this model does not cover, hence the rejection above.
+
+### KV cache off-device
+
+`lower/kvOffload.ts: kvOffloadableBlock, kvBytesPerToken, kvOffloadableStateBytes, kvMisses, kvFetchOps`;
+`lower/gqa.ts: lowerGqa`, `lower/mla.ts: lowerMla` (where the fetch is placed); `lower/offload.ts: prefetchedFraction`;
+`engine/host.ts: resolveKvCache, resolveOffload, offloadTiers`; `engine/memory.ts:
+stageResidentSequenceStateBytesPerSeq, stageTierBreakdown, tierMaxSequencesPerReplica, stageStagingBytes`;
+`engine/validate.ts: kvCacheErrors`. Tests: `lower/kvOffload.test.ts`, `engine/kvOffload.test.ts`,
+`engine/e2e-kv-offload.test.ts`, `engine/identity.test.ts` (ID-6).
+
+Deployment knob `OffloadConfig.kvCache = { deviceFraction f_dev, hostRamFraction? f_ram, hitRatio?, prefixDeviceFraction?
+f_pre }` (KV-cache tiering, report §G10). Of each offloadable layer's per-sequence KV, a share f_dev (by token) is in
+device memory, f_ram in host RAM and `f_ssd = 1 − f_dev − f_ram` on the SSD; every step, the attention first reads
+its non-resident past tokens from those tiers, through the same transfer machinery as the weight groups ("Transfer
+path", "Sharing", "Expert prefetch", "Overlap across tiers", "Memory tiers"), with its own `TransferOp.group
+'kv_cache'`. Off by default: `kvCache` absent, or `f_dev = 1` with no prefix share off the device (`f_pre = 1`, or no
+prefix-cache hit), resolves to no placement at all, so no op, no tier and no `hardware.host` read: results are
+bit-identical (ID-6).
+
+Production engines use these tiers mainly to **extend the prefix cache and survive preemption**: vLLM's offloading
+connector "extends the prefix cache by offloading completed KV blocks to slower but larger tiers" and promotes hits
+back on demand ([vLLM KV offloading](https://docs.vllm.ai/en/latest/features/kv_offloading_usage/),
+[blog](https://vllm.ai/blog/2026-01-08-kv-offloading-connector)), as do LMCache ([docs](https://docs.lmcache.ai/)),
+SGLang HiCache (GPU → host DRAM → storage; [design](https://docs.sglang.io/docs/advanced_features/hicache_design),
+[blog](https://www.lmsys.org/blog/2025-09-10-sglang-hicache/)) and Mooncake
+([arXiv 2407.00079](https://arxiv.org/abs/2407.00079)). That case is `f_pre` below: the cached prefix is fetched once
+at prefill. Streaming a LIVE sequence's KV every decode step (f_dev < 1) is the capacity case of FlexGen-style
+offload and of top-k systems that keep the full cache on the host and copy only the selected rows (vLLM HiSparse
+[design](https://docs.vllm.ai/en/latest/design/hisparse/), InfiniGen
+[arXiv 2406.19707](https://arxiv.org/abs/2406.19707), ShadowKV [arXiv 2410.21465](https://arxiv.org/abs/2410.21465)).
+Both are the same bound here: bytes read from each tier per step, over that tier's and the link's bandwidth.
+
+**What is offloadable** (`kvOffloadableBlock`): KV that grows with the context, GQA K/V of full and top-k layers
+(no sliding window) and MLA latents. It stays on the device: sliding-window caches (≤ W tokens), indexer keys
+(scored every step; HiSparse keeps them on the GPU too), K/V conv state, recurrent and short-conv state, CSA caches
+(DeepSeek-V4; a warning, `KV_CACHE_CSA_WARNING`), and the drafter's KV (`draft.ts: draftContext` drops the
+placement). A model with nothing offloadable is rejected (`KV_CACHE_NO_OFFLOADABLE_ERROR`).
+
+```
+kvB      = GQA 2·KVl·hd·bpe(kv);  MLA (rkv + dr)·bpe(kv)          bytes per cached token on this device
+past     = kvLen − qLen   (decode / verify: N; prefill: cached = floor(P·h_pc));  ceil(past/d) under DCP
+f        = decode ? f_dev : f_pre
+N_res    = f·past                                                  resident past tokens
+U        = full attention, prefill: past;  top-k decode: min(past, topK·qLen)     attended past tokens
+hits     = full, prefill: N_res;
+           top-k decode: clamp(U·h, max(0, U + N_res − past), min(U, N_res))   (the expert rule, experts → tokens)
+M        = U − hits                                                missed (fetched) tokens per sequence
+M_t      = M·share_t,  share_ram = f_ram/(1 − f_dev),  share_ssd = f_ssd/(1 − f_dev)
+reads_t  = full, prefill: [{ b, M_t·kvB }]        one contiguous span per sequence
+           top-k decode:  [{ b·M_t, kvB }]        one row per selected token (an SSD pays its 4 KiB page per row)
+useful_t = b·M_t·kvB
+q        = p = 0: 0;  full, prefill: 1;  top-k decode: max(p, M/(past − N_res))
+```
+
+- **Ops.** One `TransferOp` per tier with `M_t > 0`: `attn.kv_fetch` (host RAM) and `attn.kv_fetch_ssd`, right
+  before the attention core (after the indexer of a top-k layer; before the DCP Q all-gather; before `kv_b` in the
+  MLA dense-prefill form, which decompresses every latent). The attention op is unchanged, so its device-memory
+  bytes are identical: as for experts, the staged copy is read from HBM.
+- **Hit ratio h** (`KvHitRatioModel`): only top-k layers, where the selected tokens may or may not be the resident
+  ones. `'uniform'` (default) `h = f_dev`; `'custom'` the user's h (e.g. ShadowKV reports adjacent decode steps
+  selecting largely the same chunks; a recency-biased layout keeps recent tokens on the device), clamped to the
+  pigeonhole bounds. Full attention reads every past token, so `hits = N_res` exactly.
+- **q.** Full attention and every prefill need every non-resident past token, known before the step, so with
+  prefetching on (p > 0) the fetch of layer ℓ may run while earlier layers compute (q = 1; HiCache loads "for layer
+  N+ while layer N is executing", Mooncake's layer-wise prefill takes `max(KV load, compute)`). Top-k decode learns
+  its selection only from this layer's indexer, so it uses the expert rule: predict one layer ahead (InfiniGen
+  prefetches layer i's important tokens during layer i−1; HiSparse queues later layers' copies behind earlier
+  layers' compute) with accuracy p, or copy every non-resident token.
+- **Prefix cache.** With `Workload.prefixCacheHitRatio > 0`, the `cached = floor(P·h_pc)` tokens' KV is in device
+  memory at the share f_pre (default f_dev) and the rest is read at prefill from the tiers in the `f_ram : f_ssd`
+  proportion. With `f_dev = 1` (a prefix-only placement) `hostRamFraction` absent puts it in host RAM, and
+  `hostRamFraction: 0` on the SSD. The prefix-cache pool's own capacity (finished requests' KV kept for reuse) is
+  not modelled; only live sequences' KV counts against the tiers.
+- **Memory.** The device keeps `state_dev,s = state_s − (1 − f_dev)·Σ S_off,s` per sequence
+  (`stageResidentSequenceStateBytesPerSeq`, `S_off = N_rank·kvB` of each offloadable owning block at the fit's
+  context); each tier holds `B_r·f_t·Σ S_off,s` per device (`TierBytes.kvCache`, f_ram and f_ssd), summed per node
+  as for the weight groups. Staging: a layer's KV fetches from host RAM and the SSD feed the same attention op, so
+  they are ONE buffer, `buffer_kv,ℓ = Σ_t useful_t,ℓ` (`memory.ts: stagingUnits`); the largest layer's buffer, ×2 when
+  q > 0, and with both tiers prefetched `max_all + max_ram + max_ssd` takes that sum as the buffer being read and its
+  host-RAM and SSD parts as the next layer's fills (`2·Σ` for equal layers; `Σ` at p = 0, not the larger tier
+  alone). `maxSequencesPerReplica` takes the device bound with the resident state AND, per tier and node,
+  `floor((cap_t − static_t,node) / Σ_{node devices} f_t·S_off,s)` (`tierMaxSequencesPerReplica`; static = the weight
+  groups on that tier). The prefill→decode KV transfer (§14) still moves the FULL cache
+  (`stageSequenceStateBytesPerSeq`), whichever tier it sits on.
+- **Unified memory.** Host RAM is the device pool: f_ram folds into f_dev (`f_dev' = 1 − (1 − f_dev)·share_ssd`, f_pre
+  likewise) with a warning, and only the SSD share moves; all of it in host RAM is then a no-op.
+- **Decode bound on PCIe.** With the off-device KV in host RAM and `B_link < B_ram/n_host` (an RTX 5090's PCIe 5.0
+  x16, 57.6 GB/s, against DDR5-6000 ×2, 96 GB/s), each layer's fetch is `α + useful/B_link`, and once it exceeds the
+  step's compute `t_s = max(core, Σ_ℓ t_fetch)`: decode tok/s ≈ `B / Σ_ℓ (α + useful_ℓ/B_link)`. InfiniGen measured
+  the same regime (OPT-13B with the full KV on the CPU over PCIe 3.0: the transfer was 96.9 % of a block's time).
+- **Worked example** (`engine/e2e-kv-offload.test.ts`): REF_DENSE_8B fp8 weights, bf16 KV (kvB 4096 B), one RTX 5090
+  - DDR5-6000 ×2, b 8, P = N = 32768. Device-only needs 8·36·32,769·4096 = 38.66 GB of KV: it does not fit (at
+    most 4 sequences). With f_dev 0.25: 9.66 GB resident, 28.99 GB in host RAM, fits, at most 16 sequences (≈ 1/f).
+    Decode reads 8·0.75·32,768·4096 = 805,306,368 B per layer at 13.979 ms (`1.07 µs + useful/B_link`), 0.503 s per
+    step: **15.90 tok/s @ 32k** (the 26.2 ms of compute hides behind it; 15.11 tok/s @ 32k with p = 0), against
+    305.35 tok/s @ 32k for a device that held it all. Half of the off-device share on the 990 PRO (f_ram 0.25,
+    f_ssd 0.5): 3.08 tok/s @ 32k.
+- **Approximations** (§9): KV writes to the tiers are not costed; a layer reading another layer's latent
+  (`kvCacheFromLayer`) fetches its misses again (no cross-layer reuse, conservative); the per-layer staging buffer
+  holds a whole layer's fetch (chunked streaming with an online softmax would need less); with DCP the prefill (not
+  token-sharded) fetches the whole cached prefix on every rank; no remote pool (below).
+- **Not modelled: a remote KV pool** (Mooncake store, LMCache remote backends, llm-d's shared file system). It would
+  be a third tier behind the NIC, with its own capacity, bandwidth and sharing across instances; only host RAM and
+  the local SSD are tiers here.
 
 ## 13. Speculative decoding
 
@@ -3816,7 +3935,9 @@ R_P,eff = R_P·(cycle_P / cycle_eff)        λ_P,eff = R_P,eff / P
   dtype, plus under spec-dec the drafter's own cache on the prefill pool's last stage, where the drafter runs at any
   pp (`draftSequenceStateBytes`; §13 "Pipeline parallelism"). All P tokens move even with a prefix-cache hit. An
   uneven PP split (`stageLayerRange`) makes the stage
-  with the most layers the busiest sender.
+  with the most layers the busiest sender. With KV-cache offload (§12 "KV cache off-device") in the shared
+  deployment the FULL cache still moves (the offloaded share too); only the decode pool's device fit and its
+  per-step reads change, and the prefill pool pays the prefix fetch.
 - **Sender.** Each of a stage's tp ranks sends a distinct 1/tp of the stage's bytes (sharded heads are distinct;
   replicated MLA latents and DCP-sharded caches can still be split). DCP in either pool changes none of S, Y or
   λ_recv,1.

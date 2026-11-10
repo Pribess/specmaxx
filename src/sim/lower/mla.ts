@@ -37,6 +37,7 @@ import {
   dcpShardsBlock,
 } from './dcp';
 import { indexerSelection, lowerSparseSelection, sparseSelectionStateBytes } from './indexer';
+import { kvFetchOps } from './kvOffload';
 import type { LoweringContext } from './lower';
 
 /** Which MLA form a phase uses: absorbed for decode or sparse prefill, MHA for dense prefill. */
@@ -46,9 +47,11 @@ export function mlaForm(block: MlaAttentionBlock, ctx: LoweringContext): 'absorb
 
 /**
  * MLA ops, in order: q path (q_a → q_a_norm → q_b, or q) → [g_proj] → [own latent: kv_a → kv_a_norm] → [rope] →
- * [indexer ops] → absorbed (q_absorb → [DCP Q all-gather] → attention → [DCP output reduce-scatter] → v_absorb) or
- * MHA (kv_b → attention) → [sigmoid_mul gate] → o_proj → [TP all-reduce]. A layer with `kvCacheFromLayer` reads an
- * earlier layer's latent: no kv_a, no kv_a_norm, no k-rope, no cache write. `qkRopeDim` 0 (NoPE) emits no rope op.
+ * [indexer ops] → absorbed (q_absorb → [KV fetch] → [DCP Q all-gather] → attention → [DCP output reduce-scatter] →
+ * v_absorb) or MHA ([KV fetch] → kv_b → attention) → [sigmoid_mul gate] → o_proj → [TP all-reduce]. The KV fetch
+ * appears only with KV-cache offload when past latents are off the device (lower/kvOffload.ts). A layer with
+ * `kvCacheFromLayer` reads an earlier layer's latent: no kv_a, no kv_a_norm, no k-rope, no cache write. `qkRopeDim` 0
+ * (NoPE) emits no rope op.
  * With `outputGate` (Kimi K3) the gate projection `g_proj` reads the layer input and its sigmoid multiplies the
  * attention output before `o_proj`. With decode context parallelism (`parallel.dcp` d > 1, decode) the attention
  * core runs the d·Hl gathered heads over this rank's 1/d of the latent tokens (lower/dcp.ts).
@@ -161,10 +164,15 @@ export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
         // Formula: S_q = T·(Hl·d)·(rkv + dr)·bpe(act); attention heads Hl·d over 1/d of the latent tokens;
         //          S_o = T·(Hl·d)·(rkv·reduceBpe + 4)   (the output is still latent; v_absorb runs after the merge)
         // See docs/simulation-model.md §5 "Decode context parallelism (DCP)"
+        const sharded = dcpShardAttention(attention, ctx);
+        // KV-cache offload: fetch this rank's non-resident latent tokens first (docs §12 "KV cache off-device").
+        ops.push(...kvFetchOps(block, ctx, sharded));
         ops.push(dcpGatherQ(T, Hl, rkv + dr, ctx));
-        ops.push(dcpShardAttention(attention, ctx));
+        ops.push(sharded);
         ops.push(dcpReduceOut(T, Hl, rkv, ctx));
       } else {
+        // KV-cache offload: fetch the non-resident latent tokens first (docs §12 "KV cache off-device").
+        ops.push(...kvFetchOps(block, ctx, attention));
         ops.push(attention);
       }
       ops.push(
@@ -180,12 +188,6 @@ export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
       // Formula: kv_b: m = seqs·kvLen, n = Hl·(dn + dv), k = rkv (reads the latent: inputDtype = kvCache dtype);
       //          attention: kvHeads = Hl, qk = dn + dr, v = dv, kvRead = {act, Hl·(dn + dv) + dr}, kvWrite = latent
       // See docs/simulation-model.md §5 "MLA forms"
-      ops.push(
-        linearGemm('mla.kv_b', { m: ctx.seqs * ctx.kvLen, n: Hl * (dn + dv), k: rkv }, ctx, {
-          module: 'attention_kv_up',
-          inputDtype: ctx.quant.kvCache.dtype,
-        }),
-      );
       const decompressed = {
         format: { dtype: ctx.quant.activations },
         elemsPerToken: Hl * (dn + dv) + dr,
@@ -197,6 +199,15 @@ export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
         vHeadDim: dv,
         kvRead: decompressed,
       };
+      // KV-cache offload: kv_b reads every visible latent, so the non-resident ones are fetched before it
+      // (docs §12 "KV cache off-device").
+      ops.push(...kvFetchOps(block, ctx, attention));
+      ops.push(
+        linearGemm('mla.kv_b', { m: ctx.seqs * ctx.kvLen, n: Hl * (dn + dv), k: rkv }, ctx, {
+          module: 'attention_kv_up',
+          inputDtype: ctx.quant.kvCache.dtype,
+        }),
+      );
       ops.push(attention);
       break;
     }

@@ -20,6 +20,7 @@ import {
 import { applyDeviceModifiers } from '../hw/modifiers';
 import { deviceHostLink } from '../hw/presets/links';
 import { A2A_FORMATS, isA2aFormat } from '../ir/a2aFormat';
+import type { ModelSpec } from '../ir/model';
 import { modelSpecErrors } from '../ir/validateModel';
 import { lowerBlock, type LoweringContext } from '../lower/lower';
 import {
@@ -28,10 +29,11 @@ import {
   dcpHasCandidateBlock,
   dcpNoBlockError,
 } from '../lower/dcp';
+import { modelHasOffloadableKv } from '../lower/kvOffload';
 import { moeParallelErrors } from '../lower/moe';
 import { checkPlacement, expertTpCollectivePath } from './placement';
 import { expertRules, lookupTableRules } from './offloadRules';
-import type { LayerRange, SimInput } from './types';
+import type { KvCacheOffloadConfig, LayerRange, SimInput } from './types';
 
 /**
  * The exact error for speculative decoding with pipeline parallelism and the token embedding off the device
@@ -373,6 +375,78 @@ function inRange(x: number, lo: number, hi: number, hiOpen = false): boolean {
 }
 
 /**
+ * The exact error for KV-cache offload on a model without offloadable KV (`lower/kvOffload.ts: kvOffloadableBlock`):
+ * only sliding-window, recurrent, short-conv or CSA state, which stays on the device.
+ */
+export const KV_CACHE_NO_OFFLOADABLE_ERROR =
+  'deployment.offload.kvCache: the model has no offloadable KV cache (only sliding-window, recurrent or CSA state)';
+
+/**
+ * True if a KV-cache placement moves anything off the device before the unified-memory fold-in: `f_dev < 1`, or a
+ * prefix share `f_pre < 1` with a prefix-cache hit (`prefixCacheHitRatio > 0`).
+ */
+function kvCacheMovesAnything(
+  kv: KvCacheOffloadConfig | undefined,
+  prefixCacheHitRatio: number | undefined,
+): boolean {
+  if (kv === undefined) return false;
+  const fPre = kv.prefixDeviceFraction ?? kv.deviceFraction;
+  return kv.deviceFraction < 1 || ((prefixCacheHitRatio ?? 0) > 0 && fPre < 1);
+}
+
+/**
+ * Errors of `deployment.offload.kvCache` (docs/simulation-model.md §12 "KV cache off-device"): `deviceFraction`,
+ * `prefixDeviceFraction` in [0, 1]; `hostRamFraction` in [0, 1 − deviceFraction]; a custom hit ratio `h` in [0, 1],
+ * and `h = 0` when no KV is resident (`deviceFraction` 0, the expert rule); and, when it moves anything
+ * (`movesAnything`), a model with offloadable KV ({@link KV_CACHE_NO_OFFLOADABLE_ERROR}). Every message names the
+ * "KV cache".
+ */
+export function kvCacheErrors(
+  kv: KvCacheOffloadConfig | undefined,
+  model: ModelSpec,
+  movesAnything: boolean,
+): string[] {
+  if (kv === undefined) return [];
+  const errors: string[] = [];
+  const label = 'deployment.offload.kvCache';
+  const f = kv.deviceFraction;
+  const fOk = Number.isFinite(f) && inRange(f, 0, 1);
+  if (!fOk) {
+    errors.push(
+      `${label}.deviceFraction: the KV cache share on the device must be in [0, 1] (got ${f})`,
+    );
+  }
+  const fRam = kv.hostRamFraction;
+  if (fRam !== undefined && fOk && !(Number.isFinite(fRam) && inRange(fRam, 0, 1 - f + 1e-12))) {
+    errors.push(
+      `${label}.hostRamFraction: the KV cache share in host RAM must be in [0, 1 − deviceFraction] (got ${fRam})`,
+    );
+  }
+  const fPre = kv.prefixDeviceFraction;
+  if (fPre !== undefined && !(Number.isFinite(fPre) && inRange(fPre, 0, 1))) {
+    errors.push(
+      `${label}.prefixDeviceFraction: the cached prefix's KV cache share on the device must be in [0, 1] (got ${fPre})`,
+    );
+  }
+  const hit = kv.hitRatio;
+  if (hit !== undefined && hit.kind !== 'uniform' && hit.kind !== 'custom') {
+    errors.push(`${label}.hitRatio: the KV cache hit model must be 'uniform' or 'custom'`);
+  }
+  if (hit?.kind === 'custom') {
+    const h = hit.h;
+    if (!(Number.isFinite(h) && inRange(h, 0, 1))) {
+      errors.push(`${label}.hitRatio.h: the KV cache hit ratio must be in [0, 1] (got ${h})`);
+    } else if (f === 0 && h > 0) {
+      errors.push(
+        `${label}.hitRatio: no KV cache is on the device (deviceFraction 0), h must be 0`,
+      );
+    }
+  }
+  if (movesAnything && !modelHasOffloadableKv(model)) errors.push(KV_CACHE_NO_OFFLOADABLE_ERROR);
+  return errors;
+}
+
+/**
  * Errors of the deployment knobs (design doc §2, §3.6). Absent or `{}` deployment: none, and no other field is read.
  *
  * Offload: `mode 'cpu_compute'` is a designed hook, rejected for now (§2.8); `queueDepth` an integer ≥ 1; routed
@@ -399,7 +473,8 @@ export function deploymentErrors(input: SimInput): string[] {
   const errors: string[] = [];
   if (hardware.host !== undefined) errors.push(...validateHost(hardware.host, 'hardware.host'));
   const offload = input.deployment?.offload;
-  // Anything placed off the device (routed experts, lookup tables, the token embedding); set in the offload block.
+  // Anything placed off the device (routed experts, lookup tables, the token embedding, the KV cache); set in the
+  // offload block.
   let offDevice = false;
   if (offload !== undefined) {
     const L = model.layers.length;
@@ -502,7 +577,9 @@ export function deploymentErrors(input: SimInput): string[] {
     if (offDeviceEmbeddings && model.tieEmbeddings) {
       errors.push(TIED_EMBEDDINGS_OFFLOAD_ERROR);
     }
-    offDevice = experts.length > 0 || offDeviceTables || offDeviceEmbeddings;
+    const kvOffDevice = kvCacheMovesAnything(offload.kvCache, input.workload.prefixCacheHitRatio);
+    errors.push(...kvCacheErrors(offload.kvCache, model, kvOffDevice));
+    offDevice = experts.length > 0 || offDeviceTables || offDeviceEmbeddings || kvOffDevice;
     const device = hardware.device;
     if (
       offDevice &&

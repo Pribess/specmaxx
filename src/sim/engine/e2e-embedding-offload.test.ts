@@ -151,6 +151,7 @@ describe(`${QWEN} bf16 on one RTX 5090 + DDR5-5600 ×2 + 990 PRO: token embeddin
           routedExperts: 0,
           draftExperts: 0,
           tokenEmbeddings: SHARD_BYTES,
+          kvCache: 0,
         },
         capacityBytes: DDR5_5600_2CH.capacityBytes,
         fits: true,

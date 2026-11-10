@@ -16,7 +16,13 @@ import {
 import { deviceHostLink } from '../hw/presets/links';
 import type { DeviceSpec, HardwareStack, HostMemorySpec, LinkSpec, NvmeSpec } from '../hw/types';
 import type { ModelSpec } from '../ir/model';
-import type { ExpertPlacement, OffloadLowering, TablePlacement } from '../lower/lower';
+import type {
+  ExpertPlacement,
+  KvCachePlacement,
+  OffloadLowering,
+  TablePlacement,
+} from '../lower/lower';
+import { modelHasCsaBlock } from '../lower/kvOffload';
 import { expertRules, lookupTableRules } from './offloadRules';
 import {
   DEFAULT_PREFETCH_ACCURACY,
@@ -24,7 +30,11 @@ import {
   resolveQueueDepth,
   type TransferPath,
 } from './transfer';
-import type { LayerRange, OffloadConfig, OffloadTier } from './types';
+import type { KvCacheOffloadConfig, LayerRange, OffloadConfig, OffloadTier } from './types';
+
+/** The warning for KV-cache offload on a model with CSA blocks, whose compressed caches stay on the device. */
+export const KV_CACHE_CSA_WARNING =
+  "offload: compressed sparse attention (CSA) KV cache stays on the device; only the other layers' KV cache is offloaded";
 
 /** The resolved placement and the notes it produced. */
 export interface ResolvedOffload {
@@ -44,13 +54,16 @@ export interface ResolvedOffload {
  * rule is dropped (no transfer, its layers' weights stay counted on the device) and only `'nvme'` rules remain. Table
  * rules at `'device'` are no placement. The token-embedding rule (`config.embeddings`) becomes `offload.embeddings`
  * when its tier is off the device and not dropped the same way (docs/simulation-model.md §12 "Token embedding
- * off-device"). Nothing left off-device → `offload: undefined` (identity).
+ * off-device"). The KV-cache rule (`config.kvCache`) becomes `offload.kvCache` ({@link resolveKvCache}) when it moves
+ * anything. Nothing left off-device → `offload: undefined` (identity). `prefixCacheHitRatio` is the workload's
+ * (`Workload.prefixCacheHitRatio`, absent = 0): a KV prefix share off the device matters only with a hit.
  */
 export function resolveOffload(
   model: ModelSpec,
   config: OffloadConfig | undefined,
   memoryKind: 'dedicated' | 'unified',
   ep: number,
+  prefixCacheHitRatio: number = 0,
 ): ResolvedOffload {
   const warnings: string[] = [];
   if (config === undefined) return { offload: undefined, warnings };
@@ -124,10 +137,16 @@ export function resolveOffload(
   if (embeddingTier !== undefined && embeddingTier !== 'device' && !onDevice(embeddingTier)) {
     offload.embeddings = { tier: embeddingTier };
   }
+  const kvCache = resolveKvCache(config.kvCache, memoryKind, prefixCacheHitRatio, warnings);
+  if (kvCache !== undefined) {
+    offload.kvCache = kvCache;
+    if (modelHasCsaBlock(model)) warnings.push(KV_CACHE_CSA_WARNING);
+  }
   const any =
     offload.routedExperts !== undefined ||
     offload.lookupTables !== undefined ||
-    offload.embeddings !== undefined;
+    offload.embeddings !== undefined ||
+    offload.kvCache !== undefined;
   if (any && memoryKind === 'unified') {
     offload.hostRamIsDevice = true;
     if (offload.lookupTables?.some((t) => t.scaleLayout === 'pinned_host') === true) {
@@ -139,12 +158,73 @@ export function resolveOffload(
   return { offload: any ? offload : undefined, warnings: [...new Set(warnings)] };
 }
 
+/**
+ * The resolved KV-cache placement (docs/simulation-model.md §12 "KV cache off-device"), or undefined when it moves
+ * nothing (absent; or f_dev = 1 and, with a prefix-cache hit, f_pre = 1). Defaults: `f_ram = 1 − f_dev`,
+ * `f_pre = f_dev`, uniform hit `h = f_dev`. The off-device part splits as `ramShare = f_ram/(1 − f_dev)`,
+ * `nvmeShare = f_ssd/(1 − f_dev)`. With f_dev = 1 (only the prefix share moves) the tier comes from whether
+ * `hostRamFraction` is given: absent ⇒ host RAM, given (it must be 0) ⇒ the SSD. On unified memory host RAM IS the
+ * device pool: f_ram folds into the device (`f_dev' = 1 − (1 − f_dev)·nvmeShare`, likewise f_pre), with a warning
+ * when that changes anything, and only the SSD share moves.
+ */
+export function resolveKvCache(
+  config: KvCacheOffloadConfig | undefined,
+  memoryKind: 'dedicated' | 'unified',
+  prefixCacheHitRatio: number,
+  warnings: string[],
+): KvCachePlacement | undefined {
+  if (config === undefined) return undefined;
+  const fDev = config.deviceFraction;
+  // Formula: f_ram = hostRamFraction ?? 1 − f_dev;  f_ssd = 1 − f_dev − f_ram;  f_pre = prefixDeviceFraction ?? f_dev
+  const fRam = config.hostRamFraction ?? 1 - fDev;
+  const fSsd = Math.max(0, 1 - fDev - fRam);
+  const fPre = config.prefixDeviceFraction ?? fDev;
+  const off = fRam + fSsd;
+  // Formula: ramShare = f_ram/(f_ram + f_ssd), nvmeShare = f_ssd/(f_ram + f_ssd)
+  //          (f_dev = 1: hostRamFraction absent ⇒ host RAM; given ⇒ SSD)
+  const ramWhenNone = config.hostRamFraction === undefined ? 1 : 0;
+  let ramShare = off > 0 ? fRam / off : ramWhenNone;
+  let nvmeShare = off > 0 ? fSsd / off : 1 - ramWhenNone;
+  let deviceFraction = fDev;
+  let prefixDeviceFraction = fPre;
+  if (memoryKind === 'unified') {
+    // Formula: f_dev' = 1 − (1 − f_dev)·nvmeShare;  f_pre' = 1 − (1 − f_pre)·nvmeShare;  ramShare' = 0
+    const ramMoves = ramShare > 0 && (fDev < 1 || (prefixCacheHitRatio > 0 && fPre < 1));
+    if (ramMoves) {
+      warnings.push(
+        'offload: on unified memory host RAM is the device memory; the KV cache in host RAM stays on the device',
+      );
+    }
+    deviceFraction = nvmeShare > 0 ? 1 - (1 - fDev) * nvmeShare : 1;
+    prefixDeviceFraction = nvmeShare > 0 ? 1 - (1 - fPre) * nvmeShare : 1;
+    ramShare = 0;
+    nvmeShare = 1;
+  }
+  const movesDecode = deviceFraction < 1;
+  const movesPrefix = prefixCacheHitRatio > 0 && prefixDeviceFraction < 1;
+  if (!movesDecode && !movesPrefix) return undefined;
+  const hitModel = config.hitRatio ?? { kind: 'uniform' };
+  // Formula: h = uniform: f_dev;  custom: h
+  const hitRatio = hitModel.kind === 'custom' ? hitModel.h : deviceFraction;
+  return {
+    deviceFraction,
+    ramShare,
+    nvmeShare,
+    hitRatio,
+    prefixDeviceFraction: movesPrefix ? prefixDeviceFraction : 1,
+  };
+}
+
 /** The off-device tiers a resolved placement uses (the union over every rule of every group). */
 export function offloadTiers(offload: OffloadLowering): Set<OffloadTier> {
   const tiers = new Set<OffloadTier>();
   for (const rule of offload.routedExperts ?? []) tiers.add(rule.tier);
   for (const rule of offload.lookupTables ?? []) tiers.add(rule.tier);
   if (offload.embeddings !== undefined) tiers.add(offload.embeddings.tier);
+  if (offload.kvCache !== undefined) {
+    if (offload.kvCache.ramShare > 0) tiers.add('host_ram');
+    if (offload.kvCache.nvmeShare > 0) tiers.add('nvme');
+  }
   return tiers;
 }
 

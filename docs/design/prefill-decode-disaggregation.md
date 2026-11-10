@@ -26,9 +26,11 @@ prefill instance to a decode instance over a link.
 - **On ⇒ still the hardware/math upper bound** for the stated pool sizes, ratio, decode context and link. Each
   pool's rate is the ordinary single-pool theoretical maximum; the only new costs are the KV bytes crossing the
   P→D link, at the sending and at the receiving NICs.
-- **Out of scope:** queueing and arrival variance, TTFT/ITL SLO scheduling, the RDMA software stack, KV-cache
-  tiering (§G10, a later task), routing of requests to instances, and redistributing received KV into the decode
-  pool's layout (beyond the receiver bound of §4).
+- **Out of scope:** queueing and arrival variance, TTFT/ITL SLO scheduling, the RDMA software stack, routing of
+  requests to instances, and redistributing received KV into the decode pool's layout (beyond the receiver bound of
+  §4). KV-cache tiering (§G10) is modelled since (`docs/simulation-model.md` §12 "KV cache off-device"): in
+  `shared.deployment` it raises the decode pool's fit and adds the prefill pool's prefix fetch, while the KV bytes
+  crossing the P→D link stay the full cache.
 
 Notation: P = prompt length (ISL, `workload.promptLen`), N = decode context (`workload.decodeContextLen`), O =
 output tokens per request (OSL, new), L = `model.layers.length`, D_P / D_D = devices of one prefill / decode

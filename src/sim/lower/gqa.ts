@@ -32,6 +32,7 @@ import {
   dcpShardsBlock,
 } from './dcp';
 import { indexerSelection, lowerSparseSelection, sparseSelectionStateBytes } from './indexer';
+import { kvFetchOps } from './kvOffload';
 import type { LoweringContext } from './lower';
 
 /** Key selection of a GQA block: sliding window, top-k (sparse), or full. */
@@ -47,9 +48,11 @@ function gqaSelection(block: GqaAttentionBlock): KvSelection {
 
 /**
  * GQA attention ops, in order: qkv_proj → [kv_conv] → [rel_proj → rel_table] → [qk_norm] → [rope] →
- * [indexer ops] → [DCP Q all-gather] → attention → [DCP output reduce-scatter] → [sigmoid_mul gate] → o_proj →
- * [TP all-reduce of T·h]. The DCP pair appears only for a full-attention block in a decode step with
+ * [indexer ops] → [KV fetch] → [DCP Q all-gather] → attention → [DCP output reduce-scatter] → [sigmoid_mul gate] →
+ * o_proj → [TP all-reduce of T·h]. The DCP pair appears only for a full-attention block in a decode step with
  * `parallel.dcp` d > 1 (lower/dcp.ts); the attention core then runs the d·Hl gathered heads over 1/d of the keys.
+ * The KV fetch (`attn.kv_fetch`, `attn.kv_fetch_ssd`) appears only with KV-cache offload, for a block without a
+ * sliding window, when past tokens are off the device (lower/kvOffload.ts).
  */
 export function lowerGqa(block: GqaAttentionBlock, ctx: LoweringContext): Op[] {
   const tp = ctx.parallel.tp;
@@ -156,10 +159,15 @@ export function lowerGqa(block: GqaAttentionBlock, ctx: LoweringContext): Op[] {
   if (dcpSharded) {
     // Formula: S_q = T·(Hl·d)·hd·bpe(act); attention heads Hl·d over 1/d of the keys; S_o = T·(Hl·d)·(hd·reduceBpe + 4)
     // See docs/simulation-model.md §5 "Decode context parallelism (DCP)"
+    const sharded = dcpShardAttention(attention, ctx);
+    // KV-cache offload: fetch this rank's non-resident past tokens first (docs §12 "KV cache off-device").
+    if (block.slidingWindow === undefined) ops.push(...kvFetchOps(block, ctx, sharded));
     ops.push(dcpGatherQ(T, Hl, hd, ctx));
-    ops.push(dcpShardAttention(attention, ctx));
+    ops.push(sharded);
     ops.push(dcpReduceOut(T, Hl, hd, ctx));
   } else {
+    // KV-cache offload: fetch the non-resident past tokens first (docs §12 "KV cache off-device").
+    if (block.slidingWindow === undefined) ops.push(...kvFetchOps(block, ctx, attention));
     ops.push(attention);
   }
 

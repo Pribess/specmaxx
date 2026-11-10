@@ -115,6 +115,37 @@ export interface OffloadChoice {
    * experts it picks one layer ahead; absent = the default 0.8. In [0, 1]. Dimensionless.
    */
   prefetchAccuracy?: number;
+  /**
+   * KV-cache tiering (engine `OffloadConfig.kvCache`, docs/simulation-model.md §12 "KV cache off-device"): a share of
+   * each sequence's growing KV cache lives in host RAM or on the SSD; absent = all on the device.
+   */
+  kvCache?: KvCacheChoice;
+}
+
+/**
+ * KV-cache tiering choice. Fractions are shares of each offloadable layer's per-sequence KV, by token. A choice with
+ * every fraction at 1 (all on the device) is removed by {@link normalizeOffload}.
+ */
+export interface KvCacheChoice {
+  /** Where the off-device share lives: host RAM, the SSD, or `'split'` between them (see `ramFraction`). */
+  tier: PlacementChoice;
+  /** f_dev: share kept in device memory, in [0, 1]; absent = 1 (only the cached prefix may be off-device). */
+  deviceFraction?: number;
+  /**
+   * With `tier: 'split'`: f_ram, the share in host RAM (of the whole KV), in [0, 1 − f_dev]; the rest of the
+   * off-device share is on the SSD. Absent = half of the off-device share. Dimensionless.
+   */
+  ramFraction?: number;
+  /**
+   * Top-k (sparse-attention) models: custom hit ratio h in [0, 1], the chance an attended past token is on the device;
+   * absent = uniform (h = f_dev). Dimensionless.
+   */
+  hitRatio?: number;
+  /**
+   * f_pre: share of a prefix-cache hit's KV found in device memory at prefill, in [0, 1]; absent = f_dev. Only matters
+   * with a prefix-cache hit ratio > 0. Dimensionless.
+   */
+  prefixDeviceFraction?: number;
 }
 
 /** Speculative-decoding method (engine `SpecDecodeConfig.method`). */
@@ -181,21 +212,40 @@ export interface HostChoice {
   link?: HostLinkChoice;
 }
 
-/** True when the choice moves any weight group off the device. */
+/** True when the choice moves any weight group or a share of the KV cache off the device. */
 export function offloadsAnything(offload: OffloadChoice | undefined): boolean {
   return (
     offload !== undefined &&
     (offload.experts !== undefined ||
       offload.tables !== undefined ||
-      offload.embeddings !== undefined)
+      offload.embeddings !== undefined ||
+      offload.kvCache !== undefined)
   );
 }
 
-/** True when any offloaded weight group uses the SSD (a host-RAM + SSD split counts). */
+/** True when any offloaded weight group or the KV cache uses the SSD (a host-RAM + SSD split counts). */
 export function offloadsToSsd(offload: OffloadChoice | undefined): boolean {
-  return [offload?.experts, offload?.tables, offload?.embeddings].some(
+  return [offload?.experts, offload?.tables, offload?.embeddings, offload?.kvCache].some(
     (group) => group?.tier === 'nvme' || group?.tier === 'split',
   );
+}
+
+/**
+ * The KV-cache choice with defaults removed (f_dev 1, f_pre equal to f_dev, a host-RAM share without a split);
+ * undefined when everything stays on the device (f_dev = 1 and f_pre = 1), so that state encodes like no choice.
+ */
+export function normalizeKvCache(kv: KvCacheChoice | undefined): KvCacheChoice | undefined {
+  if (kv === undefined) return undefined;
+  const f = kv.deviceFraction ?? 1;
+  const pre = kv.prefixDeviceFraction ?? f;
+  if (f >= 1 && pre >= 1) return undefined;
+  return compact({
+    tier: kv.tier,
+    deviceFraction: f >= 1 ? undefined : f,
+    ramFraction: kv.tier === 'split' ? kv.ramFraction : undefined,
+    hitRatio: kv.hitRatio,
+    prefixDeviceFraction: pre === f ? undefined : pre,
+  });
 }
 
 /** The default scale layout of a tier (design doc §2.10): `'separate'` on host RAM, `'pinned_host'` on SSD. */
@@ -251,7 +301,8 @@ export function normalizeOffload(o: OffloadChoice): OffloadChoice {
           : o.tables.scaleLayout,
     });
   const embeddings = o.embeddings && { tier: o.embeddings.tier };
-  const out = compact({ experts, tables, embeddings });
+  const kvCache = normalizeKvCache(o.kvCache);
+  const out = compact({ experts, tables, embeddings, kvCache });
   const prefetchAccuracy =
     o.prefetchAccuracy === DEFAULT_PREFETCH_ACCURACY ? undefined : o.prefetchAccuracy;
   return offloadsAnything(out)

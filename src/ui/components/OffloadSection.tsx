@@ -7,6 +7,7 @@ import {
   defaultHostRamFor,
   hostPcieLink,
 } from '../../sim/hw/presets';
+import { modelHasOffloadableKv, modelHasTopKKv } from '../../sim/lower/kvOffload';
 import {
   defaultScaleLayout,
   formatBytesPerSec,
@@ -20,6 +21,7 @@ import {
   TIED_EMBEDDINGS_NOTE,
   type HitRatioChoice,
   type HostChoice,
+  type KvCacheChoice,
   type OffloadChoice,
   type ScaleLayoutChoice,
   type PlacementChoice,
@@ -496,6 +498,142 @@ export function OffloadSection(props: PanelProps) {
   );
 }
 
+/** KV-cache tier picker rows: host RAM, the SSD, or a split between them. */
+const KV_TIER_OPTIONS: PickerOption[] = (['host_ram', 'nvme', 'split'] as const).map((t) => ({
+  value: t,
+  label: TIER_LABELS[t],
+}));
+
+/** KV-cache hit-model picker rows (top-k models; custom is a number in the state). */
+const KV_HIT_OPTIONS: PickerOption[] = [
+  { value: 'uniform', label: 'Uniform (h = GPU share)' },
+  { value: 'custom', label: 'Custom' },
+];
+
+/** A share in [0, 1] as the percent the fields show, at most one decimal. */
+function percentOf(share: number): number {
+  return Math.round(share * 1000) / 10;
+}
+
+/** A typed percent as a share clamped to [0, `max`]. */
+function shareOf(percent: number, max = 1): number {
+  return Number.isFinite(percent) ? Math.min(max, Math.max(0, percent / 100)) : max;
+}
+
+/**
+ * Hardware → Advanced → Offload: the KV-cache tiering fields (docs/simulation-model.md §12 "KV cache off-device"),
+ * for models whose KV cache grows with the context. The GPU share (100 = off) turns it on; then its tier (dedicated
+ * memory only: on unified memory the only other tier is the SSD), the host-RAM share of a split, the hit model of
+ * top-k models, and the cached prefix's GPU share while the prefix-cache hit ratio is above 0.
+ */
+function KvCacheFields(props: PanelProps) {
+  const controls = offloadControls(props);
+  if (controls === undefined || !modelHasOffloadableKv(controls.model)) return null;
+  const { model, unified, offload, setOffload } = controls;
+  const kv = offload.kvCache;
+  const onDevice = unified ? 'in memory' : 'on GPU';
+  const deviceFraction = kv?.deviceFraction ?? 1;
+  const offDevice = 1 - deviceFraction;
+  const prefixHits = (props.state.workload.prefixCacheHitRatio ?? 0) > 0;
+  const setKv = (next: Partial<KvCacheChoice>) =>
+    setOffload({
+      ...offload,
+      kvCache: { ...(kv ?? { tier: unified ? 'nvme' : 'host_ram' }), ...next },
+    });
+  // On unified memory host RAM is the device pool: only the SSD is listed, plus a URL-carried tier.
+  const tierOptions = unified
+    ? KV_TIER_OPTIONS.filter((o) => o.value === 'nvme' || o.value === kv?.tier)
+    : KV_TIER_OPTIONS;
+  const label = unified ? 'KV cache in memory %' : 'KV cache on GPU %';
+  return (
+    <div className="kv-fields" data-testid="kv-offload">
+      <div className="fields two">
+        <NumberField
+          label={label}
+          value={percentOf(deviceFraction)}
+          min={0}
+          max={100}
+          step="1"
+          onChange={(v) => setKv({ deviceFraction: shareOf(v) })}
+          help={helpLines([
+            `Share of each sequence’s KV cache kept ${onDevice}.`,
+            unified
+              ? 'The rest streams in from the SSD every step.'
+              : 'The rest streams in from host RAM or the SSD every step.',
+            'More sequences or a longer context fit, but decode can slow to the link speed.',
+          ])}
+        />
+        {kv !== undefined && tierOptions.length > 1 && (
+          <Picker
+            label="KV cache tier"
+            value={kv.tier}
+            options={tierOptions}
+            onChange={(v) => setKv({ tier: v as PlacementChoice })}
+            help={helpLines([
+              `Where the KV cache that is not ${onDevice} lives.`,
+              'Host RAM is faster; the SSD holds more.',
+            ])}
+          />
+        )}
+        {kv?.tier === 'split' && (
+          <NumberField
+            label="KV in host RAM %"
+            value={percentOf(Math.min(offDevice, kv.ramFraction ?? offDevice / 2))}
+            min={0}
+            max={percentOf(offDevice)}
+            step="1"
+            onChange={(v) => setKv({ ramFraction: shareOf(v, offDevice) })}
+            help={helpLines([
+              'Share of the KV cache kept in host RAM.',
+              `The rest of what is not ${onDevice} is on the SSD.`,
+            ])}
+          />
+        )}
+        {kv !== undefined && modelHasTopKKv(model) && (
+          <Picker
+            label="KV hit model"
+            value={kv.hitRatio === undefined ? 'uniform' : 'custom'}
+            options={KV_HIT_OPTIONS}
+            onChange={(v) => setKv({ hitRatio: v === 'custom' ? deviceFraction : undefined })}
+            help={helpLines([
+              `How often a token the attention picks is already ${onDevice}.`,
+              `Uniform assumes picks are spread evenly, so it equals the share ${onDevice}.`,
+            ])}
+          />
+        )}
+        {kv?.hitRatio !== undefined && modelHasTopKKv(model) && (
+          <NumberField
+            label="KV hit ratio %"
+            value={percentOf(kv.hitRatio)}
+            min={0}
+            max={100}
+            step="1"
+            onChange={(v) => setKv({ hitRatio: shareOf(v) })}
+            help={helpLines([
+              `How often a token the attention picks is already ${onDevice}.`,
+              'Higher is faster.',
+            ])}
+          />
+        )}
+        {prefixHits && (
+          <NumberField
+            label={unified ? 'Prefix KV in memory %' : 'Prefix KV on GPU %'}
+            value={percentOf(kv?.prefixDeviceFraction ?? deviceFraction)}
+            min={0}
+            max={100}
+            step="1"
+            onChange={(v) => setKv({ prefixDeviceFraction: shareOf(v) })}
+            help={helpLines([
+              `Share of a reused prompt prefix’s KV cache found ${onDevice}.`,
+              'Prefill reads the rest from host RAM or the SSD first.',
+              `Starts equal to the KV cache ${onDevice} share.`,
+            ])}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
 /**
  * Hardware → Advanced → "Offload" / "Storage": the token-embedding placement (every model; locked on the device for a
  * model with tied embeddings), the lookup-table placement (models with n-gram tables), the scale layout of off-device
@@ -630,6 +768,7 @@ export function OffloadAdvancedFields(props: PanelProps) {
           ])}
         />
       )}
+      <KvCacheFields {...props} />
       {anyOff && (
         <NumberField
           label="Queue depth"

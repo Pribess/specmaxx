@@ -252,7 +252,13 @@ describe(`${QWEN} fp8 on one RTX 5090 + DDR5-5600 ×2 + 990 PRO: experts all in 
       {
         tier: 'host_ram',
         bytes: half,
-        breakdown: { lookupTables: 0, routedExperts: half, draftExperts: 0, tokenEmbeddings: 0 },
+        breakdown: {
+          lookupTables: 0,
+          routedExperts: half,
+          draftExperts: 0,
+          tokenEmbeddings: 0,
+          kvCache: 0,
+        },
         capacityBytes: 96e9,
         fits: true,
       },
@@ -264,6 +270,7 @@ describe(`${QWEN} fp8 on one RTX 5090 + DDR5-5600 ×2 + 990 PRO: experts all in 
           routedExperts: half,
           draftExperts: 0,
           tokenEmbeddings: 0,
+          kvCache: 0,
         },
         capacityBytes: 2e12,
         fits: true,

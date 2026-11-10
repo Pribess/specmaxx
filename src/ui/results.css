@@ -575,6 +575,10 @@ svg [data-chart-point]:focus-visible {
 .allocation-tier-draft {
   background: color-mix(in srgb, var(--ink) 35%, var(--paper));
 }
+/* The off-device KV cache wears the device's KV + state hatch, so the same data reads alike on every bar. */
+.allocation-tier-kv {
+  background: repeating-linear-gradient(135deg, var(--ink) 0 2px, var(--paper) 2px 4px);
+}
 .allocation-offloaded {
   background: color-mix(in srgb, var(--ink) 60%, var(--paper));
 }

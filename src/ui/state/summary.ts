@@ -194,12 +194,18 @@ export interface Breakdown {
   totalSec: number;
 }
 
-/** A weight group the deployment keeps off-device, for the result chips. */
+/** A weight group or the KV cache the deployment keeps (partly) off-device, for the result chips. */
 export interface OffloadPlacement {
-  /** Which group: routed (MoE) experts, the n-gram lookup tables, or the token-embedding table. */
-  group: 'routed_experts' | 'lookup_tables' | 'token_embeddings';
-  /** Tier holding the group. */
+  /** Which group: routed (MoE) experts, the n-gram lookup tables, the token-embedding table, or the KV cache. */
+  group: 'routed_experts' | 'lookup_tables' | 'token_embeddings' | 'kv_cache';
+  /** Tier holding the group (the KV cache: host RAM when any of it is there, else the SSD). */
   tier: OffloadTier;
+  /**
+   * KV cache only: shares of each offloadable layer's per-sequence KV on the device (f_dev), in host RAM (f_ram) and on
+   * the SSD (f_ssd), summing to 1, and the share of a cached prefix on the device (f_pre) when it differs from f_dev.
+   * Dimensionless, in [0, 1].
+   */
+  kvShares?: { device: number; hostRam: number; ssd: number; prefixDevice?: number };
   /**
    * Routed experts only: the configured hit ratio h(f) of the resident cache (the hit-ratio model at the resident
    * fraction, before the engine's physical clamp). Dimensionless, in [0, 1].
@@ -592,8 +598,9 @@ export function summarizeDisaggregated(
 }
 
 /**
- * The off-device placements of `input.deployment.offload`, in the order experts, lookup tables, token embeddings; one per rule (a
- * host-RAM + SSD split gives two), each group's rules by first layer; tables kept on the device are left out.
+ * The off-device placements of `input.deployment.offload`, in the order experts, lookup tables, token embeddings, KV
+ * cache; one per rule (a host-RAM + SSD split gives two), each group's rules by first layer; tables kept on the device
+ * are left out. The KV cache is one placement with its tier shares.
  */
 export function offloadPlacements(input: SimInput): OffloadPlacement[] {
   const offload = input.deployment?.offload;
@@ -620,5 +627,24 @@ export function offloadPlacements(input: SimInput): OffloadPlacement[] {
   const embeddings = offload.embeddings;
   if (embeddings !== undefined && embeddings.tier !== 'device')
     out.push({ group: 'token_embeddings', tier: embeddings.tier });
+  const kv = offload.kvCache;
+  if (kv !== undefined) {
+    // Formula: f_ram = hostRamFraction ?? 1 − f_dev;  f_ssd = 1 − f_dev − f_ram   (engine KvCacheOffloadConfig)
+    const device = kv.deviceFraction;
+    const hostRam = kv.hostRamFraction ?? 1 - device;
+    const ssd = Math.max(0, 1 - device - hostRam);
+    const prefixDevice = kv.prefixDeviceFraction;
+    out.push({
+      group: 'kv_cache',
+      // A given hostRamFraction of 0 means the SSD (also for a prefix-only placement, f_dev = 1).
+      tier: kv.hostRamFraction === undefined || hostRam > 0 ? 'host_ram' : 'nvme',
+      kvShares: {
+        device,
+        hostRam,
+        ssd,
+        ...(prefixDevice !== undefined && prefixDevice !== device ? { prefixDevice } : {}),
+      },
+    });
+  }
   return out;
 }

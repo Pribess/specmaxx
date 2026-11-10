@@ -36,20 +36,21 @@ export interface Workload {
    */
   prefillChunkTokens?: number;
   /**
-   * Prefix-cache hit ratio h ∈ [0, 1): the fraction of each prompt already in the device KV cache from earlier requests
+   * Prefix-cache hit ratio h ∈ [0, 1): the fraction of each prompt already in the KV cache from earlier requests
    * (production prefix caching: DeepSeek reports 56%, Mooncake 34–55%). Prefill then computes only the new tokens
    * `P_new = P − floor(P·h)` while their attention still reads the `P − P_new` cached tokens' KV (`qLen = P_new`,
-   * `kvLen = P`). The cached KV is assumed resident in device memory; fetching it from a lower tier is not modeled
-   * (hook: {@link cachedPrefixTokens}). Absent or 0 = today's behaviour, bit for bit. Dimensionless. See
-   * docs/simulation-model.md §7 "Prefix cache".
+   * `kvLen = P`). The cached KV is in device memory, unless KV-cache offload
+   * (`OffloadConfig.kvCache.prefixDeviceFraction`) places a share of it in host RAM / on the SSD: then prefill first
+   * reads that share from its tier (docs/simulation-model.md §12 "KV cache off-device"). Absent or 0 = today's
+   * behaviour, bit for bit. Dimensionless. See docs/simulation-model.md §7 "Prefix cache".
    */
   prefixCacheHitRatio?: number;
 }
 
 /**
- * Prompt tokens served from the prefix cache, `floor(P·h)`. They are never computed; their KV is assumed already in
- * device memory. HOOK for the KV-tiering task (report §G10): a cache held in a lower tier would add a fetch of
- * `cached · kvBytesPerToken` bytes here. Unit: tokens.
+ * Prompt tokens served from the prefix cache, `floor(P·h)`. They are never computed; their KV is in device memory, or
+ * with KV-cache offload a share `1 − f_pre` of it is fetched from a lower tier at prefill
+ * (`lower/kvOffload.ts: kvFetchOps`, docs/simulation-model.md §12 "KV cache off-device"). Unit: tokens.
  */
 export function cachedPrefixTokens(
   workload: Pick<Workload, 'promptLen' | 'prefixCacheHitRatio'>,
@@ -248,6 +249,47 @@ export interface OffloadConfig {
    * ("Token embedding off-device").
    */
   embeddings?: EmbeddingRule;
+  /**
+   * KV-cache tiering (vLLM CPU offload, LMCache, SGLang HiCache): a share of each sequence's growing KV cache lives in
+   * host RAM or on the SSD and is read back every step by the attention that needs it. Absent, or a no-op setting
+   * (`deviceFraction` 1 and no prefix share off the device) = everything on the device, results bit-identical. See
+   * docs/simulation-model.md §12 ("KV cache off-device").
+   */
+  kvCache?: KvCacheOffloadConfig;
+}
+
+/**
+ * Hit model of a top-k (sparse-attention) layer's device-resident KV: the probability h that an attended past token
+ * is in device memory. `'uniform'` (default): `h = f_dev` (the selected tokens are spread evenly over the context);
+ * `'custom'`: the user's h (dimensionless, in [0, 1]; e.g. a recency-biased selector with recent tokens kept on the
+ * device), clamped to the physical bounds by the lowering. Full-attention layers read every past token, so h has no
+ * effect there.
+ */
+export type KvHitRatioModel = { kind: 'uniform' } | { kind: 'custom'; h: number };
+
+/**
+ * KV-cache placement across the device, host RAM and the SSD (docs/simulation-model.md §12 "KV cache off-device").
+ * Only KV that grows with the context is tiered: GQA K/V of full and top-k layers, MLA latents. Sliding-window caches,
+ * indexer keys, recurrent/conv state, CSA caches and the drafter's KV stay on the device. Fractions are shares of each
+ * offloadable layer's per-sequence KV, by token.
+ */
+export interface KvCacheOffloadConfig {
+  /** f_dev ∈ [0, 1]: share of each offloadable layer's per-sequence KV kept in device memory. Dimensionless. */
+  deviceFraction: number;
+  /**
+   * f_ram ∈ [0, 1 − f_dev]: share kept in host RAM; the rest, `f_ssd = 1 − f_dev − f_ram`, is on the SSD. Absent =
+   * `1 − f_dev` (all off-device KV in host RAM). On unified memory host RAM is the device pool, so f_ram counts as
+   * device-resident (a warning). Dimensionless.
+   */
+  hostRamFraction?: number;
+  /** Hit model of top-k (sparse) attention layers; absent = `'uniform'`. No effect on full-attention layers. */
+  hitRatio?: KvHitRatioModel;
+  /**
+   * f_pre ∈ [0, 1]: share of a prefix-cache hit's KV found in device memory at prefill; the rest is read from the
+   * tiers in the `f_ram : f_ssd` proportion (both 0 ⇒ host RAM). Absent = f_dev. Only matters with
+   * `Workload.prefixCacheHitRatio > 0`. Dimensionless.
+   */
+  prefixDeviceFraction?: number;
 }
 
 /**
@@ -577,7 +619,11 @@ export interface DeviceMemory {
    * (the memory card's table segment). Unit: bytes.
    */
   lookupTableBytes: number;
-  /** Per-replica sequence state on this device: KV + MLA latent + indexer keys + recurrent/conv state, × B_r. Unit: bytes. */
+  /**
+   * Per-replica sequence state RESIDENT on this device: KV + MLA latent + indexer keys + recurrent/conv state, × B_r.
+   * With KV-cache offload (`OffloadConfig.kvCache`) only the device share f_dev of the offloadable KV counts here;
+   * the rest is in `TierMemory.breakdown.kvCache`. Unit: bytes.
+   */
   sequenceStateBytes: number;
   /**
    * Peak transient activations: the max over the ops of the decode step and of the LAST prefill chunk (chunked
@@ -664,6 +710,12 @@ export interface TierBytes {
    * Unit: bytes.
    */
   tokenEmbeddings: number;
+  /**
+   * Off-device KV cache of the live sequences (`OffloadConfig.kvCache`): `B_r · Σ_blocks f_t · KV_block(N)` per device
+   * on this tier t (f_ram or f_ssd, N the larger of the prompt and decode contexts); 0 without KV-cache offload.
+   * Unit: bytes.
+   */
+  kvCache: number;
 }
 
 /** Bytes placed on one off-device storage tier of a node, against its capacity (design doc §2.7). */

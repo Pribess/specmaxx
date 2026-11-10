@@ -517,6 +517,7 @@ export function simulate(input: SimInput): SimResult {
     input.deployment?.offload,
     device.memory.kind,
     parallel.ep,
+    workload.prefixCacheHitRatio ?? 0,
   );
   warnings.push(...resolved.warnings);
   let phaseOffload: PhaseOffload | undefined;
