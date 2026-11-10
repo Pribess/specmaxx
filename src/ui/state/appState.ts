@@ -15,6 +15,7 @@ import { DEFAULT_SIM_OPTIONS } from '../../sim/engine/simulate';
 import { DEFAULT_EP_IMBALANCE } from '../../sim/lower/moe';
 import type { CablingId } from '../../sim/hw/presets/catalog';
 import { DEFAULT_MODEL_ID } from './modelShortlist';
+import { DEFAULT_KV_LINK_ID } from './kvLink';
 import {
   devicesPerNodeForLocalLink,
   nearestCount,
@@ -143,7 +144,64 @@ export interface AppState {
    * with a per-kernel dispatch cost, next to the unchanged headline. Absent = off (never stored as `false`).
    */
   engineDispatchOverlay?: true;
+  /**
+   * Prefill/decode disaggregation (design: docs/design/prefill-decode-disaggregation.md): on when present (never
+   * `{}`), off when absent. With it on, `hw`, `parallel`, `parallelLayout` and `workload.batch` above are the
+   * **prefill pool**, and the decode pool's copy of those four fields is in `decodePool`; everything else is shared.
+   */
+  disaggregation?: DisaggregationChoice;
 }
+
+/**
+ * One pool's own fields (one instance of it): exactly the four `AppState` fields a pool does not share. The prefill
+ * pool's are `AppState.hw`, `parallel`, `parallelLayout` and `workload.batch` themselves; the decode pool's are
+ * {@link DisaggregationChoice.decodePool}.
+ */
+export interface PoolChoice {
+  /** The pool's hardware (one instance's device set). */
+  hw: HardwareChoice;
+  /** The pool's parallel degrees (same conventions as {@link AppState.parallel}, `dcp` included). */
+  parallel: ParallelConfig;
+  /** The pool's named layout; absent = custom (as {@link AppState.parallelLayout}). */
+  parallelLayout?: 'dpAttentionEp';
+  /** Global batch of one instance step, sequences (as `Workload.batch`). Count. */
+  batch: number;
+}
+
+/** Default output tokens per request O (OSL) when {@link DisaggregationChoice.outputLen} is absent. Unit: tokens. */
+export const DEFAULT_OUTPUT_LEN = 1024;
+
+/** The KV link fields a user may edit, in SI units (B/s per direction; seconds). */
+export type KvEditPath = 'bandwidthPerDirectionBytesPerSec' | 'latencySec';
+/** Edits on the KV link, by {@link KvEditPath}. */
+export type KvEdits = Partial<Record<KvEditPath, number>>;
+
+/** The disaggregation knob's choices; absent fields are the defaults. */
+export interface DisaggregationChoice {
+  /** The decode pool's own fields. */
+  decodePool: PoolChoice;
+  /** Output tokens per request O (OSL); absent = {@link DEFAULT_OUTPUT_LEN}. Never stored at the default. Unit: tokens. */
+  outputLen?: number;
+  /**
+   * The user's instance ratio n_P : n_D (integers ≥ 1 once valid); absent = 1 : 1. Never stored as 1 : 1. Count.
+   */
+  instances?: { prefill: number; decode: number };
+  /**
+   * The P→D KV link preset (`linkPresetId` of one of `KV_LINK_PRESETS`, kvLink.ts); absent = the default
+   * (`DEFAULT_KV_LINK_ID`, InfiniBand NDR400). Never stored at the default.
+   */
+  kvLinkId?: string;
+  /**
+   * Edits on the KV link: `bandwidthPerDirectionBytesPerSec` (B/s, per device, per direction) and/or `latencySec`
+   * (s); absent = none (never `{}`). Cleared when the link changes.
+   */
+  kvEdits?: KvEdits;
+  /** `'none'`: the KV transfer does not overlap the prefill (waits for arrival); absent = layer-wise overlap. */
+  kvOverlap?: 'none';
+}
+
+/** Which pool a view or an action addresses. */
+export type PoolId = 'prefill' | 'decode';
 
 /**
  * A named parallel layout of the Parallelism panel. `'custom'`: TP, PP, DP and EP as the user sets them.
@@ -348,7 +406,100 @@ export type AppAction =
    * Turn two-batch overlap on or off (`DeploymentChoice.twoBatchOverlap`). Turning it on clears an explicit EP
    * overlap, so EP takes the two-batch default (full).
    */
-  | { type: 'setTwoBatchOverlap'; on: boolean };
+  | { type: 'setTwoBatchOverlap'; on: boolean }
+  /**
+   * Turn prefill/decode disaggregation on (the decode pool starts as a copy of the prefill pool's four fields; already
+   * on: unchanged) or off (`disaggregation` removed, so the state is exactly the one without the knob).
+   */
+  | { type: 'setDisaggregation'; on: boolean }
+  /**
+   * Set the output length O and/or the instance ratio (a key present in the action is set; a default value, 1024 or
+   * 1 : 1, is stored as absent). Only while disaggregation is on (else unchanged).
+   */
+  | {
+      type: 'setDisaggregationParams';
+      outputLen?: number;
+      instances?: { prefill: number; decode: number };
+    }
+  /**
+   * Run `action` in the decode pool's view ({@link reduceInPool}): it reads and writes the decode pool's hardware,
+   * parallelism, layout and batch, and the shared fields (model, quant, P, N, options, deployment) as usual. Only
+   * while disaggregation is on (else unchanged).
+   */
+  | { type: 'inPool'; pool: 'decode'; action: PoolAction }
+  /** Pick the KV link preset (undefined or the default: stored as absent); clears the KV link edits. */
+  | { type: 'setKvLink'; linkId: string | undefined }
+  /** Set (value, SI) or clear (undefined) one KV link edit. */
+  | { type: 'setKvEdit'; path: KvEditPath; value: number | undefined }
+  /** Choose whether the KV transfer overlaps the prefill (`'layerwise'`, stored as absent) or not (`'none'`). */
+  | { type: 'setKvOverlap'; overlap: 'layerwise' | 'none' };
+
+/**
+ * An action a pool view can run (`inPool`): every {@link AppAction} except `replace` and the disaggregation ones,
+ * so a pool action can never change the knob itself.
+ */
+export type PoolAction = Exclude<
+  AppAction,
+  {
+    type:
+      | 'replace'
+      | 'setDisaggregation'
+      | 'setDisaggregationParams'
+      | 'inPool'
+      | 'setKvLink'
+      | 'setKvEdit'
+      | 'setKvOverlap';
+  }
+>;
+
+/** The four pool fields of `state` (its prefill pool, or the pool of a {@link poolView}). */
+function poolOf(state: AppState): PoolChoice {
+  return {
+    hw: state.hw,
+    parallel: state.parallel,
+    ...(state.parallelLayout !== undefined ? { parallelLayout: state.parallelLayout } : {}),
+    batch: state.workload.batch,
+  };
+}
+
+/**
+ * `state` with `pool`'s four fields in place of its own (hw, parallel, parallelLayout, workload.batch), so the
+ * ordinary panels, `reduce` and `buildSimInput` work on that pool unchanged. `'prefill'`, or disaggregation off:
+ * `state` itself.
+ */
+export function poolView(state: AppState, pool: PoolId): AppState {
+  const d = state.disaggregation;
+  if (pool === 'prefill' || d === undefined) return state;
+  const p = d.decodePool;
+  const view: AppState = {
+    ...without(state, 'parallelLayout'),
+    hw: p.hw,
+    parallel: p.parallel,
+    workload: { ...state.workload, batch: p.batch },
+  };
+  return p.parallelLayout !== undefined ? { ...view, parallelLayout: p.parallelLayout } : view;
+}
+
+/**
+ * Runs `action` in the decode pool's view and writes it back: the decode pool takes the view's hw, parallel,
+ * parallelLayout and workload.batch; every other field (shared) is taken from the reduced view; the prefill pool's
+ * four fields stay as in `state`. Disaggregation off: `state` unchanged.
+ */
+export function reduceInPool(state: AppState, action: PoolAction): AppState {
+  const d = state.disaggregation;
+  if (d === undefined) return state;
+  const next = reduce(poolView(state, 'decode'), action);
+  const shared: AppState = {
+    ...without(next, 'parallelLayout'),
+    hw: state.hw,
+    parallel: state.parallel,
+    workload: { ...next.workload, batch: state.workload.batch },
+    disaggregation: { ...d, decodePool: poolOf(next) },
+  };
+  return state.parallelLayout !== undefined
+    ? { ...shared, parallelLayout: state.parallelLayout }
+    : shared;
+}
 
 /** The `HardwareChoice` field holding the edits of `target`. */
 export function editsKey(target: EditTarget): 'deviceEdits' | 'intraEdits' | 'interEdits' {
@@ -599,6 +750,65 @@ export function reduce(state: AppState, action: AppAction): AppState {
           ...state.deployment,
           twoBatchOverlap: action.on ? true : undefined,
         }),
+      };
+    }
+    case 'setDisaggregation':
+      if (!action.on) return without(state, 'disaggregation');
+      return state.disaggregation !== undefined
+        ? state
+        : { ...state, disaggregation: { decodePool: poolOf(state) } };
+    case 'setDisaggregationParams': {
+      const d = state.disaggregation;
+      if (d === undefined) return state;
+      let next: DisaggregationChoice = d;
+      if ('outputLen' in action)
+        next =
+          action.outputLen === undefined || action.outputLen === DEFAULT_OUTPUT_LEN
+            ? without(next, 'outputLen')
+            : { ...next, outputLen: action.outputLen };
+      if ('instances' in action) {
+        const i = action.instances;
+        next =
+          i === undefined || (i.prefill === 1 && i.decode === 1)
+            ? without(next, 'instances')
+            : { ...next, instances: { prefill: i.prefill, decode: i.decode } };
+      }
+      return { ...state, disaggregation: next };
+    }
+    case 'inPool':
+      return reduceInPool(state, action.action);
+    case 'setKvLink': {
+      const d = state.disaggregation;
+      if (d === undefined) return state;
+      const base = without(d, 'kvEdits');
+      return {
+        ...state,
+        disaggregation:
+          action.linkId === undefined || action.linkId === DEFAULT_KV_LINK_ID
+            ? without(base, 'kvLinkId')
+            : { ...base, kvLinkId: action.linkId },
+      };
+    }
+    case 'setKvEdit': {
+      const d = state.disaggregation;
+      if (d === undefined) return state;
+      const edits: KvEdits =
+        action.value === undefined
+          ? without(d.kvEdits ?? {}, action.path)
+          : { ...d.kvEdits, [action.path]: action.value };
+      return {
+        ...state,
+        disaggregation:
+          Object.keys(edits).length > 0 ? { ...d, kvEdits: edits } : without(d, 'kvEdits'),
+      };
+    }
+    case 'setKvOverlap': {
+      const d = state.disaggregation;
+      if (d === undefined) return state;
+      return {
+        ...state,
+        disaggregation:
+          action.overlap === 'none' ? { ...d, kvOverlap: 'none' } : without(d, 'kvOverlap'),
       };
     }
     default: {

@@ -50,17 +50,30 @@
  * | `sd` | speculative decoding method: `mtp`, `dflash2`, `dspark` (absent: off) | `sd=mtp` |
  * | `sdr` | (block methods) drafter repo id, or `hyp` for the hypothetical drafter (default: the known one for the model) | `sdr=hyp` |
  * | `sdk`, `sdu`, `sda` | draft length k 1–16 (default per method), use case `code`, `math`, `reasoning`, `agentic` (default `prose`), acceptance α 0–0.99 (custom; overrides the use case) | `sdk=3&sda=0.8` |
+ * | `pd` | prefill/decode disaggregation on: `1` (absent: off). The keys above are then the prefill pool's | `pd=1` |
+ * | `osl` | (with `pd`) output tokens per request O, integer ≥ 1 (default 1024) | `osl=2048` |
+ * | `pdr` | (with `pd`) instance ratio `<prefill>:<decode>`, integers 1–1024 (default `1:1`) | `pdr=1:3` |
+ * | `kvl` | (with `pd`) P→D KV link preset id, an RDMA NIC per device (default `infiniband-ndr400-one-nic-per-gpu`) | `kvl=infiniband-xdr800-one-nic-per-gpu` |
+ * | `kvx` | (with `pd`) KV link edits, `path:value` list, SI units: `bandwidthPerDirectionBytesPerSec` (> 0), `latencySec` (0–1) | `kvx=bandwidthPerDirectionBytesPerSec:1e9` |
+ * | `kvo` | (with `pd`) `none` = the KV transfer does not overlap the prefill (absent: layer-wise overlap) | `kvo=none` |
+ * | `dec.<key>` | (with `pd`) the decode pool's hardware, parallelism and batch: `<key>` is one of `d` … `rr`, `tp` … `a2e` and `b` above, same values and defaults (not the prefill pool's) | `dec.nodes=18&dec.dp=144&dec.ep=144&dec.lay=dep` |
  */
 
 import type { OverlapClass, SimOptions } from '../../sim/engine/types';
 import { isA2aFormat } from '../../sim/ir/a2aFormat';
+import type { ParallelConfig } from '../../sim/ir/model';
 import { DEFAULT_EP_IMBALANCE } from '../../sim/lower/moe';
 import type { DeviceSpec } from '../../sim/hw/types';
 import type { UnlockSelection } from '../../sim/hw/unlocks';
 import { numericLeafPaths } from '../../sim/hw/validate';
 import { deviceUnlocks } from '../../sim/hw/presets/index';
 import { isValidModelId } from '../../hf/urls';
+import { DEFAULT_KV_LINK_ID, KV_EDIT_PATHS, findKvLink } from './kvLink';
 import {
+  DEFAULT_OUTPUT_LEN,
+  type DisaggregationChoice,
+  type KvEdits,
+  type PoolChoice,
   DEFAULT_HW,
   DEFAULT_STATE,
   normalizeOptions,
@@ -149,7 +162,7 @@ export function latencyFloorSecFromMicros(us: number): number {
 /**
  * Every key the codec knows, in encoding order (`oo`, `odl`, `odt` are legacy keys: read, never written), except the
  * split keys of the last two lines: `oxr`, `oxe` are written right after `oxh`, and `olr`, `ole`
- * right after `ols`.
+ * right after `ols`. The decode pool's `dec.` keys ({@link POOL_URL_KEYS}) follow `pdr`.
  */
 export const URL_KEYS = [
   'm',
@@ -223,10 +236,58 @@ export const URL_KEYS = [
   'sdk',
   'sdu',
   'sda',
+  'pd',
+  'osl',
+  'pdr',
+  'kvl',
+  'kvx',
+  'kvo',
   'oxr',
   'oxe',
   'olr',
   'ole',
+] as const;
+
+/** Prefix of the decode pool's keys (`dec.nodes=18`). */
+export const POOL_KEY_PREFIX = 'dec.';
+
+/**
+ * The keys of one pool's own fields (hardware, parallelism, batch), in encoding order: with {@link POOL_KEY_PREFIX}
+ * they hold the decode pool, written after `pdr`. Same meanings, defaults and rules as the state's own keys.
+ */
+export const POOL_URL_KEYS = [
+  'd',
+  'u',
+  'eng',
+  'cap',
+  'n',
+  'nodes',
+  'il',
+  'xl',
+  'fab',
+  'x',
+  'xi',
+  'xe',
+  'hr',
+  'hrc',
+  'ssd',
+  'hl',
+  'gpu',
+  'rr',
+  'tp',
+  'pp',
+  'dp',
+  'ep',
+  'dcp',
+  'lay',
+  'dn',
+  'epi',
+  'epa',
+  'rex',
+  'dsp',
+  'cmb',
+  'a2e',
+  'b',
 ] as const;
 
 /** URL value of a tier. */
@@ -301,6 +362,68 @@ function encodeEdits(edits: SpecEdits): string {
     .join(',');
 }
 
+/** Writes one URL parameter; an undefined value writes nothing. Numbers go through {@link encodeNumber}. */
+type Put = (key: string, value: string | number | undefined) => void;
+/** Reads one URL parameter (undefined when absent). */
+type Get = (key: string) => string | undefined;
+/** Records a dropped parameter (`key=value`) for the notice. */
+type Drop = (key: string, value: string) => void;
+
+/**
+ * Puts the hardware keys of `hw` (`d` … `rr`, see the module table), defaults omitted. Shared by the state's own
+ * hardware and the decode pool's (`dec.` keys, through a prefixed `put`).
+ */
+function encodeHardware(put: Put, hw: HardwareChoice): void {
+  if (hw.deviceId !== DEFAULT_HW.deviceId) put('d', hw.deviceId);
+  const axisOrder = deviceUnlocks({ id: hw.deviceId }).map((a) => a.id);
+  const axes = Object.keys(hw.unlocks).sort((a, b) => axisOrder.indexOf(a) - axisOrder.indexOf(b));
+  if (axes.length > 0) put('u', axes.map((a) => `${a}.${hw.unlocks[a]}`).join(','));
+  put('eng', hw.engineId);
+  if (hw.capacityIndex !== 0) put('cap', hw.capacityIndex);
+  if (hw.devicesPerNode !== 1) put('n', hw.devicesPerNode);
+  if (hw.nodes !== 1) put('nodes', hw.nodes);
+  put('il', hw.intraLinkId);
+  put('xl', hw.interLinkId);
+  // Absent when it is the default (the state keeps only a non-default cabling, `normalizeCabling`).
+  put('fab', normalizeCabling(hw).cabling);
+  if (Object.keys(hw.deviceEdits).length > 0) put('x', encodeEdits(hw.deviceEdits));
+  if (Object.keys(hw.intraEdits).length > 0) put('xi', encodeEdits(hw.intraEdits));
+  if (Object.keys(hw.interEdits).length > 0) put('xe', encodeEdits(hw.interEdits));
+  const host = normalizeHost(hw.host ?? {});
+  put('hr', host.ramId);
+  if (host.ramCapacityBytes !== undefined) put('hrc', host.ramCapacityBytes / 1e9);
+  put('ssd', host.ssdId);
+  if (host.link !== undefined) put('hl', `${host.link.generation}x${host.link.lanes}`);
+  // Percent with at most 4 decimals, so 0.9 encodes as 90 (not 90.00000000000001).
+  if (hw.gpuUsableFraction !== undefined) put('gpu', Math.round(hw.gpuUsableFraction * 1e6) / 1e4);
+  if (hw.runtimeReserveBytes !== undefined) put('rr', hw.runtimeReserveBytes / 1e9);
+}
+
+/**
+ * Puts the parallel keys (`tp` … `a2e`, see the module table) of `parallel` and its `layout`, defaults omitted.
+ * Shared by the state's own parallelism and the decode pool's.
+ */
+function encodeParallel(
+  put: Put,
+  parallel: ParallelConfig,
+  layout: AppState['parallelLayout'],
+): void {
+  for (const key of ['tp', 'pp', 'dp', 'ep'] as const)
+    if (parallel[key] !== 1) put(key, parallel[key]);
+  if (parallel.dcp !== undefined && parallel.dcp > 1) put('dcp', parallel.dcp);
+  if (layout === 'dpAttentionEp') put('lay', 'dep');
+  if (layout === 'dpAttentionEp' && parallel.denseTpGroup === 'ep') put('dn', 'tp');
+  // Kept in the state only when not the default (`normalizeEpBalance`).
+  put('epi', parallel.epImbalance);
+  if (parallel.epImbalanceScalesAllToAll === true) put('epa', '1');
+  put('rex', parallel.redundantExpertsPerRank);
+  put('dsp', parallel.dispatchFormat);
+  put('cmb', parallel.combineFormat);
+  // Percent with at most 4 decimals (0.7 encodes as 70).
+  if (parallel.allToAllEfficiency !== undefined)
+    put('a2e', Math.round(parallel.allToAllEfficiency * 1e6) / 1e4);
+}
+
 /**
  * The query string of a state, without the leading `?` (`''` for the default state). Defaults are omitted;
  * keys follow {@link URL_KEYS}; unlocks follow the device's axis order and edits are sorted by path.
@@ -326,44 +449,8 @@ export function encodeState(s: AppState): string {
   put('a', s.quant.activations);
   put('kv', s.quant.kvCache);
   put('lt', s.quant.lookupTables);
-  const hw = s.hw;
-  if (hw.deviceId !== DEFAULT_HW.deviceId) put('d', hw.deviceId);
-  const axisOrder = deviceUnlocks({ id: hw.deviceId }).map((a) => a.id);
-  const axes = Object.keys(hw.unlocks).sort((a, b) => axisOrder.indexOf(a) - axisOrder.indexOf(b));
-  if (axes.length > 0) put('u', axes.map((a) => `${a}.${hw.unlocks[a]}`).join(','));
-  put('eng', hw.engineId);
-  if (hw.capacityIndex !== 0) put('cap', hw.capacityIndex);
-  if (hw.devicesPerNode !== 1) put('n', hw.devicesPerNode);
-  if (hw.nodes !== 1) put('nodes', hw.nodes);
-  put('il', hw.intraLinkId);
-  put('xl', hw.interLinkId);
-  // Absent when it is the default (the state keeps only a non-default cabling, `normalizeCabling`).
-  put('fab', normalizeCabling(hw).cabling);
-  if (Object.keys(hw.deviceEdits).length > 0) put('x', encodeEdits(hw.deviceEdits));
-  if (Object.keys(hw.intraEdits).length > 0) put('xi', encodeEdits(hw.intraEdits));
-  if (Object.keys(hw.interEdits).length > 0) put('xe', encodeEdits(hw.interEdits));
-  const host = normalizeHost(hw.host ?? {});
-  put('hr', host.ramId);
-  if (host.ramCapacityBytes !== undefined) put('hrc', host.ramCapacityBytes / 1e9);
-  put('ssd', host.ssdId);
-  if (host.link !== undefined) put('hl', `${host.link.generation}x${host.link.lanes}`);
-  // Percent with at most 4 decimals, so 0.9 encodes as 90 (not 90.00000000000001).
-  if (hw.gpuUsableFraction !== undefined) put('gpu', Math.round(hw.gpuUsableFraction * 1e6) / 1e4);
-  if (hw.runtimeReserveBytes !== undefined) put('rr', hw.runtimeReserveBytes / 1e9);
-  for (const key of ['tp', 'pp', 'dp', 'ep'] as const)
-    if (s.parallel[key] !== 1) put(key, s.parallel[key]);
-  if (s.parallel.dcp !== undefined && s.parallel.dcp > 1) put('dcp', s.parallel.dcp);
-  if (s.parallelLayout === 'dpAttentionEp') put('lay', 'dep');
-  if (s.parallelLayout === 'dpAttentionEp' && s.parallel.denseTpGroup === 'ep') put('dn', 'tp');
-  // Kept in the state only when not the default (`normalizeEpBalance`).
-  put('epi', s.parallel.epImbalance);
-  if (s.parallel.epImbalanceScalesAllToAll === true) put('epa', '1');
-  put('rex', s.parallel.redundantExpertsPerRank);
-  put('dsp', s.parallel.dispatchFormat);
-  put('cmb', s.parallel.combineFormat);
-  // Percent with at most 4 decimals (0.7 encodes as 70).
-  if (s.parallel.allToAllEfficiency !== undefined)
-    put('a2e', Math.round(s.parallel.allToAllEfficiency * 1e6) / 1e4);
+  encodeHardware(put, s.hw);
+  encodeParallel(put, s.parallel, s.parallelLayout);
   const w = s.workload;
   const dw = DEFAULT_STATE.workload;
   if (w.batch !== dw.batch) put('b', w.batch);
@@ -414,6 +501,26 @@ export function encodeState(s: AppState): string {
     put('sdk', sd.k);
     put('sdu', sd.useCase);
     put('sda', sd.alpha);
+  }
+  const pd = s.disaggregation;
+  if (pd !== undefined) {
+    put('pd', '1');
+    if (pd.outputLen !== undefined && pd.outputLen !== DEFAULT_OUTPUT_LEN) put('osl', pd.outputLen);
+    const i = pd.instances;
+    if (i !== undefined && (i.prefill !== 1 || i.decode !== 1))
+      put('pdr', `${encodeNumber(i.prefill)}:${encodeNumber(i.decode)}`);
+    if (pd.kvLinkId !== undefined && pd.kvLinkId !== DEFAULT_KV_LINK_ID) put('kvl', pd.kvLinkId);
+    const kvEdits = pd.kvEdits ?? {};
+    const kvPaths = KV_EDIT_PATHS.filter((p) => kvEdits[p] !== undefined);
+    if (kvPaths.length > 0)
+      put('kvx', kvPaths.map((p) => `${p}:${encodeNumber(kvEdits[p] as number)}`).join(','));
+    if (pd.kvOverlap === 'none') put('kvo', 'none');
+    // The decode pool through the same encoders, against the same defaults, with `dec.` keys.
+    const putPool: Put = (key, value) => put(POOL_KEY_PREFIX + key, value);
+    const pool = pd.decodePool;
+    encodeHardware(putPool, pool.hw);
+    encodeParallel(putPool, pool.parallel, pool.parallelLayout);
+    if (pool.batch !== DEFAULT_STATE.workload.batch) putPool('b', pool.batch);
   }
   return out.map(([k, v]) => `${k}=${encodeValue(v)}`).join('&');
 }
@@ -590,65 +697,11 @@ function decodeDeployment(
 }
 
 /**
- * The state of a query string (with or without the leading `?`). Starts from the default state; each known
- * key with a valid value overrides its field. Device-dependent values (unlocks, engine, capacity, edits,
- * links) are checked against the decoded device; link edits against the link in use at that level.
+ * The hardware choice of the device, unlock, engine, capacity, count, link, cabling and edit keys (`d` … `xe`,
+ * see the module table), checked against the decoded device and links, and the unlocked device it resolved to
+ * (for {@link decodeHardwareMemory}). Shared by the state's own hardware and the decode pool's (`dec.` keys).
  */
-export function decodeState(search: string): DecodedState {
-  const params = new URLSearchParams(search);
-  const dropped: string[] = [];
-  const drop = (key: string, value: string) => dropped.push(`${key}=${value}`);
-  const get = (key: string): string | undefined => params.get(key) ?? undefined;
-  for (const [key, value] of params)
-    if (!(URL_KEYS as readonly string[]).includes(key)) drop(key, value);
-
-  // Model.
-  let model: ModelChoice = DEFAULT_STATE.model;
-  const m = get('m');
-  const rev = get('rev');
-  if (m !== undefined) {
-    if (isValidModelId(m)) {
-      model =
-        rev !== undefined && rev !== '' && rev !== 'main'
-          ? { kind: 'hf', id: m, revision: rev }
-          : { kind: 'hf', id: m };
-    } else drop('m', m);
-  }
-  if (rev !== undefined && m === undefined) drop('rev', rev);
-
-  // Quant overrides.
-  const quant: QuantOverrides = {};
-  for (const [key, field] of [
-    ['w', 'weights'],
-    ['a', 'activations'],
-    ['kv', 'kvCache'],
-    ['lt', 'lookupTables'],
-  ] as const) {
-    const v = get(key);
-    if (v === undefined) continue;
-    if (
-      field === 'weights'
-        ? isWeightFormat(v)
-        : field === 'lookupTables'
-          ? isLookupTableDtype(v)
-          : isQuantDtype(v)
-    )
-      Object.assign(quant, { [field]: v });
-    else drop(key, v);
-  }
-  // EXL3 bits per weight; meaningful only with `w=exl3`.
-  for (const [key, field, valid] of [
-    ['bpw', 'bpw', isValidBpw],
-    ['hbpw', 'headBpw', isValidHeadBpw],
-  ] as const) {
-    const v = get(key);
-    if (v === undefined) continue;
-    const n = Number(v);
-    if (quant.weights === 'exl3' && v.trim() !== '' && valid(n)) quant[field] = n;
-    else drop(key, v);
-  }
-
-  // Device and its unlocks.
+function decodeHardware(get: Get, drop: Drop): { hw: HardwareChoice; unlocked: DeviceSpec } {
   const hw: HardwareChoice = {
     ...DEFAULT_HW,
     unlocks: {},
@@ -751,9 +804,46 @@ export function decodeState(search: string): DecodedState {
     hw[field] = parseEdits(edits, link.unlocked, bad);
     if (bad.length > 0) drop(key, bad.join(','));
   }
+  return { hw, unlocked };
+}
 
-  // Parallelism and workload.
-  const parallel = { ...DEFAULT_STATE.parallel };
+/**
+ * Sets the host (`hr`, `hrc`, `ssd`, `hl`) and memory-fit (`gpu`, `rr`) keys on `hw` (mutated), checked against
+ * `unlocked` (the GPU limit only on unified memory).
+ */
+function decodeHardwareMemory(
+  get: Get,
+  drop: Drop,
+  hw: HardwareChoice,
+  unlocked: DeviceSpec,
+): void {
+  const host = normalizeHost(decodeHost(get, drop));
+  if (Object.keys(host).length > 0) hw.host = host;
+  // Memory-fit knobs: the GPU limit only on unified memory (it means nothing on a dedicated device).
+  const gpu = get('gpu');
+  if (gpu !== undefined) {
+    const percent = parseNumberIn(gpu, Number.MIN_VALUE, 100);
+    if (percent !== undefined && unlocked.memory.kind === 'unified')
+      hw.gpuUsableFraction = percent / 100;
+    else drop('gpu', gpu);
+  }
+  const rr = get('rr');
+  if (rr !== undefined) {
+    const gb = parseNumberIn(rr, 0, 1e6);
+    if (gb !== undefined) hw.runtimeReserveBytes = Math.round(gb * 1e9);
+    else drop('rr', rr);
+  }
+}
+
+/**
+ * The parallel degrees, layout, dense TP, DCP, EP balance and all-to-all keys (`tp` … `a2e`, see the module table). The layout
+ * only with its shape (TP 1, DP = EP); `dn` only within it; `dcp` never in it.
+ */
+function decodeParallel(
+  get: Get,
+  drop: Drop,
+): { parallel: ParallelConfig; layout?: 'dpAttentionEp' } {
+  const parallel: ParallelConfig = { ...DEFAULT_STATE.parallel };
   for (const key of ['tp', 'pp', 'dp', 'ep'] as const) {
     const v = get(key);
     if (v === undefined) continue;
@@ -811,6 +901,179 @@ export function decodeState(search: string): DecodedState {
     if (percent === undefined) drop('a2e', a2e);
     else if (percent < 100) parallel.allToAllEfficiency = percent / 100;
   }
+  return dep ? { parallel, layout: 'dpAttentionEp' } : { parallel };
+}
+
+/** True for a key of {@link URL_KEYS}, or `dec.` + a key of {@link POOL_URL_KEYS}. */
+function isKnownKey(key: string): boolean {
+  if ((URL_KEYS as readonly string[]).includes(key)) return true;
+  return (
+    key.startsWith(POOL_KEY_PREFIX) &&
+    (POOL_URL_KEYS as readonly string[]).includes(key.slice(POOL_KEY_PREFIX.length))
+  );
+}
+
+/** True for a key that belongs to the disaggregation knob: `osl`, `pdr`, the KV keys and the `dec.` pool keys. */
+function isDisaggregationKey(key: string): boolean {
+  return (
+    key === 'osl' ||
+    key === 'pdr' ||
+    key === 'kvl' ||
+    key === 'kvx' ||
+    key === 'kvo' ||
+    key.startsWith(POOL_KEY_PREFIX)
+  );
+}
+
+/** Largest KV link latency the URL accepts (`kvx=latencySec:…`). Unit: seconds. */
+export const MAX_KV_LATENCY_SEC = 1;
+
+/**
+ * The disaggregation choice of `pd`, `osl`, `pdr`, the KV keys and the `dec.` pool keys, or undefined (off). Without
+ * `pd=1`, every one of them is dropped. The decode pool is decoded from the defaults with the same rules as the
+ * state's own hardware, parallelism and batch (a `dec.lay=dep` without its shape is dropped, and so on); its drops are
+ * listed with their `dec.` key. A default `osl` (1024), `pdr` (1:1) or `kvl` (the default link) stays absent.
+ */
+function decodeDisaggregation(
+  params: URLSearchParams,
+  drop: Drop,
+): DisaggregationChoice | undefined {
+  const pd = params.get('pd') ?? undefined;
+  if (pd !== '1') {
+    if (pd !== undefined) drop('pd', pd);
+    for (const [key, value] of params)
+      if (isDisaggregationKey(key) && isKnownKey(key)) drop(key, value);
+    return undefined;
+  }
+  const choice: Omit<DisaggregationChoice, 'decodePool'> = {};
+  const osl = params.get('osl') ?? undefined;
+  if (osl !== undefined) {
+    const parsed = parseInteger(osl, 1, MAX_VALUE);
+    if (parsed === undefined) drop('osl', osl);
+    else if (parsed !== DEFAULT_OUTPUT_LEN) choice.outputLen = parsed;
+  }
+  const pdr = params.get('pdr') ?? undefined;
+  if (pdr !== undefined) {
+    const match = /^(\d+):(\d+)$/.exec(pdr);
+    const prefill = match === null ? undefined : parseInteger(match[1], 1, MAX_COUNT);
+    const decode = match === null ? undefined : parseInteger(match[2], 1, MAX_COUNT);
+    if (prefill === undefined || decode === undefined) drop('pdr', pdr);
+    else if (prefill !== 1 || decode !== 1) choice.instances = { prefill, decode };
+  }
+  const kvl = params.get('kvl') ?? undefined;
+  if (kvl !== undefined) {
+    if (findKvLink(kvl) === undefined) drop('kvl', kvl);
+    else if (kvl !== DEFAULT_KV_LINK_ID) choice.kvLinkId = kvl;
+  }
+  const kvx = params.get('kvx') ?? undefined;
+  if (kvx !== undefined) {
+    const edits: KvEdits = {};
+    const bad: string[] = [];
+    for (const entry of kvx.split(',')) {
+      const i = entry.lastIndexOf(':');
+      const path = KV_EDIT_PATHS.find((p) => p === entry.slice(0, i));
+      const value =
+        i < 0
+          ? undefined
+          : path === 'latencySec'
+            ? parseNumberIn(entry.slice(i + 1), 0, MAX_KV_LATENCY_SEC)
+            : parseNumberIn(entry.slice(i + 1), Number.MIN_VALUE, Number.MAX_VALUE);
+      if (path !== undefined && value !== undefined && edits[path] === undefined)
+        edits[path] = value;
+      else bad.push(entry);
+    }
+    if (Object.keys(edits).length > 0) choice.kvEdits = edits;
+    if (bad.length > 0) drop('kvx', bad.join(','));
+  }
+  const kvo = params.get('kvo') ?? undefined;
+  if (kvo !== undefined) {
+    if (kvo === 'none') choice.kvOverlap = 'none';
+    else drop('kvo', kvo);
+  }
+  // The decode pool: the same decoders as the state's own fields, on the `dec.` keys.
+  const get: Get = (key) => params.get(POOL_KEY_PREFIX + key) ?? undefined;
+  const poolDrop: Drop = (key, value) => drop(POOL_KEY_PREFIX + key, value);
+  const { hw, unlocked } = decodeHardware(get, poolDrop);
+  const { parallel, layout } = decodeParallel(get, poolDrop);
+  let batch = DEFAULT_STATE.workload.batch;
+  const b = get('b');
+  if (b !== undefined) {
+    const parsed = parseInteger(b, 1, MAX_VALUE);
+    if (parsed !== undefined) batch = parsed;
+    else poolDrop('b', b);
+  }
+  decodeHardwareMemory(get, poolDrop, hw, unlocked);
+  const decodePool: PoolChoice = {
+    hw,
+    parallel,
+    ...(layout !== undefined ? { parallelLayout: layout } : {}),
+    batch,
+  };
+  return { decodePool, ...choice };
+}
+
+/**
+ * The state of a query string (with or without the leading `?`). Starts from the default state; each known
+ * key with a valid value overrides its field. Device-dependent values (unlocks, engine, capacity, edits,
+ * links) are checked against the decoded device; link edits against the link in use at that level.
+ */
+export function decodeState(search: string): DecodedState {
+  const params = new URLSearchParams(search);
+  const dropped: string[] = [];
+  const drop = (key: string, value: string) => dropped.push(`${key}=${value}`);
+  const get = (key: string): string | undefined => params.get(key) ?? undefined;
+  for (const [key, value] of params) if (!isKnownKey(key)) drop(key, value);
+
+  // Model.
+  let model: ModelChoice = DEFAULT_STATE.model;
+  const m = get('m');
+  const rev = get('rev');
+  if (m !== undefined) {
+    if (isValidModelId(m)) {
+      model =
+        rev !== undefined && rev !== '' && rev !== 'main'
+          ? { kind: 'hf', id: m, revision: rev }
+          : { kind: 'hf', id: m };
+    } else drop('m', m);
+  }
+  if (rev !== undefined && m === undefined) drop('rev', rev);
+
+  // Quant overrides.
+  const quant: QuantOverrides = {};
+  for (const [key, field] of [
+    ['w', 'weights'],
+    ['a', 'activations'],
+    ['kv', 'kvCache'],
+    ['lt', 'lookupTables'],
+  ] as const) {
+    const v = get(key);
+    if (v === undefined) continue;
+    if (
+      field === 'weights'
+        ? isWeightFormat(v)
+        : field === 'lookupTables'
+          ? isLookupTableDtype(v)
+          : isQuantDtype(v)
+    )
+      Object.assign(quant, { [field]: v });
+    else drop(key, v);
+  }
+  // EXL3 bits per weight; meaningful only with `w=exl3`.
+  for (const [key, field, valid] of [
+    ['bpw', 'bpw', isValidBpw],
+    ['hbpw', 'headBpw', isValidHeadBpw],
+  ] as const) {
+    const v = get(key);
+    if (v === undefined) continue;
+    const n = Number(v);
+    if (quant.weights === 'exl3' && v.trim() !== '' && valid(n)) quant[field] = n;
+    else drop(key, v);
+  }
+
+  const { hw, unlocked } = decodeHardware(get, drop);
+
+  // Parallelism and workload.
+  const { parallel, layout } = decodeParallel(get, drop);
   const workload = { ...DEFAULT_STATE.workload };
   for (const [key, field] of [
     ['b', 'batch'],
@@ -860,22 +1123,7 @@ export function decodeState(search: string): DecodedState {
   const engineDispatchOverlay = ed === '1';
   if (ed !== undefined && !engineDispatchOverlay) drop('ed', ed);
 
-  const host = normalizeHost(decodeHost(get, drop));
-  if (Object.keys(host).length > 0) hw.host = host;
-  // Memory-fit knobs: the GPU limit only on unified memory (it means nothing on a dedicated device).
-  const gpu = get('gpu');
-  if (gpu !== undefined) {
-    const percent = parseNumberIn(gpu, Number.MIN_VALUE, 100);
-    if (percent !== undefined && unlocked.memory.kind === 'unified')
-      hw.gpuUsableFraction = percent / 100;
-    else drop('gpu', gpu);
-  }
-  const rr = get('rr');
-  if (rr !== undefined) {
-    const gb = parseNumberIn(rr, 0, 1e6);
-    if (gb !== undefined) hw.runtimeReserveBytes = Math.round(gb * 1e9);
-    else drop('rr', rr);
-  }
+  decodeHardwareMemory(get, drop, hw, unlocked);
   const deployment = decodeDeployment(get, drop);
   const tbo = get('tbo');
   if (tbo === '1') deployment.twoBatchOverlap = true;
@@ -890,7 +1138,9 @@ export function decodeState(search: string): DecodedState {
     options: normalizeOptions(options),
     deployment,
   };
-  if (dep) state.parallelLayout = 'dpAttentionEp';
+  if (layout !== undefined) state.parallelLayout = layout;
   if (engineDispatchOverlay) state.engineDispatchOverlay = true;
+  const disaggregation = decodeDisaggregation(params, drop);
+  if (disaggregation !== undefined) state.disaggregation = disaggregation;
   return { state, dropped };
 }

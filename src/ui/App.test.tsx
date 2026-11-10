@@ -965,3 +965,48 @@ describe('drafter picker keyboard and custom repos', () => {
     ]);
   });
 });
+
+describe('prefill/decode disaggregation', () => {
+  const QUERY =
+    '?m=zai-org/GLM-5.3-Flash&d=h100-sxm&n=8&nodes=4&dp=32&ep=32&lay=dep&b=32&pd=1&pdr=1:3' +
+    '&dec.d=h100-sxm&dec.n=8&dec.nodes=18&dec.dp=144&dec.ep=144&dec.lay=dep&dec.b=144';
+
+  it('shows both pools, the System answer with its quote, and edits the decode pool through the pool switch', async () => {
+    history.replaceState(null, '', `/${QUERY}`);
+    mount();
+    const system = await screen.findByTestId('pd-system-tps', {}, { timeout: 5000 });
+    expect(system.textContent).toMatch(/tok\/s\/GPU @ 8k\/1k, decode @ 8k$/);
+    expect(screen.getByTestId('pd-balanced').textContent).toMatch(/^(1 : [\d.]+|[\d.]+ : 1)$/);
+    expect(screen.getByTestId('pd-kv').textContent).toMatch(/per request @ 8k/);
+    expect(screen.getByTestId('pd-rig').textContent).toContain('DP attention + EP 32 / 144');
+    await waitFor(() =>
+      expect(document.title).toMatch(/tok\/s @ 8k prefill · .* tok\/s @ 8k decode/),
+    );
+    // The per-pool panels name the edited pool; the decode pool's batch goes to dec.b.
+    expect(screen.getByText('Hardware (prefill pool)')).toBeTruthy();
+    const pool = screen.getByRole('radiogroup', { name: 'Edit pool' });
+    fireEvent.click(within(pool).getByRole('radio', { name: 'Decode' }));
+    expect(screen.getByText('Hardware (decode pool)')).toBeTruthy();
+    const batch = screen.getByRole('spinbutton', { name: 'Batch size (decode pool)' });
+    expect((batch as HTMLInputElement).value).toBe('144');
+    fireEvent.change(batch, { target: { value: '288' } });
+    await waitFor(() => expect(location.search).toContain('dec.b=288'));
+    expect(location.search).toContain('&b=32&');
+  });
+
+  it('turning it off gives back the single-pool page and URL', async () => {
+    const query = '?m=zai-org/GLM-5.3-Flash&d=h100-sxm&n=8&nodes=4&dp=32&ep=32&lay=dep&b=32';
+    history.replaceState(null, '', `/${query}`);
+    mount();
+    await waitFor(() => expect(screen.getByTestId('decode-tps').textContent).toMatch(/[1-9]/));
+    const before = screen.getByTestId('decode-tps').textContent;
+    const toggle = screen.getByRole('radiogroup', { name: 'Prefill/decode disaggregation' });
+    fireEvent.click(within(toggle).getByRole('radio', { name: 'On' }));
+    await screen.findByTestId('pd-system-tps', {}, { timeout: 5000 });
+    await waitFor(() => expect(location.search).toContain('pd=1'));
+    fireEvent.click(within(toggle).getByRole('radio', { name: 'Off' }));
+    await waitFor(() => expect(screen.queryByTestId('pd-system-tps')).toBeNull());
+    await waitFor(() => expect(screen.getByTestId('decode-tps').textContent).toBe(before));
+    await waitFor(() => expect(location.search).toBe(query));
+  });
+});

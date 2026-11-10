@@ -21,7 +21,7 @@ import { AllToAllFields } from './AllToAllFields';
 import { OverlapFields } from './OverlapFields';
 import { MemoryFitFields } from './MemoryFitFields';
 import { PerOpCostFields } from './PerOpCostFields';
-import type { PanelProps as Props } from './types';
+import { poolTitle, type PanelProps as Props } from './types';
 
 /** The group of the curated multi-device setups, at the top of the device picker. */
 export const POPULAR_GROUP = 'Popular setups';
@@ -81,7 +81,7 @@ export function HardwarePanel(props: Props) {
     }
   })();
   return (
-    <Panel title="Hardware" value={label} open>
+    <Panel title={poolTitle('Hardware', props.pool)} value={label} open>
       <Picker
         label="Device"
         value={selected}

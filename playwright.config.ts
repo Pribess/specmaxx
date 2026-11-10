@@ -8,7 +8,8 @@ import { defineConfig, devices } from '@playwright/test';
  *   NVL72 and its dense-layers TP option; the dcp test runs decode context parallelism (Kimi-K3 at TP 8 + DCP 8 on
  *   8 × B300, and the GQA limit on Qwen3.8-27B); the deployment test turns on speculative decoding and
  *   expert offload; the layout test checks the desktop split (splitter drag, keyboard, reset, persistence) and the
- *   phone stacking order; the gated-mirror test loads a gated shortlist model from its mirror without a token.
+ *   phone stacking order; the gated-mirror test loads a gated shortlist model from its mirror without a token; the
+ *   disaggregation test runs prefill and decode pools in DeepSeek's 32 : 144 shape with a KV link.
  * - `screenshots` (`bun run screenshots`): writes docs/screenshots/*.png (or to `$SCREENSHOTS_DIR`).
  * - `redesign` (`bun run screenshots:redesign`): viewport-only before/after states (`$REDESIGN_DIR`).
  * The HF Hub is mocked per test (no real network). `@playwright/test` is pinned to 1.64.1, whose
@@ -29,7 +30,7 @@ export default defineConfig({
     {
       name: 'smoke',
       testMatch:
-        /(smoke|fabric|rack-scale|dp-attention|dcp|deployment|layout|help|gated-mirror)\.spec\.ts/,
+        /(smoke|fabric|rack-scale|dp-attention|dcp|deployment|layout|help|gated-mirror|disaggregation)\.spec\.ts/,
     },
     { name: 'screenshots', testMatch: /screenshots\.spec\.ts/ },
     { name: 'redesign', testMatch: /redesign\.spec\.ts/ },

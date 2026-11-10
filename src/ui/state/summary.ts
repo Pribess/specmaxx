@@ -21,6 +21,15 @@ import { hitRatio } from '../../sim/engine/transfer';
 import { expertRules, lookupTableRules } from '../../sim/engine/offloadRules';
 import { memoryFits } from './memoryVerdict';
 import type { Op } from '../../sim/ir/ops';
+import {
+  poolInput,
+  type BalanceResult,
+  type DisaggregatedInput,
+  type DisaggregatedResult,
+  type PoolRates,
+  type SystemResult,
+} from '../../sim/engine/disaggregation';
+import type { KvTransferResult } from '../../sim/engine/kvTransfer';
 
 /** Headline numbers of one phase. */
 export interface PhaseSummary {
@@ -470,6 +479,110 @@ export function summarize(result: SimResult, input: SimInput, notes: string[] = 
         hypothetical: input.deployment.speculative.drafter?.kind === 'hypothetical',
       },
     }),
+  };
+}
+
+/**
+ * The cross-pool figures of a disaggregated result, as plain numbers (see `DisaggregatedResult` and
+ * docs/design/prefill-decode-disaggregation.md §3). Every figure here is quoted with all three contexts, P / O and
+ * the decode context N (`formatWorkloadQuote`).
+ */
+export interface DisaggregationSummary {
+  /** Prompt length P of every request. Unit: tokens. */
+  promptLen: number;
+  /** Output tokens O per request. Unit: tokens. */
+  outputLen: number;
+  /** Decode context N at which the decode pool's rate is taken (for all O tokens). Unit: tokens. */
+  decodeContextLen: number;
+  /** One prefill instance: devices D_P, R_P (tok/s @ P), λ_P (requests/s). */
+  prefill: PoolRates;
+  /** One decode instance: devices D_D, R_D (tok/s @ N), λ_D (requests/s). */
+  decode: PoolRates;
+  /** The balanced ratio r* and the figures at balance. */
+  balance: BalanceResult;
+  /** The system at the user's instance ratio. */
+  system: SystemResult;
+  /**
+   * The P→D KV transfer (bytes per request @ P, per-request and exposed seconds, effective prefill cycle, decode
+   * ingress); absent when the input had none.
+   */
+  kvTransfer?: KvTransferResult;
+}
+
+/** {@link summarizeDisaggregated}'s result: each pool's ordinary summary and the cross-pool figures. */
+export interface DisaggregatedSummary {
+  /**
+   * The prefill pool's run (`DisaggregatedResult.prefillPool`): its prefill phase is the headline Prefill; its memory
+   * fit is at P; its decode phase (taken at max(1, P − 1)) is not meant to be shown.
+   */
+  prefillPool: ResultSummary;
+  /** The decode pool's run: its decode phase is the headline Decode @ N. */
+  decodePool: ResultSummary;
+  /** Cross-pool figures. */
+  system: DisaggregationSummary;
+}
+
+/**
+ * The prefill pool's headline prefill phase with the KV transfer applied: R_P,eff = R_P · cycle_P / cycle_eff
+ * (`DisaggregationSummary.prefill.tokensPerSec`), with the per-sequence and computed-token rates scaled by the same
+ * factor cycle_P / cycle_eff. `computeOnlyTokensPerSec` is R_P, the pool's rate without the transfer (tokens/s @ P).
+ * Without a KV transfer the factor is 1 and the phase equals the pool's own.
+ */
+export function effectivePrefillPhase(
+  s: DisaggregatedSummary,
+): PhaseSummary & { computeOnlyTokensPerSec: number } {
+  const raw = s.prefillPool.prefill;
+  // Formula: f = R_P,eff / R_P = cycle_P / cycle_eff  (1 without a transfer)
+  const factor = raw.tokensPerSec > 0 ? s.system.prefill.tokensPerSec / raw.tokensPerSec : 1;
+  return {
+    ...raw,
+    tokensPerSec: s.system.prefill.tokensPerSec,
+    perSequenceTokensPerSec: raw.perSequenceTokensPerSec * factor,
+    ...(raw.computedTokensPerSec !== undefined && {
+      computedTokensPerSec: raw.computedTokensPerSec * factor,
+    }),
+    computeOnlyTokensPerSec: raw.tokensPerSec,
+  };
+}
+
+/**
+ * Reduces a disaggregated result for the UI: {@link summarize} on each pool's run (with that pool's own input,
+ * `poolInput`), plus the cross-pool numbers. `prefillNotes` / `decodeNotes` go to each pool's warnings.
+ */
+export function summarizeDisaggregated(
+  result: DisaggregatedResult,
+  input: DisaggregatedInput,
+  prefillNotes: string[] = [],
+  decodeNotes: string[] = prefillNotes,
+): DisaggregatedSummary {
+  const w = input.shared.workload;
+  return {
+    prefillPool: summarize(
+      result.prefillPool,
+      poolInput(input.shared, input.prefillPool, 'prefill'),
+      prefillNotes,
+    ),
+    decodePool: summarize(
+      result.decodePool,
+      poolInput(input.shared, input.decodePool, 'decode'),
+      decodeNotes,
+    ),
+    system: {
+      promptLen: w.promptLen,
+      outputLen: input.config.outputLen,
+      decodeContextLen: w.decodeContextLen,
+      prefill: { ...result.prefill },
+      decode: { ...result.decode },
+      balance: { ...result.balance },
+      system: { ...result.system },
+      ...(result.kvTransfer !== undefined && {
+        kvTransfer: {
+          ...result.kvTransfer,
+          link: { ...result.kvTransfer.link },
+          stageRequestBytes: [...result.kvTransfer.stageRequestBytes],
+        },
+      }),
+    },
   };
 }
 

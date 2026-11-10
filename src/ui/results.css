@@ -135,6 +135,21 @@
   gap: var(--gap-label-icon);
   white-space: nowrap;
 }
+/* Disaggregation: the System answer (SystemAnswer.tsx) spans the answers' row, and its long context quotes wrap. */
+.answer-system {
+  grid-column: 1 / -1;
+}
+.answer-system h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-label-icon);
+}
+.answer-system .answer-unit {
+  white-space: normal;
+}
+.answer-system .what-if-value {
+  white-space: normal;
+}
 /* Phone and narrow output panes: the two figures side by side. */
 .hero-grid.no-roofline .answers {
   grid-template-columns: repeat(2, minmax(0, 1fr));

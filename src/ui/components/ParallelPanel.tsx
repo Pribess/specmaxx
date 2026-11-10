@@ -13,7 +13,7 @@ import { NumberField } from './NumberField';
 import { ParallelAdvancedFields } from './ParallelAdvancedFields';
 import { Segmented } from './Segmented';
 import { helpLines } from './helpLines';
-import type { PanelProps as Props } from './types';
+import { poolTitle, type PanelProps as Props } from './types';
 
 /** Help text per field: short sentences, each shown on its own line in the tooltip. */
 const HELP = {
@@ -85,7 +85,7 @@ const ON_OFF = [
   { value: 'on', label: 'On' },
 ];
 
-export function ParallelPanel({ state, dispatch, loaded, built }: Props) {
+export function ParallelPanel({ state, dispatch, loaded, built, pool }: Props) {
   // EP and the layouts are offered only for a loaded MoE model; a dense model always runs with EP 1.
   const moe = loaded !== null && hasMoe(loaded.model);
   const dep = moe && state.parallelLayout === 'dpAttentionEp';
@@ -177,7 +177,7 @@ export function ParallelPanel({ state, dispatch, loaded, built }: Props) {
   };
 
   return (
-    <Panel title="Parallelism" value={value} open>
+    <Panel title={poolTitle('Parallelism', pool)} value={value} open>
       {moe && (
         <Segmented
           label="Layout"

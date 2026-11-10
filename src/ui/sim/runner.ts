@@ -1,18 +1,69 @@
 import type { SimInput } from '../../sim/engine/types';
 import { simulate } from '../../sim/engine/simulate';
-import { batchSweep, summarize, type ResultSummary, type SweepPoint } from '../state';
+import {
+  poolInput,
+  simulateDisaggregated,
+  type DisaggregatedInput,
+} from '../../sim/engine/disaggregation';
+import {
+  batchSweep,
+  summarize,
+  summarizeDisaggregated,
+  type DisaggregatedSummary,
+  type ResultSummary,
+  type SweepPoint,
+} from '../state';
+
+/** The disaggregated part of a run request (only while disaggregation is on). */
+export interface DisaggregatedRun {
+  /** The two pools and the settings (`buildDisaggregatedInput`). */
+  input: DisaggregatedInput;
+  /** The decode pool's notes (its unlock descriptions, loader notes), for its summary's warnings. */
+  decodeNotes: string[];
+}
 
 export interface RunResult {
   summary: ResultSummary;
   sweep: SweepPoint[];
+  /**
+   * Disaggregated results; present only when the run had a {@link DisaggregatedRun} (absent key otherwise, so a
+   * run without it is exactly the one from before disaggregation).
+   */
+  pd?: {
+    /** Each pool's summary and the cross-pool figures. */
+    summary: DisaggregatedSummary;
+    /** Batch sweep of the decode pool's own input. */
+    decodeSweep: SweepPoint[];
+  };
 }
 export interface SimRunner {
-  run(input: SimInput, notes: string[]): Promise<RunResult>;
+  /**
+   * Simulates `input` (the single-pool input: with disaggregation on, the prefill pool's state) and, with
+   * `disaggregated`, the two pools too.
+   */
+  run(input: SimInput, notes: string[], disaggregated?: DisaggregatedRun): Promise<RunResult>;
   dispose?(): void;
 }
 export const inlineRunner: SimRunner = {
-  async run(input, notes) {
-    return { summary: summarize(simulate(input), input, notes), sweep: batchSweep(input) };
+  async run(input, notes, disaggregated) {
+    const result: RunResult = {
+      summary: summarize(simulate(input), input, notes),
+      sweep: batchSweep(input),
+    };
+    if (disaggregated === undefined) return result;
+    const pd = disaggregated.input;
+    return {
+      ...result,
+      pd: {
+        summary: summarizeDisaggregated(
+          simulateDisaggregated(pd),
+          pd,
+          notes,
+          disaggregated.decodeNotes,
+        ),
+        decodeSweep: batchSweep(poolInput(pd.shared, pd.decodePool, 'decode')),
+      },
+    };
   },
 };
 
@@ -25,7 +76,7 @@ export function workerRunner(): SimRunner {
     { resolve: (r: RunResult) => void; reject: (e: Error) => void }
   >();
   return {
-    run(input, notes) {
+    run(input, notes, disaggregated) {
       if (!worker) {
         worker = new Worker(new URL('./sim.worker.ts', import.meta.url), { type: 'module' });
         worker.onmessage = (
@@ -45,7 +96,9 @@ export function workerRunner(): SimRunner {
       const id = ++nextId;
       return new Promise((resolve, reject) => {
         pending.set(id, { resolve, reject });
-        worker!.postMessage({ id, input, notes });
+        worker!.postMessage(
+          disaggregated === undefined ? { id, input, notes } : { id, input, notes, disaggregated },
+        );
       });
     },
     dispose() {

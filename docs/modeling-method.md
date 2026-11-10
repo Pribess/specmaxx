@@ -120,6 +120,20 @@ The default acceptance per method and use case is fitted to published measuremen
 
 More: [speculative decoding](simulation-model.md#13-speculative-decoding), [accepted tokens](simulation-model.md#accepted-tokens), [acceptance defaults](simulation-model.md#acceptance-defaults).
 
+## Prefill/decode disaggregation
+
+Optional, off by default. Prefill and decode run on two separate groups of GPUs (pools), each with its own hardware, parallel layout and batch, as large deployments do: DeepSeek runs prefill on 32 GPUs and decode on 144 ([DeepSeek inference system overview](https://github.com/deepseek-ai/open-infra-index/blob/main/202502OpenSourceWeek/day_6_one_more_thing_deepseekV3R1_inference_system_overview.md)), SGLang ran Kimi K2 on 4 prefill and 12 decode nodes ([LMSYS](https://lmsys.org/blog/2025-07-20-k2-large-scale-ep/), [large-scale EP](https://lmsys.org/blog/2025-05-05-large-scale-ep/)), and Mooncake, TensorRT-LLM and Dynamo do the same ([Mooncake, FAST'25](https://www.usenix.org/conference/fast25/presentation/qin), [TensorRT-LLM](https://nvidia.github.io/TensorRT-LLM/blogs/tech_blog/blog5_Disaggregated_Serving_in_TensorRT-LLM.html), [Dynamo planner](https://docs.dynamo.nvidia.com/dynamo/v-0-9-0/design-docs/planner-design.md)).
+
+Each pool is simulated on its own. The prefill pool gives requests per second as its prompt tokens per second divided by the prompt length; the decode pool gives its output tokens per second divided by the output length. From these the app finds the **balanced P:D ratio**, the number of prefill instances per decode instance at which neither pool waits, and the **system rate** at the ratio you set: the smaller of the two pools' request rates, as output tokens per second per GPU.
+
+All output tokens are taken at the decode rate at the decode context you set, so these figures are quoted with the prompt length, the output length and that decode context ("533.3 tok/s/GPU @ 8k/1k, decode @ 8,704"). They are not an average over the growing context while a request generates; a decode context near the prompt length plus half the output length is a representative choice.
+
+**KV transfer.** A finished prompt's cache (and, with speculative decoding, the draft model's cache) is sent from the prefill GPUs to the decode GPUs over a network link you choose, by default one 400 Gb/s InfiniBand NIC per GPU. By default each layer's cache is sent while the next layers compute, so the link slows prefill only when it is slower than the prefill itself; the "not overlapped" setting sends it after the whole prompt and makes prefill wait for it. The decode GPUs' own links also cap how many requests per second they can take in. The transfer uses the link's full bandwidth and one latency per transfer: no RDMA software overhead, and no cost for rearranging the cache when the decode pool splits it differently than the prefill pool. Measured transfers are slower (Mooncake: 87 GB/s per node on 4 × 200 Gb RoCE, 190 GB/s on 8 × 400 Gb, [slides](https://datatracker.ietf.org/meeting/125/materials/slides-125-irtfopen-disaggregated-architecture-for-llm-inference-mooncake-01)).
+
+Not modelled: queueing, latency targets (SLOs), how requests are routed to instances. Disaggregation mainly helps time-to-first-token and per-token latency tails, and vLLM notes it "does not improve throughput" by itself ([vLLM docs](https://docs.vllm.ai/en/latest/features/disagg_prefill/)); here it shows the throughput bound of a given split.
+
+More: [prefill/decode disaggregation](simulation-model.md#14-prefilldecode-disaggregation).
+
 ## Quantization
 
 Weights, activations and the KV cache each have their own number format. Storage per element is the format's bits plus block scales and group overhead, so a 4-bit format with group scales costs a little more than 4 bits. Fractional-bit formats such as EXL3 (for example 2.5 bits per weight) are costed from their actual layout.
@@ -130,7 +144,7 @@ More: [dtypes](simulation-model.md#dtypes-math-and-accumulate), [EXL3](simulatio
 
 ## What is not modelled
 
-Anything that depends on a particular inference engine: paged attention, continuous batching, chunked prefill (except its effect on the memory fit), scheduling and kernel-launch overhead, CUDA graphs. Also left out: dequantization arithmetic, exponentials computed on the ordinary arithmetic units instead of the special-function units (a trick some newer attention kernels use), cache reuse beyond reading each operand once, clock throttling, in-network reduction, link contention, and framework memory unless you set a runtime reserve.
+Anything that depends on a particular inference engine: paged attention, continuous batching, chunked prefill (except its effect on the memory fit), scheduling and kernel-launch overhead, CUDA graphs. Also left out: dequantization arithmetic, exponentials computed on the ordinary arithmetic units instead of the special-function units (a trick some newer attention kernels use), cache reuse beyond reading each operand once, clock throttling, in-network reduction, link contention, framework memory unless you set a runtime reserve, and request queueing and latency targets (with disaggregation too).
 
 The one exception for engine overhead is the **engine dispatch overlay**, opt-in only and off by default. Turned on, it adds about 2 µs for launching each kernel (one per operation, nothing fused) to a decode step and shows the result as a second, labelled decode figure. The headline figure never includes it. More: [engine dispatch overlay](simulation-model.md#engine-dispatch-overlay).
 

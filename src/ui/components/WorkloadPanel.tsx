@@ -17,12 +17,12 @@ export function WorkloadPanel(props: PanelProps & { drafter?: DrafterStatus }) {
   return (
     <Panel
       title="Workload"
-      value={`Batch ${batch}, prefill ${formatContextTokens(promptLen)}, decode @ ${formatContextTokens(decodeContextLen)}${spec ? `, ${METHOD_NAMES[spec.method]}` : ''}`}
+      value={`Batch ${batch}${props.pool ? ` (${props.pool})` : ''}, prefill ${formatContextTokens(promptLen)}, decode @ ${formatContextTokens(decodeContextLen)}${spec ? `, ${METHOD_NAMES[spec.method]}` : ''}`}
       open
     >
       <div className="fields">
         <NumberField
-          label="Batch size"
+          label={props.pool ? `Batch size (${props.pool} pool)` : 'Batch size'}
           value={batch}
           onChange={(v) => dispatch({ type: 'setWorkload', workload: { batch: v } })}
           issues={built.issues.filter((i) => i.field === 'batch')}

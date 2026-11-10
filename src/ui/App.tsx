@@ -15,7 +15,13 @@ import {
   BUNDLED_DEFAULT_MODEL,
   loadedFromHf,
   buildSimInput,
+  buildDisaggregatedInput,
+  poolView,
+  effectivePrefillPhase,
   formatRateAtContext,
+  type AppAction,
+  type PoolAction,
+  type PoolId,
   drafterSource,
   type DrafterStatus,
   type LoadedModel,
@@ -29,6 +35,8 @@ import {
   AssumptionsPanel,
 } from './Panels';
 import { ResultHero, BreakdownTable, BatchSweepChart, RooflineChart } from './Results';
+import { DisaggregationPanel } from './components/DisaggregationPanel';
+import type { PanelProps } from './components/types';
 import '../styles/tokens.css';
 import './panels.css';
 import './app.css';
@@ -111,6 +119,17 @@ export function App({
     };
   }, [drafterRepo, drafterLoader]);
   const built = useMemo(() => buildSimInput(state, loaded, drafter), [state, loaded, drafter]);
+  // Prefill/decode disaggregation: undefined while off, so the off path is exactly the single-pool one.
+  const pdBuilt = useMemo(
+    () => buildDisaggregatedInput(state, loaded, drafter),
+    [state, loaded, drafter],
+  );
+  // Which pool the Hardware, Parallelism and batch fields edit (not in the URL); always the prefill pool while off.
+  const [editingPoolChoice, setEditingPool] = useState<PoolId>('prefill');
+  const editingPool: PoolId = state.disaggregation ? editingPoolChoice : 'prefill';
+  // The issues the notice lists and the run waits on: the combined list while on.
+  const allIssues = pdBuilt?.issues ?? built.issues;
+  const runnable = pdBuilt ? pdBuilt.kind === 'ok' : built.kind === 'ok';
   const query = encodeState(state);
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -175,13 +194,21 @@ export function App({
   }, [state.model, loader, attempt]);
   useEffect(() => {
     if (built.kind !== 'ok') return;
+    if (pdBuilt !== undefined && pdBuilt.kind !== 'ok') return;
     let current = true;
     const key = query;
     const timer = setTimeout(() => {
       if (current) setDim(true);
     }, 150);
-    runner
-      .run(built.input, built.notes)
+    // With disaggregation on, the single-pool run is the prefill pool's state; the pools run on top of it.
+    const run =
+      pdBuilt === undefined
+        ? runner.run(built.input, built.notes)
+        : runner.run(built.input, built.notes, {
+            input: pdBuilt.input,
+            decodeNotes: pdBuilt.decode.notes,
+          });
+    run
       .then((result) => {
         if (current) {
           setSimulation({ key, result });
@@ -198,16 +225,41 @@ export function App({
       current = false;
       clearTimeout(timer);
     };
-  }, [built, query, runner]);
+  }, [built, pdBuilt, query, runner]);
   const titleModel = loaded?.label ?? state.model.id;
-  const titleResult = built.kind === 'ok' ? simulation.result?.summary : undefined;
+  const titleResult = runnable ? simulation.result?.summary : undefined;
+  const pdResult = runnable && pdBuilt ? simulation.result?.pd : undefined;
+  // With disaggregation on: the prefill pool's prefill and the decode pool's decode.
+  const titlePrefill = pdResult ? effectivePrefillPhase(pdResult.summary) : titleResult?.prefill;
+  const titleDecode = pdResult?.summary.decodePool ?? titleResult;
   useEffect(() => {
-    document.title = titleResult
-      ? `${titleModel} · ${formatRateAtContext(titleResult.prefill.tokensPerSec, state.workload.promptLen)} prefill · ${formatRateAtContext(titleResult.decode.tokensPerSec, state.workload.decodeContextLen)} decode`
-      : `${titleModel} · specmaxx`;
-  }, [titleModel, titleResult, state.workload.promptLen, state.workload.decodeContextLen]);
+    document.title =
+      titlePrefill && titleDecode
+        ? `${titleModel} · ${formatRateAtContext(titlePrefill.tokensPerSec, state.workload.promptLen)} prefill · ${formatRateAtContext(titleDecode.decode.tokensPerSec, state.workload.decodeContextLen)} decode`
+        : `${titleModel} · specmaxx`;
+  }, [
+    titleModel,
+    titlePrefill,
+    titleDecode,
+    state.workload.promptLen,
+    state.workload.decodeContextLen,
+  ]);
   useEffect(() => () => runner.dispose?.(), [runner]);
   const props = { state, dispatch, loaded, built };
+  // The per-pool panels (Hardware, Parallelism, the batch field) edit the chosen pool's view.
+  const poolProps: PanelProps =
+    pdBuilt === undefined
+      ? props
+      : editingPool === 'decode'
+        ? {
+            state: poolView(state, 'decode'),
+            dispatch: (action: AppAction) =>
+              dispatch({ type: 'inPool', pool: 'decode', action: action as PoolAction }),
+            loaded,
+            built: pdBuilt.decode,
+            pool: 'decode',
+          }
+        : { ...props, built: pdBuilt.prefill, pool: 'prefill' };
   // The memory card's n-gram table segment: one click places the tables on host RAM (the SSD on unified memory).
   const placeTablesOnHost = () => {
     const unified = built.hardware?.device.device.memory.kind === 'unified';
@@ -216,7 +268,24 @@ export function App({
       offload: { ...state.deployment.offload, tables: { tier: unified ? 'nvme' : 'host_ram' } },
     });
   };
-  const result = built.kind === 'ok' ? simulation.result?.summary : undefined;
+  // The summary the memory card, breakdown, sweep and notes show: with disaggregation on, the edited pool's (the
+  // prefill pool's run fits at P and shows only its prefill phase).
+  const result = !runnable
+    ? undefined
+    : pdResult
+      ? editingPool === 'decode'
+        ? pdResult.summary.decodePool
+        : pdResult.summary.prefillPool
+      : pdBuilt
+        ? undefined
+        : simulation.result?.summary;
+  const detailPhases: readonly ('prefill' | 'decode')[] | undefined =
+    pdResult && editingPool === 'prefill' ? ['prefill'] : undefined;
+  const sweep = pdResult
+    ? editingPool === 'decode'
+      ? pdResult.decodeSweep
+      : undefined
+    : simulation.result?.sweep;
   const error = modelState.key === choiceKey ? modelState.error : undefined;
   const stacked = useStacked();
   const workspaceRef = useRef<HTMLElement>(null);
@@ -254,15 +323,15 @@ export function App({
           </button>
         </aside>
       )}
-      {built.issues.length > 0 && (
+      {allIssues.length > 0 && (
         <aside className="notice" role="alert">
           <p>
-            {built.kind === 'issues'
+            {!runnable
               ? 'No estimate is computed until the input errors are resolved.'
               : 'Input notes'}
           </p>
           <ul>
-            {built.issues.map((issue, index) => (
+            {allIssues.map((issue, index) => (
               <li className={issue.level === 'error' ? 'error' : ''} key={index}>
                 {issue.message}
               </li>
@@ -281,15 +350,32 @@ export function App({
     <ResultHero
       state={state}
       loaded={loaded}
-      built={built}
+      built={
+        // While on, an error in either pool (or the settings) keeps the hero empty with the issues message.
+        pdBuilt?.kind === 'issues' && built.kind === 'ok'
+          ? { kind: 'issues', issues: pdBuilt.issues, hardware: built.hardware }
+          : built
+      }
       result={result}
       pending={dim && simulation.key !== query}
       onPlaceTablesOnHost={placeTablesOnHost}
       roofline={!stacked}
       figuresRef={setFigures}
+      pd={
+        pdResult && pdBuilt
+          ? {
+              summary: pdResult.summary,
+              decodeState: poolView(state, 'decode'),
+              decodeBuilt: pdBuilt.decode,
+              phases: detailPhases ?? ['prefill', 'decode'],
+            }
+          : undefined
+      }
     />
   );
-  const mini = result && <MiniResult result={result} visible={!figuresVisible} />;
+  const mini = result && (
+    <MiniResult result={result} visible={!figuresVisible} pd={pdResult?.summary} />
+  );
   const inputs = (
     <>
       <ModelPanel
@@ -306,9 +392,16 @@ export function App({
         gated={modelState.key === choiceKey && !!modelState.gated}
       />
       <QuantPanel {...props} />
-      <HardwarePanel {...props} />
-      <ParallelPanel {...props} />
-      <WorkloadPanel {...props} drafter={drafter} />
+      <DisaggregationPanel
+        state={state}
+        dispatch={dispatch}
+        editingPool={editingPool}
+        onEditingPool={setEditingPool}
+        issues={allIssues}
+      />
+      <HardwarePanel {...poolProps} />
+      <ParallelPanel {...poolProps} />
+      <WorkloadPanel {...poolProps} drafter={drafter} />
       <AssumptionsPanel {...props} />
     </>
   );
@@ -318,10 +411,11 @@ export function App({
         <RooflineChart
           roof={result.roofline}
           contexts={{ prefill: result.prefill.contextTokens, decode: result.decode.contextTokens }}
+          phases={detailPhases}
         />
       )}
-      <BreakdownTable result={result} />
-      <BatchSweepChart points={simulation.result!.sweep} />
+      <BreakdownTable result={result} phases={detailPhases} />
+      {sweep && <BatchSweepChart points={sweep} />}
       {result.warnings.length > 0 && (
         <details className="notes">
           <summary>Notes and approximations ({result.warnings.length})</summary>

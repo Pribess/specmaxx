@@ -8,7 +8,9 @@ import { validateInput } from '../../sim/engine/validate';
 import type { ModelSpec } from '../../sim/ir/model';
 import { REF_DENSE_8B } from '../../sim/models/reference';
 import type { HfMapResult, QuantDefaults } from '../../sim/models/hf/types';
-import type { AppState, ModelChoice } from './appState';
+import { disaggregationErrors, type DisaggregatedInput } from '../../sim/engine/disaggregation';
+import { DEFAULT_OUTPUT_LEN, poolView, type AppState, type ModelChoice } from './appState';
+import { kvTransferConfig } from './kvLink';
 import { resolveHardware, type ResolvedHardware } from './hardware';
 import { effectiveParallel, fieldIssues, hasErrors, type FieldIssue } from './parallelism';
 import { REFERENCE_QUANT_DEFAULTS, applyQuantOverride } from './quant';
@@ -215,4 +217,164 @@ export function buildSimInput(
     issues,
     notes: [...hardware.notes, ...loaded.notes, ...drafterNotes],
   };
+}
+
+/** A successful {@link BuildResult}. */
+export type BuildOk = Extract<BuildResult, { kind: 'ok' }>;
+
+/** Prefix of the decode pool's issue messages in the combined list. */
+export const DECODE_POOL_ISSUE_PREFIX = 'Decode pool: ';
+
+/**
+ * Result of {@link buildDisaggregatedInput}. `prefill` and `decode` are each pool's own {@link BuildResult} (the
+ * decode one with unprefixed messages, for the panels while they edit that pool); `issues` is the combined list: the
+ * prefill pool's issues, the decode pool's prefixed with {@link DECODE_POOL_ISSUE_PREFIX}, and the disaggregation
+ * settings' own (`outputLen`, `instances`).
+ */
+export type DisaggregatedBuildResult =
+  | {
+      kind: 'ok';
+      /** The engine input of `simulateDisaggregated`. */
+      input: DisaggregatedInput;
+      prefill: BuildOk;
+      decode: BuildOk;
+      /** Warnings only. */
+      issues: FieldIssue[];
+    }
+  | {
+      kind: 'issues';
+      prefill: BuildResult;
+      decode: BuildResult;
+      /** At least one error; nothing runs. */
+      issues: FieldIssue[];
+    };
+
+/** True for an integer ≥ 1. */
+function isCount(x: number): boolean {
+  return Number.isInteger(x) && x >= 1;
+}
+
+/** What both pools share: `input` without its `hardware` and `parallel` (a new object; `input` is not mutated). */
+export function sharedInput(input: SimInput): DisaggregatedInput['shared'] {
+  const copy: Partial<SimInput> = { ...input };
+  delete copy.hardware;
+  delete copy.parallel;
+  return copy as DisaggregatedInput['shared'];
+}
+
+/**
+ * The shared part of both pools' inputs. Everything but two per-run fields comes out the same from either pool's
+ * `buildSimInput`; those two are set per pool by its layout, and one `shared` must serve both:
+ * - `options.overlapByClass`: each input keeps only the classes its own run has (`effectiveOptions`); the shared one
+ *   keeps the union, which the engine ignores for a class a run lacks, so each pool sees its own choices;
+ * - `deployment.twoBatchOverlap`: set only where it applies (MoE mode B, no offload), and the engine rejects it
+ *   elsewhere; it stays on only when it applies to both pools, else it is off for both with a warning.
+ */
+function poolsShared(
+  prefill: SimInput,
+  decode: SimInput,
+  issues: FieldIssue[],
+): DisaggregatedInput['shared'] {
+  const shared = sharedInput(prefill);
+  const byClass = { ...decode.options?.overlapByClass, ...prefill.options?.overlapByClass };
+  if (Object.keys(byClass).length > 0)
+    shared.options = { ...shared.options, overlapByClass: byClass };
+  const prefillTbo = prefill.deployment?.twoBatchOverlap === true;
+  const decodeTbo = decode.deployment?.twoBatchOverlap === true;
+  if (prefillTbo !== decodeTbo) {
+    issues.push({
+      field: 'twoBatchOverlap',
+      level: 'warning',
+      message:
+        'Two-batch overlap needs expert parallelism across TP groups in both pools; it is off for this run.',
+    });
+    if (shared.deployment !== undefined) {
+      const deployment = { ...shared.deployment };
+      delete deployment.twoBatchOverlap;
+      if (Object.keys(deployment).length > 0) shared.deployment = deployment;
+      else delete shared.deployment;
+    }
+  }
+  return shared;
+}
+
+/**
+ * The disaggregated input of `state`, or undefined when disaggregation is off (so the off path builds exactly
+ * today's single-pool input with {@link buildSimInput} and nothing else). The prefill pool is `state` itself, the
+ * decode pool `poolView(state, 'decode')`, each built by {@link buildSimInput}; the shared part is the prefill
+ * pool's input without its hardware and parallel. Then the settings' ranges (output length and instances integers
+ * ≥ 1), then `disaggregationErrors` (anything the per-pool checks did not catch, as general errors).
+ */
+export function buildDisaggregatedInput(
+  state: AppState,
+  loaded: LoadedModel | null,
+  drafter?: DrafterStatus,
+): DisaggregatedBuildResult | undefined {
+  const d = state.disaggregation;
+  if (d === undefined) return undefined;
+  const prefill = buildSimInput(state, loaded, drafter);
+  const decode = buildSimInput(poolView(state, 'decode'), loaded, drafter);
+  const outputLen = d.outputLen ?? DEFAULT_OUTPUT_LEN;
+  const instances = d.instances ?? { prefill: 1, decode: 1 };
+  const settings: FieldIssue[] = [];
+  if (!isCount(outputLen))
+    settings.push({
+      field: 'outputLen',
+      level: 'error',
+      message: 'Output length must be a whole number ≥ 1.',
+    });
+  if (!isCount(instances.prefill) || !isCount(instances.decode))
+    settings.push({
+      field: 'instances',
+      level: 'error',
+      message: 'Instance counts must be whole numbers ≥ 1.',
+    });
+  const kvTransfer = kvTransferConfig(d);
+  const { bandwidthPerDirectionBytesPerSec: kvBw, latencySec: kvLat } = kvTransfer.link;
+  if (!(Number.isFinite(kvBw) && kvBw > 0))
+    settings.push({
+      field: 'kvBandwidth',
+      level: 'error',
+      message: 'KV link bandwidth must be above 0.',
+    });
+  if (!(Number.isFinite(kvLat) && kvLat >= 0))
+    settings.push({
+      field: 'kvLatency',
+      level: 'error',
+      message: 'KV link latency must be 0 or more.',
+    });
+  const issues = [
+    ...prefill.issues,
+    ...decode.issues.map((i) => ({ ...i, message: DECODE_POOL_ISSUE_PREFIX + i.message })),
+    ...settings,
+  ];
+  if (prefill.kind !== 'ok' || decode.kind !== 'ok' || hasErrors(issues))
+    return { kind: 'issues', prefill, decode, issues };
+  const shared = poolsShared(prefill.input, decode.input, issues);
+  const input: DisaggregatedInput = {
+    shared,
+    prefillPool: {
+      hardware: prefill.input.hardware,
+      parallel: prefill.input.parallel,
+      batch: prefill.input.workload.batch,
+    },
+    decodePool: {
+      hardware: decode.input.hardware,
+      parallel: decode.input.parallel,
+      batch: decode.input.workload.batch,
+    },
+    config: {
+      outputLen,
+      prefillInstances: instances.prefill,
+      decodeInstances: instances.decode,
+      kvTransfer,
+    },
+  };
+  const errors = disaggregationErrors(input).map((message): FieldIssue => ({
+    field: 'general',
+    level: 'error',
+    message,
+  }));
+  if (errors.length > 0) return { kind: 'issues', prefill, decode, issues: [...issues, ...errors] };
+  return { kind: 'ok', input, prefill, decode, issues };
 }

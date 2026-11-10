@@ -32,7 +32,8 @@ import type { AppState } from './appState';
  * `redundantExperts` are the EP balance fields (ρ, EPLB replicas); `allToAllEfficiency` is the all-to-all efficiency
  * η; `overlap` is the per-class overlap rows and `twoBatchOverlap` the two-batch switch of Hardware → Advanced →
  * "Communication overlap"; `offload` and `specDec` are the deployment sections (offloading, speculative decoding);
- * `general` is anything else.
+ * `outputLen` and `instances` are the Disaggregation panel's output length and instance counts, `kvBandwidth` and
+ * `kvLatency` its KV link fields; `general` is anything else.
  */
 export type IssueField =
   | 'tp'
@@ -54,6 +55,10 @@ export type IssueField =
   | 'headBpw'
   | 'offload'
   | 'specDec'
+  | 'outputLen'
+  | 'instances'
+  | 'kvBandwidth'
+  | 'kvLatency'
   | 'general';
 
 /** One problem with the inputs. Errors stop the simulation; warnings do not. */

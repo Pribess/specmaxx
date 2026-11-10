@@ -19,6 +19,7 @@ Contents:
 11. [Extending](#11-extending)
 12. [Offloading](#12-offloading)
 13. [Speculative decoding](#13-speculative-decoding)
+14. [Prefill/decode disaggregation](#14-prefilldecode-disaggregation)
 
 ---
 
@@ -2827,6 +2828,13 @@ Shortlist-model approximations (sub-percent unless noted):
 - The relative-position bias gather and add inside attention are excluded (vector work; the softmax is costed, §7).
 - A cross-layer source on another pipeline stage: the consumer's stage is assumed to hold the data; no transfer is
   costed and the data is not counted twice in memory (a `simulate` warning names each case).
+- Prefill/decode disaggregation (§14): every one of the O output tokens is taken at the decode rate @ N (a fixed
+  decode context, not an average over P..P+O); the prefill pool's memory fit is at exactly P (P + k with spec-dec,
+  plus the verify snapshots: conservative); the user's ratio is in whole instances; no queueing, arrival variance or
+  SLO scheduling (the system rate is the smaller side's capacity, the other side idles). KV transfer: the busiest
+  sender splits its stage's bytes evenly over its tp ranks and the receivers spread evenly over the decode instance's
+  devices (optimistic when the layouts differ); no re-sharding of the received cache into the decode layout, no
+  RDMA-stack or memory-registration overhead; the exposed TTFT assumes equal layers and chunks (display only).
 
 ---
 
@@ -3467,3 +3475,148 @@ draftContext`), get `draft.moe.expert_fetch` ops on the last stage, keep `C = f�
 `draft_s`, and add their full expert set to the tier (`memory.ts: stageTierBytes`). With the token embedding
 off-device, the drafter's shared-embedding gathers fetch their rows from its tier (§12 "Token embedding
 off-device").
+
+## 14. Prefill/decode disaggregation
+
+`src/sim/engine/disaggregation.ts`; tests `src/sim/engine/disaggregation.test.ts`; design
+`docs/design/prefill-decode-disaggregation.md` (evidence: `docs/research/large-scale-deployment-gaps.md` §G1).
+
+A deployment scenario, off by default: prefill and decode run on two separate device pools, each with its own
+hardware, parallel layout and batch (DeepSeek: prefill DEP32 on 4 nodes, decode DEP144 on 18 nodes). It is built on
+top of `simulate()`, which it does not change: each pool is one ordinary `simulate()` run, and the functions below
+combine the prefill pool's prefill rate with the decode pool's decode rate. Off, no disaggregated input exists and
+nothing here runs, so every result is unchanged by construction.
+
+Notation: P = prompt length (`workload.promptLen`), N = decode context (`workload.decodeContextLen`), O = output
+tokens per request (`DisaggregationConfig.outputLen`), D_P / D_D = devices of one prefill / decode instance
+(`SimResult.devicesUsed` = tp·pp·dp), n_P : n_D = the user's instance ratio (integers ≥ 1).
+
+### Pools
+
+`disaggregation.ts: PoolSpec, DisaggregatedInput, poolInput, disaggregationErrors`.
+
+- Shared by both pools: model, quant, the workload (P, N, prefix cache, prefill chunk), options, deployment,
+  overlays. Per pool (`PoolSpec`): hardware, `ParallelConfig` (so DP attention + EP, ρ, redundant experts and DCP are
+  per pool), batch.
+- The prefill pool holds only the prompt, so its run uses `decodeContextLen = max(1, P − 1)`: its decode `kvLen` is
+  then P and the memory fit's context `max(P, kvLen)` (§8) is exactly P (P + k with spec-dec). Its prefill phase does
+  not read N; its decode phase is never shown.
+- The decode pool's run is the shared input with the decode pool's fields.
+- Validation is each pool's `validateInput`, prefixed "prefill pool: " / "decode pool: ", plus the config's ranges.
+
+### Request rates
+
+`disaggregation.ts: prefillPoolRates, decodePoolRates`.
+
+```
+R_P = prefill tok/s @ P of one prefill instance (all P prompt tokens, cached ones included; §7 "Prefix cache")
+R_D = decode tok/s @ N of one decode instance (spec-dec acceptance included when on)
+λ_P = R_P / P        requests/s one prefill instance completes
+λ_D = R_D / O        requests/s one decode instance completes
+```
+
+Every output token is taken at the rate @ N: the results hold for the chosen decode context, not for an exact
+average over the output trajectory P..P+O (N ≈ P + O/2 is a representative choice).
+
+### Balanced ratio
+
+`disaggregation.ts: balancedPrefillPerDecode, balancedDeployment`.
+
+```
+λ_D,eff = min(λ_D, λ_recv,1)                            decode side: compute or KV ingress (λ_recv,1 = ∞ without KV transfer)
+r* = n_P / n_D = λ_D,eff / λ_P,eff                     prefill instances per decode instance (real)
+share of prefill devices = r*·D_P / (r*·D_P + D_D)
+output tok/s per device at balance = λ_D,eff·O / (D_D + r*·D_P) = R_D·(λ_D,eff / λ_D) / (D_D + r*·D_P)
+```
+
+At balance n_P·λ_P,eff = n_D·λ_D,eff, so one decode instance serves λ_D,eff requests/s on its D_D devices plus
+r*·D_P prefill devices. Without a KV transfer λ_P,eff = λ_P and λ_D,eff = λ_D (the ratio λ_D,eff / λ_D is exactly 1).
+Test: λ_P = 16, λ_D = 6.25, D_P = D_D = 8 ⇒ r* = 0.390625 (P:D 1 : 2.56) and 6400 / 11.125 = 575.28 output tok/s per
+device (W-PD1).
+
+### System throughput
+
+`disaggregation.ts: systemThroughput, BALANCE_REL_TOLERANCE`.
+
+```
+λ_sys = min(n_P·λ_P,eff, n_D·λ_D, n_D·λ_recv,1)          requests/s
+G     = n_P·D_P + n_D·D_D               devices
+input tok/s = λ_sys·P     output tok/s = λ_sys·O     output tok/s per device = λ_sys·O / G
+util_P = λ_sys / (n_P·λ_P,eff)     util_D = λ_sys / (n_D·λ_D)   (decode compute)
+bottleneck = 'balanced'  if |n_P·λ_P,eff − n_D·λ_D,eff| ≤ 1e-9·max(both)
+           = 'prefill'   if n_P·λ_P,eff is the smallest
+           = 'kvIngress' if n_D·λ_recv,1 ≤ n_D·λ_D (only with a KV transfer)
+           = 'decode'    otherwise
+```
+
+No queueing: the system completes requests at the smaller side's capacity and the other side idles for the rest of
+its time. Test (W-PD1 at 1:2): min(16, 12.5) = 12.5 requests/s on 24 devices, 12,800 output tok/s, 533.33 per
+device, decode-bound.
+
+**Quoting.** The pool rates are quoted at their own context ("131,072 tok/s @ 8k" prefill, "6,400 tok/s @ 8,704"
+decode). The cross-pool figures depend on P, O and N, so they carry all three: "533.3 tok/s/GPU @ 8k/1k, decode @
+8,704", "P:D 1 : 2.56 @ 8k/1k, decode @ 8,704".
+
+### KV transfer
+
+`kvTransfer.ts: KvTransferConfig, DEFAULT_KV_TRANSFER_LINK, stageRequestKvBytes, exposedTransferSec,
+effectivePrefillCycleSec, kvTransferTime`; wired in `disaggregation.ts: simulateDisaggregated` (absent
+`config.kvTransfer` = none of this runs); tests `src/sim/engine/kvTransfer.test.ts`, `disaggregation.test.ts`; design
+note §4.
+
+A finished prompt's cache moves from its prefill instance to a decode instance. The link is one `LinkSpec` per
+device per direction, the same at both ends: bandwidth B_link and latency α (default `IB_NDR_400`, one 400 Gb/s NIC
+per GPU, §4 "Links and topologies").
+
+```
+S_s(P) = stageSequenceStateBytesPerSeq(model, ctx₁, s, P) + [s = pp_P − 1] draftSequenceStateBytes(draft, ctx₁, P)
+         ctx₁: tp = dp = ep = 1, no dcp, pp = pp_P (the prefill pool's split), the shared quant
+S_tot  = Σ_s S_s(P)                         bytes per request (display: S_tot / P bytes per token)
+B_r    = B_P / dp_P                         sequences one prefill replica finishes per cycle
+Y      = max_s B_r·S_s(P) / tp_P            bytes the busiest prefill device sends per cycle
+t_bw   = Y / B_link                         its link occupancy per cycle
+t_req  = α + max_s S_s(P) / (tp_P·B_link)  one request alone on its replica's devices
+
+layer-wise:  cycle_eff = max(cycle_P, t_bw)
+none:        cycle_eff = cycle_P + α + t_bw          (wait for the last byte before the next batch)
+R_P,eff = R_P·(cycle_P / cycle_eff)        λ_P,eff = R_P,eff / P
+λ_recv,1 = D_D·B_link / S_tot             requests/s one decode instance can take in
+```
+
+- **Bytes.** `S_s` is the cache stage s holds for one request, counted once (§8 "Memory fit" state functions at
+  tp = 1): GQA KV (windows capped), MLA latents, indexer keys, recurrent and conv state (fixed in P), at the KV
+  dtype, plus under spec-dec the drafter's own cache on the last stage (`draftSequenceStateBytes`; spec-dec forces
+  pp = 1). All P tokens move even with a prefix-cache hit. An uneven PP split (`stageLayerRange`) makes the stage
+  with the most layers the busiest sender.
+- **Sender.** Each of a stage's tp ranks sends a distinct 1/tp of the stage's bytes (sharded heads are distinct;
+  replicated MLA latents and DCP-sharded caches can still be split). DCP in either pool changes none of S, Y or
+  λ_recv,1.
+- **Throughput.** α is latency, not occupancy (as for PP sends in §7 "Pipeline and DP"): layer-wise, the link is a
+  second resource next to compute and binds only when t_bw > cycle_P. Not overlapped, the instance waits for the
+  last byte, so the whole α + t_bw is serial.
+- **Receiver.** The decode instance's D_D NICs take in every request's S_tot, spread evenly; the bound enters the
+  balance as λ_D,eff and the system as `'kvIngress'`. Re-sharding into the decode layout is not costed.
+- **Exposed TTFT (display only, never a rate input).** With L = `model.layers.length` equal layers of compute
+  a = t_pf / L (t_pf = prefill `latencySec`) and equal chunks β_c = t_bw / L, pipelined writes with α paid once on
+  the last chunk (a two-stage flow shop):
+
+  ```
+  layer-wise: exposed = a + β_c + (L−1)·max(a, β_c) + α − t_pf
+            = α + t_bw / L                    if a ≥ β_c
+            = α + t_bw − t_pf·(L−1)/L         if β_c > a
+  none:       exposed = α + t_bw
+  ```
+
+- **Identity.** Without `config.kvTransfer` the result has no `kvTransfer` and is the one above; with B_link = ∞
+  and α = 0 it is equal to that (cycle_eff = cycle_P, λ_recv,1 = ∞; test ID-PD-4).
+
+Tests (W-PD1, REF_DENSE_8B, P = 8192, D_P = D_D = 8, B_r = 1, t_pf = cycle_P = 0.5 s, L = 36): S_tot = 147,456
+B/token · 8192 = 1,207,959,552 B; at 50e9 B/s t_bw = 24.159 ms, layer-wise exposed = 1 µs + t_bw/36 = 0.672 ms and
+cycle_eff = 0.5 s (no change), not overlapped cycle_eff = 0.52416 s (λ_P,eff = 15.2625); at 1e9 B/s layer-wise
+cycle_eff = t_bw = 1.20796 s and exposed = 0.72185 s; with D_D = 4 at 1e9 B/s the ingress 4e9 / S_tot = 3.3114
+requests/s binds (`'kvIngress'` at 1:1, r* = 0.5). Uneven PP: pp 5 over 36 layers is 7, 7, 7, 7, 8 layers, so
+Y = 8 · 4096 · 8192 = 268,435,456 B.
+
+Sanity check (not a test): Mooncake measures 87 GB/s per node on 4 × 200 Gb RoCE and 190 GB/s on 8 × 400 Gb
+([slides](https://datatracker.ietf.org/meeting/125/materials/slides-125-irtfopen-disaggregated-architecture-for-llm-inference-mooncake-01)),
+below the 100 / 400 GB/s line rates used here, as an upper bound should be.

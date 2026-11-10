@@ -26,8 +26,18 @@ const BOUND_CLASS: Record<BreakdownBound, string> = {
 
 const VISIBLE_ROWS = 12;
 
-export function BreakdownTable({ result }: { result: ResultSummary }) {
-  const [phase, setPhase] = useState<'prefill' | 'decode'>('decode');
+/** Both phases, in toggle order. */
+const BOTH = ['decode', 'prefill'] as const;
+export function BreakdownTable({
+  result,
+  phases = BOTH,
+}: {
+  result: ResultSummary;
+  /** The phases offered, in toggle order (default both; a disaggregated prefill pool offers only prefill). */
+  phases?: readonly ('prefill' | 'decode')[];
+}) {
+  const [chosen, setPhase] = useState<'prefill' | 'decode'>('decode');
+  const phase = phases.includes(chosen) ? chosen : phases[0];
   const [group, setGroup] = useState<'byOp' | 'byKind' | 'byLayer'>('byOp');
   const [all, setAll] = useState(false);
   const rows = result.breakdown[phase][group];
@@ -65,7 +75,7 @@ export function BreakdownTable({ result }: { result: ResultSummary }) {
         </h2>
         <div className="toggles">
           <div className="segmented" aria-label="Phase">
-            {(['decode', 'prefill'] as const).map((p) => (
+            {phases.map((p) => (
               <button aria-pressed={phase === p} onClick={() => setPhase(p)} key={p}>
                 {p === 'decode' ? 'Decode' : 'Prefill'} @{' '}
                 {formatContextTokens(result[p].contextTokens)}

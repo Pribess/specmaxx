@@ -102,3 +102,37 @@ export function formatContextTokens(n: number): string {
 export function formatRateAtContext(tokensPerSec: number, contextTokens: number): string {
   return `${formatTokensPerSec(tokensPerSec)} tok/s @ ${formatContextTokens(contextTokens)}`;
 }
+
+/**
+ * The context quote of a cross-pool (disaggregated) figure: prompt length P / output length O, and the decode
+ * context N its decode rate is taken at, each through {@link formatContextTokens}: `@ 8k/1k, decode @ 8,704`.
+ */
+export function formatWorkloadQuote(
+  promptLen: number,
+  outputLen: number,
+  decodeContextLen: number,
+): string {
+  return `@ ${formatContextTokens(promptLen)}/${formatContextTokens(outputLen)}, decode @ ${formatContextTokens(decodeContextLen)}`;
+}
+
+/**
+ * An instance ratio n_P : n_D = `prefillPerDecode` : 1 with the smaller side at 1 and two decimals on the other:
+ * 0.390625 → `1 : 2.56`, 1.3343 → `1.33 : 1`, 1 → `1 : 1.00`. Non-finite or ≤ 0 → `'—'`.
+ */
+export function formatRatio(prefillPerDecode: number): string {
+  const r = prefillPerDecode;
+  if (!Number.isFinite(r) || r <= 0) return '—';
+  return r <= 1 ? `1 : ${fixed(1 / r, 2)}` : `${fixed(r, 2)} : 1`;
+}
+
+/**
+ * Output tokens/s per device of a disaggregated system, with its quote: `533.3 tok/s/GPU @ 8k/1k, decode @ 8,704`.
+ */
+export function formatSystemRate(
+  tokensPerSecPerDevice: number,
+  promptLen: number,
+  outputLen: number,
+  decodeContextLen: number,
+): string {
+  return `${formatTokensPerSec(tokensPerSecPerDevice)} tok/s/GPU ${formatWorkloadQuote(promptLen, outputLen, decodeContextLen)}`;
+}

@@ -189,6 +189,43 @@ for (const size of ['desktop', 'phone'] as const) {
       await page.keyboard.press('Escape');
       await section.screenshot({ path: name('advanced-disabled-tied-section') });
     });
+    test(`disaggregation ${size} ${colorScheme}`, async ({ page }) => {
+      await open(page, size, colorScheme);
+      const name = (s: string) => `${DIR}/disaggregation-${s}-${size}-${colorScheme}.png`;
+      const panel = page.locator('details.panel', {
+        has: page.locator('> summary', { hasText: 'Disaggregation' }),
+      });
+      // DeepSeek's 32 : 144 shape: prefill DP attention + EP 32 on 4 × 8 H100, decode DP attention + EP 144 on
+      // 18 × 8, 1 : 3 instances.
+      await page.goto(
+        '/?m=zai-org/GLM-5.3-Flash&d=h100-sxm&n=8&nodes=4&dp=32&ep=32&lay=dep&b=32&pd=1&pdr=1:3' +
+          '&dec.d=h100-sxm&dec.n=8&dec.nodes=18&dec.dp=144&dec.ep=144&dec.lay=dep&dec.b=144',
+      );
+      await expect(page.getByTestId('pd-system-tps')).toHaveText(/tok\/s\/GPU @ 8k\/1k/);
+      await page.evaluate(() => document.fonts.ready);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
+      await page.screenshot({ path: name('hero') });
+      if ((await panel.getAttribute('open')) === null) await panel.locator('> summary').click();
+      await page.addStyleTag({ content: '.compact-results { visibility: hidden !important }' });
+      await panel.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+      await page.waitForTimeout(50);
+      await panel.screenshot({ path: name('panel') });
+      // The System help, on keyboard focus.
+      await page.getByRole('button', { name: 'About System throughput' }).focus();
+      await expect(page.getByRole('tooltip').filter({ hasText: 'per GPU' })).toBeVisible();
+      await page.screenshot({ path: name('system-help') });
+      // A 1 GB/s KV link, not overlapped: the Prefill figure drops and the rate without it shows below.
+      await page.goto(
+        '/?m=zai-org/GLM-5.3-Flash&d=h100-sxm&n=8&nodes=4&dp=32&ep=32&lay=dep&b=32&pd=1&pdr=1:3' +
+          '&kvx=bandwidthPerDirectionBytesPerSec:1e9&kvo=none' +
+          '&dec.d=h100-sxm&dec.n=8&dec.nodes=18&dec.dp=144&dec.ep=144&dec.lay=dep&dec.b=144',
+      );
+      await expect(page.getByTestId('prefill-no-kv')).toBeVisible();
+      await page.evaluate(() => document.fonts.ready);
+      await page.screenshot({ path: name('hero-slow-kv') });
+    });
     test(`parallelism moe ${size} ${colorScheme}`, async ({ page }) => {
       await open(page, size, colorScheme);
       const name = (s: string) => `${DIR}/parallelism-${s}-${size}-${colorScheme}.png`;

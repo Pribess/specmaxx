@@ -2,12 +2,17 @@ import { useId } from 'react';
 import { ChartTooltip, useChartPoint } from './ChartTooltip';
 import { formatFlopsPerSec, formatContextTokens, type RooflineSummary } from '../state';
 
+/** Both phases, in drawing order. */
+const BOTH = ['prefill', 'decode'] as const;
 export function RooflineChart({
   roof,
   contexts,
+  phases = BOTH,
 }: {
   roof: RooflineSummary;
   contexts: { prefill: number; decode: number };
+  /** The phases to draw (default both; a disaggregated prefill pool shows only its prefill). */
+  phases?: readonly ('prefill' | 'decode')[];
 }) {
   const id = useId();
   const maxI = Math.max(roof.ridgeFlopPerByte * 10, roof.prefill.intensityFlopPerByte * 2, 1000);
@@ -19,7 +24,6 @@ export function RooflineChart({
     ((Math.log10(Math.max(minF, f)) - Math.log10(minF)) / (Math.log10(maxF) - Math.log10(minF))) *
       188;
   const ridge = Math.min(maxI, Math.max(0.1, roof.ridgeFlopPerByte));
-  const phases = ['prefill', 'decode'] as const;
   const chart = useChartPoint(
     phases.map((phase) => x(roof[phase].intensityFlopPerByte)),
     470,
@@ -28,9 +32,11 @@ export function RooflineChart({
     `${phase === 'prefill' ? 'Prefill' : 'Decode'} · ${roof[phase].intensityFlopPerByte.toFixed(1)} FLOP/B · ${formatFlopsPerSec(roof[phase].attainedFlopsPerSec)} @ ${formatContextTokens(contexts[phase])}`;
   const active = chart.active === null ? undefined : phases[chart.active];
   const contextLabel =
-    contexts.prefill === contexts.decode
-      ? formatContextTokens(contexts.decode)
-      : `${formatContextTokens(contexts.prefill)} prefill / ${formatContextTokens(contexts.decode)} decode`;
+    phases.length === 1
+      ? formatContextTokens(contexts[phases[0]])
+      : contexts.prefill === contexts.decode
+        ? formatContextTokens(contexts.decode)
+        : `${formatContextTokens(contexts.prefill)} prefill / ${formatContextTokens(contexts.decode)} decode`;
   return (
     <figure className="roofline interactive-chart" data-chart="roofline">
       <svg

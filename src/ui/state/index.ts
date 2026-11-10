@@ -19,3 +19,4 @@ export * from './memoryVerdict';
 export * from './format';
 export * from './modelShortlist';
 export * from './bundledModel';
+export * from './kvLink';

@@ -1,6 +1,8 @@
-import type { Ref } from 'react';
+import { Fragment, type Ref } from 'react';
 import {
   formatTokensPerSec,
+  type DisaggregatedSummary,
+  effectivePrefillPhase,
   formatContextTokens,
   formatSeconds,
   type ResultSummary,
@@ -18,6 +20,59 @@ import { HeroMemoryWarning } from './MemoryWarning';
 import { HelpIcon } from './HelpIcon';
 import { helpLines } from './helpLines';
 import { Num } from './Num';
+import { SystemAnswer } from './SystemAnswer';
+
+/** The parallel layout of a pool in words: `DP attention + EP 32`, `TP 8, DCP 8`, `TP 4, DP 2`. */
+export function parallelText(state: AppState, moe: boolean): string {
+  const p = state.parallel;
+  if (moe && state.parallelLayout === 'dpAttentionEp') return `DP attention + EP ${p.ep}`;
+  return [
+    `TP ${p.tp}`,
+    ...(p.dcp !== undefined && p.dcp > 1 ? [`DCP ${p.dcp}`] : []),
+    ...(p.dp > 1 ? [`DP ${p.dp}`] : []),
+  ].join(', ');
+}
+
+/**
+ * The rig line of a disaggregated deployment: both pools' device sets and layouts, e.g. `GLM-5.3-Flash on 32 × H100
+ * SXM prefill and 144 × H100 SXM decode, with DP attention + EP 32 / 144`.
+ */
+function PdRig({
+  label,
+  moe,
+  pools,
+}: {
+  label: string;
+  moe: boolean;
+  pools: { name: 'prefill' | 'decode'; state: AppState; built: BuildResult }[];
+}) {
+  const dep = moe && pools.every((p) => p.state.parallelLayout === 'dpAttentionEp');
+  return (
+    <h1 className="rig" data-testid="pd-rig">
+      {label} on{' '}
+      {pools.map((p, i) => {
+        const [first, ...rest] = rigDeviceName(p.built.hardware, p.state.hw.deviceId).split(' ');
+        return (
+          <Fragment key={p.name}>
+            {i > 0 && ' and '}
+            <span className="keep-together">
+              {p.state.hw.devicesPerNode * p.state.hw.nodes} × {first}
+            </span>
+            {rest.length > 0 && ` ${rest.join(' ')}`} {p.name}
+          </Fragment>
+        );
+      })}
+      , with{' '}
+      {dep ? (
+        <span className="keep-together">
+          DP attention + EP {pools.map((p) => p.state.parallel.ep).join(' / ')}
+        </span>
+      ) : (
+        pools.map((p) => `${parallelText(p.state, moe)} ${p.name}`).join(', ')
+      )}
+    </h1>
+  );
+}
 
 /** Display name of an off-device tier. */
 export function tierName(tier: 'host_ram' | 'nvme'): string {
@@ -87,7 +142,9 @@ export function ResultHero({
   onPlaceTablesOnHost,
   roofline = true,
   figuresRef,
+  pd,
 }: {
+  /** The summary the memory card, roofline and chips show (with disaggregation on: the edited pool's). */
   result?: ResultSummary;
   state: AppState;
   loaded: LoadedModel | null;
@@ -99,7 +156,22 @@ export function ResultHero({
   roofline?: boolean;
   /** The element holding the two figures, watched to show the mini result bar once it scrolls away. */
   figuresRef?: Ref<HTMLDivElement>;
+  /**
+   * With disaggregation on: Prefill comes from the prefill pool and Decode from the decode pool, a System answer is
+   * added, and the rig line names both pools. `phases`: what the roofline shows (the edited pool's phases).
+   */
+  pd?: {
+    summary: DisaggregatedSummary;
+    decodeState: AppState;
+    decodeBuilt: BuildResult;
+    phases: readonly ('prefill' | 'decode')[];
+  };
 }) {
+  const prefillSrc = pd?.summary.prefillPool ?? result;
+  const decodeSrc = pd?.summary.decodePool ?? result;
+  const decodeBatch = pd?.decodeState.workload.batch ?? state.workload.batch;
+  const effPrefill = pd ? effectivePrefillPhase(pd.summary) : undefined;
+  const moe = loaded !== null && hasMoe(loaded.model);
   const link = built.hardware?.links.intra?.link;
   const intraName = link
     ? `${link.name.replace(/ \(host bounce\)/, '')}${link.p2p === 'direct' ? ' with direct P2P' : ' with host staging'}`
@@ -113,7 +185,6 @@ export function ResultHero({
     : undefined;
   const linkName = [intraName, interName].filter((n) => n !== undefined).join(' and ');
   const offload = result?.offload ?? [];
-  const spec = result?.decode.speculative;
   const chips = [
     { key: 'spec-dec', text: specDecChipText(result?.speculative, state.deployment.specDec) },
     ...offload.map((p) => ({ key: `${p.group}-${p.layers?.from ?? 0}`, text: offloadChipText(p) })),
@@ -122,135 +193,170 @@ export function ResultHero({
   const [deviceFirst, ...deviceRest] = rigDeviceName(built.hardware, state.hw.deviceId).split(' ');
   return (
     <section className={`hero ${pending ? 'pending' : ''}`} aria-busy={pending}>
-      <h1 className="rig">
-        {loaded?.label ?? 'Loading model'} on{' '}
-        <span className="keep-together">
-          {state.hw.devicesPerNode * state.hw.nodes} × {deviceFirst}
-        </span>
-        {deviceRest.length > 0 && ` ${deviceRest.join(' ')}`}
-        {built.hardware?.edited && !built.hardware.device.edited ? ' (edited)' : ''}
-        {linkName ? ` over ${linkName}` : ''}, with{' '}
-        {loaded && hasMoe(loaded.model) && state.parallelLayout === 'dpAttentionEp' ? (
-          <span className="keep-together">DP attention + EP {state.parallel.ep}</span>
-        ) : (
-          <>
-            <span className="keep-together">TP {state.parallel.tp}</span>
-            {state.parallel.dcp !== undefined && state.parallel.dcp > 1 && (
-              <>
-                , <span className="keep-together">DCP {state.parallel.dcp}</span>
-              </>
-            )}
-            {state.parallel.dp > 1 && (
-              <>
-                , <span className="keep-together">DP {state.parallel.dp}</span>
-              </>
-            )}
-          </>
-        )}
-      </h1>
-      {result ? (
+      {pd ? (
+        <PdRig
+          label={loaded?.label ?? 'Loading model'}
+          moe={moe}
+          pools={[
+            { name: 'prefill', state, built },
+            { name: 'decode', state: pd.decodeState, built: pd.decodeBuilt },
+          ]}
+        />
+      ) : (
+        <h1 className="rig">
+          {loaded?.label ?? 'Loading model'} on{' '}
+          <span className="keep-together">
+            {state.hw.devicesPerNode * state.hw.nodes} × {deviceFirst}
+          </span>
+          {deviceRest.length > 0 && ` ${deviceRest.join(' ')}`}
+          {built.hardware?.edited && !built.hardware.device.edited ? ' (edited)' : ''}
+          {linkName ? ` over ${linkName}` : ''}, with{' '}
+          {moe && state.parallelLayout === 'dpAttentionEp' ? (
+            <span className="keep-together">DP attention + EP {state.parallel.ep}</span>
+          ) : (
+            <>
+              <span className="keep-together">TP {state.parallel.tp}</span>
+              {state.parallel.dcp !== undefined && state.parallel.dcp > 1 && (
+                <>
+                  , <span className="keep-together">DCP {state.parallel.dcp}</span>
+                </>
+              )}
+              {state.parallel.dp > 1 && (
+                <>
+                  , <span className="keep-together">DP {state.parallel.dp}</span>
+                </>
+              )}
+            </>
+          )}
+        </h1>
+      )}
+      {result && prefillSrc && decodeSrc ? (
         <>
           <div className={`hero-grid${roofline ? '' : ' no-roofline'}`}>
             <div className="answers" ref={figuresRef}>
-              {(['prefill', 'decode'] as const).map((phase) => (
-                <div className="answer" key={phase}>
-                  <h2>{phase === 'prefill' ? 'Prefill' : 'Decode'}</h2>
-                  <div className="answer-line">
-                    <strong data-testid={`${phase}-tps`}>
-                      <Num>{formatTokensPerSec(result[phase].tokensPerSec)}</Num>
-                    </strong>
-                    <HeroMemoryWarning memory={result.memory} />
-                    <span className="answer-unit">
-                      tok/s @ {formatContextTokens(result[phase].contextTokens)}
-                    </span>
-                    {phase === 'decode' && spec && (
-                      <span className="spec-dec" data-testid="spec-dec">
-                        (spec-dec ×{spec.speedup.toFixed(2)}){' '}
-                        <HelpIcon term="Speculative decoding speedup">
-                          {helpLines([
-                            ...(result.speculative
-                              ? [
-                                  `${METHOD_NAMES[result.speculative.method]}, k=${result.speculative.draftLength}.`,
-                                ]
-                              : []),
-                            `${spec.expectedTokensPerStep.toFixed(2)} tokens accepted per step on average (incl. the bonus token).`,
-                            `One step: draft ${formatSeconds(spec.draftSec)} + verify ${formatSeconds(spec.verifySec)}.`,
-                          ])}
-                        </HelpIcon>
+              {(['prefill', 'decode'] as const).map((phase) => {
+                const src = phase === 'prefill' ? prefillSrc : decodeSrc;
+                const batch = phase === 'prefill' ? state.workload.batch : decodeBatch;
+                const spec = src.decode.speculative;
+                // With disaggregation on, the prefill figure is the pool's rate with the KV transfer (R_P,eff).
+                const fig = phase === 'prefill' && effPrefill ? effPrefill : src[phase];
+                return (
+                  <div className="answer" key={phase}>
+                    <h2>{phase === 'prefill' ? 'Prefill' : 'Decode'}</h2>
+                    <div className="answer-line">
+                      <strong data-testid={`${phase}-tps`}>
+                        <Num>{formatTokensPerSec(fig.tokensPerSec)}</Num>
+                      </strong>
+                      <HeroMemoryWarning memory={src.memory} />
+                      <span className="answer-unit">
+                        tok/s @ {formatContextTokens(fig.contextTokens)}
                       </span>
+                      {phase === 'decode' && spec && (
+                        <span className="spec-dec" data-testid="spec-dec">
+                          (spec-dec ×{spec.speedup.toFixed(2)}){' '}
+                          <HelpIcon term="Speculative decoding speedup">
+                            {helpLines([
+                              ...(src.speculative
+                                ? [
+                                    `${METHOD_NAMES[src.speculative.method]}, k=${src.speculative.draftLength}.`,
+                                  ]
+                                : []),
+                              `${spec.expectedTokensPerStep.toFixed(2)} tokens accepted per step on average (incl. the bonus token).`,
+                              `One step: draft ${formatSeconds(spec.draftSec)} + verify ${formatSeconds(spec.verifySec)}.`,
+                            ])}
+                          </HelpIcon>
+                        </span>
+                      )}
+                    </div>
+                    {phase === 'prefill' && fig.computedTokensPerSec !== undefined && (
+                      <div className="what-if" data-testid="prefill-computed">
+                        <span>Computed: </span>
+                        <span className="what-if-value">
+                          <span>
+                            <span data-testid="prefill-computed-tps">
+                              <Num>{formatTokensPerSec(fig.computedTokensPerSec)}</Num>
+                            </span>
+                            <span className="answer-unit">
+                              {' '}
+                              tok/s @ {formatContextTokens(src.prefill.contextTokens)}
+                            </span>
+                          </span>
+                          <HelpIcon term="Computed prefill rate">
+                            {helpLines([
+                              'The headline counts every prompt token, cached ones included.',
+                              'This counts only the tokens prefill actually computed.',
+                            ])}
+                          </HelpIcon>
+                        </span>
+                      </div>
                     )}
+                    {phase === 'prefill' &&
+                      effPrefill &&
+                      effPrefill.computeOnlyTokensPerSec !== effPrefill.tokensPerSec && (
+                        <div className="what-if" data-testid="prefill-no-kv">
+                          <span>Without KV transfer: </span>
+                          <span className="what-if-value">
+                            <span>
+                              <Num>{formatTokensPerSec(effPrefill.computeOnlyTokensPerSec)}</Num>
+                            </span>
+                            <HelpIcon term="Prefill without KV transfer">
+                              {helpLines([
+                                'The prefill pool when sending the KV cache to decode costs no time.',
+                                'The headline includes the KV link: a slow or not overlapped link stretches each prefill batch.',
+                              ])}
+                            </HelpIcon>
+                          </span>
+                        </div>
+                      )}
+                    {phase === 'prefill' && src.prefill.withoutOverlap && (
+                      <div className="what-if" data-testid="prefill-no-overlap">
+                        <span>Without overlap: </span>
+                        <span className="what-if-value">
+                          <span>
+                            <Num>{formatTokensPerSec(src.prefill.withoutOverlap.tokensPerSec)}</Num>
+                          </span>
+                          <HelpIcon term="Prefill without overlap">
+                            {helpLines([
+                              'Prefill when sending data between devices does not overlap with compute.',
+                              'The headline hides as much as the overlap settings allow; most engines hide less.',
+                            ])}
+                          </HelpIcon>
+                        </span>
+                      </div>
+                    )}
+                    {phase === 'decode' && src.decode.withDispatch && (
+                      <div className="what-if" data-testid="decode-dispatch">
+                        <span>With engine dispatch: </span>
+                        <span className="what-if-value">
+                          <span>
+                            <Num>{formatTokensPerSec(src.decode.withDispatch.tokensPerSec)}</Num>
+                          </span>
+                          <HelpIcon term="With engine dispatch">
+                            {helpLines([
+                              `Decode if the engine spends ${formatSeconds(src.decode.withDispatch.perKernelSec)} launching each GPU kernel: ${src.decode.withDispatch.kernelsPerStep} per step, one per operation.`,
+                              'That is engine overhead, not a hardware limit, so the headline leaves it out.',
+                            ])}
+                          </HelpIcon>
+                        </span>
+                      </div>
+                    )}
+                    <small
+                      aria-hidden={batch === 1}
+                      style={{
+                        display: 'block',
+                        height: '1.2em',
+                        lineHeight: '1.2',
+                        visibility: batch > 1 ? 'visible' : 'hidden',
+                      }}
+                    >
+                      {batch > 1
+                        ? `${formatTokensPerSec(fig.perSequenceTokensPerSec)} per sequence`
+                        : ''}
+                    </small>
                   </div>
-                  {phase === 'prefill' && result.prefill.computedTokensPerSec !== undefined && (
-                    <div className="what-if" data-testid="prefill-computed">
-                      <span>Computed: </span>
-                      <span className="what-if-value">
-                        <span>
-                          <span data-testid="prefill-computed-tps">
-                            <Num>{formatTokensPerSec(result.prefill.computedTokensPerSec)}</Num>
-                          </span>
-                          <span className="answer-unit">
-                            {' '}
-                            tok/s @ {formatContextTokens(result.prefill.contextTokens)}
-                          </span>
-                        </span>
-                        <HelpIcon term="Computed prefill rate">
-                          {helpLines([
-                            'The headline counts every prompt token, cached ones included.',
-                            'This counts only the tokens prefill actually computed.',
-                          ])}
-                        </HelpIcon>
-                      </span>
-                    </div>
-                  )}
-                  {phase === 'prefill' && result.prefill.withoutOverlap && (
-                    <div className="what-if" data-testid="prefill-no-overlap">
-                      <span>Without overlap: </span>
-                      <span className="what-if-value">
-                        <span>
-                          <Num>
-                            {formatTokensPerSec(result.prefill.withoutOverlap.tokensPerSec)}
-                          </Num>
-                        </span>
-                        <HelpIcon term="Prefill without overlap">
-                          {helpLines([
-                            'Prefill when sending data between devices does not overlap with compute.',
-                            'The headline hides as much as the overlap settings allow; most engines hide less.',
-                          ])}
-                        </HelpIcon>
-                      </span>
-                    </div>
-                  )}
-                  {phase === 'decode' && result.decode.withDispatch && (
-                    <div className="what-if" data-testid="decode-dispatch">
-                      <span>With engine dispatch: </span>
-                      <span className="what-if-value">
-                        <span>
-                          <Num>{formatTokensPerSec(result.decode.withDispatch.tokensPerSec)}</Num>
-                        </span>
-                        <HelpIcon term="With engine dispatch">
-                          {helpLines([
-                            `Decode if the engine spends ${formatSeconds(result.decode.withDispatch.perKernelSec)} launching each GPU kernel: ${result.decode.withDispatch.kernelsPerStep} per step, one per operation.`,
-                            'That is engine overhead, not a hardware limit, so the headline leaves it out.',
-                          ])}
-                        </HelpIcon>
-                      </span>
-                    </div>
-                  )}
-                  <small
-                    aria-hidden={state.workload.batch === 1}
-                    style={{
-                      display: 'block',
-                      height: '1.2em',
-                      lineHeight: '1.2',
-                      visibility: state.workload.batch > 1 ? 'visible' : 'hidden',
-                    }}
-                  >
-                    {state.workload.batch > 1
-                      ? `${formatTokensPerSec(result[phase].perSequenceTokensPerSec)} per sequence`
-                      : ''}
-                  </small>
-                </div>
-              ))}
+                );
+              })}
+              {pd && <SystemAnswer summary={pd.summary.system} />}
               <ul className="result-chips" aria-label="Result settings">
                 {chips.map((chip, i) => (
                   // The "?" shares the last chip's item, so it never wraps onto a line of its own.
@@ -276,6 +382,7 @@ export function ResultHero({
                   prefill: result.prefill.contextTokens,
                   decode: result.decode.contextTokens,
                 }}
+                phases={pd?.phases}
               />
             )}
           </div>
