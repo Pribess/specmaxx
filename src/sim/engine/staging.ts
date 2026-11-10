@@ -23,8 +23,8 @@
  * Single-node topologies have nothing to stage.
  */
 
-import { hostPcieLink, HOST_STAGING_STEP_BYTES, SOCKET_COPY_STEP_BYTES } from '../hw/presets/links';
-import { DEFAULT_HOST_RAM } from '../hw/presets/storage';
+import { deviceHostLink, hostPcieLink, HOST_STAGING_STEP_BYTES, SOCKET_COPY_STEP_BYTES } from '../hw/presets/links';
+import { defaultHostRamFor } from '../hw/presets/storage';
 import type { DeviceSpec, HardwareStack, LinkSpec, TopologySpec } from '../hw/types';
 import type { ParallelConfig } from '../ir/model';
 
@@ -104,13 +104,14 @@ export interface ResolvedHostStaging {
 /**
  * The host staging of a run (docs §6 "Inter-node host staging", "TCP socket copy"), or none.
  * - pcie ⇔ {@link needsHostStaging}. B_pcie and α_pcie come from `hardware.host.link`, else from
- *   `hostPcieLink(device.hostInterface)` (the stack sends `host` only when something is offloaded, so the device's own
+ *   `deviceHostLink(device)` (non-PCIe before PCIe; the stack sends `host` only when something is offloaded, so the device's own
  *   PCIe slot is the usual source), else from PCIe 5.0 x16 with a warning (an SXM module on a TCP link, which no
  *   catalogued setup has).
  * - socketCopy ⇔ {@link needsSocketCopy}.
  * - Neither ⇒ `staging: undefined`, exactly the paths of before.
  * B_host = the device's unified pool peak (`device.memory.bandwidthBytesPerSec`) on unified memory, else
- * `hardware.host.ram` ?? `DEFAULT_HOST_RAM`. c = `HOST_STAGING_STEP_BYTES` with pcie, else `SOCKET_COPY_STEP_BYTES`.
+ * `hardware.host.ram` ?? `defaultHostRamFor(device, devicesPerNode)` (Grace pool or legacy DDR5 default).
+ * c = `HOST_STAGING_STEP_BYTES` with pcie, else `SOCKET_COPY_STEP_BYTES`.
  * n_stg = min(devicesPerNode, tp·dp). `device` and `topology` are the effective ones (after modifiers).
  */
 export function resolveHostStaging(
@@ -130,8 +131,8 @@ export function resolveHostStaging(
     let hostLink: LinkSpec;
     if (hardware.host?.link !== undefined) {
       hostLink = hardware.host.link;
-    } else if (device.hostInterface !== undefined) {
-      hostLink = hostPcieLink(device.hostInterface.generation, device.hostInterface.lanes);
+    } else if (deviceHostLink(device) !== undefined) {
+      hostLink = deviceHostLink(device)!;
     } else {
       hostLink = hostPcieLink(5, 16);
       warnings.push(
@@ -150,7 +151,7 @@ export function resolveHostStaging(
   const hostMemBandwidthBytesPerSec =
     device.memory.kind === 'unified'
       ? device.memory.bandwidthBytesPerSec
-      : (hardware.host?.ram ?? DEFAULT_HOST_RAM).bandwidthBytesPerSec;
+      : (hardware.host?.ram ?? defaultHostRamFor(device, topology.devicesPerNode)).bandwidthBytesPerSec;
   const staging: HostStaging = {
     ...(pcie === undefined ? {} : { pcie }),
     socketCopy,

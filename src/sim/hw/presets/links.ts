@@ -7,7 +7,16 @@
  * per-step time of a small all-reduce is only an upper bound. On one physical medium RDMA ≤ TCP (`LINK_MEDIA`).
  * See docs/simulation-model.md §4 ("Links and topologies"), §6 ("Collectives"), and engine/collectives.ts.
  */
-import type { LinkSpec, PcieGeneration, PcieLanes, SourceRef } from '../types';
+import type { DeviceSpec, LinkSpec, PcieGeneration, PcieLanes, SourceRef } from '../types';
+import {
+  BLACKWELL_DATASHEET_URL,
+  BLACKWELL_ULTRA_BLOG_URL,
+  GB200_NVL72_URL,
+  MI325X_LINK_DATASHEET_URL,
+  MI355X_PLATFORM_URL,
+  CDNA4_LINK_WHITEPAPER_URL,
+  MI455X_SCALE_UP_URL,
+} from './rack-scale-sources';
 
 const BANDWIDTH_FIELD = 'bandwidthPerDirectionBytesPerSec';
 const PCIE_SIG_URL = 'https://pcisig.com/faq?field_category_value%5B%5D=pci_express_5.0&keys=';
@@ -1170,12 +1179,194 @@ export const ETHERNET_5G_TCP = ethernetTcp(5);
 /** 10GbE TCP, 1.25 GB/s per direction; assumes a non-oversubscribed network. */
 export const ETHERNET_10G_TCP = ethernetTcp(10);
 
+/** NVL72 switched injection: 1.8 TB/s bidirectional = 900 GB/s per GPU per direction, up to 72 GPUs.
+ * See docs/simulation-model.md §4 "Scale-up domains".
+ */
+export const NVLINK_5_NVL72: LinkSpec = {
+  ...NVLINK_5,
+  name: 'NVLink5 / NVL72 NVLink Switch',
+  sources: [
+    ...NVLINK_5.sources,
+    {
+      url: GB200_NVL72_URL,
+      title: 'GB200 NVL72',
+      fields: [BANDWIDTH_FIELD],
+      note: '130 TB/s bidirectional rack total (rounded), 72 GPUs, 1.8 TB/s per GPU.',
+    },
+  ],
+};
+/** NVL4 bridge: 7.2 TB/s bidirectional / 4 / 2 = 900 GB/s per GPU per direction aggregate; optimistic for subgroups.
+ * See docs/simulation-model.md §4 "Scale-up domains".
+ */
+export const NVLINK_5_NVL4: LinkSpec = {
+  ...NVLINK_5,
+  kind: 'nvlink_bridge',
+  name: 'NVLink5 / NVL4 bridge (mesh estimate)',
+  sources: [
+    {
+      url: BLACKWELL_DATASHEET_URL,
+      title: 'Blackwell datasheet OCT25 pp. 4, 8',
+      fields: [BANDWIDTH_FIELD],
+      note: 'Four GPUs connected by an NVLink bridge, 7.2 TB/s total bandwidth.',
+    },
+  ],
+  estimated: [
+    {
+      field: BANDWIDTH_FIELD,
+      reason:
+        'Direct mesh inferred, not published: 3 peers × 300 GB/s per direction = 900 GB/s aggregate injection. Optimistic for pairs/subgroups; no inter-board NVLink assumed.',
+    },
+    {
+      field: 'latencySec',
+      reason:
+        'NVL4 latency unpublished; reuse NVLink5 0.8 µs GB200 remote-store proxy, not a measured bridge latency.',
+    },
+  ],
+};
+/** Grace C2C: 900 GB/s bidirectional = 450 GB/s per GPU per direction (ambiguous vs shared-superchip wording).
+ * See docs/simulation-model.md §4 "Host and storage tiers".
+ */
+export const NVLINK_C2C: LinkSpec = {
+  kind: 'nvlink',
+  name: 'NVLink-C2C (Grace CPU–GPU)',
+  bandwidthPerDirectionBytesPerSec: 450e9,
+  latencySec: 0.8e-6,
+  p2p: 'direct',
+  sources: [
+    {
+      url: BLACKWELL_ULTRA_BLOG_URL,
+      title: 'Inside Blackwell Ultra Table 1',
+      fields: [BANDWIDTH_FIELD],
+      note: 'Per-GPU comparison lists 900 GB/s C2C; caption specifies bidirectional GB/s.',
+    },
+  ],
+  estimated: [
+    {
+      field: BANDWIDTH_FIELD,
+      reason:
+        'Vendor per-GPU table supports 450 GB/s per direction; superchip wording is ambiguous. If shared by its two GPUs this would be 225 GB/s per GPU per direction. Grace DRAM normally binds first.',
+    },
+    {
+      field: 'latencySec',
+      reason:
+        'C2C latency unpublished; reuse 0.8 µs NVLink5 GB200 remote-store proxy, not a C2C measurement.',
+    },
+  ],
+};
+/** MI325X peer: 128 GB/s bidirectional = 64 GB/s per direction.
+ * See docs/simulation-model.md §4 "Scale-up domains".
+ */
+export const XGMI_MI325X_PER_PEER: LinkSpec = {
+  ...XGMI_MI300X_PER_PEER,
+  name: 'MI325X xGMI (one peer)',
+  sources: [
+    {
+      url: MI325X_LINK_DATASHEET_URL,
+      title: 'MI325X datasheet',
+      fields: [BANDWIDTH_FIELD],
+      note: 'Seven 128 GB/s bidirectional peer links = 64 GB/s each direction.',
+    },
+  ],
+};
+/** MI325X aggregate injection: 7 × 64 = 448 GB/s per GPU per direction; optimistic for subgroups.
+ * See docs/simulation-model.md §4 "Scale-up domains".
+ */
+export const XGMI_MI325X_8_GPU: LinkSpec = {
+  ...XGMI_MI325X_PER_PEER,
+  name: 'MI325X xGMI (8-GPU aggregate injection)',
+  bandwidthPerDirectionBytesPerSec: 7 * 64e9,
+  sources: XGMI_MI325X_PER_PEER.sources.map((s) => ({
+    ...s,
+    note: `${s.note} Full mesh injection = 7 × 64 GB/s = 448 GB/s per direction; requires all seven peers.`,
+  })),
+};
+/** MI355X peer: 144 GB/s bidirectional = 72 GB/s per direction, NOT the stale 153.6 figure.
+ * See docs/simulation-model.md §4 "Scale-up domains".
+ */
+export const XGMI_MI355X_PER_PEER: LinkSpec = {
+  ...XGMI_MI300X_PER_PEER,
+  name: 'MI355X xGMI (one peer)',
+  bandwidthPerDirectionBytesPerSec: 72e9,
+  sources: [
+    {
+      url: MI355X_PLATFORM_URL,
+      title: 'MI355X platform brochure',
+      fields: [BANDWIDTH_FIELD],
+      note: 'Seven 144 GB/s bidirectional links.',
+    },
+    {
+      url: CDNA4_LINK_WHITEPAPER_URL,
+      title: 'CDNA4 p. 13 and Table 2',
+      fields: [BANDWIDTH_FIELD],
+      note: '36 Gb/s × 16 lanes / 8 = 72 GB/s per direction; 1,008 GB/s aggregate bidirectional. Figure 5 label 1075 GB/s is stale.',
+    },
+  ],
+};
+/** MI355X aggregate injection: 7 × 72 = 504 GB/s per GPU per direction; optimistic for subgroups.
+ * See docs/simulation-model.md §4 "Scale-up domains".
+ */
+export const XGMI_MI355X_8_GPU: LinkSpec = {
+  ...XGMI_MI355X_PER_PEER,
+  name: 'MI355X xGMI (8-GPU aggregate injection)',
+  bandwidthPerDirectionBytesPerSec: 7 * 72e9,
+  sources: XGMI_MI355X_PER_PEER.sources.map((s) => ({
+    ...s,
+    note: `${s.note} Full mesh injection = 7 × 72 GB/s = 504 GB/s per direction; requires all seven peers.`,
+  })),
+};
+/** MI455X switched UALoE: 3.6 TB/s bidirectional = 1.8 TB/s per GPU per direction, up to 72 GPUs.
+ * See docs/simulation-model.md §4 "Scale-up domains".
+ */
+export const UALOE_MI455X: LinkSpec = {
+  kind: 'other',
+  name: 'MI455X UALoE / Helios scale-up',
+  bandwidthPerDirectionBytesPerSec: 1.8e12,
+  latencySec: 1.5e-6,
+  p2p: 'direct',
+  sources: [
+    {
+      url: MI455X_SCALE_UP_URL,
+      title: 'AMD MI455X specifications',
+      fields: [BANDWIDTH_FIELD],
+      note: 'Scale-up (Peak) UALoE Bi-directional Bandwidth 3.6 TB/s per GPU.',
+    },
+  ],
+  estimated: [
+    {
+      field: 'latencySec',
+      reason:
+        'UALoE latency unpublished; reuse existing 1.5 µs xGMI estimate for one switched hop, not a measurement.',
+    },
+  ],
+};
+/** Default CPU attachment: non-PCIe hostLink, then PCIe interface, else undefined. B/s per GPU per direction; latency seconds.
+ * See docs/simulation-model.md §4 "Host and storage tiers".
+ */
+export function deviceHostLink(
+  device: Pick<DeviceSpec, 'hostLink' | 'hostInterface'>,
+): LinkSpec | undefined {
+  return (
+    device.hostLink ??
+    (device.hostInterface === undefined
+      ? undefined
+      : hostPcieLink(device.hostInterface.generation, device.hostInterface.lanes))
+  );
+}
+
 /** All stock host-bounced GeForce PCIe lane configurations; unlock modifiers can switch each to direct P2P. */
 export const HOST_BOUNCE_PCIE_LINKS: LinkSpec[] = [PCIE_4_X16, PCIE_4_X8, PCIE_5_X16, PCIE_5_X8];
 /** The CMP 170HX's fused-down host-bounced PCIe links (Gen1 / Gen2 × x4 / x16), fastest first. */
 export const CMP_PCIE_LINKS: LinkSpec[] = [PCIE_2_X16, PCIE_1_X16, PCIE_2_X4, PCIE_1_X4];
 /** All link presets, including per-peer and full-node xGMI conventions. Every entry must validate. */
 export const LINK_PRESETS: LinkSpec[] = [
+  NVLINK_5_NVL72,
+  NVLINK_5_NVL4,
+  NVLINK_C2C,
+  XGMI_MI325X_PER_PEER,
+  XGMI_MI325X_8_GPU,
+  XGMI_MI355X_PER_PEER,
+  XGMI_MI355X_8_GPU,
+  UALOE_MI455X,
   PCIE_3_X16_DIRECT,
   PCIE_3_X16,
   NVLINK_3,

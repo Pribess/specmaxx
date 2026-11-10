@@ -161,7 +161,9 @@ describe('preset library: every device preset', () => {
     expect(ids('AMD Radeon / Ryzen AI')).toEqual(['radeon-ai-pro-r9700', 'radeon-rx-9070-xt', 'ryzen-ai-max-plus-395']);
     expect(ids('Intel Arc')).toEqual(['arc-pro-b70', 'arc-pro-b65', 'arc-pro-b60', 'arc-b580']);
     expect(ids('Datacenter')).toEqual([
+      'gb300',
       'b300',
+      'gb200',
       'b200',
       'h200-sxm',
       'h100-sxm',
@@ -317,6 +319,14 @@ describe('preset library: links and topologies', () => {
       'rtx-3090-nvlink-bridge',
       'nvlink4-nvswitch',
       'nvlink5-nvswitch',
+      'nvlink5-nvl72-nvlink-switch',
+      'nvlink5-nvl4-bridge-mesh-estimate',
+      'nvlink-c2c-grace-cpu-gpu',
+      'mi325x-xgmi-one-peer',
+      'mi325x-xgmi-8-gpu-aggregate-injection',
+      'mi355x-xgmi-one-peer',
+      'mi355x-xgmi-8-gpu-aggregate-injection',
+      'mi455x-ualoe-helios-scale-up',
       'infiniband-ndr400-one-nic-per-gpu',
       'infiniband-xdr800-one-nic-per-gpu',
       'dgx-spark-connectx-7-200gbe-roce',

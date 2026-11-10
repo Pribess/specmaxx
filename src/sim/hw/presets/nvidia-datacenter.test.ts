@@ -23,7 +23,9 @@ describe('NVIDIA datacenter presets', () => {
   it('every preset passes validateDevice and has sourced URLs', () => {
     expect(NVIDIA_DATACENTER_DEVICE_PRESETS.map((d) => d.id)).toEqual([
       'dgx-spark',
+      'gb300',
       'b300',
+      'gb200',
       'b200',
       'h200-sxm',
       'h100-sxm',
@@ -50,7 +52,7 @@ describe('NVIDIA datacenter presets', () => {
   it('2:4 = 2 × dense everywhere NVIDIA states it (all but B300 FP4)', () => {
     for (const d of NVIDIA_DATACENTER_DEVICE_PRESETS) {
       for (const p of d.engines[0].matmulPeaks.filter((x) => x.sparsity === '2:4')) {
-        if (d.id === 'b300' && p.input === 'fp4') continue; // 18 sparse vs 14 dense (datasheet)
+        if ((d.id === 'b300' || d.id === 'gb300') && p.input === 'fp4') continue; // Ultra FP4 is not 2:1 (datasheet)
         expectClose(p.flopsPerSec, 2 * peak(d, p.input, p.accumulate, 'dense'));
       }
     }

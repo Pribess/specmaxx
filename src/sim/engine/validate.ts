@@ -17,6 +17,7 @@ import {
   validateTopology,
 } from '../hw/validate';
 import { applyDeviceModifiers } from '../hw/modifiers';
+import { deviceHostLink } from '../hw/presets/links';
 import { modelSpecErrors } from '../ir/validateModel';
 import { lowerBlock, type LoweringContext } from '../lower/lower';
 import { moeParallelErrors } from '../lower/moe';
@@ -228,7 +229,7 @@ function inRange(x: number, lo: number, hi: number, hiOpen = false): boolean {
  * `scaleLayout 'pinned_host'` needs the NVMe tier; the removed `denseLayers` is rejected; `embeddings.tier` is
  * `'device'`, `'host_ram'` or `'nvme'`, and off the device only for an untied model
  * ({@link TIED_EMBEDDINGS_OFFLOAD_ERROR}). Any off-device group on a dedicated-memory device needs a host
- * link: `hardware.host.link` or the device's cited `hostInterface`. `hardware.host`, when given, is validated.
+ * link: `hardware.host.link`, the device's cited `hostLink`, or its PCIe `hostInterface`. `hardware.host`, when given, is validated.
  *
  * Speculative decoding: rejected with pp > 1 (§3.6, {@link SPEC_DEC_PP_ERROR}); `draftLength` k an integer in
  * 1..16; `'mtp'` needs `model.draft.kind === 'mtp'`; a block method needs a `drafter` of the same method with
@@ -345,7 +346,7 @@ export function deploymentErrors(input: SimInput): string[] {
       offDevice &&
       device.memory.kind === 'dedicated' &&
       hardware.host?.link === undefined &&
-      device.hostInterface === undefined
+      deviceHostLink(device) === undefined
     ) {
       errors.push(`deployment.offload: no host link known for ${device.id}; set hardware.host.link`);
     }

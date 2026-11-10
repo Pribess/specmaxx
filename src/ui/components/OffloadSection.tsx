@@ -1,5 +1,12 @@
+import type { ReactNode } from 'react';
 import { DEFAULT_PREFETCH_ACCURACY } from '../../sim/engine/transfer';
-import { HOST_PCIE_LINKS, HOST_RAM_PRESETS, SSD_PRESETS, hostPcieLink } from '../../sim/hw/presets';
+import {
+  HOST_PCIE_LINKS,
+  HOST_RAM_PRESETS,
+  SSD_PRESETS,
+  defaultHostRamFor,
+  hostPcieLink,
+} from '../../sim/hw/presets';
 import {
   defaultScaleLayout,
   formatBytesPerSec,
@@ -19,6 +26,7 @@ import {
   type TierChoice,
   type TierSplitChoice,
 } from '../state';
+import { HelpIcon } from './HelpIcon';
 import { NumberField } from './NumberField';
 import { Picker } from './Picker';
 import { helpLines } from './helpLines';
@@ -145,6 +153,48 @@ const HOST_RAM_OPTIONS: PickerOption[] = [...HOST_RAM_PRESETS]
     description: `${(r.bandwidthBytesPerSec / 1e9).toFixed(1)} GB/s`,
   }));
 
+/** Picker group of a device's own host RAM that is not a catalog preset (the pooled Grace LPDDR5X). */
+const OWN_RAM_GROUP = 'This machine';
+
+/** Help of the Host RAM picker on PCIe-attached GPUs and on Grace machines. */
+const HOST_RAM_HELP = helpLines([
+  'Speed of the machine’s system memory (RAM), from its datasheet.',
+  'All GPUs in a machine share it.',
+]);
+const GRACE_RAM_HELP = helpLines([
+  'Memory of the Grace CPUs: one CPU per two GPUs, pooled for the whole machine.',
+  'All GPUs in a machine share it.',
+]);
+
+/** Help of the fixed host link of a device with a non-PCIe CPU link (Grace NVLink-C2C). */
+const OWN_LINK_HELP = helpLines([
+  'The link between each GPU and its CPU, built into the device.',
+  'Offloaded data cannot stream faster than this link or the RAM allows.',
+]);
+
+/** A label with its "?" help and a value as plain text (a field with one possibility), styled like the setup row's. */
+function StaticField({
+  label,
+  help,
+  children,
+}: {
+  label: string;
+  help: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="field">
+      <div className="field-head">
+        <span className="field-label">{label}</span>
+        <HelpIcon term={label}>{help}</HelpIcon>
+      </div>
+      <p className="field-static" data-testid="host-link-static">
+        {children}
+      </p>
+    </div>
+  );
+}
+
 /**
  * Shared state of the offload controls (the main section and its Advanced subsection): the model and device, the
  * current offload choice and its setter, and the tier picker rows (`placementOptions` adds "Host RAM + SSD" for the
@@ -221,6 +271,20 @@ export function OffloadSection(props: PanelProps) {
   const setHost = (next: Partial<HostChoice>) =>
     dispatch({ type: 'setHost', host: { ...host, ...next } });
   const resolvedHost = resolveHost(state.hw, device);
+  // The device's own host RAM (Grace) is not a catalog preset: list it first, and picking it clears the choice.
+  const ownRam = defaultHostRamFor(device, state.hw.devicesPerNode);
+  const ownRamListed = HOST_RAM_PRESETS.some((r) => r.id === ownRam.id);
+  const ramOptions: PickerOption[] = ownRamListed
+    ? HOST_RAM_OPTIONS
+    : [
+        {
+          value: ownRam.id,
+          label: ownRam.name,
+          group: OWN_RAM_GROUP,
+          description: `${(ownRam.bandwidthBytesPerSec / 1e12).toFixed(2)} TB/s`,
+        },
+        ...HOST_RAM_OPTIONS,
+      ];
   const layerCount = model.layers.length;
   const issues = built.issues.filter((i) => i.field === 'offload');
   const experts = offload.experts;
@@ -362,13 +426,15 @@ export function OffloadSection(props: PanelProps) {
           <Picker
             label="Host RAM"
             value={resolvedHost.ram.id}
-            options={HOST_RAM_OPTIONS}
+            options={ramOptions}
             searchThreshold={4}
-            onChange={(v) => setHost({ ramId: v, ramCapacityBytes: undefined })}
-            help={helpLines([
-              'Speed of the machine’s system memory (RAM), from its datasheet.',
-              'All GPUs in a machine share it.',
-            ])}
+            onChange={(v) =>
+              setHost({
+                ramId: !ownRamListed && v === ownRam.id ? undefined : v,
+                ramCapacityBytes: undefined,
+              })
+            }
+            help={!ownRamListed && resolvedHost.ramDefault ? GRACE_RAM_HELP : HOST_RAM_HELP}
           />
           <NumberField
             label="Host RAM capacity (GB)"
@@ -395,7 +461,12 @@ export function OffloadSection(props: PanelProps) {
           ])}
         />
       )}
-      {anyOff && !unified && (
+      {anyOff && !unified && device.hostLink !== undefined && resolvedHost.link !== undefined && (
+        <StaticField label="Host link" help={OWN_LINK_HELP}>
+          {`${resolvedHost.link.name.replace(/ \(.*\)$/, '')}, ${formatBytesPerSec(resolvedHost.link.bandwidthPerDirectionBytesPerSec)}`}
+        </StaticField>
+      )}
+      {anyOff && !unified && device.hostLink === undefined && (
         <Picker
           label="Host link"
           value={host.link ? `${host.link.generation}x${host.link.lanes}` : DEFAULT_LINK}

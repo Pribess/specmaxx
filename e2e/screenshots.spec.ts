@@ -267,6 +267,10 @@ for (const size of ['desktop', 'phone'] as const) {
         ['m5-ultra-x4-tb5-mesh2', '?d=apple-m5-ultra-80c&cap=2&nodes=4&fab=mesh2&pp=4'],
         ['dgx-spark-x4-ring', '?d=dgx-spark&nodes=4&fab=ring&tp=4'],
         ['rtx-5090-x2', '?n=2&tp=2'],
+        // Rack scale: the GB200 NVL72 popular setup (72 GPUs on the NVL72 NVLink Switch) and a 64-GPU subset of it,
+        // each as one model copy per GPU (DP) so the parallelism fits the rig.
+        ['gb200-nvl72', '?d=gb200&n=72&dp=72&b=72'],
+        ['gb200-x64-nvl72', '?d=gb200&n=64&dp=64&b=64'],
       ];
       for (const [id, query] of cases) {
         await load(query);
@@ -285,6 +289,27 @@ for (const size of ['desktop', 'phone'] as const) {
       await page.getByRole('combobox', { name: 'Device', exact: true }).click();
       await expect(page.getByRole('group', { name: 'Popular setups' })).toBeVisible();
       await page.screenshot({ path: name('device-picker-popular') });
+      await page.keyboard.press('Escape');
+      // The device picker searched for Grace Blackwell: GB300 and GB200 in the Datacenter group.
+      await page.getByRole('combobox', { name: 'Device', exact: true }).click();
+      await page.keyboard.type('Grace Blackwell');
+      await expect(page.getByRole('option', { name: /NVIDIA GB200/ }).first()).toBeVisible();
+      await page.screenshot({ path: name('device-picker-grace') });
+      await page.keyboard.press('Escape');
+      // The Grace host fields: GB200 × 64 as DP 64 × EP 64 with experts in host RAM (the pooled Grace LPDDR5X of 32
+      // CPUs and the fixed NVLink-C2C host link).
+      await load(
+        '?m=deepseek-ai/DeepSeek-V4-Flash-0731&d=gb200&n=64&tp=1&dp=64&ep=64&b=64&ox=ram&oxf=0.5',
+      );
+      await page.addStyleTag({ content: '.compact-results { visibility: hidden !important }' });
+      const offload = page.getByTestId('offload-section');
+      await expect(offload.getByTestId('host-link-static')).toBeVisible();
+      await offload.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+      await page.waitForTimeout(50);
+      await offload.screenshot({ path: name('grace-host') });
+      await offload.getByRole('combobox', { name: 'Host RAM', exact: true }).click();
+      await expect(page.getByRole('group', { name: 'This machine' })).toBeVisible();
+      await page.screenshot({ path: name('grace-host-ram-picker') });
       await page.keyboard.press('Escape');
     });
     test(`memory states ${size} ${colorScheme}`, async ({ page }) => {

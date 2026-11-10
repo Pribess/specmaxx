@@ -42,6 +42,8 @@ import {
   V100_PCIE,
   B200,
   B300,
+  GB200,
+  GB300,
   DGX_SPARK,
   H100_SXM,
   H200_SXM,
@@ -63,6 +65,7 @@ export * from './amd';
 export * from './intel';
 export * from './links';
 export * from './storage';
+export * from './rack-scale-sources';
 export * from './topologies';
 export * from './catalog';
 
@@ -93,7 +96,9 @@ export const DEVICE_PRESET_GROUPS: DevicePresetGroup[] = [
   {
     name: 'Datacenter',
     devices: [
+      GB300,
       B300,
+      GB200,
       B200,
       H200_SXM,
       H100_SXM,

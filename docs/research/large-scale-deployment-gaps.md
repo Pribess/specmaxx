@@ -81,12 +81,14 @@ Effort: S ≈ a day or less, M ≈ days, L ≈ a week+.
 - **Evidence:** NVIDIA [wide-EP blog](https://developer.nvidia.com/blog/scaling-large-moe-models-with-wide-expert-parallelism-on-nvl72-rack-scale-systems/); SGLang [GB200](https://lmsys.org/blog/2025-06-16-gb200-part-1/)/[part 2](https://lmsys.org/blog/2025-09-25-gb200-part-2/)/[GB300](https://www.lmsys.org/blog/2026-02-19-gb300-longctx/); vLLM GB200 16 / GB300 11 recipes (as NVL4 trays), NVL72 in blogs.
 - **Fit:** pure hardware data. Engine already supports arbitrary `devicesPerNode`; UI caps at 8×8, no NVL72 preset.
 - **Effort: S–M.** `src/sim/hw/presets` (GB200/GB300 devices, NVL72 topology), `catalog.ts` limits (devices-per-machine, max machines), UI.
+- **Status: done.** GB200 (186 GB) and GB300 (279 GB; the 288 GB above is the full-chip maximum, not the product) device presets, the NVL72 switched domain (900 GB/s per GPU per direction) and GB200 NVL4 trays (bridge mesh estimated), NVLink-C2C as the host link (450 GB/s per GPU per direction, sharing ambiguous) and the pooled Grace LPDDR5X (480 GB, 384 GB/s per Grace). The UI offers up to 72 GPUs per machine and 18 machines. EP stays limited to divisors of the expert count (EP64 on a 64-GPU domain for 256 experts; EP72/EP144 wait for G3). See `docs/simulation-model.md` §4 "Scale-up domains", "Host and storage tiers".
 
 ### G6. AMD scale-up presets (MI325X/MI355X xGMI) and other accelerators — **A** (AMD), **C** (TPU)
 - **What:** AMD hardware is the most-targeted non-NVIDIA family: MI355X 49, MI300X 40, MI325X 38 recipes. Catalog uses PCIe placeholders for MI325X/MI355X/MI455X.
 - **Evidence:** recipe hardware counts above; AMD MI355X + SGLang/MoRI [TCO post](https://www.amd.com/en/developer/resources/technical-articles/2026/win-on-tco.html). TPU Ironwood: only 2 vLLM recipes, no primary frontier-MoE tokens/s found (thin) [Google](https://cloud.google.com/blog/products/compute/ironwood-tpus-and-new-axion-based-vms-for-your-ai-workloads).
 - **Fit:** data only. TPU needs a torus/ICI topology the fabric model may not express → effort L, grade C for now.
 - **Effort: S** (AMD xGMI numbers/topology), **L** (TPU).
+- **Status: done for AMD.** MI325X (7 × 64 GB/s per direction, as MI300X) and MI355X (7 × 72 GB/s per direction, 504 aggregate) xGMI links replace the PCIe placeholders; MI455X gets its 72-GPU switched UALoE domain (1.8 TB/s per GPU per direction). TPU remains open. See `docs/simulation-model.md` §4 "Scale-up domains".
 
 ### G7. Prefix-cache hit ratio (scenario knob) — **A**, in scope
 - **What:** cached prompt prefix skips prefill FLOPs; only new tokens are computed (attention still reads cached KV). Cached KV from a lower tier costs a read (PCIe/C2C).

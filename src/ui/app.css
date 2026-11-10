@@ -316,6 +316,7 @@ button.quiet:hover { border-color: var(--ink); background: var(--tint); }
   color: var(--muted);
   font-size: var(--type-meta);
   line-height: 18px;
+  overflow-wrap: anywhere; /* long "Valid TP: …" lists at 72–144 devices wrap, never overflow */
 }
 p.hint { margin: var(--space-2) 0 0; }
 .hint > span { display: block; }

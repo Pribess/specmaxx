@@ -6,6 +6,14 @@
  * `presets/catalog.ts` (device × count × link × cabling); the named constants here serve tests and the sanity harness.
  */
 import { isNonBlockingSwitched } from '../fabric';
+import {
+  BLACKWELL_DATASHEET_URL,
+  GB200_NVL72_URL,
+  GB300_NVL72_URL,
+  MI325X_LINK_DATASHEET_URL,
+  MI355X_PLATFORM_URL,
+  HELIOS_URL,
+} from './rack-scale-sources';
 import type { DeviceSpec, FabricShape, LinkSpec, TopologySpec } from '../types';
 import { RADEON_AI_PRO_R9700, RYZEN_AI_MAX_PLUS_395 } from './amd';
 import { M3_ULTRA_80C, M4_MAX_40C, M5_MAX_40C, M5_ULTRA_80C } from './apple';
@@ -14,6 +22,11 @@ import { RTX_3090, RTX_4090, RTX_5090 } from './nvidia';
 import { A100_PCIE_80GB, DGX_SPARK, V100_PCIE, V100_SXM2 } from './nvidia-datacenter';
 import {
   ETHERNET_5G_TCP, ETHERNET_10G_TCP, IB_NDR_400, IB_XDR_800, NVLINK_4, NVLINK_5,
+  NVLINK_5_NVL72,
+  NVLINK_5_NVL4,
+  XGMI_MI325X_8_GPU,
+  XGMI_MI355X_8_GPU,
+  UALOE_MI455X,
   A100_NVLINK_BRIDGE,
   IB_HDR_200,
   NVLINK_3,
@@ -355,8 +368,123 @@ export const MI300X_XGMI_8: TopologySpec = {
   }],
 };
 
+/**
+ * NVL72 racks: 72 GPUs per switched scale-up domain. racks is a positive integer count.
+ * NIC injection is per GPU per direction: GB200 NDR400, GB300 XDR800 (docs §4, §6).
+ * See docs/simulation-model.md §4 "Scale-up domains".
+ */
+export function nvl72Rack(gen: 'gb200' | 'gb300', racks = 1): TopologySpec {
+  if (!Number.isInteger(racks) || racks < 1) throw new Error('racks must be a positive integer');
+  return {
+    ...nodeTopology({
+      device: { id: gen, name: gen.toUpperCase() },
+      devicesPerNode: 72,
+      nodes: racks,
+      intraNode: NVLINK_5_NVL72,
+      interNode: gen === 'gb200' ? IB_NDR_400 : IB_XDR_800,
+    }),
+    sources: [
+      {
+        url: gen === 'gb200' ? GB200_NVL72_URL : GB300_NVL72_URL,
+        title: 'NVIDIA NVL72 specifications',
+        fields: ['devicesPerNode'],
+        note: '72 GPUs in one NVLink Switch domain.',
+      },
+    ],
+  };
+}
+/**
+ * GB200 NVL4 boards: four GPUs joined by a bridge per tray, NDR400 per GPU between boards.
+ * trays is a positive integer count; no inter-board NVLink is assumed; internal mesh is estimated (link provenance).
+ * See docs/simulation-model.md §4 "Scale-up domains".
+ */
+export function nvl4Trays(gen: 'gb200', trays = 1): TopologySpec {
+  if (!Number.isInteger(trays) || trays < 1) throw new Error('trays must be a positive integer');
+  return {
+    ...nodeTopology({
+      device: { id: gen, name: 'GB200 NVL4' },
+      devicesPerNode: 4,
+      nodes: trays,
+      intraNode: NVLINK_5_NVL4,
+      interNode: IB_NDR_400,
+    }),
+    sources: [
+      {
+        url: BLACKWELL_DATASHEET_URL,
+        title: 'Blackwell datasheet OCT25 pp. 4, 5, 8',
+        fields: ['devicesPerNode'],
+        note: 'Four GPUs joined by NVLink bridge. NVIDIA projections assume 400G/GPU network; no inter-board NVLink specified.',
+      },
+    ],
+  };
+}
+/** GB200 NVL72: 72 GPUs, one NVLink Switch domain. */
+export const GB200_NVL72 = nvl72Rack('gb200');
+/** GB300 NVL72: 72 GPUs, one NVLink Switch domain. */
+export const GB300_NVL72 = nvl72Rack('gb300');
+/** GB200: 18 NVL4 boards, 72 GPUs total, NDR400 per GPU between boards. */
+export const GB200_NVL4_X18 = nvl4Trays('gb200', 18);
+/** MI325X eight-GPU full mesh, aggregate 448 GB/s per GPU per direction, optimistic for subgroups.
+ * See docs/simulation-model.md §4 "Scale-up domains".
+ */
+export const MI325X_XGMI_8: TopologySpec = {
+  ...MI300X_XGMI_8,
+  id: 'mi325x-xgmi-8',
+  name: '8 × MI325X / xGMI full mesh',
+  intraNode: XGMI_MI325X_8_GPU,
+  sources: [
+    {
+      url: MI325X_LINK_DATASHEET_URL,
+      title: 'MI325X datasheet',
+      fields: ['devicesPerNode'],
+      note: 'Eight accelerators with seven direct GPU-peer links.',
+    },
+  ],
+};
+/** MI355X eight-GPU full mesh, aggregate 504 GB/s per GPU per direction, optimistic for subgroups.
+ * See docs/simulation-model.md §4 "Scale-up domains".
+ */
+export const MI355X_XGMI_8: TopologySpec = {
+  ...MI300X_XGMI_8,
+  id: 'mi355x-xgmi-8',
+  name: '8 × MI355X / xGMI full mesh',
+  intraNode: XGMI_MI355X_8_GPU,
+  sources: [
+    {
+      url: MI355X_PLATFORM_URL,
+      title: 'MI355X platform brochure',
+      fields: ['devicesPerNode'],
+      note: 'Eight accelerators with seven direct GPU-peer links.',
+    },
+  ],
+};
+/** Helios: 72 MI455X GPUs in a switched UALoE scale-up domain, 1.8 TB/s injection per GPU per direction.
+ * See docs/simulation-model.md §4 "Scale-up domains".
+ */
+export const MI455X_HELIOS_72: TopologySpec = {
+  id: 'mi455x-helios-72',
+  name: '72 × MI455X / Helios UALoE',
+  devicesPerNode: 72,
+  nodes: 1,
+  intraNode: UALOE_MI455X,
+  sources: [
+    {
+      url: HELIOS_URL,
+      title: 'AMD Helios solution brief',
+      fields: ['devicesPerNode'],
+      note: '18 four-GPU trays, six switch trays; single-switch-hop UALoE fabric.',
+    },
+  ],
+};
+
 /** All named multi-device topology presets; each is independently schema-valid. */
 export const TOPOLOGY_PRESETS: TopologySpec[] = [
+  GB200_NVL72,
+  GB300_NVL72,
+  GB200_NVL4_X18,
+  MI325X_XGMI_8,
+  MI355X_XGMI_8,
+  MI455X_HELIOS_72,
   HGX_A100_8,
   HGX_A100_16_HDR,
   A100_PCIE_NVLINK_2,

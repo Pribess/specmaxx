@@ -661,12 +661,14 @@ spot values against the datasheet).
 | `presets/nvidia.ts`            | GeForce RTX 3090, 4090, 5090 and their unlock axes                                                                                                                              | `NVIDIA_CONSUMER_DEVICE_PRESETS`, `RTX_3090_UNLOCKS`, `RTX_4090_UNLOCKS`, `RTX_5090_UNLOCKS`                             |
 | `presets/nvidia-cmp.ts`        | CMP 170HX 8 GB (GA100 mining card, no vendor datasheet: review / community sources, peaks derived from A100 per-SM rates) and its unlock axes                                    | `NVIDIA_CMP_DEVICE_PRESETS`, `CMP_170HX_UNLOCKS`                                                                         |
 | `presets/nvidia-pro.ts` | RTX PRO Blackwell 6000 Workstation / Max-Q, 5000 (48/72GB), 4000 SFF; sustained-clock options | `NVIDIA_PRO_DEVICE_PRESETS`, `RTX_PRO_6000_WS_UNLOCKS`, `RTX_PRO_6000_MAX_Q_UNLOCKS` |
-| `presets/nvidia-datacenter.ts` | DGX Spark (GB10), H100 SXM, H200 SXM, B200, B300, A100 SXM4 / PCIe 40/80GB, V100 SXM2 / PCIe 16/32GB                                                                            | `NVIDIA_DATACENTER_DEVICE_PRESETS`                                                                                       |
+| `presets/nvidia-datacenter.ts` | DGX Spark (GB10), GB200 and GB300 (one Grace Blackwell GPU each, with its NVLink-C2C host link), H100 SXM, H200 SXM, B200, B300, A100 SXM4 / PCIe 40/80GB, V100 SXM2 / PCIe 16/32GB | `NVIDIA_DATACENTER_DEVICE_PRESETS`, `GB200`, `GB300`                                                                     |
 | `presets/apple.ts`             | M5 Ultra, M5 Max, M4 Max, M3 Ultra, M3 Max; binned GPU-core counts as separate SKUs                                                                                             | `APPLE_DEVICE_PRESETS`                                                                                                   |
 | `presets/amd.ts`               | Radeon AI PRO R9700, RX 9070 XT, Ryzen AI Max+ 395 (Strix Halo iGPU), Instinct MI300X / MI325X / MI355X / MI455X                                                                | `AMD_DEVICE_PRESETS`                                                                                                     |
 | `presets/intel.ts`             | Arc Pro B70, B65, B60, Arc B580                                                                                                                                                 | `INTEL_DEVICE_PRESETS`                                                                                                   |
-| `presets/links.ts` | PCIe Gen3/4/5, NVLink bridge / NVLink 2/3/4/5, InfiniBand HDR200/NDR400/XDR800, ConnectX-7, xGMI, Thunderbolt, USB4, Ethernet | `LINK_PRESETS`, `HOST_BOUNCE_PCIE_LINKS` |
-| `presets/topologies.ts` | PCIe boxes, SoC clusters (with fabric shape), HGX A100/H100/B200/B300 nodes, A100 bridge pairs, V100 4/8-GPU NVLink boards and Gen3 PCIe boxes, MI300X xGMI node | `TOPOLOGY_PRESETS`, `pcieBox`, `socCluster`, `hgxCluster`, `nodeTopology`, `fabricIdSuffix` |
+| `presets/links.ts` | PCIe Gen3/4/5, NVLink bridge / NVLink 2/3/4/5, NVL72 NVLink Switch, GB200 NVL4 bridge, NVLink-C2C, InfiniBand HDR200/NDR400/XDR800, ConnectX-7, xGMI (MI300X / MI325X / MI355X), MI455X UALoE, Thunderbolt, USB4, Ethernet; the device's default host link | `LINK_PRESETS`, `HOST_BOUNCE_PCIE_LINKS`, `NVLINK_5_NVL72`, `NVLINK_5_NVL4`, `NVLINK_C2C`, `deviceHostLink` |
+| `presets/topologies.ts` | PCIe boxes, SoC clusters (with fabric shape), HGX A100/H100/B200/B300 nodes, GB200 / GB300 NVL72 racks, GB200 NVL4 trays, A100 bridge pairs, V100 4/8-GPU NVLink boards and Gen3 PCIe boxes, MI300X / MI325X / MI355X xGMI nodes, MI455X Helios rack | `TOPOLOGY_PRESETS`, `pcieBox`, `socCluster`, `hgxCluster`, `nodeTopology`, `nvl72Rack`, `nvl4Trays`, `fabricIdSuffix` |
+| `presets/storage.ts` | Host RAM and SSD presets, the pooled Grace LPDDR5X of a GB200 / GB300 node, the default host RAM per device | `HOST_RAM_PRESETS`, `SSD_PRESETS`, `graceHostRam`, `defaultHostRamFor` |
+| `presets/rack-scale-sources.ts` | Vendor URLs shared by the GB200 / GB300, NVL72 / NVL4, Grace, MI325X / MI355X and MI455X presets | `BLACKWELL_DATASHEET_URL`, `GB200_NVL72_URL`, `GB300_NVL72_URL`, ... |
 | `presets/catalog.ts`           | The setup catalog: what each device composes into (GPUs per machine, machines, local and network links, cabling), validation, `composeTopology`, SKU labels, the popular setups | `setupOptionsFor`, `allowedCablings`, `defaultCabling`, `setupErrors`, `composeTopology`, `setupLabel`, `POPULAR_SETUPS` |
 
 `DEVICE_PRESET_GROUPS` is the display order: consumer / prosumer first (GeForce, NVIDIA RTX PRO, Apple, AMD Radeon and Strix
@@ -848,7 +850,7 @@ NCCL_PTR_HOST`), and so do Gloo (`cuda_allreduce_ring.cc:82,102`) and MLX. On RD
   | `SPARK_CONNECTX_7`                                                           | false           | NVIDIA forum 352051/2: "GPUDirect RDMA technology is not supported" on Spark; no effect: unified memory |
   | `IB_NDR_400`, `IB_XDR_800`                                                   | true            | CUDA GPUDirect RDMA doc (https://docs.nvidia.com/cuda/gpudirect-rdma/index.html); ROCm PeerDirect       |
   | RTX 5090 / 4090 / 3090                                                       | false           | NVIDIA forums 154509/5 ("RDMA is not supported on geforce"), 157984/2                                   |
-  | H100 SXM, H200 SXM, B200, B300                                               | true            | CUDA GPUDirect RDMA doc                                                                                 |
+  | H100 SXM, H200 SXM, B200, B300, GB200, GB300                                 | true            | CUDA GPUDirect RDMA doc                                                                                 |
   | MI300X / MI325X / MI355X / MI455X                                            | true            | ROCm "GPU-enabled MPI" (PeerDirect), https://rocm.docs.amd.com/en/latest/how-to/gpu-enabled-mpi.html    |
   | R9700, RX 9070 XT, Arc Pro B70 / B65 / B60, Arc B580                         | false           | estimated: no RDMA source found; moot on TCP, where they stage anyway                                   |
   | DGX Spark, Apple M-series, Ryzen AI Max+ 395                                 | absent          | unified memory: the NIC reads the shared pool                                                           |
@@ -894,6 +896,7 @@ NCCL_PTR_HOST`), and so do Gloo (`cuda_allreduce_ring.cc:82,102`) and MLX. On RD
 - **xGMI aggregate**: `XGMI_MI300X_8_GPU` (used by `MI300X_XGMI_8`) is 7 peers × 64 GB/s = 448 GB/s per
   direction, the full-mesh injection ceiling, because the collective formulas treat B as a device's aggregate
   injection; it is optimistic for subgroups and send/recv. `XGMI_MI300X_PER_PEER` (64 GB/s) is the one-peer link.
+  MI325X and MI355X follow the same two conventions ("Scale-up domains" below).
 - Topologies: `pcieBox` (one node, N devices, one PCIe link each; shared switch / root-complex uplinks not
   modeled), `socCluster` (N single-SoC machines, one link budget per device, no port aggregation; Ethernet
   assumes a non-oversubscribed switch), `hgxCluster` (8-GPU NVLink nodes, one full-rate NIC per GPU), and the
@@ -931,8 +934,11 @@ NCCL_PTR_HOST`), and so do Gloo (`cuda_allreduce_ring.cc:82,102`) and MLX. On RD
   cables per pair on 4 M3 Ultras, a ring of 2, a switch on Thunderbolt, an 8-Spark ring); `composeTopology` builds
   the `TopologySpec` (`interNodeFabric` omitted for a switch); `setupLabel` names the exact SKU everywhere:
   `'M5 Ultra 80-core GPU, 256GB ×2 · TB5 mesh'`, `'DGX Spark 128GB ×4 · ConnectX-7 ring'`,
-  `'RTX 5090 32GB ×2 · PCIe 5.0 x16'`.
-- **Popular setups** (`POPULAR_SETUPS`, ≤ 10, grouped by vendor, each citing who runs it): RTX 5090 32GB ×2 PCIe 5.0
+  `'RTX 5090 32GB ×2 · PCIe 5.0 x16'`. GB200 / GB300 (`rackScale`) and the MI455X offer 1, 2, 4, 8, 16, 32, 36, 64
+  or 72 GPUs per machine, a "machine" being one scale-up domain ("Scale-up domains" below); GB200 / GB300 offer
+  1, 2, 4, 8, 16 or 18 machines.
+- **Popular setups** (`POPULAR_SETUPS`, ≤ 12, grouped by vendor, each citing who runs it): GB300 NVL72 and GB200
+  NVL72 (one 72-GPU domain each, NVIDIA's product pages); RTX 5090 32GB ×2 PCIe 5.0
   x16; RTX 3090 24GB ×2 NVLink bridge; DGX Spark 128GB ×2 (one cable), ×3 (triangle) and ×4 ring (NVIDIA playbooks,
   SparkRing) and ×4 switch (MikroTik CRS804/812); M3 Ultra 80-core 512GB ×4 TB5 mesh (Geerling, exo #1050);
   M5 Ultra 80-core 256GB ×2 TB5 (the user's example; weak source); M5 Ultra 80-core 512GB ×4 TB5 mesh with two
@@ -975,10 +981,76 @@ NCCL_PTR_HOST`), and so do Gloo (`cuda_allreduce_ring.cc:82,102`) and MLX. On RD
   a non-blocking switch, the convention of every topology before fabric shapes; shapes other than `'switched'` need
   one device per node (`validateTopology`).
 
+### Scale-up domains
+
+`src/sim/hw/presets/links.ts: NVLINK_5_NVL72, NVLINK_5_NVL4, XGMI_MI325X_PER_PEER, XGMI_MI325X_8_GPU,
+XGMI_MI355X_PER_PEER, XGMI_MI355X_8_GPU, UALOE_MI455X`; `src/sim/hw/presets/topologies.ts: nvl72Rack, nvl4Trays,
+GB200_NVL72, GB300_NVL72, GB200_NVL4_X18, MI325X_XGMI_8, MI355X_XGMI_8, MI455X_HELIOS_72`;
+`src/sim/hw/presets/nvidia-datacenter.ts: GB200, GB300`; vendor URLs in `src/sim/hw/presets/rack-scale-sources.ts`.
+
+A scale-up domain is one `TopologySpec` node: `devicesPerNode` GPUs joined by the intra-node link, priced by the
+intra-node formulas of §6 for any `devicesPerNode` (nothing in the engine assumes 8). Every bandwidth below follows
+the per-direction, per-device convention of "Links and topologies":
+
+```
+B_dir        = B_bidirectional / 2                 vendor "x TB/s bidirectional" → x/2 per direction
+B_aggregate  = links × B_dir,link                  a mesh GPU's injection over all its peer links
+```
+
+- **NVL72** (`NVLINK_5_NVL72`, `nvl72Rack(gen, racks)`): 72 GPUs behind NVLink Switch trays, every pair at the
+  full per-GPU rate (a non-blocking switch, so the switched formulas are exact here). Per GPU 18 links × 50 GB/s =
+  **900 GB/s per direction** ("1.8 TB/sec total bandwidth, 900 GB/sec in each direction", Blackwell brief p. 10);
+  the rack's 130 TB/s is bidirectional, 72 × 1.8 TB/s. α = 0.8 µs, the GB200 remote-store latency measured in
+  arXiv 2607.16100 (as `NVLINK_5`). Between racks one NIC per GPU: `IB_NDR_400` on GB200 (DGX GB200: 72 ConnectX-7
+  400 Gb/s), `IB_XDR_800` on GB300 (DGX GB300: 72 ConnectX-8 800 Gb/s); the UI offers the other as well.
+- **GB200 NVL4** (`NVLINK_5_NVL4`, `nvl4Trays('gb200', trays)`): four GPUs on an "NVLink bridge" with two Graces
+  (Blackwell datasheet p. 4); 7.2 TB/s total = 1.8 TB/s bidirectional per GPU = **900 GB/s per direction**
+  aggregate. NVIDIA does not publish the bridge topology: a direct full mesh is ESTIMATED (18 links over 3 peers =
+  6 links = 300 GB/s per direction per peer), encoded as aggregate injection like xGMI, so it is optimistic for a
+  pair or a TP2 group (300, not 900 GB/s). No NVLink between boards: trays talk over the NIC, 400 Gb/s per GPU as
+  NVIDIA's own NVL4 projections assume (datasheet p. 5). α reuses the 0.8 µs NVLink proxy (estimated). Offered for
+  2 or 4 GPUs, and for GB200 only: NVIDIA lists no GB300 NVL4.
+- **AMD xGMI** (full mesh of 8, one link per peer; the MI300X caveat applies: aggregate injection is optimistic for
+  subgroups and send/recv, the per-peer link is the one-pair figure):
+
+  | device | per link, bidirectional | per link, per direction | aggregate (7 peers), per direction | source |
+  | ------ | ----------------------- | ----------------------- | ---------------------------------- | ------ |
+  | MI300X | 128 GB/s | 64 GB/s | 448 GB/s | MI300X datasheet, CDNA 3 whitepaper |
+  | MI325X | 128 GB/s | 64 GB/s | 448 GB/s | MI325X datasheet ("7x 128 GB/s") |
+  | MI355X | 144 GB/s | 72 GB/s | 504 GB/s | MI355X platform brochure; CDNA 4 whitepaper p. 13 (36 Gb/s × 16 lanes = 72 GB/s each direction), Table 2 (1,008 GB/s bidirectional) |
+
+  The 153.6 GB/s / 1,075 GB/s MI355X figure is a stale label in CDNA 4 Figure 5; the text, Table 2 and the product
+  page say 144 / 1,008. α = 1.5 µs, estimated as for MI300X.
+- **MI455X** (`UALOE_MI455X`, `MI455X_HELIOS_72`): a switched UALink-over-Ethernet domain of 72 GPUs (Helios: 18
+  four-GPU trays, 6 switch trays, one switch hop), 3.6 TB/s bidirectional per GPU = **1.8 TB/s per direction**
+  (MI455X product page). α = 1.5 µs, estimated (UALoE latency unpublished).
+- **Grace Blackwell devices** (`GB200`, `GB300`: ONE GPU each, not a superchip or a rack; per-GPU column of the
+  Blackwell / Blackwell Ultra datasheets, OCT25). Both: 8 TB/s HBM3e, FP8/FP6 10 PFLOP/s, BF16 5 PFLOP/s sparse
+  (dense = ½), FP32 80 TFLOP/s; `hostLink` = NVLink-C2C ("Host and storage tiers").
+
+  | device | HBM3e | FP4 dense / 2:4 sparse | INT8 dense / sparse | FP64 |
+  | ------ | ----- | ---------------------- | ------------------- | ---- |
+  | GB200  | 186 GB | 10 / 20 PFLOP/s | 5 / 10 POP/s | 40 TFLOP/s |
+  | GB300  | 279 GB | 15 / 20 PFLOP/s | 0.165 / 0.33 POP/s | 1.3 TFLOP/s |
+
+  186 GB and 279 GB are the products (rack 13.4 TB / 72 and 20 TB / 72); 192 GB and 288 GB are the full-chip
+  maxima. GB300's FP4 sparse is NOT 2 × dense. MXFP4 / MXFP6 take the NVFP4 / FP6 rates (not listed separately),
+  and the SM count (148) is estimated; the SFU rule derives its clock from the FP32 peak, so the count does not
+  change the softmax bound.
+- **Group sizes** (§5 "Rank layout"): a group inside a domain must divide `devicesPerNode`, so on 72 GPUs an EP64
+  group does not tile; use a 64-GPU domain (the catalog offers 64). EP must also divide the expert count: a
+  256-expert model runs EP64 at most inside one NVL72, and EP72 / EP144 need redundant experts (research report
+  §G3, not modeled). The rack tests therefore run DeepSeek-V4-Flash-0731 (256 routed experts) with EP64 on a
+  64-GPU NVL72 domain: `src/sim/engine/rackScale.test.ts` checks that its all-to-all uses the NVLink, not the
+  inter-node link (and that EP64 over sixteen NVL4 boards is hierarchical over NDR), `e2e/rack-scale.spec.ts` runs
+  DP 64 × EP 64 in the UI.
+
 ### Host and storage tiers
 
-`src/sim/hw/types.ts: HostMemorySpec, NvmeSpec, StorageTierSpec, HostSpec, HostInterfaceSpec, HostComputeSpec`;
-`src/sim/hw/presets/storage.ts: HOST_RAM_PRESETS, SSD_PRESETS`; `src/sim/hw/presets/links.ts: hostPcieLink,
+`src/sim/hw/types.ts: HostMemorySpec, NvmeSpec, StorageTierSpec, HostSpec, HostInterfaceSpec, HostComputeSpec,
+DeviceSpec.hostLink`;
+`src/sim/hw/presets/storage.ts: HOST_RAM_PRESETS, SSD_PRESETS, graceHostRam, defaultHostRamFor`;
+`src/sim/hw/presets/links.ts: hostPcieLink, deviceHostLink, NVLINK_C2C,
 pcieBandwidthPerDirectionBytesPerSec`; `src/sim/hw/validate.ts: validateStorageTier, validateHost`. Read only when a
 deployment offloads weights off the device (design: `docs/design/offload-specdec-latency.md` §2.2); with nothing
 offloaded no result depends on them.
@@ -1008,7 +1080,28 @@ offloaded no result depends on them.
   B60 is x16 mechanical, x8 electrical; CMP 170HX Gen1 x4 as shipped); the engine builds the default host link from
   it, after the device modifiers, so a `hostInterface` unlock (CMP Gen2 patch, capacitor mod) changes the link the
   offload streams over. SXM / OAM modules and SoCs carry none. The UI's host-link override lists Gen3–Gen5 only.
-- **Defaults**: `DDR5_6000_2CH` (host RAM) and `NVME_990_PRO_2TB` (SSD), used with a warning when the stack names
+- **Non-PCIe host link** (`DeviceSpec.hostLink?`, `deviceHostLink(device)`): a CPU attachment that is not PCIe, per
+  GPU, per direction. The default host link is `deviceHostLink(device) = device.hostLink ?? hostPcieLink(hostInterface)`
+  (offload streaming, offload validation, and the host hop of inter-node staging), so every PCIe device is unchanged.
+  GB200 / GB300 carry `NVLINK_C2C`: NVIDIA's per-GPU interconnect table lists NVLink-C2C at 900 GB/s bidirectional
+  ("Inside NVIDIA Blackwell Ultra", Table 1), so **450 GB/s per GPU per direction**. The superchip pages say only
+  "900 GB/s" for a Grace and its two GPUs; if that were shared it would be 225 GB/s per GPU, recorded as
+  `estimated`. α = 0.8 µs, the NVLink proxy (C2C latency unpublished, estimated).
+- **Grace host RAM** (`graceHostRam(gen, devicesPerNode)`, used by `defaultHostRamFor(device, devicesPerNode)` when
+  the stack names no RAM on a GB200 / GB300): one Grace per two GPUs, pooled per node:
+
+  ```
+  G = ceil(devicesPerNode / 2)                       Grace CPUs in the node (NVL72: 36)
+  capacityBytes        = G × 480e9                   480 GB LPDDR5X per Grace (NVL72 pages: 17 TB per rack)
+  bandwidthBytesPerSec = G × 384e9                   384 GB/s per Grace at 480 GB (Grace tuning guide; rack 14 TB/s)
+  ```
+
+  The 512 GB/s on the superchip page is the 120 / 240 GB module's. Approximation: a GPU's own Grace is pooled with
+  the others of the node, so NUMA placement is ignored; each GPU is still bounded by its own C2C link, and when every
+  GPU streams the pooled RAM binds first (§12 "Transfer path": 384 / 2 = 192 GB/s per GPU < 450). Other devices keep
+  `DDR5_6000_2CH`.
+- **Defaults**: `DDR5_6000_2CH` (host RAM; Grace pool on GB200 / GB300) and `NVME_990_PRO_2TB` (SSD), used with a
+  warning when the stack names
   no tier.
 - **CPU compute** (`HostComputeSpec`): a hook for a future CPU-compute offload mode, not costed; the mode is
   rejected by input validation.
@@ -1451,6 +1544,11 @@ so TP and EP groups are contiguous. A group of n is intra-node if `n ≤ dpn` an
 partner `r + tp·dp` sit in different nodes. `tp·pp·dp ≤ dpn·nodes`; unused devices are a warning; a missing
 required link is an error.
 
+With scale-up domains above 8 GPUs this rule decides which group sizes exist: on dpn = 72 an intra-node group must
+divide 72 (1, 2, 3, 4, 6, 8, 9, 12, 18, 24, 36, 72), so EP64 needs dpn = 64 (64 GPUs of an NVL72 domain), and since
+EP must also divide the experts (`moeParallelErrors`), a 256-expert model cannot use EP72 or, across two racks,
+EP144 without redundant experts (§4 "Scale-up domains").
+
 On an inter-node fabric (§6 "Fabric shapes"), node i of a ring or chain is cabled to node i ± 1 in this order.
 `collectivePath` gives a flat inter-node group its view of the fabric (`groupFabric`: a ring the group does not
 cover is a chain of the group's nodes), and a hierarchical group an oversubscribed switch (the only shape with
@@ -1553,9 +1651,9 @@ PCIe-stages):
 
 | symbol   | meaning                                    | value                                                                                                   |
 | -------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `B_pcie` | the device's PCIe host link, per direction | `hardware.host.link ?? hostPcieLink(device.hostInterface)`, else PCIe 5.0 x16 with a warning            |
+| `B_pcie` | the device's host link, per direction | `hardware.host.link ?? deviceHostLink(device)` (C2C on GB200 / GB300, else `hostPcieLink(device.hostInterface)`), else PCIe 5.0 x16 with a warning |
 | `α_pcie` | one PCIe crossing                          | that link's `latencySec`, 1 µs (estimated)                                                              |
-| `B_host` | node DRAM, read + write combined           | `hardware.host.ram ?? DEFAULT_HOST_RAM` (DDR5-6000 2ch, 96 GB/s); the pool peak on unified memory       |
+| `B_host` | node DRAM, read + write combined           | `hardware.host.ram ?? defaultHostRamFor(device, dpn)` (DDR5-6000 2ch, 96 GB/s; the Grace pool on GB200 / GB300); the pool peak on unified memory |
 | `c`      | one pipeline step of the staging buffer    | `HOST_STAGING_STEP_BYTES` = 4 MiB / 8 = 512 KiB (NCCL `NCCL_BUFFSIZE` default 4 MiB / `NCCL_STEPS` = 8) |
 | `n_stg`  | devices of one node staging at once        | `min(devicesPerNode, tp·dp)`                                                                            |
 
@@ -1646,7 +1744,7 @@ the wire in steps.
 
 | symbol   | meaning                                 | value                                                                                                                                               |
 | -------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `B_host` | the DRAM the copy runs in, read + write | unified memory: the pool peak `device.memory.bandwidthBytesPerSec`; dedicated: `hardware.host.ram ?? DEFAULT_HOST_RAM`                              |
+| `B_host` | the DRAM the copy runs in, read + write | unified memory: the pool peak `device.memory.bandwidthBytesPerSec`; dedicated: `hardware.host.ram ?? defaultHostRamFor(device, dpn)` |
 | `c`      | one pipeline step                       | `SOCKET_COPY_STEP_BYTES` = 64 KiB (Linux `include/linux/netdevice.h:2333`, v6.12; ESTIMATED for macOS) without PCIe staging; with it NCCL's 512 KiB |
 | `n_stg`  | devices of one node copying at once     | `min(devicesPerNode, tp·dp)`                                                                                                                        |
 
@@ -2262,7 +2360,11 @@ Documented approximations (each isolated in one constant or rule):
   between Sparks is reported not to work and mesh forwarding is unmeasured); tree steps are assumed not to share
   links; mesh striping over k cables is ideal; every shape but switched needs one device per node; intra-node links
   stay switched (`XGMI_MI300X_8_GPU` encodes its full mesh as aggregate injection under the switched formulas, which
-  equals the mesh's direct β but keeps the ring's 2(n−1)α; re-modelling it is a follow-up).
+  equals the mesh's direct β but keeps the ring's 2(n−1)α; re-modelling it is a follow-up; the same holds for the
+  MI325X / MI355X xGMI and the estimated GB200 NVL4 mesh, §4 "Scale-up domains").
+- Scale-up domains (§4 "Scale-up domains"): a group must divide `devicesPerNode` and EP must divide the expert
+  count, so a 256-expert model on NVL72 runs EP64 on a 64-GPU domain; EP72 / EP144 would need redundant experts
+  (research report §G3), which are not modeled. The NVL4 bridge topology is an estimate.
 - TCP socket copy (§6 "TCP socket copy"): the CPU memcpy runs at the DRAM peak (B_host; the CPU's own copy rate is
   not datasheet-published, so this is optimistic); `MSG_ZEROCOPY` / `TCP_ZEROCOPY_RECEIVE` are not assumed (NCCL's
   socket transport, Gloo and MLX's ring do not use them by default); a dedicated GPU over TCP keeps NCCL's 512 KiB
@@ -2273,7 +2375,8 @@ Documented approximations (each isolated in one constant or rule):
 - Offload (§12): the DMA write of streamed bytes into device memory is not charged to its bandwidth; expected
   misses and requests are real numbers (no rounding; the staging buffer rounds up); the prefetch window is the whole
   stage's core time and wrong guesses cost only otherwise idle link time (§12 "Expert prefetch"); the host link
-  takes no link modifiers.
+  takes no link modifiers; a GB200 / GB300 node pools its Graces' LPDDR5X into one host RAM (NUMA ignored, §4 "Host
+  and storage tiers"); NVLink-C2C is taken as 450 GB/s per GPU per direction, not shared by a superchip's two GPUs.
 - Speculative decoding (§13): `m_ctx = ⌈E[τ]⌉` context rows; every MTP pass reads `N + k + 1` keys; rejected KV
   rows and tentative MTP rows are overwritten, not charged back; the selector's and Markov head's sequential walks
   are not costed; the DeepSeek-V4.1 MoE drafter adds its context rows to the compressed-KV GEMM and runs its
@@ -2450,8 +2553,10 @@ to move**:
 `src/sim/engine/host.ts: resolveHost, defaultSsdFor, transferPath`. The tiers and the host link of §4 "Host and
 storage tiers", resolved only when something is off-device; each default warns:
 
-- dedicated memory: `host.link ?? hostPcieLink(device.hostInterface)` (validation rejects a device with neither);
-  `host.ram ?? DDR5_6000_2CH` (a tier, and the staging hop of NVMe reads);
+- dedicated memory: `host.link ?? deviceHostLink(device)` (`device.hostLink`, e.g. GB200 / GB300 NVLink-C2C, else
+  `hostPcieLink(device.hostInterface)`; validation rejects a device with neither);
+  `host.ram ?? defaultHostRamFor(device, devicesPerNode)` (the pooled Grace LPDDR5X on GB200 / GB300, else
+  `DDR5_6000_2CH`; a tier, and the staging hop of NVMe reads);
 - `host.ssd ??` the device's own drive on unified systems (Apple M5 → `apple-ssd-m5-pro-max`, other Apple →
   `apple-ssd-m3-m4-max-1tb`, DGX Spark → `dgx-spark-ssd-4tb`, Ryzen AI Max → `nvme-gen4-x4-generic`), else
   `NVME_990_PRO_2TB`. An SSD without `randomRead` warns (no IOPS term).

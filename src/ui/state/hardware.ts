@@ -27,11 +27,11 @@ import { applyDeviceModifiers, applyLinkModifiers, describeDeviceModifier, descr
 import { resolveUnlocks } from '../../sim/hw/unlocks';
 import { numericLeafPaths } from '../../sim/hw/validate';
 import { DEVICE_PRESETS, deviceUnlocks } from '../../sim/hw/presets/index';
-import { LEGACY_LINK_IDS, LINK_PRESETS, hostPcieLink } from '../../sim/hw/presets/links';
+import { LEGACY_LINK_IDS, LINK_PRESETS, deviceHostLink, hostPcieLink } from '../../sim/hw/presets/links';
 import {
   APPLE_SSD_M3_M4_MAX_1TB,
   APPLE_SSD_M5_PRO_MAX,
-  DEFAULT_HOST_RAM,
+  defaultHostRamFor,
   DEFAULT_SSD,
   DGX_SPARK_SSD_4TB,
   HOST_RAM_PRESETS,
@@ -532,23 +532,39 @@ export function defaultSsdFor(device: Pick<DeviceSpec, 'id' | 'memory'>): NvmeSp
 
 /** The resolved host of a choice: what the engine gets as `HardwareStack.host`, and where each part came from. */
 export interface ResolvedHost {
-  /** The host-RAM preset in use (capacity overridden when `ramCapacityBytes` is set). */
+  /**
+   * The host-RAM preset in use (capacity overridden when `ramCapacityBytes` is set): the user's preset, else the
+   * device's default for this many devices per machine (`defaultHostRamFor`: the pooled Grace LPDDR5X of
+   * ceil(devicesPerNode / 2) CPUs on GB200 / GB300, the desktop DDR5 default elsewhere). Capacity in bytes and
+   * bandwidth in B/s per machine (one scale-up domain).
+   */
   ram: HostMemorySpec;
+  /** True when `ram` is the device's default (`defaultHostRamFor`), not a preset the user picked. */
+  ramDefault: boolean;
   /** The SSD preset in use. */
   ssd: NvmeSpec;
   /**
-   * The device's PCIe link to the host: the override, else the device's `hostInterface`; undefined when neither
-   * exists (SXM/OAM modules, SoCs), which the engine rejects while something is offloaded on dedicated memory.
+   * The device's link to the host, per GPU, per direction: on a device with a non-PCIe `hostLink` (Grace
+   * NVLink-C2C) always that link; else the user's PCIe override, else the device's PCIe `hostInterface`; undefined
+   * when none exists (SXM/OAM modules, SoCs), which the engine rejects while something is offloaded on dedicated
+   * memory.
    */
   link?: LinkSpec;
-  /** True when `link` is the user's override, not the device's `hostInterface`. */
+  /**
+   * True when `link` is the user's PCIe override, not the device's own link. Always false on a device with a
+   * `hostLink`: its GPU reaches the CPU only over that link, so a PCIe override (from a shared URL) is ignored.
+   */
   linkOverridden: boolean;
 }
 
 /** Resolves the host of a choice for `device` (see {@link ResolvedHost}). Unknown preset ids fall back to the default. */
-export function resolveHost(hw: Pick<HardwareChoice, 'host'>, device: DeviceSpec): ResolvedHost {
+export function resolveHost(
+  hw: Pick<HardwareChoice, 'host' | 'devicesPerNode'>,
+  device: DeviceSpec,
+): ResolvedHost {
   const host = hw.host ?? {};
-  const preset = (host.ramId !== undefined ? findHostRam(host.ramId) : undefined) ?? DEFAULT_HOST_RAM;
+  const picked = host.ramId !== undefined ? findHostRam(host.ramId) : undefined;
+  const preset = picked ?? defaultHostRamFor(device, hw.devicesPerNode);
   const ram =
     host.ramCapacityBytes !== undefined && host.ramCapacityBytes !== preset.capacityBytes
       ? {
@@ -558,12 +574,15 @@ export function resolveHost(hw: Pick<HardwareChoice, 'host'>, device: DeviceSpec
         }
       : preset;
   const ssd = (host.ssdId !== undefined ? findSsd(host.ssdId) : undefined) ?? defaultSsdFor(device);
-  const iface = host.link ?? device.hostInterface;
+  const overridden = device.hostLink === undefined && host.link !== undefined;
+  const link =
+    overridden && host.link !== undefined ? hostPcieLink(host.link.generation, host.link.lanes) : deviceHostLink(device);
   return {
     ram,
+    ramDefault: picked === undefined,
     ssd,
-    ...(iface !== undefined ? { link: hostPcieLink(iface.generation, iface.lanes) } : {}),
-    linkOverridden: host.link !== undefined,
+    ...(link !== undefined ? { link } : {}),
+    linkOverridden: overridden,
   };
 }
 
@@ -680,11 +699,16 @@ export interface EditableField {
 
 /**
  * True if a device leaf path may be edited (spec editor, URL `x`): every numeric leaf except `hostInterface.*`, whose
- * generation and lanes are enumerations set through the Host link picker, not free numbers, and
+ * generation and lanes are enumerations set through the Host link picker, not free numbers; `hostLink.*`, the fixed
+ * non-PCIe CPU link (Grace NVLink-C2C), a cited link spec rather than a device number; and
  * `memory.gpuUsableFraction`, which has its own field (Advanced → Memory fit → GPU memory limit).
  */
 export function isEditableDevicePath(path: string): boolean {
-  return !path.startsWith('hostInterface.') && path !== 'memory.gpuUsableFraction';
+  return (
+    !path.startsWith('hostInterface.') &&
+    !path.startsWith('hostLink.') &&
+    path !== 'memory.gpuUsableFraction'
+  );
 }
 /**
  * The editable numbers of a device: every `numericLeafPaths` leaf, grouped into memory, matmul peaks, vector

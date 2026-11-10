@@ -2,18 +2,69 @@ import { describe, expect, it } from 'vitest';
 import { simulate } from '../../sim/engine/simulate';
 import { DEVICE_PRESETS } from '../../sim/hw/presets/index';
 import { POPULAR_SETUPS, composeTopology } from '../../sim/hw/presets/catalog';
-import { PCIE_4_X16, PCIE_5_X16, SPARK_CONNECTX_7, TB5_RDMA, USB4_HALO_RDMA, NVLINK_4, XGMI_MI300X_8_GPU } from '../../sim/hw/presets/links';
+import { LINK_PRESETS, PCIE_4_X16, PCIE_5_X16, SPARK_CONNECTX_7, TB5_RDMA, USB4_HALO_RDMA, NVLINK_4, NVLINK_C2C, XGMI_MI300X_8_GPU, hostPcieLink } from '../../sim/hw/presets/links';
+import { DEFAULT_HOST_RAM, graceHostRam } from '../../sim/hw/presets/storage';
 import { validateDevice, validateLink, validateTopology } from '../../sim/hw/validate';
 import { REF_DENSE_8B } from '../../sim/models/reference';
 import { SINGLE_DEVICE_HW, type HardwareChoice } from './appState';
 import {
   EDITED_REASON, UNITS, applyEdits, cablingName, cablingOptions, defaultLinks, editableFields, editableLinkFields,
   effectiveCabling, findDevice, fromDisplay, matchingPopularSetup, nearestCount, normalizeCabling, popularSetupChoice,
-  resolveDevice, resolveHardware, toDisplay,
+  resolveDevice, resolveHardware, resolveHost, toDisplay,
 } from './hardware';
 import { REFERENCE_QUANT_DEFAULTS } from './quant';
 
 const hw = (over: Partial<HardwareChoice>): HardwareChoice => ({ ...SINGLE_DEVICE_HW, ...over });
+
+describe('resolveHost', () => {
+  const plain = DEVICE_PRESETS.filter((d) => d.hostLink === undefined);
+  it.each(plain.map((d) => [d.id, d] as const))('%s (no hostLink): the desktop RAM default and its PCIe interface, as before', (_id, device) => {
+    for (const devicesPerNode of [1, 8, 72]) {
+      const host = resolveHost({ host: undefined, devicesPerNode }, device);
+      expect(host.ram).toBe(DEFAULT_HOST_RAM);
+      expect(host.ramDefault).toBe(true);
+      expect(host.link).toEqual(
+        device.hostInterface && hostPcieLink(device.hostInterface.generation, device.hostInterface.lanes),
+      );
+      expect(host.linkOverridden).toBe(false);
+      const overridden = resolveHost({ host: { link: { generation: 4, lanes: 8 } }, devicesPerNode }, device);
+      expect(overridden.link).toEqual(hostPcieLink(4, 8));
+      expect(overridden.linkOverridden).toBe(true);
+    }
+  });
+
+  it('GB200 / GB300: NVLink-C2C and the Grace pool of ceil(GPUs / 2) CPUs by default', () => {
+    const gb200 = findDevice('gb200')!;
+    const gb300 = findDevice('gb300')!;
+    const rack = resolveHost({ host: undefined, devicesPerNode: 72 }, gb200);
+    expect(rack.link).toBe(NVLINK_C2C);
+    expect(rack.ram).toEqual(graceHostRam('gb200', 72));
+    expect(rack.ram.capacityBytes).toBe(36 * 480e9);
+    expect(rack.ram.bandwidthBytesPerSec).toBe(36 * 384e9);
+    expect(resolveHost({ host: undefined, devicesPerNode: 4 }, gb200).ram.capacityBytes).toBe(2 * 480e9);
+    expect(resolveHost({ host: undefined, devicesPerNode: 1 }, gb300).ram).toEqual(graceHostRam('gb300', 1));
+  });
+
+  it('GB200: ignores a PCIe override, keeps a picked RAM preset and an edited capacity', () => {
+    const gb200 = findDevice('gb200')!;
+    const pcie = resolveHost({ host: { link: { generation: 5, lanes: 16 } }, devicesPerNode: 72 }, gb200);
+    expect(pcie.link).toBe(NVLINK_C2C);
+    expect(pcie.linkOverridden).toBe(false);
+    const picked = resolveHost({ host: { ramId: DEFAULT_HOST_RAM.id }, devicesPerNode: 72 }, gb200);
+    expect(picked.ram).toBe(DEFAULT_HOST_RAM);
+    expect(picked.ramDefault).toBe(false);
+    const edited = resolveHost({ host: { ramCapacityBytes: 1e12 }, devicesPerNode: 72 }, gb200);
+    expect(edited.ram.capacityBytes).toBe(1e12);
+    expect(edited.ram.bandwidthBytesPerSec).toBe(36 * 384e9);
+    expect(edited.ram.estimated).toContainEqual({ field: 'capacityBytes', reason: EDITED_REASON });
+  });
+
+  it('GB200 NVL72 with offloading: the engine gets the C2C link and the 36-CPU Grace pool', () => {
+    const stack = resolveHardware(hw({ deviceId: 'gb200', devicesPerNode: 72, nodes: 1 }), true).stack;
+    expect(stack.host?.link).toBe(NVLINK_C2C);
+    expect(stack.host?.ram).toEqual(graceHostRam('gb200', 72));
+  });
+});
 
 describe('defaultLinks and topologies', () => {
   it.each(DEVICE_PRESETS.map((d) => [d.id, d] as const))('%s: default links and node topologies validate', (_id, device) => {
@@ -198,6 +249,17 @@ describe('spec edits', () => {
 });
 
 describe('editable fields', () => {
+  it.each(DEVICE_PRESETS.map((d) => [d.id, d] as const))('%s: every editable field has a human label and a unit, never its raw path', (_id, device) => {
+    for (const f of editableFields(device)) {
+      expect(f.label, f.path).not.toBe(f.path);
+      expect(f.unit, f.path).toBeDefined();
+    }
+    expect(editableFields(device).some((f) => f.path.startsWith('hostLink.'))).toBe(false);
+  });
+
+  it.each(LINK_PRESETS.map((l) => [l.name, l] as const))('%s: every editable link field has a human label, never its raw path', (_name, link) => {
+    for (const f of editableLinkFields(link)) expect(f.label, f.path).not.toBe(f.path);
+  });
   it('covers every numeric leaf with a group, a label and a unit', () => {
     for (const device of DEVICE_PRESETS) {
       const fields = editableFields(device);

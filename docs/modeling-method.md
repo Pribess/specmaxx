@@ -63,7 +63,9 @@ A PCIe link carries data in packets, and each packet's header and checksum take 
 
 Between machines the network shape matters: a switch, a full mesh, a ring or a chain. Each shape gets its own routing and bandwidth rules. Where the hardware cannot pass data straight between devices, as with some consumer GPUs, or between a GPU and a network card, the traffic is staged through host memory and pays for it. Over TCP, the operating system also copies every message into and out of its socket buffers at each end; RDMA skips that copy.
 
-More: [parallelism](simulation-model.md#5-parallelism), [collectives](simulation-model.md#6-collectives), [links and topologies](simulation-model.md#links-and-topologies), [fabric shapes](simulation-model.md#fabric-shapes), [host bounce](simulation-model.md#host-bounce), [inter-node host staging](simulation-model.md#inter-node-host-staging), [TCP socket copy](simulation-model.md#tcp-socket-copy).
+A "machine" can also be a whole rack. GB200 and GB300 NVL72 join 72 GPUs through NVLink switches at 900 GB/s per GPU in each direction ([NVIDIA](https://dam-cdn.nvd.orangelogic.com/AssetLink/gl2l4l4812s5fw0p614s6i8bv6mi3vx5.pdf)); GB200 NVL4 joins four on an NVLink bridge whose layout NVIDIA does not publish, so it is estimated. AMD MI300X, MI325X and MI355X join eight GPUs with one link per pair, 64, 64 and 72 GB/s each way ([MI325X](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/product-briefs/instinct-mi325x-datasheet.pdf), [MI355X](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/product-briefs/amd-instinct-miI355x-platform-brochure.pdf)); the estimate gives every GPU the sum of its seven links, which flatters groups of two or four. A group must split the machine evenly and the experts evenly, so a 256-expert model uses 64 of an NVL72's 72 GPUs for expert parallelism.
+
+More: [parallelism](simulation-model.md#5-parallelism), [collectives](simulation-model.md#6-collectives), [links and topologies](simulation-model.md#links-and-topologies), [scale-up domains](simulation-model.md#scale-up-domains), [rank layout](simulation-model.md#rank-layout), [fabric shapes](simulation-model.md#fabric-shapes), [host bounce](simulation-model.md#host-bounce), [inter-node host staging](simulation-model.md#inter-node-host-staging), [TCP socket copy](simulation-model.md#tcp-socket-copy).
 
 ## Does it fit in memory?
 
@@ -78,6 +80,8 @@ More: [memory fit](simulation-model.md#memory-fit), [activation peak](simulation
 ## Offloading
 
 Optional, off by default. Part of the weights can live in host RAM or on an SSD instead of device memory: experts of mixture-of-experts layers, or n-gram lookup tables. Each can be split by layer range, e.g. the experts of the first layers in host RAM and the rest on the SSD. Whatever is needed and not resident is fetched over the host link each step, which adds transfer time and frees device memory.
+
+On GB200 and GB300 the host link is NVLink-C2C to the Grace CPU, taken as 450 GB/s per GPU in each direction ([NVIDIA](https://developer.nvidia.com/blog/inside-nvidia-blackwell-ultra-the-chip-powering-the-ai-factory-era/)); NVIDIA's wording leaves open whether a superchip's two GPUs share it. Each Grace adds 480 GB of host RAM at 384 GB/s for two GPUs ([NVIDIA](https://docs.nvidia.com/grace-perf-tuning-guide/index.html)), pooled across the machine.
 
 The token-embedding table can move off the device too. Each token reads only one row of it, so this frees its whole size (about 2.5 GB for a 27B model) at almost no speed cost; llama.cpp keeps it in host RAM by default ([source](https://github.com/ggml-org/llama.cpp/blob/a4d4f2fd4ec85ec6a0a9ece4870416c1b6cc24f5/src/llama-model.cpp#L1780-L1782)). Models that reuse this table for their output (tied embeddings) keep it on the device.
 

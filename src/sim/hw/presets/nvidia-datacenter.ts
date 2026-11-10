@@ -29,6 +29,8 @@ import type { MathFormat } from '../../ir/dtype';
 import type { ComputeEngine, DeviceSpec, EstimatedField, GemmTiling, MatmulPeak, SourceRef } from '../types';
 import { gb, gbPerSec, mb, tbPerSec, tflops } from '../units';
 import { NVIDIA_DC_GPUDIRECT_SOURCE } from './gpudirect';
+import { NVLINK_C2C } from './links';
+import { BLACKWELL_DATASHEET_URL } from './rack-scale-sources';
 import {
   engineSfuAtVectorClock,
   NVIDIA_BLACKWELL_DC_SFU, NVIDIA_BLACKWELL_ULTRA_SFU, NVIDIA_GB10_SFU, NVIDIA_SM_SFU, nvidiaSfu } from './sfu';
@@ -1032,12 +1034,111 @@ export const V100_SXM2 = v100Device(true);
 /** V100 PCIe Gen3 x16, 32/16GB HBM2 at 900 GB/s; FP16 tensor 112 TFLOP/s, no NVLink. */
 export const V100_PCIE = v100Device(false);
 /**
+ * One Grace Blackwell GPU, not a two-GPU superchip or rack. Per-GPU SI peaks from the GB200/GB300 columns.
+ * NVFP4/MXFP4 share the fp4 math class; MXFP6 shares fp6 (separate micro-scaling rates unpublished).
+ * See docs/simulation-model.md §4 "Scale-up domains".
+ */
+function graceBlackwellDevice(ultra: boolean): DeviceSpec {
+  const gen = ultra ? 'gb300' : 'gb200';
+  // All rates are per GPU in FLOP/s (INT8 OP/s). Only FP4 Ultra is not a 2:1 sparse:dense ratio.
+  const rates: [MathFormat, number, number][] = [
+    ['fp4', ultra ? 15000 : 10000, 20000],
+    ['fp8', 5000, 10000],
+    ['fp6', 5000, 10000],
+    ['fp16', 2500, 5000],
+    ['bf16', 2500, 5000],
+    ['tf32', 1250, 2500],
+    ['int8', ultra ? 165 : 5000, ultra ? 330 : 10000],
+  ];
+  const peaks: MatmulPeak[] = rates.flatMap(([input, dense, sparse]) => [
+    {
+      input,
+      accumulate: input === 'int8' ? 'int32' : 'fp32',
+      sparsity: 'dense',
+      flopsPerSec: tflops(dense),
+    },
+    {
+      input,
+      accumulate: input === 'int8' ? 'int32' : 'fp32',
+      sparsity: '2:4',
+      flopsPerSec: tflops(sparse),
+    },
+  ]);
+  const sfu = nvidiaSfu(
+    ultra ? NVIDIA_BLACKWELL_ULTRA_SFU : NVIDIA_BLACKWELL_DC_SFU,
+    148,
+    tflops(80),
+  );
+  return {
+    id: gen,
+    name: `NVIDIA ${gen.toUpperCase()} (${ultra ? 'Grace Blackwell Ultra' : 'Grace Blackwell'})`,
+    vendor: 'NVIDIA',
+    engines: [
+      {
+        id: 'gpu',
+        name: `${gen.toUpperCase()} 5th-gen Tensor Cores (tcgen05)`,
+        kind: 'gpu',
+        computeUnits: 148,
+        matmulPeaks: peaks,
+        vectorFlopsPerSec: { fp32: tflops(80), fp64: tflops(ultra ? 1.3 : 40) },
+        sfuOpsPerSec: sfu.sfuOpsPerSec,
+        gemmTiling: blackwellDcTiling(),
+      },
+    ],
+    memory: {
+      kind: 'dedicated',
+      technology: 'HBM3e',
+      capacityOptionsBytes: [gb(ultra ? 279 : 186)],
+      bandwidthBytesPerSec: tbPerSec(8),
+    },
+    hostLink: NVLINK_C2C,
+    gpuDirectRdma: true,
+    sources: [
+      NVIDIA_DC_GPUDIRECT_SOURCE,
+      {
+        url: ultra ? BLACKWELL_ULTRA_DATASHEET_URL : BLACKWELL_DATASHEET_URL,
+        title: `Blackwell${ultra ? ' Ultra' : ''} datasheet OCT25, ${gen.toUpperCase()} NVL72 column (per GPU)`,
+        fields: ['engines.0.matmulPeaks', 'engines.0.vectorFlopsPerSec', 'memory'],
+        note: ultra
+          ? 'FP4 sparse|dense 20|15 PF; FP8/FP6 10 PF, BF16/FP16 5 PF, TF32 2.5 PF, INT8 330 TOPS (sparse; dense half). FP32 80 TF, FP64 1.3 TF; 279 GB HBM3e, 8 TB/s. Prefer datasheet FP64 over rounded rack 100 TF / 72.'
+          : 'FP4 20 PF, FP8/FP6/INT8 10 PF/POPS, BF16/FP16 5 PF, TF32 2.5 PF (sparse; dense half). FP32 80 TF, FP64 40 TF; 186 GB HBM3e, 8 TB/s. NVL4 has identical per-GPU peaks.',
+      },
+      BLACKWELL_DC_TILING_SOURCE,
+      ...sfu.sources,
+    ],
+    estimated: [
+      {
+        field: 'engines.0.computeUnits',
+        reason:
+          'GB200/GB300 active SM count unpublished; assume 148 as on the corresponding HGX B200/B300. SFU rule derives clock from FP32 peak, so its result is independent of this count.',
+      },
+      {
+        field: 'engines.0.matmulPeaks',
+        reason:
+          'MXFP4/MXFP6 rates not separately published; use the NVFP4/FP6 math-class rates, as for HGX Blackwell.',
+      },
+      ...tilingEstimates(
+        BLACKWELL_DC_TILING_KEYS,
+        'Typical CUTLASS sm100 CTA tiles (m a multiple of 128)',
+      ),
+      ...sfu.estimated,
+    ],
+  };
+}
+
+/** GB200: one GPU, 186 GB HBM3e at 8 TB/s; FP4 10/20 PFLOP/s dense/sparse, Grace CPU on C2C. */
+export const GB200: DeviceSpec = graceBlackwellDevice(false);
+/** GB300: one GPU, 279 GB HBM3e at 8 TB/s; FP4 15/20 PFLOP/s dense/sparse, FP64 1.3 TFLOP/s. */
+export const GB300: DeviceSpec = graceBlackwellDevice(true);
+/**
  * Every NVIDIA datacenter / DGX device preset, in display order (DGX Spark, then the datacenter parts newest
  * generation first and higher tier first). Each must pass `validateDevice`.
  */
 export const NVIDIA_DATACENTER_DEVICE_PRESETS: DeviceSpec[] = [
   DGX_SPARK,
+  GB300,
   B300,
+  GB200,
   B200,
   H200_SXM,
   H100_SXM,

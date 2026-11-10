@@ -8,12 +8,12 @@
 import {
   APPLE_SSD_M3_M4_MAX_1TB,
   APPLE_SSD_M5_PRO_MAX,
-  DEFAULT_HOST_RAM,
+  defaultHostRamFor,
   DEFAULT_SSD,
   DGX_SPARK_SSD_4TB,
   NVME_GEN4_X4_GENERIC,
 } from '../hw/presets/storage';
-import { hostPcieLink } from '../hw/presets/links';
+import { deviceHostLink } from '../hw/presets/links';
 import type { DeviceSpec, HardwareStack, HostMemorySpec, LinkSpec, NvmeSpec } from '../hw/types';
 import type { ModelSpec } from '../ir/model';
 import type { ExpertPlacement, OffloadLowering, TablePlacement } from '../lower/lower';
@@ -162,9 +162,10 @@ export interface ResolvedHost {
 
 /**
  * Fill the host side for the tiers a placement uses (design doc §2.2). Dedicated memory: `host.link` absent →
- * `hostPcieLink(device.hostInterface)`; `host.ram` absent → `DDR5_6000_2CH` (needed for host-RAM groups and as the
+ * `deviceHostLink(device)` (non-PCIe attachment before PCIe); `host.ram` absent → size-aware Grace RAM on GB200/GB300,
+ * else unchanged `DDR5_6000_2CH` (needed for host-RAM groups and as the
  * staging hop of NVMe reads). `host.ssd` absent with an NVMe group → {@link defaultSsdFor}. Each default warns.
- * Validation guarantees a dedicated device has a link or a `hostInterface`.
+ * Validation guarantees a dedicated device has a link, `hostLink`, or a `hostInterface` (docs/simulation-model.md §4).
  */
 export function resolveHost(hardware: HardwareStack, device: DeviceSpec, tiers: Set<OffloadTier>): ResolvedHost {
   const warnings: string[] = [];
@@ -174,16 +175,16 @@ export function resolveHost(hardware: HardwareStack, device: DeviceSpec, tiers: 
     if (host?.link !== undefined) {
       out.link = host.link;
     } else {
-      const iface = device.hostInterface;
-      if (iface === undefined) throw new Error(`offload: no host link known for ${device.id}; set hardware.host.link`);
-      out.link = hostPcieLink(iface.generation, iface.lanes);
+      const link = deviceHostLink(device);
+      if (link === undefined) throw new Error(`offload: no host link known for ${device.id}; set hardware.host.link`);
+      out.link = link;
       warnings.push(`offload: no host link given; using ${out.link.name} from ${device.name}'s host interface`);
     }
     if (host?.ram !== undefined) {
       out.ram = host.ram;
     } else {
-      out.ram = DEFAULT_HOST_RAM;
-      warnings.push(`offload: no host RAM given; using ${DEFAULT_HOST_RAM.name}`);
+      out.ram = defaultHostRamFor(device, hardware.topology.devicesPerNode);
+      warnings.push(`offload: no host RAM given; using ${out.ram.name}`);
     }
   }
   if (tiers.has('nvme')) {

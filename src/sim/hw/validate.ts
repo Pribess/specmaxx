@@ -165,7 +165,10 @@ function engineErrors(e: ComputeEngine, label: string): string[] {
  */
 export function validateDevice(d: DeviceSpec): string[] {
   const label = `device ${d.id}`;
-  const errors = [...leafErrors(d, d.sources, d.estimated, label), ...provenanceRecordErrors(d.sources, d.estimated, label)];
+  // The nested link owns its provenance, like links on a topology; do not require duplicate device citations.
+  const { hostLink, ...deviceNumbers } = d;
+  const errors = [...leafErrors(deviceNumbers, d.sources, d.estimated, label), ...provenanceRecordErrors(d.sources, d.estimated, label)];
+  if (hostLink !== undefined) errors.push(...validateLink(hostLink));
   if (d.engines.length === 0) errors.push(`${label}: no engines`);
   const ids = new Set<string>();
   d.engines.forEach((e, i) => {

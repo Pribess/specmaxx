@@ -18,7 +18,7 @@ import { helpLines } from './helpLines';
 import { networkLinkHelp } from './linkHelp';
 import { Picker } from './Picker';
 import type { PickerOption } from './fuzzy';
-import { Segmented, type Segment } from './Segmented';
+import { CountField } from './CountField';
 
 /** Help texts of the setup row ("?" icons). */
 const HELP = {
@@ -40,12 +40,6 @@ const HELP = {
     'Ring: each machine links to two neighbours; a daisy chain is a ring missing one cable.',
   ]),
 };
-
-/** Segments for the offered counts, plus the current count when it is not offered (an older link). */
-function countSegments(offered: number[], current: number): Segment[] {
-  const counts = offered.includes(current) ? offered : [...offered, current].sort((a, b) => a - b);
-  return counts.map((n) => ({ value: String(n), label: String(n) }));
-}
 
 /** A label with its "?" help and a value as plain text: a field with exactly one possibility. */
 function StaticField({
@@ -162,11 +156,11 @@ export function SetupRow({
     <div className="setup-row" data-testid="setup-row">
       {showPerMachine && (
         <div className="setup-level">
-          <Segmented
+          <CountField
             label={`${unit} in one machine`}
-            value={String(hw.devicesPerNode)}
-            segments={countSegments(options.devicesPerNodeCounts, hw.devicesPerNode)}
-            onChange={(v) => dispatch({ type: 'setCounts', devicesPerNode: Number(v) })}
+            value={hw.devicesPerNode}
+            counts={options.devicesPerNodeCounts}
+            onChange={(v) => dispatch({ type: 'setCounts', devicesPerNode: v })}
             help={helpLines([
               `How many ${unit === 'GPUs' ? 'GPUs' : 'devices'} sit in one machine.`,
               'They talk over the local link, which is faster than the network.',
@@ -176,11 +170,11 @@ export function SetupRow({
         </div>
       )}
       <div className="setup-level">
-        <Segmented
+        <CountField
           label="Machines"
-          value={String(hw.nodes)}
-          segments={countSegments(options.nodeCounts, hw.nodes)}
-          onChange={(v) => dispatch({ type: 'setCounts', nodes: Number(v) })}
+          value={hw.nodes}
+          counts={options.nodeCounts}
+          onChange={(v) => dispatch({ type: 'setCounts', nodes: v })}
           help={HELP.machines}
           aside={totalText}
           issues={built.issues.filter((i) => i.field === 'devices')}

@@ -36,6 +36,13 @@ import {
   PCIE_4_X16, PCIE_4_X16_DIRECT, PCIE_4_X8, PCIE_4_X8_DIRECT, PCIE_5_X16, PCIE_5_X16_DIRECT, PCIE_5_X8,
   PCIE_5_X8_DIRECT, RTX_3090_NVLINK, SPARK_CONNECTX_7, TB4_TCP, TB4_TCP_20G, TB5_RDMA, TB5_TCP, USB4_HALO_RDMA, USB4_HALO_TCP,
   XGMI_MI300X_8_GPU, XGMI_MI300X_PER_PEER,
+  NVLINK_5_NVL72,
+  NVLINK_5_NVL4,
+  XGMI_MI325X_8_GPU,
+  XGMI_MI325X_PER_PEER,
+  XGMI_MI355X_8_GPU,
+  XGMI_MI355X_PER_PEER,
+  UALOE_MI455X,
 } from './links';
 import { NVIDIA_CONSUMER_DEVICE_PRESETS, RTX_3090, RTX_4090, RTX_5090 } from './nvidia';
 import { CMP_170HX, NVIDIA_CMP_DEVICE_PRESETS } from './nvidia-cmp';
@@ -46,7 +53,10 @@ import {
   A100_PCIE_40GB,
   V100_SXM2,
   V100_PCIE,
+  GB200,
+  GB300,
   B200, B300, DGX_SPARK, H100_SXM, H200_SXM, NVIDIA_DATACENTER_DEVICE_PRESETS } from './nvidia-datacenter';
+import { GB200_NVL72_URL, GB300_NVL72_URL } from './rack-scale-sources';
 import {
   NVIDIA_PRO_DEVICE_PRESETS,
   RTX_PRO_6000_WS,
@@ -436,7 +446,9 @@ const PCIE2_X16_HOST = pcieOption(PCIE_2_X16, 'PCIe 2.0 x16', 2, 16);
 /** GPUs per machine and machines offered for a PCIe card or a datacenter accelerator. */
 const GPU_COUNTS = [1, 2, 4, 8];
 const GPU_BOX_NODES = [1, 2, 4];
-const DATACENTER_NODES = [1, 2, 4, 8];
+const DATACENTER_NODES = [1, 2, 4, 8, 16, 18, 32];
+/** Configurable active GPUs within a 72-GPU switched domain; 64 permits EP64 for 256 experts. */
+const RACK_GPU_COUNTS = [1, 2, 4, 8, 16, 32, 36, 64, 72];
 /** Machines offered for a Mac (people run 2–4; 8 as a ring where the ports run out) and for Strix Halo boxes. */
 const MAC_NODES = [1, 2, 3, 4, 8];
 const HALO_NODES = [1, 2, 3, 4];
@@ -451,6 +463,35 @@ function pcieCard(device: DeviceSpec, shortName: string, localLinks: LocalLinkOp
 function datacenter(device: DeviceSpec, shortName: string, localLinks: LocalLinkOption[], networks: NetworkOption[]): DeviceSetupOptions {
   return { deviceId: device.id, shortName, devicesPerNodeCounts: GPU_COUNTS, nodeCounts: DATACENTER_NODES, localLinks, networks };
 }
+/** Grace Blackwell: NVL72 switched domain, with a separately selected four-GPU bridge/tray option. */
+function rackScale(device: DeviceSpec, shortName: string): DeviceSetupOptions {
+  const ultra = device.id === 'gb300';
+  const network = (base: NetworkOption): NetworkOption => ({
+    ...base,
+    sources: [
+      {
+        url: `https://www.nvidia.com/en-us/data-center/dgx-${device.id}/`,
+        title: `DGX ${shortName} NIC specifications`,
+        fields: PORTS,
+        note: `72 single-port ConnectX-${ultra ? '8 800G' : '7 400G'} adapters for 72 GPUs; one NIC per GPU shard.`,
+      },
+    ],
+  });
+  return {
+    deviceId: device.id,
+    shortName,
+    devicesPerNodeCounts: RACK_GPU_COUNTS,
+    nodeCounts: [1, 2, 4, 8, 16, 18],
+    localLinks: [
+      { link: NVLINK_5_NVL72, shortName: 'NVL72 NVLink' },
+      // NVIDIA publishes NVL4 for GB200, not GB300: do not invent an Ultra NVL4 product.
+      ...(!ultra
+        ? [{ link: NVLINK_5_NVL4, shortName: 'NVL4 NVLink bridge', devicesPerNodeCounts: [2, 4] }]
+        : []),
+    ],
+    networks: ultra ? [network(IB_XDR), IB_NDR] : [network(IB_NDR), IB_XDR],
+  };
+}
 /** An Apple SoC: one per Mac, Thunderbolt between Macs. */
 function mac(device: DeviceSpec, networks: NetworkOption[], nodeCounts = MAC_NODES): DeviceSetupOptions {
   // 'Apple M5 Ultra (80-core GPU)' → 'M5 Ultra 80-core GPU'.
@@ -462,8 +503,9 @@ function mac(device: DeviceSpec, networks: NetworkOption[], nodeCounts = MAC_NOD
  * The catalog, by device id. Defaults (the first local link that fits the stock `hostInterface`, `networks[0]`)
  * reproduce the UI's pre-catalog `defaultLinks` for every device that existed (catalog.test.ts pins them): GeForce PCIe
  * generation host-bounced, Arc Pro B60 direct x8, Arc B580 PCIe 4.0 x8 host-bounced (its Gen4 x8 edge), other cards
- * PCIe 5.0 x16 host-bounced, datacenter NVLink / xGMI (PCIe 5.0 x16 direct for the MI325X–MI455X, whose xGMI numbers
- * are not in the library) + InfiniBand, Macs TB5 RDMA, Strix Halo USB4 RDMA, Spark ConnectX-7. PCIe links are offered
+ * PCIe 5.0 x16 host-bounced, datacenter NVLink / xGMI / UALoE + InfiniBand, Macs TB5 RDMA,
+ * Strix Halo USB4 RDMA, Spark ConnectX-7. Deliberate corrections: MI325X/MI355X xGMI and MI455X UALoE
+ * replace the old PCIe placeholders. All other existing defaults are unchanged. PCIe links are offered
  * only while they fit the EFFECTIVE host interface ({@link allowedLocalLinks}); catalog.test.ts checks every device
  * under every unlock selection. The CMP 170HX lists its four links fastest first, so the default follows its PCIe
  * unlocks: stock Gen1 x4 only; capacitor mod Gen1 x16 / x4; Gen2 patch Gen2 x4 / Gen1 x4; both all four (Gen2 x16).
@@ -513,6 +555,8 @@ const CATALOG: DeviceSetupOptions[] = [
   // PCIe 4.0 x8 (hostInterface): Gen4 x8 links only.
   pcieCard(ARC_B580, 'Arc B580', [PCIE4_X8_HOST, PCIE4_X8_DIRECT_OPT]),
   { deviceId: DGX_SPARK.id, shortName: 'DGX Spark', devicesPerNodeCounts: [1], nodeCounts: SPARK_NODES, localLinks: [], networks: [SPARK_CX7] },
+  rackScale(GB300, 'GB300'),
+  rackScale(GB200, 'GB200'),
   datacenter(B300, 'B300', [{ link: NVLINK_5, shortName: 'NVLink 5' }], [IB_XDR, IB_NDR]),
   datacenter(B200, 'B200', [{ link: NVLINK_5, shortName: 'NVLink 5' }], [IB_NDR, IB_XDR]),
   datacenter(H200_SXM, 'H200 SXM', [{ link: NVLINK_4, shortName: 'NVLink 4' }], [IB_NDR, IB_XDR]),
@@ -550,9 +594,9 @@ const CATALOG: DeviceSetupOptions[] = [
     ]),
     nodeCounts: [1],
   },
-  datacenter(INSTINCT_MI455X, 'MI455X', [PCIE5_DIRECT], [IB_NDR, IB_XDR]),
-  datacenter(INSTINCT_MI355X, 'MI355X', [PCIE5_DIRECT], [IB_NDR, IB_XDR]),
-  datacenter(INSTINCT_MI325X, 'MI325X', [PCIE5_DIRECT], [IB_NDR, IB_XDR]),
+  { ...datacenter(INSTINCT_MI455X, 'MI455X', [{ link: UALOE_MI455X, shortName: 'UALoE' }], [IB_NDR, IB_XDR]), devicesPerNodeCounts: RACK_GPU_COUNTS },
+  datacenter(INSTINCT_MI355X, 'MI355X', [{ link: XGMI_MI355X_8_GPU, shortName: 'xGMI' }, { link: XGMI_MI355X_PER_PEER, shortName: 'xGMI (one peer)' }], [IB_NDR, IB_XDR]),
+  datacenter(INSTINCT_MI325X, 'MI325X', [{ link: XGMI_MI325X_8_GPU, shortName: 'xGMI' }, { link: XGMI_MI325X_PER_PEER, shortName: 'xGMI (one peer)' }], [IB_NDR, IB_XDR]),
   datacenter(INSTINCT_MI300X, 'MI300X', [{ link: XGMI_MI300X_8_GPU, shortName: 'xGMI' }, { link: XGMI_MI300X_PER_PEER, shortName: 'xGMI (one peer)' }], [IB_NDR, IB_XDR]),
 ];
 
@@ -799,11 +843,21 @@ function popular(id: string, choice: SetupChoice, sources: SourceRef[], note?: s
 }
 
 /**
- * The curated popular setups (≤ 10), grouped by vendor: GeForce boxes, DGX Spark clusters (NVIDIA's playbooks),
+ * The curated popular setups (≤ 12), grouped by vendor: GeForce boxes, Grace Blackwell racks, DGX Spark clusters (NVIDIA's playbooks),
  * Mac Studio Thunderbolt 5 meshes (Geerling / exo, Apple ML Research, the user's example), the Strix Halo USB4 ring.
  * Every entry passes `setupErrors` (catalog.test.ts). Ids of the setups that existed before the catalog are kept.
  */
 export const POPULAR_SETUPS: PopularSetup[] = [
+  popular(
+    'gb300-nvl72',
+    { deviceId: GB300.id, devicesPerNode: 72, nodes: 1, localLinkId: linkPresetId(NVLINK_5_NVL72) },
+    [report(GB300_NVL72_URL, 'NVIDIA GB300 NVL72', 'vendor')],
+  ),
+  popular(
+    'gb200-nvl72',
+    { deviceId: GB200.id, devicesPerNode: 72, nodes: 1, localLinkId: linkPresetId(NVLINK_5_NVL72) },
+    [report(GB200_NVL72_URL, 'NVIDIA GB200 NVL72', 'vendor')],
+  ),
   popular('rtx-5090-x2-pcie5', { deviceId: RTX_5090.id, devicesPerNode: 2, nodes: 1, localLinkId: linkPresetId(PCIE_5_X16) }, [
     report('https://github.com/tinygrad/open-gpu-kernel-modules/issues/29', 'RTX 5090 P2P bandwidth and latency matrices', 'community', 'Two cards on Gen5 x16, host-staged without the P2P patch.'),
   ], 'Two RTX 5090s on PCIe 5.0 x16, host-staged (stock GeForce has no P2P).'),

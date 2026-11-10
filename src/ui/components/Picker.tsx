@@ -9,6 +9,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
+import type { FieldIssue } from '../state';
 import { fuzzyFilter, groupOptions, stepIndex, type NavStep, type PickerOption } from './fuzzy';
 import { HelpIcon } from './HelpIcon';
 import { OptionList, findOptionElement, revealOption, setActiveDescendant } from './OptionList';
@@ -56,6 +57,8 @@ export function Picker({
   help,
   renderValue,
   disabled = false,
+  aside,
+  issues = [],
 }: {
   /** Visible label; also the accessible name of the trigger. */
   label: string;
@@ -78,6 +81,10 @@ export function Picker({
    * stays focusable, so the reason for the lock can live there. Default false.
    */
   disabled?: boolean;
+  /** Text at the right end of the label row (e.g. a device total). */
+  aside?: ReactNode;
+  /** Validation messages shown under the trigger; an error marks the trigger invalid. */
+  issues?: FieldIssue[];
 }) {
   const id = useId();
   const labelId = `${id}-label`;
@@ -164,6 +171,7 @@ export function Picker({
           {label}
         </span>
         {help && <HelpIcon term={label}>{help}</HelpIcon>}
+        {aside && <span className="field-aside">{aside}</span>}
       </div>
       <Popover.Root open={open} onOpenChange={(next) => (next ? openPopup() : close(false))}>
         <Popover.Trigger asChild>
@@ -176,6 +184,7 @@ export function Picker({
             aria-controls={open ? listEl?.id : undefined}
             aria-labelledby={labelId}
             disabled={disabled}
+            aria-invalid={issues.some((i) => i.level === 'error') || undefined}
             className="picker-trigger"
             onKeyDown={(e) => onKeyDown(e, false)}
           >
@@ -250,6 +259,15 @@ export function Picker({
           </Popover.Content>
         </Popover.Portal>
       </Popover.Root>
+      {issues.length > 0 && (
+        <span className="hint">
+          {issues.map((i, n) => (
+            <span className={i.level === 'error' ? 'error' : ''} key={n}>
+              {i.message}
+            </span>
+          ))}
+        </span>
+      )}
     </div>
   );
 }

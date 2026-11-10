@@ -25,6 +25,10 @@ import {
   PCIE_4_X8, PCIE_4_X8_DIRECT, PCIE_5_X8, PCIE_5_X8_DIRECT, RTX_3090_NVLINK, SPARK_CONNECTX_7, TB4_TCP, TB4_TCP_20G, TB5_RDMA,
   TB5_TCP,
   USB4_HALO_RDMA, XGMI_MI300X_8_GPU,
+  XGMI_MI325X_8_GPU,
+  XGMI_MI355X_8_GPU,
+  UALOE_MI455X,
+  NVLINK_5_NVL72,
 } from './links';
 import { linkPresetId } from './topologies';
 
@@ -122,9 +126,12 @@ describe('setup catalog: every device', () => {
     ['b200', linkPresetId(NVLINK_5), linkPresetId(IB_NDR_400)],
     ['h200-sxm', linkPresetId(NVLINK_4), linkPresetId(IB_NDR_400)],
     ['h100-sxm', linkPresetId(NVLINK_4), linkPresetId(IB_NDR_400)],
-    ['instinct-mi455x', linkPresetId(PCIE_5_X16_DIRECT), linkPresetId(IB_NDR_400)],
-    ['instinct-mi355x', linkPresetId(PCIE_5_X16_DIRECT), linkPresetId(IB_NDR_400)],
-    ['instinct-mi325x', linkPresetId(PCIE_5_X16_DIRECT), linkPresetId(IB_NDR_400)],
+    // Deliberate change: replace PCIe placeholders with verified UALoE/xGMI scale-up links.
+    ['instinct-mi455x', linkPresetId(UALOE_MI455X), linkPresetId(IB_NDR_400)],
+    ['instinct-mi355x', linkPresetId(XGMI_MI355X_8_GPU), linkPresetId(IB_NDR_400)],
+    ['instinct-mi325x', linkPresetId(XGMI_MI325X_8_GPU), linkPresetId(IB_NDR_400)],
+    ['gb200', linkPresetId(NVLINK_5_NVL72), linkPresetId(IB_NDR_400)],
+    ['gb300', linkPresetId(NVLINK_5_NVL72), linkPresetId(IB_XDR_800)],
     ['instinct-mi300x', linkPresetId(XGMI_MI300X_8_GPU), linkPresetId(IB_NDR_400)],
   ];
 
@@ -181,10 +188,11 @@ function pcieGenLanes(name: string): { generation: number; lanes: number } {
 describe('setup catalog: PCIe links never exceed the card', () => {
   /**
    * Accelerators without a `hostInterface` (OAM modules, whose host attachment no datasheet states as a slot) that
-   * are offered a PCIe link as the stand-in for an xGMI fabric the library lacks. Listed so a new device that offers
+   * formerly had PCIe placeholders; none remain. A new device that offers
    * PCIe without a cited `hostInterface` fails here instead of slipping through.
    */
-  const NO_HOST_INTERFACE_PCIE = ['instinct-mi325x', 'instinct-mi355x', 'instinct-mi455x'];
+  // All old OAM PCIe placeholders were deliberately replaced by cited scale-up links.
+  const NO_HOST_INTERFACE_PCIE: string[] = [];
 
   /** Every unlock selection of a device with its effective host interface (stock included: the empty selection). */
   function unlockStates(device: DeviceSpec): { selection: Record<string, string>; iface: HostInterfaceSpec | undefined }[] {
@@ -367,7 +375,7 @@ describe('setupErrors', () => {
     expect(setupErrors({ deviceId: 'rtx-3090', devicesPerNode: 8, nodes: 1, localLinkId: bridge })).toHaveLength(1);
     // The RTX 3090 exception above predates the count-restricted A100/V100 links tested separately below. No
     // host-interface limit here: the CMP's PCIe filter is tested above.
-    for (const id of DEVICE_PRESETS.map((d) => d.id).filter((id) => !/^(a100-|v100-)/.test(id))) {
+    for (const id of DEVICE_PRESETS.map((d) => d.id).filter((id) => !/^(a100-|v100-|gb200$)/.test(id))) {
       const opts = setupOptionsFor(id);
       for (const n of opts.devicesPerNodeCounts.filter((x) => x > 1)) {
         expect(opts.localLinks.filter((l) => localLinkAllows(l, n)).length, `${id} ×${n}`).toBe(opts.localLinks.length - (id === 'rtx-3090' && n !== 2 ? 1 : 0));
@@ -483,12 +491,15 @@ describe('setupLabel', () => {
 });
 
 describe('POPULAR_SETUPS', () => {
-  it('is at most 10, grouped by vendor, with unique ids and names equal to setupLabel', () => {
-    expect(POPULAR_SETUPS.length).toBeLessThanOrEqual(10);
+  it('is at most 12, grouped by vendor, with unique ids and names equal to setupLabel', () => {
+    // Deliberately add two rack-scale Grace Blackwell setups, retaining the existing ten.
+    expect(POPULAR_SETUPS.length).toBeLessThanOrEqual(12);
     expect(new Set(POPULAR_SETUPS.map((p) => p.id)).size).toBe(POPULAR_SETUPS.length);
     expect(new Set(POPULAR_SETUPS.map((p) => p.name)).size).toBe(POPULAR_SETUPS.length);
     for (const p of POPULAR_SETUPS) expect(p.name).toBe(setupLabel(p.choice));
     expect(POPULAR_SETUPS.map((p) => p.id)).toEqual([
+      'gb300-nvl72',
+      'gb200-nvl72',
       'rtx-5090-x2-pcie5',
       'rtx-3090-x2-nvlink',
       'dgx-spark-x2',
@@ -501,6 +512,8 @@ describe('POPULAR_SETUPS', () => {
       'strix-halo-128gb-x4-usb4-ring',
     ]);
     expect(POPULAR_SETUPS.map((p) => p.name)).toEqual([
+      'GB300 279GB ×72 · NVL72 NVLink',
+      'GB200 186GB ×72 · NVL72 NVLink',
       'RTX 5090 32GB ×2 · PCIe 5.0 x16',
       'RTX 3090 24GB ×2 · NVLink bridge',
       'DGX Spark 128GB ×2 · ConnectX-7 mesh',

@@ -164,6 +164,12 @@ export interface DeviceSpec {
    */
   hostInterface?: HostInterfaceSpec;
   /**
+   * Non-PCIe CPU attachment (e.g. Grace NVLink-C2C), per GPU, per direction in B/s; latency in seconds.
+   * Preferred over hostInterface when hardware.host.link is absent. Its own sources/estimates cover its numbers.
+   * Host RAM remains one pooled tier per scale-up domain; NUMA placement is not modeled (docs/simulation-model.md §4 "Host and storage tiers").
+   */
+  hostLink?: LinkSpec;
+  /**
    * Dedicated-memory devices: whether an RDMA NIC may DMA straight into this device's memory (NVIDIA GPUDirect
    * RDMA: data-center and RTX/Quadro parts, not GeForce; AMD Instinct: PeerDirect). `false` ⇒ every inter-node
    * message is staged through host memory, whatever the link (docs/simulation-model.md §6 "Inter-node host

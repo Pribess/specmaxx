@@ -12,7 +12,8 @@
  * - SI decimal units throughout (1 GB = 1e9 B, as both Samsung and Sandisk define it in their footnotes).
  */
 
-import type { EstimatedField, HostMemorySpec, NvmeSpec, SourceRef } from '../types';
+import type { DeviceSpec, EstimatedField, HostMemorySpec, NvmeSpec, SourceRef } from '../types';
+import { GB200_NVL72_URL, GB300_NVL72_URL, GRACE_TUNING_URL } from './rack-scale-sources';
 import { gb, gbPerSec } from '../units';
 import { pcieBandwidthPerDirectionBytesPerSec } from './links';
 
@@ -703,6 +704,69 @@ export const HOST_RAM_PRESETS: HostMemorySpec[] = [
 
 /** The default host RAM when the stack names none: desktop DDR5-6000, 2 channels. */
 export const DEFAULT_HOST_RAM: HostMemorySpec = DDR5_6000_2CH;
+
+/**
+ * Pooled Grace LPDDR5X for one scale-up domain (docs/simulation-model.md §4 "Host and storage tiers").
+ * devicesPerNode is a positive integer GPU count; ceil(count/2) Grace CPUs, each 480e9 B and 384e9 B/s
+ * read+write combined. One GPU gets its whole Grace; NUMA ignored. Latency seconds, outstanding reads estimated.
+ */
+export function graceHostRam(gen: 'gb200' | 'gb300', devicesPerNode: number): HostMemorySpec {
+  if (!Number.isInteger(devicesPerNode) || devicesPerNode < 1)
+    throw new Error('devicesPerNode must be a positive integer');
+  const graces = Math.ceil(devicesPerNode / 2);
+  return {
+    kind: 'host_ram',
+    id: `grace-lpddr5x-${gen}-x${graces}`,
+    name: `Grace LPDDR5X (${graces} CPUs, ${graces * 480} GB)`,
+    capacityBytes: graces * 480e9,
+    bandwidthBytesPerSec: graces * 384e9,
+    latencySec: 100e-9,
+    channels: graces * 16,
+    readGranularityBytes: 64,
+    maxOutstanding: graces * 64,
+    sources: [
+      {
+        url: gen === 'gb200' ? GB200_NVL72_URL : GB300_NVL72_URL,
+        title: `${gen.toUpperCase()} NVL72 specifications`,
+        fields: ['capacityBytes'],
+        note: '36 Grace CPUs, 17 TB LPDDR5X (rounded): 36 × 480 GB. Two GPUs per Grace; pool ceil(GPUs/2) CPUs.',
+      },
+      {
+        url: GRACE_TUNING_URL,
+        title: 'NVIDIA Grace performance tuning guide',
+        fields: ['bandwidthBytesPerSec'],
+        note: '480 GB configuration: 384 GB/s per Grace (512 GB/s is for 120/240 GB). 36 × 384 GB/s = 13.824 TB/s, rack 14 TB/s rounded.',
+      },
+    ],
+    estimated: [
+      {
+        field: 'latencySec',
+        reason: 'Grace DRAM unloaded latency unpublished; 100 ns server-LPDDR proxy, not measured.',
+      },
+      {
+        field: 'channels',
+        reason:
+          'Informational: sixteen 32-bit LPDDR channels per Grace assumed; bandwidth uses the cited 384 GB/s, not this count.',
+      },
+      { ...CACHE_LINE_ESTIMATE },
+      {
+        field: 'maxOutstanding',
+        reason:
+          'Random-read concurrency unpublished; reuse 64 outstanding reads per Grace (existing host-RAM proxy), sum across pooled CPUs.',
+      },
+    ],
+  };
+}
+
+/** Default host RAM per node: size-aware Grace pool for GB200/GB300, otherwise the unchanged desktop default. Bytes and B/s per node. */
+export function defaultHostRamFor(
+  device: Pick<DeviceSpec, 'id'>,
+  devicesPerNode: number,
+): HostMemorySpec {
+  return device.id === 'gb200' || device.id === 'gb300'
+    ? graceHostRam(device.id, devicesPerNode)
+    : DEFAULT_HOST_RAM;
+}
 
 // ---------------------------------------------------------------------------------------------------------
 // NVMe SSDs
