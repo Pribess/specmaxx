@@ -125,15 +125,17 @@ export interface MoeRouting {
  * is not given. Dimensionless.
  *
  * Measured max/mean token load per EP rank, DeepSeek-V3/R1 (256 experts, top-8), averaged over layers and steps:
- * - with an expert-placement load balancer (EPLB, https://github.com/deepseek-ai/EPLB): 1.109 at EP32 and 1.115 at
- *   EP36, both with redundant expert slots (TensorRT-LLM wide-EP blog, Table 1, reported as (max − mean)/mean
- *   0.109 / 0.115: https://nvidia.github.io/TensorRT-LLM/1.0.0rc3/blogs/tech_blog/blog4_Scaling_Expert_Parallelism_in_TensorRT-LLM.html);
+ * - with an expert-placement load balancer (EPLB, https://github.com/deepseek-ai/EPLB): 1.109 at EP32 (9 slots per
+ *   rank: 1 redundant expert per rank, 32 in total) and 1.115 at EP36 (8 slots per rank, 288 slots for 256 experts)
+ *   (TensorRT-LLM wide-EP blog, Table 1, reported as (max − mean)/mean 0.109 / 0.115:
+ *   https://nvidia.github.io/TensorRT-LLM/1.0.0rc3/blogs/tech_blog/blog4_Scaling_Expert_Parallelism_in_TensorRT-LLM.html);
  * - without one: 2.56 at EP32 (same table, 1.564); ≈ 1.47 at 8 GPUs, rising with the GPU count (SGLang
  *   "balancedness" mean/max ≈ 0.68, LMSYS large-scale EP blog, https://lmsys.org/blog/2025-05-05-large-scale-ep/,
  *   figure values as read in Aleph Alpha's DeepSeek inference model, Fig. 12).
  * 1.2 takes the balanced case, which the engines that run EP use, rounded up from 1.11 because those figures need
- * redundant expert copies (+12.5% expert memory) that this model does not store. An estimate, not a constant of the
- * hardware.
+ * redundant expert copies (+12.5% expert memory), which the default does not store (`redundantExpertsPerRank` 0).
+ * ρ is the user's input: setting `redundantExpertsPerRank` adds the copies' memory but does not lower ρ. An
+ * estimate, not a constant of the hardware.
  */
 export const DEFAULT_EP_IMBALANCE = 1.2;
 
@@ -161,9 +163,11 @@ export function epImbalance(parallel: ParallelConfig): number {
  *   mean 0.25, ρ·mean 0.3 → 1, cap 1·min(2, 1) = 1: one assignment, not 2.
  * `A ≤` the cap always (`T_g·k/ep ≤ T_g·min(k, Eloc)` since `k ≤ E`), so the clamp is well-formed.
  *
- * ρ scales the busiest device's assignments (the grid: compute, activations, combine) but not `U`: EP imbalance
- * comes from hot experts drawing more tokens (the EPLB motivation), so the busiest device runs more rows through the
- * same experts rather than reading more distinct expert weights; in prefill `U = Eloc` either way.
+ * ρ scales the busiest device's assignments (the grid: compute, activations, combine; in mode B, with
+ * `parallel.epImbalanceScalesAllToAll`, also the dispatch and combine all-to-all bytes, see {@link a2aRowsOf})
+ * but not `U`: EP imbalance comes from hot experts drawing more
+ * tokens (the EPLB motivation), so the busiest device runs more rows through the same experts rather than reading
+ * more distinct expert weights; in prefill `U = Eloc` either way.
  */
 export function moeRouting(block: MoeBlock, layout: MoeLayout, tokens: number, parallel: ParallelConfig): MoeRouting {
   // Formula: A = mode A ? ceil(T·k/ep) : Ts·k;  T_g = mode A ? T : ep·Ts;
@@ -195,6 +199,19 @@ function sharedFfnShape(block: MoeBlock): DenseFfnShape {
     activation: block.activation,
     bias: false,
   };
+}
+
+/**
+ * Rows (token copies) a mode-B dispatch / combine all-to-all carries per device: the busiest device's `A_max` when
+ * `parallel.epImbalanceScalesAllToAll` is true (it receives the A_max assignments routed to its experts and sends
+ * them back, and the step waits for it), else (default) the mean volume `Ts·k` (the device's own token copies), as
+ * before the switch existed. ρ scales the expert rows either way. Equal to `Ts·k` at ρ = 1. Unit: rows (token,
+ * expert) assignments.
+ */
+export function a2aRowsOf(routing: MoeRouting, parallel: ParallelConfig): number {
+  // Formula: R_a2a = epImbalanceScalesAllToAll ? A_max : Ts·k
+  // See docs/simulation-model.md §5 "EP load imbalance"
+  return parallel.epImbalanceScalesAllToAll === true ? routing.busiestAssignments : routing.assignments;
 }
 
 /** An expert-parallel all-to-all of `messageBytes` per device over the EP group. */
@@ -373,10 +390,14 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext, layerIndex?: num
     ops.push(linearGemm('moe.latent_in', { m: routedTokens, n: l, k: h }, ctx, { module: 'moe_latent' }));
   }
 
+  // Mode B all-to-alls: rows R_a2a = epImbalanceScalesAllToAll ? A_max : Ts·k. Switched on, they carry the busiest
+  // device's A_max rows (it sends its own Ts·k token copies but receives the A_max assignments routed to its experts,
+  // and the step waits for it); off (default) they carry the mean volume Ts·k, as before the switch existed.
+  const a2aRows = a2aRowsOf(routing, ctx.parallel);
   if (layout.mode === 'B') {
-    // Formula: dispatch S = Ts·k·l·bpe(act)
-    // See docs/simulation-model.md §5 "MoE modes A/B"
-    ops.push(epAllToAll('moe.dispatch', routedTokens * block.topK * l * act, ctx.quant.activations, ep));
+    // Formula: dispatch S = R_a2a·l·bpe(act)
+    // See docs/simulation-model.md §5 "MoE modes A/B", "EP load imbalance"
+    ops.push(epAllToAll('moe.dispatch', a2aRows * l * act, ctx.quant.activations, ep));
   }
 
   // Grouped expert GEMMs on the balanced grid of a experts × mE tokens (FLOP, tiles, activations), reading the
@@ -428,8 +449,8 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext, layerIndex?: num
   if (block.expertOutputNorm === true) ops.push(normOp('moe.expert_norm', 'rmsnorm', expertRows, lShard, ctx));
 
   if (layout.mode === 'B') {
-    // Formula: combine S = Ts·k·l·reduceBpe
-    ops.push(epAllToAll('moe.combine_a2a', routedTokens * block.topK * l * reduceBpe(ctx), reduceDtype(ctx), ep));
+    // Formula: combine S = R_a2a·l·reduceBpe   (R_a2a = a2aRowsOf: A_max when switched on, else Ts·k)
+    ops.push(epAllToAll('moe.combine_a2a', a2aRows * l * reduceBpe(ctx), reduceDtype(ctx), ep));
   }
 
   // Weighted sum of the expert outputs: mode A over the R = a·mE expert rows into a T·l_s partial-sum buffer;
@@ -493,11 +514,21 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext, layerIndex?: num
 }
 
 /**
+ * Redundant expert slots per device of a parallel config (EPLB replicas): `parallel.redundantExpertsPerRank` at
+ * ep > 1, else 0 (one device holds every expert, nothing to replicate). Count per device per MoE layer.
+ */
+export function redundantExperts(parallel: ParallelConfig): number {
+  return parallel.ep > 1 ? (parallel.redundantExpertsPerRank ?? 0) : 0;
+}
+
+/**
  * Resident MoE weights on one device: ALL local experts (not only the active ones), the router, the latent
  * projections and latent norm (if any; see {@link moeLatentWeightBytes}), the expert-output norm γ (if any) and the
  * shared experts. With the layer's experts offloaded (`layerIndex` in the placement's range), only the
  * `C = f·E_loc` resident experts count (the full set lives on the tier, design doc §2.7); everything else stays
- * resident. Unit: bytes.
+ * resident. With ep > 1 and `parallel.redundantExpertsPerRank` r > 0 (EPLB replicas), `r` full copies of one routed
+ * expert ({@link expertWeightBytes}) are added on every device, always resident (also on an offloaded layer: the
+ * replicas are the hot experts, kept on the device; a simplification). Unit: bytes.
  */
 export function moeResidentWeightBytes(block: MoeBlock, ctx: LoweringContext, layerIndex?: number): number {
   const layout = moeLayout(block, ctx.parallel);
@@ -513,7 +544,8 @@ export function moeResidentWeightBytes(block: MoeBlock, ctx: LoweringContext, la
   //            + [expertOutputNorm] (l/s)·bpe(hp) + (gated ? 3 : 2)·h·S·fs/(mode A ? tp : 1)·bpe(w_shared),
   //   l = latentDim ?? h, s = expertOutputShards (the γ slice the norm op reads)
   // Formula (offloaded layer, f < 1): the routed part becomes C·W_expert, C = f·Eloc
-  // See docs/simulation-model.md §8 "Memory fit", §12 ("Memory tiers")
+  // Formula (EPLB replicas, ep > 1): + r·W_expert,  r = redundantExpertsPerRank (default 0)
+  // See docs/simulation-model.md §5 "Redundant experts", §8 "Memory fit", §12 ("Memory tiers")
   const placement = expertPlacementAt(ctx, layerIndex);
   const experts =
     placement === undefined || placement.residentFraction >= 1
@@ -523,7 +555,10 @@ export function moeResidentWeightBytes(block: MoeBlock, ctx: LoweringContext, la
   const latent = moeLatentWeightBytes(block, ctx);
   const norm = block.expertOutputNorm === true ? (l / expertOutputShards(block, layout)) * hpBpe(ctx) : 0;
   const shared = gemmWeightBytes(matrices, h, sharedLocal, sharedFmt.weights, sharedFmt.sparsity);
-  return experts + router + latent + norm + shared;
+  const replicas = redundantExperts(ctx.parallel);
+  const redundant = replicas > 0 ? replicas * expertWeightBytes(block, ctx) : 0;
+  // The replicas are added last, so with none the sum is the one from before they existed, bit for bit.
+  return experts + router + latent + norm + shared + redundant;
 }
 
 /**

@@ -118,20 +118,21 @@ describe('estimator inputs', () => {
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-Flash-Next&n=2&tp=2&ep=2');
     mount();
     await screen.findByTestId('prefill-tps');
-    const ep = screen.getByLabelText(/^EP/) as HTMLInputElement;
+    // /^EP$/: the EP balance fields ("EP imbalance") also start with EP
+    const ep = screen.getByLabelText(/^EP$/) as HTMLInputElement;
     expect(ep.value).toBe('2');
     expect(screen.getByRole('button', { name: 'About EP' })).toBeTruthy();
     expect(screen.getByText('Valid EP: 1, 2')).toBeTruthy();
     fireEvent.change(ep, { target: { value: '3' } });
     await waitFor(() => expect(screen.queryByTestId('prefill-tps')).toBeNull());
-    expect(screen.getByLabelText(/^EP/).getAttribute('aria-invalid')).toBe('true');
+    expect(screen.getByLabelText(/^EP$/).getAttribute('aria-invalid')).toBe('true');
     expect(screen.getAllByText('EP 3 must divide TP 2.').length).toBeGreaterThan(0);
     expect(screen.getByLabelText(/^TP/).getAttribute('aria-invalid')).not.toBe('true');
-    fireEvent.change(screen.getByLabelText(/^EP/), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText(/^EP$/), { target: { value: '2' } });
     await screen.findByTestId('prefill-tps');
     // TP 1 with EP 2: the error is on EP, not TP.
     fireEvent.change(screen.getByLabelText(/^TP/), { target: { value: '1' } });
-    await waitFor(() => expect(screen.getByLabelText(/^EP/).getAttribute('aria-invalid')).toBe('true'));
+    await waitFor(() => expect(screen.getByLabelText(/^EP$/).getAttribute('aria-invalid')).toBe('true'));
     expect(screen.getAllByText('EP 2 must divide TP 1.').length).toBeGreaterThan(0);
     expect(screen.getByLabelText(/^TP/).getAttribute('aria-invalid')).not.toBe('true');
   });

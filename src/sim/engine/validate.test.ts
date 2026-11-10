@@ -86,6 +86,28 @@ describe('T17 input errors', () => {
     }
   });
 
+  it('redundantExpertsPerRank is a whole number ≥ 0; 0 and above are valid', () => {
+    for (const bad of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expectError(
+        input({ ep: 2, dp: 2, redundantExpertsPerRank: bad }, { model: TINY_HYBRID }),
+        /parallel\.redundantExpertsPerRank must be a whole number ≥ 0/,
+      );
+    }
+    for (const ok of [0, 1, 32]) {
+      const workload = { batch: 2, promptLen: 128, decodeContextLen: 256 };
+      expect(validateInput(input({ ep: 2, dp: 2, redundantExpertsPerRank: ok }, { model: TINY_HYBRID, workload }))).toEqual([]);
+    }
+  });
+
+  it('epImbalanceScalesAllToAll is a boolean', () => {
+    const bad = input({ ep: 2, dp: 2, epImbalanceScalesAllToAll: 1 as unknown as boolean }, { model: TINY_HYBRID });
+    expectError(bad, /parallel\.epImbalanceScalesAllToAll must be true or false/);
+    for (const ok of [true, false]) {
+      const workload = { batch: 2, promptLen: 128, decodeContextLen: 256 };
+      expect(validateInput(input({ ep: 2, dp: 2, epImbalanceScalesAllToAll: ok }, { model: TINY_HYBRID, workload }))).toEqual([]);
+    }
+  });
+
   it('unknown engineId', () => {
     expectError(input({}, { hardware: { device: SYNTH_GPU, topology: singleDevice(SYNTH_GPU), engineId: 'npu' } }), /engineId 'npu'/);
   });

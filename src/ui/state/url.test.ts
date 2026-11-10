@@ -34,6 +34,14 @@ const STATES: [string, AppState][] = [
   ['MoE with expert parallelism', state({ model: { kind: 'hf', id: 'Qwen/Qwen3.8-Flash-Next' }, parallel: { tp: 4, pp: 1, dp: 1, ep: 2 } })],
   ['data parallelism', state({ hw: { devicesPerNode: 4 }, parallel: { tp: 2, pp: 1, dp: 2, ep: 1 }, workload: { batch: 4, promptLen: 8192, decodeContextLen: 8192 } })],
   ['MoE with mode-B expert parallelism', state({ model: { kind: 'hf', id: 'Qwen/Qwen3.8-Flash-Next' }, parallel: { tp: 1, pp: 1, dp: 4, ep: 4 }, workload: { batch: 8, promptLen: 8192, decodeContextLen: 8192 } })],
+  [
+    'MoE with EP imbalance and redundant experts',
+    state({
+      model: { kind: 'hf', id: 'Qwen/Qwen3.8-Flash-Next' },
+      parallel: { tp: 1, pp: 1, dp: 4, ep: 4, epImbalance: 1.55, redundantExpertsPerRank: 2 },
+      workload: { batch: 8, promptLen: 8192, decodeContextLen: 8192 },
+    }),
+  ],
   ['every option', state({ options: { overlap: 'none', elementwiseFusion: 'ideal', collectiveAlgorithm: 'ring' } })],
   [
     'every offload knob and host field',
@@ -153,6 +161,40 @@ describe('URL codec', () => {
         expect(s.parallel[key]).toBe(1);
         expect(dropped).toEqual([`${key}=${v}`]);
       }
+    }
+  });
+
+  it('EP balance: epi (ρ ≥ 1), epa (1 = ρ on the all-to-alls) and rex (whole ≥ 0) after dn; defaults omitted; invalid values dropped', () => {
+    const q = 'm=Qwen/Qwen3.8-Flash-Next&n=4&dp=4&ep=4&epi=1.5&epa=1&rex=32&b=4';
+    const { state: s, dropped } = decodeState(q);
+    expect(dropped).toEqual([]);
+    expect(s.parallel).toEqual({
+      tp: 1,
+      pp: 1,
+      dp: 4,
+      ep: 4,
+      epImbalance: 1.5,
+      epImbalanceScalesAllToAll: true,
+      redundantExpertsPerRank: 32,
+    });
+    expect(encodeState(s)).toBe(q);
+    // The defaults (ρ 1.2, off, 0 replicas) decode to absent fields and are never written
+    expect(decodeState('ep=2&dp=2&epi=1.2&rex=0')).toEqual(decodeState('ep=2&dp=2'));
+    const set = reduce(DEFAULT_STATE, {
+      type: 'setParallel',
+      parallel: { epImbalance: 1.5, epImbalanceScalesAllToAll: true, redundantExpertsPerRank: 1 },
+    });
+    expect(encodeState(set)).toBe('epi=1.5&epa=1&rex=1');
+    const back = reduce(set, {
+      type: 'setParallel',
+      parallel: { epImbalance: 1.2, epImbalanceScalesAllToAll: false, redundantExpertsPerRank: 0 },
+    });
+    expect(back).toEqual(DEFAULT_STATE);
+    expect(encodeState(back)).toBe('');
+    for (const [key, v] of [['epi', '0.9'], ['epi', '0'], ['epi', 'x'], ['epi', '101'], ['epa', '0'], ['epa', 'true'], ['rex', '-1'], ['rex', '1.5'], ['rex', 'x']]) {
+      const d = decodeState(`ep=2&dp=2&${key}=${v}`);
+      expect(d.dropped).toEqual([`${key}=${v}`]);
+      expect(d.state.parallel).toEqual({ tp: 1, pp: 1, dp: 2, ep: 2 });
     }
   });
 

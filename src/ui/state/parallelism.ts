@@ -25,12 +25,12 @@ import type { AppState } from './appState';
 
 /**
  * A field the UI can mark. `devices` is the device/node count; `denseTp` is the "Dense layers" DP | TP control of
- * the DP attention + EP layout; `offload` and `specDec` are the deployment sections (offloading, speculative
- * decoding); `general` is anything else.
+ * the DP attention + EP layout; `epImbalance` and `redundantExperts` are the EP balance fields (ρ, EPLB replicas);
+ * `offload` and `specDec` are the deployment sections (offloading, speculative decoding); `general` is anything else.
  */
 export type IssueField =
-  | 'tp' | 'pp' | 'dp' | 'ep' | 'denseTp' | 'batch' | 'promptLen' | 'decodeContextLen' | 'devices' | 'bpw' | 'headBpw'
-  | 'offload' | 'specDec' | 'general';
+  | 'tp' | 'pp' | 'dp' | 'ep' | 'denseTp' | 'epImbalance' | 'redundantExperts' | 'batch' | 'promptLen' | 'decodeContextLen'
+  | 'devices' | 'bpw' | 'headBpw' | 'offload' | 'specDec' | 'general';
 
 /** One problem with the inputs. Errors stop the simulation; warnings do not. */
 export interface FieldIssue {
@@ -102,13 +102,20 @@ export function placementField(message: string): IssueField {
 
 /**
  * `parallel` as the checks and the engine see it on `model`: on a dense model EP is 1 and `denseTpGroup` is dropped
- * (there is no EP group), whatever the state or URL holds. Every other field is kept.
+ * (there is no EP group), whatever the state or URL holds. The EP balance knobs (`epImbalance`,
+ * `epImbalanceScalesAllToAll`, `redundantExpertsPerRank`) are dropped unless the model is MoE and EP > 1: the engine
+ * reads them only then, and the panel hides their fields otherwise, so a stale value cannot block the simulation.
+ * Every other field is kept.
  */
 function onModel(parallel: ParallelConfig, model: ModelSpec): ParallelConfig {
-  if (hasMoe(model)) return parallel;
-  const dense: ParallelConfig = { ...parallel, ep: 1 };
-  delete dense.denseTpGroup;
-  return dense;
+  const moe = hasMoe(model);
+  if (moe && parallel.ep > 1) return parallel;
+  const out: ParallelConfig = moe ? { ...parallel } : { ...parallel, ep: 1 };
+  if (!moe) delete out.denseTpGroup;
+  delete out.epImbalance;
+  delete out.redundantExpertsPerRank;
+  delete out.epImbalanceScalesAllToAll;
+  return out;
 }
 
 /**
@@ -130,6 +137,8 @@ export function effectiveParallel(
  * The problems of a parallelism + workload on a model and topology, by field. `parallel` is the one to simulate
  * ({@link effectiveParallel} of the user's); on a dense model it is checked with EP 1 and no `denseTpGroup`:
  * - every degree (EP only on MoE models) and workload value is an integer ≥ 1 (if not, nothing else is checked);
+ * - the EP balance knobs, when kept (MoE, EP > 1): `epImbalance` ≥ 1 on `epImbalance`, `redundantExpertsPerRank` a
+ *   whole number ≥ 0 on `redundantExperts`;
  * - `tp·pp·dp` ≠ devices is an error on `devices` (the device count must equal TP × PP × DP: EP uses the TP and DP
  *   devices); in the DP attention + EP `layout` on a MoE model (TP 1, DP = EP, so TP and DP are not shown) it is
  *   worded as EP × PP;
@@ -158,6 +167,14 @@ export function fieldIssues(
     if (!isPositiveInteger(workload[key])) error(key, `${WORKLOAD_LABEL[key]} must be a whole number ≥ 1.`);
   }
   if (issues.length > 0) return issues;
+  // The EP balance knobs (kept by onModel only on a MoE model at EP > 1): ρ ≥ 1, replicas a whole number ≥ 0. They
+  // do not enter the checks below, so an invalid one does not stop them (the degree hints stay right).
+  const rho = effective.epImbalance;
+  if (rho !== undefined && !(Number.isFinite(rho) && rho >= 1)) error('epImbalance', 'EP imbalance must be a number ≥ 1.');
+  const replicas = effective.redundantExpertsPerRank;
+  if (replicas !== undefined && !(Number.isSafeInteger(replicas) && replicas >= 0)) {
+    error('redundantExperts', 'Redundant experts must be a whole number ≥ 0.');
+  }
 
   // EP lies inside the TP group (mode A) or spans DP replicas (mode B): the device count must equal TP × PP × DP.
   const { tp, pp, dp, ep } = effective;

@@ -12,6 +12,7 @@ import type { ParallelConfig } from '../../sim/ir/model';
 import type { SimOptions, Workload } from '../../sim/engine/types';
 import type { UnlockSelection } from '../../sim/hw/unlocks';
 import { DEFAULT_SIM_OPTIONS } from '../../sim/engine/simulate';
+import { DEFAULT_EP_IMBALANCE } from '../../sim/lower/moe';
 import type { CablingId } from '../../sim/hw/presets/catalog';
 import { DEFAULT_MODEL_ID } from './modelShortlist';
 import { devicesPerNodeForLocalLink, nearestCount, normalizeCabling, normalizeLocalLink, setupOptionsOf } from './hardware';
@@ -108,7 +109,10 @@ export interface AppState {
   /**
    * Parallelism degrees (each an integer ≥ 1 once valid; the state may hold invalid values while editing).
    * `denseTpGroup` is present only as `'ep'` (dense layers TP over the EP group), and only with
-   * {@link AppState.parallelLayout} set; `epImbalance` is never set by the UI.
+   * {@link AppState.parallelLayout} set. `epImbalance` (EP load imbalance ρ), `epImbalanceScalesAllToAll` (ρ on the
+   * all-to-alls) and `redundantExpertsPerRank` (EPLB replicas) are set by the Parallelism panel's EP balance fields
+   * and kept only when they differ from the default (ρ `DEFAULT_EP_IMBALANCE`, off, 0 replicas;
+   * {@link normalizeEpBalance}); the engine reads them only on MoE models at EP > 1.
    */
   parallel: ParallelConfig;
   /**
@@ -153,6 +157,20 @@ export function isDpAttentionEpShape(parallel: ParallelConfig): boolean {
  */
 function normalizeDenseTp(parallel: ParallelConfig, layout: AppState['parallelLayout']): ParallelConfig {
   return layout === 'dpAttentionEp' && parallel.denseTpGroup === 'ep' ? parallel : without(parallel, 'denseTpGroup');
+}
+
+/**
+ * `parallel` with the EP balance knobs normalized: `epImbalance` removed when it equals `DEFAULT_EP_IMBALANCE`,
+ * `epImbalanceScalesAllToAll` kept only as `true`, and `redundantExpertsPerRank` removed when 0 (absent fields are
+ * the defaults, so equal choices encode equally). Other values, invalid ones included (the fields show their
+ * errors), are kept.
+ */
+export function normalizeEpBalance(parallel: ParallelConfig): ParallelConfig {
+  let out = parallel;
+  if (out.epImbalance === undefined || out.epImbalance === DEFAULT_EP_IMBALANCE) out = without(out, 'epImbalance');
+  if (out.epImbalanceScalesAllToAll !== true) out = without(out, 'epImbalanceScalesAllToAll');
+  if (out.redundantExpertsPerRank === undefined || out.redundantExpertsPerRank === 0) out = without(out, 'redundantExpertsPerRank');
+  return out;
 }
 
 /** Device of the default state. */
@@ -391,7 +409,7 @@ export function reduce(state: AppState, action: AppAction): AppState {
       const parallel = { ...state.parallel, ...action.parallel };
       const layout = state.parallelLayout !== undefined && isDpAttentionEpShape(parallel) ? state.parallelLayout : undefined;
       const next = layout === undefined ? without(state, 'parallelLayout') : { ...state, parallelLayout: layout };
-      return { ...next, parallel: normalizeDenseTp(parallel, layout) };
+      return { ...next, parallel: normalizeEpBalance(normalizeDenseTp(parallel, layout)) };
     }
     case 'setParallelLayout': {
       if (action.layout === 'custom') {

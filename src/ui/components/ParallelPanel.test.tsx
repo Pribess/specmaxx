@@ -94,4 +94,47 @@ describe('ParallelPanel', () => {
     expect(screen.getByRole('spinbutton', { name: 'TP' })).toBeTruthy();
     expect(screen.queryByRole('spinbutton', { name: 'EP' })).toBeNull();
   });
+
+  it('EP imbalance and redundant experts show only at EP > 1, in both layouts, with the defaults 1.2 and 0', () => {
+    panel(`m=${ID}&d=gb200&n=72&b=72`);
+    expect(screen.queryByRole('spinbutton', { name: 'EP imbalance' })).toBeNull();
+    expect(screen.queryByRole('spinbutton', { name: 'Redundant experts' })).toBeNull();
+    expect(screen.queryByRole('radiogroup', { name: 'Imbalance on all-to-all' })).toBeNull();
+    cleanup();
+    for (const q of [
+      `m=${ID}&d=gb200&n=72&b=72&dp=72&ep=72`,
+      `m=${ID}&d=gb200&n=72&b=72&dp=72&ep=72&lay=dep`,
+    ]) {
+      const dispatch = panel(q);
+      const rho = screen.getByRole('spinbutton', { name: 'EP imbalance' }) as HTMLInputElement;
+      const replicas = screen.getByRole('spinbutton', {
+        name: 'Redundant experts',
+      }) as HTMLInputElement;
+      expect([rho.value, rho.step, replicas.value]).toEqual(['1.2', '0.01', '0']);
+      fireEvent.change(rho, { target: { value: '1.55' } });
+      fireEvent.change(replicas, { target: { value: '1' } });
+      const a2a = screen.getByRole('radiogroup', { name: 'Imbalance on all-to-all' });
+      expect((a2a.querySelector('input[value="off"]') as HTMLInputElement).checked).toBe(true);
+      fireEvent.click(screen.getByRole('radio', { name: 'On' }));
+      expect(dispatch.mock.calls.map((c) => c[0])).toEqual([
+        { type: 'setParallel', parallel: { epImbalance: 1.55 } },
+        { type: 'setParallel', parallel: { redundantExpertsPerRank: 1 } },
+        { type: 'setParallel', parallel: { epImbalanceScalesAllToAll: true } },
+      ]);
+      cleanup();
+    }
+    panel(`m=${ID}&d=gb200&n=72&b=72&dp=72&ep=72&epi=1.01&epa=1&rex=1`);
+    expect(
+      (screen.getByRole('spinbutton', { name: 'EP imbalance' }) as HTMLInputElement).value,
+    ).toBe('1.01');
+    const on = screen.getByRole('radiogroup', { name: 'Imbalance on all-to-all' });
+    expect((on.querySelector('input[value="on"]') as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('a dense model never shows the EP balance fields', () => {
+    panel('n=2&dp=2&ep=2&epi=1.5&rex=2&b=2', REFERENCE_MODEL);
+    expect(screen.queryByRole('spinbutton', { name: 'EP imbalance' })).toBeNull();
+    expect(screen.queryByRole('spinbutton', { name: 'Redundant experts' })).toBeNull();
+    expect(screen.queryByRole('radiogroup', { name: 'Imbalance on all-to-all' })).toBeNull();
+  });
 });

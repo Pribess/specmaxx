@@ -40,7 +40,8 @@ test('GB200 NVL72: GLM-5.3-Flash as DP attention + EP 72, kept on reload', async
   const panel = parallelism(page);
   // The segment's native radio covers its label (Segmented.tsx), so it is checked directly.
   await panel.getByRole('radio', { name: 'DP attention + EP' }).check();
-  await panel.getByRole('spinbutton', { name: 'EP' }).fill('72');
+  // exact: "EP imbalance" (shown at EP > 1) also contains "EP".
+  await panel.getByRole('spinbutton', { name: 'EP', exact: true }).fill('72');
   await computed(page);
   await expect(panel.locator('> summary .panel-value')).toHaveText('DP attention + EP 72');
   await expect(page.locator('h1.rig')).toContainText('DP attention + EP 72');
@@ -71,7 +72,7 @@ test('GB200 NVL72: dense layers on TP need EP to divide 12288; at EP 24 × PP 3 
 
   // PP 3 refills each stage: EP = DP = 72 / 3 = 24.
   await panel.getByRole('spinbutton', { name: 'PP' }).fill('3');
-  await expect(panel.getByRole('spinbutton', { name: 'EP' })).toHaveValue('24');
+  await expect(panel.getByRole('spinbutton', { name: 'EP', exact: true })).toHaveValue('24');
   await computed(page);
   await expect(panel.locator('> summary .panel-value')).toHaveText(
     'DP attention + EP 24, PP 3, dense TP',

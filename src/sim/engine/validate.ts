@@ -117,6 +117,14 @@ export function validateInput(input: SimInput): string[] {
   if (rho !== undefined && !(Number.isFinite(rho) && rho >= 1)) {
     errors.push(`parallel.epImbalance must be a finite number ≥ 1 (got ${rho})`);
   }
+  const redundant = parallel.redundantExpertsPerRank;
+  if (redundant !== undefined && !(Number.isSafeInteger(redundant) && redundant >= 0)) {
+    errors.push(`parallel.redundantExpertsPerRank must be a whole number ≥ 0 (got ${redundant})`);
+  }
+  const scalesA2a = parallel.epImbalanceScalesAllToAll;
+  if (scalesA2a !== undefined && typeof scalesA2a !== 'boolean') {
+    errors.push(`parallel.epImbalanceScalesAllToAll must be true or false (got ${String(scalesA2a)})`);
+  }
   errors.push(...positiveIntegerErrors(workload.batch, 'workload.batch'));
   errors.push(...positiveIntegerErrors(workload.promptLen, 'workload.promptLen'));
   errors.push(...positiveIntegerErrors(workload.decodeContextLen, 'workload.decodeContextLen'));

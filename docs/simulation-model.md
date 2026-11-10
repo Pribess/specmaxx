@@ -1111,7 +1111,9 @@ offloaded no result depends on them.
 ## 5. Parallelism
 
 `src/sim/lower/` (`lower.ts: lowerModel, lowerBlock`; one file per block kind; shared rules in `common.ts`).
-`ParallelConfig { tp, pp, dp, ep, epImbalance?, denseTpGroup? }`, world = `tp·pp·dp` (ep groups live inside it).
+`ParallelConfig { tp, pp, dp, ep, epImbalance?, epImbalanceScalesAllToAll?, redundantExpertsPerRank?, denseTpGroup? }`,
+world = `tp·pp·dp` (ep groups live inside it; ρ, its all-to-all switch and the redundant experts:
+[EP load imbalance](#ep-load-imbalance), [Redundant experts](#redundant-experts)).
 `denseTpGroup` picks the group the dense FFN layers and the LM head are tensor-parallel over: the replica's tp
 ranks (absent / `'tp'`, the rule everywhere below) or the whole EP group (`'ep'`, tp = 1 only; [DP attention +
 EP](#dp-attention--ep)).
@@ -1377,10 +1379,11 @@ distinct experts" and "EP load imbalance" below). Valid iff `E % ep == 0` and (`
   every row (FLOP ×≈ρ in prefill), activations of its own `a·mE` rows only, and whole experts in decode
   (`src/sim/engine/ep.test.ts`).
 - **Mode B**: the EP group spans p replicas; each device routes its slice `Ts = ceil(T/tp)`; `A = Ts·k`,
-  `A_max` as in mode A, `etp = 1`. Router → top-k → [`latent_in`] → `all_to_all(ep)` dispatch `Ts·k·l·bpe(act)` →
-  experts (grid and weights as in mode A) → `all_to_all(ep)` combine `Ts·k·l·reduceBpe` → combine (`Ts·k·l`) →
+  `A_max` as in mode A, `etp = 1`. Router → top-k → [`latent_in`] → `all_to_all(ep)` dispatch `R_a2a·l·bpe(act)` →
+  experts (grid and weights as in mode A) → `all_to_all(ep)` combine `R_a2a·l·reduceBpe` → combine (`Ts·k·l`) →
   [`latent_norm`] → [`latent_out`] → shared experts (unsharded) on Ts → `all_gather(tp)` of `T·h·bpe(act)` when
-  tp > 1 (replaces the all-reduce).
+  tp > 1 (replaces the all-reduce). `R_a2a = Ts·k` by default, `A_max` with `epImbalanceScalesAllToAll`
+  ([EP load imbalance](#ep-load-imbalance)).
 - **Latent MoE** (`MoeBlock.latentDim` = l, Muse Spark `moe_hidden_size`, Nemotron `moe_latent_size`, Kimi K3
   `routed_expert_hidden_size`): `latent_in (m Ts, n l, k h)` after the top-k and `latent_out (m Ts, n h, k l)` after
   the combine (Ts = T in mode A), module `moe_latent`. Both are **replicated** (except a split expert-output norm,
@@ -1457,8 +1460,10 @@ reads `U(8) = 51.6` experts per layer instead of 64 (−19.3 % expert bytes).
 
 ### EP load imbalance
 
-`lower/moe.ts: epImbalance, DEFAULT_EP_IMBALANCE, moeRouting`; `ParallelConfig.epImbalance` (engine-level; the UI
-sets ep, not ρ). The step waits for the busiest device of the EP group, which gets more than the mean share:
+`lower/moe.ts: epImbalance, DEFAULT_EP_IMBALANCE, moeRouting, a2aRowsOf, lowerMoe`; `ParallelConfig.epImbalance`
+(UI: Parallelism → "EP imbalance", shown for MoE models at EP > 1; URL `epi`) and
+`ParallelConfig.epImbalanceScalesAllToAll` (UI: "Imbalance on all-to-all", off by default; URL `epa=1`). The step
+waits for the busiest device of the EP group, which gets more than the mean share:
 
 ```
 ρ     = max/mean (token, expert) assignments per device     1 at ep = 1; default 1.2 at ep > 1
@@ -1476,22 +1481,60 @@ A_max = min(T_g·min(k, Eloc), max(A, ceil(ρ·T_g·k/ep)))  the busiest device'
 
 - **Scaled by ρ** (through `A_max`): the expert grid rows `a·mE`, i.e. the grouped GEMMs' FLOP and activations,
   `moe.act`, the expert-output norm and its etp collectives, and the mode A combine.
+- **Scaled by ρ only with `epImbalanceScalesAllToAll`** (default off): the mode B dispatch and combine all-to-alls
+  (`lowerMoe`, `a2aRowsOf`):
+
+  ```
+  R_a2a = epImbalanceScalesAllToAll ? A_max : Ts·k
+  S_dispatch = R_a2a·l·bpe(act)        S_combine = R_a2a·l·reduceBpe        (mode B)
+  ```
+
+  Switched on, the busiest device's all-to-alls carry its `A_max` rows: it sends its own `Ts·k` token copies but
+  receives the `A_max` rows routed to its experts (and sends them back in the combine), its larger side sets its
+  all-to-all time, and the step waits for it. Off (default), every device moves the mean volume `Ts·k`, so default
+  results are exactly the ones from before the switch existed. A separate switch, not a side effect of setting ρ, so
+  the result moves continuously with ρ (absent ρ and an explicit 1.2 are the same). Mode A has no all-to-all, so it
+  is unchanged either way.
 - **Not scaled**: the expert weights read (`U` comes from the mean share A: the imbalance comes from hot experts
-  drawing more tokens, so the busiest device runs more rows through the same experts; in prefill `U = Eloc`
-  anyway), the router and top-k, the shared experts, the dispatch and combine all-to-alls (each device sends its
-  own `Ts·k` rows; the busiest device's larger receive is not modelled) and the TP all-reduce / all-gather.
-- **Default 1.2** (`DEFAULT_EP_IMBALANCE`, sources in its comment). Measured max/mean token load per EP rank,
-  DeepSeek-V3/R1: 1.11 at EP32 and 1.12 at EP36 with an expert load balancer
-  ([EPLB](https://github.com/deepseek-ai/EPLB)) and redundant expert slots, 2.56 at EP32 without one
-  ([TensorRT-LLM wide-EP blog, Table 1](https://nvidia.github.io/TensorRT-LLM/1.0.0rc3/blogs/tech_blog/blog4_Scaling_Expert_Parallelism_in_TensorRT-LLM.html));
+  drawing more tokens, so the busiest device runs more rows through the same experts, not more distinct experts;
+  in prefill `U = Eloc` anyway), the router and top-k, the shared experts, the mode B weighted sum (over the
+  device's own `Ts·k` returned rows) and the TP all-reduce / all-gather.
+- ρ is a user input, not derived: the load balancer that lowers it (EPLB: placing and replicating hot experts) is
+  not modelled. Redundant experts (below) add their memory but do not change ρ; set ρ to the load they reach.
+- **Default 1.2** (`DEFAULT_EP_IMBALANCE`, sources in its comment), with 0 redundant experts. Measured max/mean
+  token load per EP rank, DeepSeek-V3/R1: 1.11 at EP32 and 1.12 at EP36 with an expert load balancer
+  ([EPLB](https://github.com/deepseek-ai/EPLB)) and 32 redundant expert slots (1 per rank at EP32), 2.56 at EP32
+  without one ([TensorRT-LLM wide-EP blog, Table 1](https://nvidia.github.io/TensorRT-LLM/1.0.0rc3/blogs/tech_blog/blog4_Scaling_Expert_Parallelism_in_TensorRT-LLM.html),
+  which reports `(max − mean)/mean`: 0.109, 0.115 and 1.564);
   ≈ 1.47 at 8 GPUs without one ([SGLang large-scale EP](https://lmsys.org/blog/2025-05-05-large-scale-ep/),
-  balancedness ≈ 0.68). 1.2 is the balanced case rounded up, because the 1.11 needs redundant expert copies the
-  model does not store. An estimate of the routing, not a hardware constant; set `epImbalance: 1` for the
-  perfectly balanced bound.
-- Effect (`docs/review/practicality-review.md` F12): Qwen3-235B-A22B FP8 on 8× H100 (HGX), batch 64, prefill
-  64×4096: mode B tp 1 dp 8 ep 8 282,617 → 256,117 tok/s @ 4096 (−9.4 %; ρ 1.5: 225,145, −20.3 %); tp 2 dp 4
-  ep 8 274,549 → 255,701 (−6.9 %); mode A tp 8 ep 8 unchanged at 165,859 (that prefill is bound by the TP
-  all-reduce, which hides the extra expert compute). ρ alone moves decode by under 0.1 %.
+  balancedness ≈ 0.68). 1.2 is the balanced case rounded up, because the 1.11 needs redundant expert copies that
+  the default does not store. An estimate of the routing, not a hardware constant; set `epImbalance: 1` for the
+  perfectly balanced bound. Suggested: ≈ 1.5 (8 GPUs) to 2.5 (32 GPUs) without a balancer; ≈ 1.1 with EPLB and
+  `redundantExpertsPerRank` 1 at EP32.
+- Effect (`docs/review/practicality-review.md` F12, switch off): Qwen3-235B-A22B FP8 on 8× H100 (HGX), batch 64,
+  prefill 64×4096: mode B tp 1 dp 8 ep 8 282,617 → 256,117 tok/s @ 4096 (−9.4 %; ρ 1.5: 225,145, −20.3 %); tp 2
+  dp 4 ep 8 274,549 → 255,701 (−6.9 %); mode A tp 8 ep 8 unchanged at 165,859 (that prefill is bound by the TP
+  all-reduce, which hides the extra expert compute). ρ alone moves decode by under 0.1 %. With the switch on, mode B
+  also adds ρ's share of all-to-all bytes on top.
+
+### Redundant experts
+
+`lower/moe.ts: redundantExperts, moeResidentWeightBytes`; `ParallelConfig.redundantExpertsPerRank` r (UI:
+Parallelism → "Redundant experts", shown with "EP imbalance"; URL `rex`). EPLB keeps `r` extra copies of hot
+experts on every EP rank (DeepSeek-R1 EP32: 9 slots per rank for 256 experts, r = 1). Here they are memory only:
+
+```
+W_moe += r·W_expert          per device, per MoE layer; ep > 1 only (r = 0 at ep = 1)
+W_expert = gemmWeightBytes((gated ? 3 : 2), l, fe/etp, w_routed)          (expertWeightBytes)
+```
+
+- Each replica is a full local copy of one routed expert, sharded like the device's own experts (`etp`), always
+  resident, also on a layer whose experts are offloaded (the replicas are the hot experts; a simplification), and
+  not on the offload tier (`moeLocalExpertBytes` unchanged).
+- They change neither the routing (A, `A_max`, U) nor the ops: the lower load they buy is ρ, which the user sets.
+- Default 0: absent and 0 give the same input and results, bit for bit (the term is added last).
+- Size: DeepSeek-V3/R1 FP8 `W_expert` = 3·7168·2048·1 B ≈ 44 MB, so r = 1 adds ≈ 2.6 GB (2.4 GiB) per device over
+  58 MoE layers.
 
 ### Latent MoE
 
@@ -2288,7 +2331,8 @@ helpers `gqaSequenceStateBytes`, `mlaSequenceStateBytes`, `csaSequenceStateBytes
 Per device of stage s:
 
 - `W_s` = Σ resident block weights (non-MoE blocks: the weight bytes of a one-token lowering, so resident and
-  streamed weights agree by construction; MoE: all local experts; n-gram: the table shard `ceil(rows/tp)·d·bpe(lookup)`
+  streamed weights agree by construction; MoE: all local experts, plus `r·W_expert` EPLB replicas at ep > 1 (§5
+  "Redundant experts"); n-gram: the table shard `ceil(rows/tp)·d·bpe(lookup)`
   plus its projections and vectors) + the embedding shard on stage 0 while it is on the device
   (`[s = 0 ∧ on device] W_emb`, `W_emb = ceil(vocab/tp)·h·bpe(emb)`; §12 "Token embedding off-device") + the LM-head
   shard and final norm on the last stage (`W_head = ceil(vocab/G)·h·bpe(head) + norm`, G = tp, or ep with
@@ -2422,8 +2466,9 @@ Documented approximations (each isolated in one constant or rule):
 - Reductions travel as bf16 when activations are narrower than 16 bits.
 - Prefill computes LM-head logits for one position per sequence (`Tout = seqs`).
 - Balanced MoE routing on the busiest device (ceilings), with the EP load imbalance ρ (`DEFAULT_EP_IMBALANCE`
-  1.2, §5 "EP load imbalance"); the expert weights read are the expected distinct experts under iid-uniform
-  routing, an expectation rather than a bound (§5 "Expected distinct experts").
+  1.2, a user input; §5 "EP load imbalance"); the load balancer (EPLB) is not modelled, its redundant experts
+  only add memory (§5 "Redundant experts"); the expert weights read are the expected distinct experts under
+  iid-uniform routing, an expectation rather than a bound (§5 "Expected distinct experts").
 - Elementwise FLOP-per-element table (§3) and the fp32-accumulate default.
 - The activation peak in the memory fit is the largest single op.
 - Fabric shapes (§6 "Fabric shapes"): a TP / EP group covering part of a ring is a chain (the long way round is

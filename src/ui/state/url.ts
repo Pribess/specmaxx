@@ -18,6 +18,9 @@
  * | `tp`, `pp`, `dp`, `ep` | parallel degrees (`ep` applies to MoE models only; old URLs with `dp` load it as written) | `tp=2&dp=2` |
  * | `lay` | parallel layout: `dep` = DP attention + EP (TP 1, DP = EP; MoE models only; absent: custom; dropped unless `tp` is 1 and `dp` equals `ep`) | `dp=72&ep=72&lay=dep` |
  * | `dn` | (with `lay=dep`) dense FFN layers and LM head: `tp` = TP over the EP group (absent: DP) | `dn=tp` |
+ * | `epi` | EP load imbalance ρ (busiest EP rank's routed load ÷ mean), 1–{@link MAX_EP_IMBALANCE} (default 1.2, `DEFAULT_EP_IMBALANCE`; read by the engine only on MoE models at EP > 1) | `epi=1.5` |
+ * | `epa` | ρ also scales the mode-B all-to-alls (`epImbalanceScalesAllToAll`): `1` = on (absent: off) | `epa=1` |
+ * | `rex` | redundant experts (EPLB replicas) per EP rank, integer ≥ 0 (default 0) | `rex=32` |
  * | `b`, `p`, `c` | batch, prefill length (default 8192), decode context (default 8192) | `b=8` |
  * | `pc` | prefill chunk of the memory fit, tokens (default 8192) | `pc=2048` |
  * | `ov`, `fu`, `ar` | overlap, elementwise fusion, all-reduce algorithm | `ov=none` |
@@ -45,6 +48,7 @@
  */
 
 import type { SimOptions } from '../../sim/engine/types';
+import { DEFAULT_EP_IMBALANCE } from '../../sim/lower/moe';
 import type { DeviceSpec } from '../../sim/hw/types';
 import type { UnlockSelection } from '../../sim/hw/unlocks';
 import { numericLeafPaths } from '../../sim/hw/validate';
@@ -78,6 +82,12 @@ export const MAX_COUNT = 1024;
 /** Largest accepted parallel degree or workload value (tokens, sequences). */
 export const MAX_VALUE = 1e9;
 
+/**
+ * Largest EP load imbalance ρ the URL accepts: far above any measured value (2.56 without a load balancer, see
+ * `DEFAULT_EP_IMBALANCE`); the engine caps the busiest rank's load at what its tokens can route anyway. Dimensionless.
+ */
+export const MAX_EP_IMBALANCE = 100;
+
 /** Allowed values of the option keys, in URL key → [SimOptions field, values]. */
 const OPTION_KEYS: [string, keyof SimOptions, readonly string[]][] = [
   ['ov', 'overlap', ['ideal', 'none']],
@@ -103,7 +113,7 @@ export function latencyFloorSecFromMicros(us: number): number {
  */
 export const URL_KEYS = [
   'm', 'rev', 'w', 'bpw', 'hbpw', 'a', 'kv', 'lt', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'fab', 'x', 'xi', 'xe',
-  'hr', 'hrc', 'ssd', 'hl', 'gpu', 'rr', 'tp', 'pp', 'dp', 'ep', 'lay', 'dn', 'b', 'p', 'c', 'pc', 'ph', 'ov', 'fu', 'ar', 'lf', 'ed', 'oo',
+  'hr', 'hrc', 'ssd', 'hl', 'gpu', 'rr', 'tp', 'pp', 'dp', 'ep', 'lay', 'dn', 'epi', 'epa', 'rex', 'b', 'p', 'c', 'pc', 'ph', 'ov', 'fu', 'ar', 'lf', 'ed', 'oo',
   'ox', 'oxl', 'oxf', 'oxh', 'odl', 'odt', 'olt', 'ols', 'oet', 'oqd', 'osr', 'opf', 'sd', 'sdr', 'sdk', 'sdu', 'sda',
   'oxr', 'oxe',
   'olr', 'ole',
@@ -222,6 +232,10 @@ export function encodeState(s: AppState): string {
   for (const key of ['tp', 'pp', 'dp', 'ep'] as const) if (s.parallel[key] !== 1) put(key, s.parallel[key]);
   if (s.parallelLayout === 'dpAttentionEp') put('lay', 'dep');
   if (s.parallelLayout === 'dpAttentionEp' && s.parallel.denseTpGroup === 'ep') put('dn', 'tp');
+  // Kept in the state only when not the default (`normalizeEpBalance`).
+  put('epi', s.parallel.epImbalance);
+  if (s.parallel.epImbalanceScalesAllToAll === true) put('epa', '1');
+  put('rex', s.parallel.redundantExpertsPerRank);
   const w = s.workload;
   const dw = DEFAULT_STATE.workload;
   if (w.batch !== dw.batch) put('b', w.batch);
@@ -525,6 +539,24 @@ export function decodeState(search: string): DecodedState {
   if (dn !== undefined) {
     if (dep && dn === 'tp') parallel.denseTpGroup = 'ep';
     else drop('dn', dn);
+  }
+  // EP load imbalance ρ and EPLB replicas; a default value stays absent (`normalizeEpBalance`).
+  const epi = get('epi');
+  if (epi !== undefined) {
+    const rho = parseNumberIn(epi, 1, MAX_EP_IMBALANCE);
+    if (rho === undefined) drop('epi', epi);
+    else if (rho !== DEFAULT_EP_IMBALANCE) parallel.epImbalance = rho;
+  }
+  const epa = get('epa');
+  if (epa !== undefined) {
+    if (epa === '1') parallel.epImbalanceScalesAllToAll = true;
+    else drop('epa', epa);
+  }
+  const rex = get('rex');
+  if (rex !== undefined) {
+    const r = parseInteger(rex, 0, MAX_VALUE);
+    if (r === undefined) drop('rex', rex);
+    else if (r > 0) parallel.redundantExpertsPerRank = r;
   }
   const workload = { ...DEFAULT_STATE.workload };
   for (const [key, field] of [['b', 'batch'], ['p', 'promptLen'], ['c', 'decodeContextLen'], ['pc', 'prefillChunkTokens']] as const) {

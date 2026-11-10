@@ -29,7 +29,7 @@ import { nodeTopology } from '../hw/presets/topologies';
 import { DDR5_6000_2CH } from '../hw/presets/storage';
 import type { CollectiveOp } from '../ir/ops';
 import type { MoeBlock, ModelSpec, QuantConfig } from '../ir/model';
-import { DEFAULT_EP_IMBALANCE, moeLayout, moeRouting } from '../lower/moe';
+import { DEFAULT_EP_IMBALANCE, expertWeightBytes, moeLayout, moeRouting } from '../lower/moe';
 import { fixtureRepoFiles } from '../models/__fixtures__/fixtures.testutil';
 import { mapHfModel } from '../models/hf/index';
 import { simulate } from './simulate';
@@ -285,5 +285,52 @@ describe('speculative decoding and offload with EP = 2', () => {
     );
     expect(r.decode.transfer?.bytes).toBeGreaterThan(0);
     expect(r.warnings.some((w) => /^offload: with EP > 1/.test(w))).toBe(true);
+  });
+});
+
+describe('EP balance knobs (docs §5 "EP load imbalance", "Redundant experts")', () => {
+  const withParallel = (parallel: Partial<SimInput['parallel']>, tp = 2): SimInput => ({
+    model: FLASH_NEXT.model,
+    quant: FLASH_NEXT.quant,
+    parallel: { tp, pp: 1, dp: 1, ep: 1, ...parallel },
+    workload: WORKLOAD,
+    hardware: box(tp),
+  });
+
+  it('defaults are identities: 0 redundant experts = absent; at ep 1 neither knob changes anything', () => {
+    expect(simulate(withParallel({ ep: 2, redundantExpertsPerRank: 0 }))).toEqual(
+      simulate(withParallel({ ep: 2 })),
+    );
+    expect(simulate(withParallel({ ep: 2, epImbalance: DEFAULT_EP_IMBALANCE }))).toEqual(
+      simulate(withParallel({ ep: 2 })),
+    );
+    expect(simulate(withParallel({ epImbalance: 2, redundantExpertsPerRank: 4 }))).toEqual(
+      simulate(withParallel({})),
+    );
+  });
+
+  it("r redundant experts add r·W_expert per MoE layer to each device's weights, and nothing else", () => {
+    const base = simulate(withParallel({ ep: 2 }));
+    const r2 = simulate(withParallel({ ep: 2, redundantExpertsPerRank: 2 }));
+    const moeBlocks = FLASH_NEXT.model.layers.flatMap((l) =>
+      l.blocks.filter((b): b is MoeBlock => b.kind === 'moe'),
+    );
+    const ctx = {
+      phase: 'decode' as const,
+      seqs: 1,
+      qLen: 1,
+      kvLen: 1,
+      quant: FLASH_NEXT.quant,
+      parallel: { tp: 2, pp: 1, dp: 1, ep: 2 },
+    };
+    const added = moeBlocks.reduce((sum, b) => sum + 2 * expertWeightBytes(b, ctx), 0);
+    expect(added).toBeGreaterThan(0);
+    expect(r2.memory.perStage[0].weightBytes - base.memory.perStage[0].weightBytes).toBeCloseTo(
+      added,
+      0,
+    );
+    // Routing, U and the all-to-alls are untouched: the step times are the same
+    expect(r2.decode.tokensPerSec).toBe(base.decode.tokensPerSec);
+    expect(r2.prefill.tokensPerSec).toBe(base.prefill.tokensPerSec);
   });
 });

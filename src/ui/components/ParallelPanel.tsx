@@ -1,3 +1,4 @@
+import { DEFAULT_EP_IMBALANCE } from '../../sim/lower/moe';
 import {
   validDegrees,
   dpAttentionEpSplits,
@@ -48,6 +49,21 @@ const HELP = {
     'DP: whole on every GPU, no extra traffic.',
     'TP: split over the EP GPUs; tokens are gathered before and scattered after.',
   ],
+  epImbalance: [
+    "Busiest GPU's expert load ÷ the average GPU's (1 = perfectly even).",
+    "Scales that GPU's expert compute, which the step waits for.",
+    'About 1.5 on 8 GPUs and 2.5 on 32 without a load balancer; about 1.1 with EPLB.',
+  ],
+  redundantExperts: [
+    'Extra copies of hot experts each GPU stores in every MoE layer (EPLB).',
+    "Adds their weights to each GPU's memory; the load they even out is the EP imbalance you set.",
+    '1 per GPU (32 at EP 32) brought DeepSeek-R1 to about 1.1.',
+  ],
+  epImbalanceAllToAll: [
+    'On: the busiest GPU also moves EP imbalance × the average all-to-all traffic.',
+    'Off (default): every GPU moves the average amount.',
+    'Only matters when EP spans several DP copies.',
+  ],
 } as const;
 
 /** The layout control's segments. */
@@ -60,6 +76,12 @@ const LAYOUTS: { value: ParallelLayout; label: string }[] = [
 const DENSE = [
   { value: 'dp', label: 'DP' },
   { value: 'tp', label: 'TP' },
+];
+
+/** An off / on switch's segments. */
+const ON_OFF = [
+  { value: 'off', label: 'Off' },
+  { value: 'on', label: 'On' },
 ];
 
 export function ParallelPanel({ state, dispatch, loaded, built }: Props) {
@@ -84,6 +106,44 @@ export function ParallelPanel({ state, dispatch, loaded, built }: Props) {
         }
       : undefined;
   const issuesOf = (...names: string[]) => built.issues.filter((i) => names.includes(i.field));
+  // The EP balance knobs only where the engine reads them: a MoE model at EP > 1 (effectiveParallel drops them otherwise).
+  const balance = moe && ep > 1 && (
+    <>
+      <div className="fields two">
+        <NumberField
+          label="EP imbalance"
+          help={helpLines(HELP.epImbalance)}
+          value={state.parallel.epImbalance ?? DEFAULT_EP_IMBALANCE}
+          step="0.01"
+          min={1}
+          onChange={(v) => dispatch({ type: 'setParallel', parallel: { epImbalance: v } })}
+          issues={issuesOf('epImbalance')}
+        />
+        <NumberField
+          label="Redundant experts"
+          help={helpLines(HELP.redundantExperts)}
+          value={state.parallel.redundantExpertsPerRank ?? 0}
+          min={0}
+          onChange={(v) =>
+            dispatch({ type: 'setParallel', parallel: { redundantExpertsPerRank: v } })
+          }
+          issues={issuesOf('redundantExperts')}
+        />
+      </div>
+      <Segmented
+        label="Imbalance on all-to-all"
+        value={state.parallel.epImbalanceScalesAllToAll === true ? 'on' : 'off'}
+        segments={ON_OFF}
+        onChange={(v) =>
+          dispatch({
+            type: 'setParallel',
+            parallel: { epImbalanceScalesAllToAll: v === 'on' ? true : undefined },
+          })
+        }
+        help={helpLines(HELP.epImbalanceAllToAll)}
+      />
+    </>
+  );
   // The splits EP × PP = devices the layout's EP and PP fields move between; their hints list exactly these.
   const splits =
     dep && checked
@@ -176,26 +236,30 @@ export function ParallelPanel({ state, dispatch, loaded, built }: Props) {
             help={helpLines(HELP.dense)}
             issues={issuesOf('denseTp')}
           />
+          {balance}
         </>
       ) : (
-        /* Three fields in a row; four (with EP) as two rows of two, so the hints keep room. */
-        <div className={`fields ${moe ? 'two' : 'three'}`}>
-          {fields.map((field) => (
-            <NumberField
-              key={field}
-              label={field.toUpperCase()}
-              help={helpLines(HELP[field])}
-              value={state.parallel[field]}
-              onChange={(v) => dispatch({ type: 'setParallel', parallel: { [field]: v } })}
-              issues={issuesOf(field)}
-              hint={
-                checked
-                  ? `Valid ${field.toUpperCase()}: ${validDegrees(field, checked.model, checked.quant, checked.parallel, state.workload, checked.topology).join(', ')}`
-                  : undefined
-              }
-            />
-          ))}
-        </div>
+        <>
+          {/* Three fields in a row; four (with EP) as two rows of two, so the hints keep room. */}
+          <div className={`fields ${moe ? 'two' : 'three'}`}>
+            {fields.map((field) => (
+              <NumberField
+                key={field}
+                label={field.toUpperCase()}
+                help={helpLines(HELP[field])}
+                value={state.parallel[field]}
+                onChange={(v) => dispatch({ type: 'setParallel', parallel: { [field]: v } })}
+                issues={issuesOf(field)}
+                hint={
+                  checked
+                    ? `Valid ${field.toUpperCase()}: ${validDegrees(field, checked.model, checked.quant, checked.parallel, state.workload, checked.topology).join(', ')}`
+                    : undefined
+                }
+              />
+            ))}
+          </div>
+          {balance}
+        </>
       )}
     </Panel>
   );

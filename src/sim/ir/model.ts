@@ -783,10 +783,27 @@ export interface ParallelConfig {
   /**
    * EP load imbalance ρ: routed (token, expert) assignments on the busiest device of an EP group over the mean
    * device's, averaged over layers and steps (max/mean, ≥ 1; 1 = perfectly balanced). Scales the busiest device's
-   * expert GEMM rows, not the expert weights it reads (docs §5 "EP load imbalance"). Only read when ep > 1.
-   * Default `DEFAULT_EP_IMBALANCE` (lower/moe.ts, 1.2). Engine-level only: the UI keeps ep = 1. Dimensionless.
+   * expert GEMM rows, and with {@link ParallelConfig.epImbalanceScalesAllToAll} also its MoE mode B dispatch /
+   * combine all-to-all bytes; never the expert weights it reads (docs §5 "EP load imbalance"). A user input: the load
+   * balancer that lowers it (EPLB) is not modelled. Only read when ep > 1. Default `DEFAULT_EP_IMBALANCE`
+   * (lower/moe.ts, 1.2; absent and an explicit 1.2 are the same). Dimensionless.
    */
   epImbalance?: number;
+  /**
+   * When true, the MoE mode B dispatch / combine all-to-alls carry the busiest device's `A_max` rows (scaled by ρ:
+   * it receives the assignments routed to its experts and the step waits for it); when false or absent (default),
+   * they carry the mean volume `Ts·k` (each device's own token copies). Off by default so default results stay the
+   * ones from before. Only read when ep > 1 in mode B (docs §5 "EP load imbalance").
+   */
+  epImbalanceScalesAllToAll?: boolean;
+  /**
+   * Redundant expert slots per EP rank (EPLB replicas of hot experts): extra full copies of routed experts each
+   * device stores in every MoE layer, on top of its `E/ep` own experts. They only add resident weight bytes
+   * (`r·W_expert` per device per MoE layer, docs §5 "Redundant experts"); the lower load they buy is the user's ρ
+   * ({@link ParallelConfig.epImbalance}), and they change neither the routing nor the expert weights read. Only read
+   * when ep > 1. Default 0 (absent). Count per device, integer ≥ 0.
+   */
+  redundantExpertsPerRank?: number;
   /**
    * Group the dense FFN layers (`mlp` blocks) and the LM head are tensor-parallel over; size G (count).
    * - `'tp'` (default, also when absent): the replica's own tp ranks, G = tp. At tp = 1 they are whole on every
