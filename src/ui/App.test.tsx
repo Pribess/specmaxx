@@ -28,6 +28,10 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+// Full App mounts of a 72-device MoE run, several times each: ~5 s on a fast laptop, so slow
+// 2-4 vCPU CI runners need far more than vitest's 5 s default.
+const HEAVY_APP_TEST_TIMEOUT_MS = 60_000;
+
 describe('quant picker defaults', () => {
   it('labels the default option with the resolved format and updates when the model changes', async () => {
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B');
@@ -566,71 +570,79 @@ describe('estimator inputs', () => {
     fireEvent.click(within(section).getByLabelText('off'));
     await waitFor(() => expect(location.search).not.toContain('ed='));
   });
-  it('expert all-to-all in Advanced: only in MoE mode B; writes dsp, cmb and a2e', async () => {
-    history.replaceState(null, '', '/?m=zai-org/GLM-5.3-Flash&d=gb200&n=72&b=72&dp=72');
-    mount();
-    await screen.findByTestId('decode-tps');
-    expect(screen.queryByTestId('all-to-all-advanced')).toBeNull();
-    cleanup();
-    history.replaceState(null, '', '/?m=zai-org/GLM-5.3-Flash&d=gb200&n=72&b=72&dp=72&ep=72');
-    mount();
-    await screen.findByTestId('decode-tps');
-    const section = screen.getByTestId('all-to-all-advanced');
-    const eff = within(section).getByLabelText('All-to-all efficiency %') as HTMLInputElement;
-    expect(eff.value).toBe('100');
-    fireEvent.change(eff, { target: { value: '70' } });
-    await waitFor(() => expect(location.search).toContain('a2e=70'));
-    fireEvent.click(within(section).getByRole('combobox', { name: 'Dispatch format' }));
-    fireEvent.click(await screen.findByRole('option', { name: 'NVFP4' }));
-    await waitFor(() => expect(location.search).toContain('dsp=nvfp4'));
-    fireEvent.click(within(section).getByRole('combobox', { name: 'Combine format' }));
-    fireEvent.click(await screen.findByRole('option', { name: 'FP8' }));
-    await waitFor(() => expect(location.search).toContain('cmb=fp8_e4m3'));
-    await screen.findByTestId('decode-tps');
-    fireEvent.change(eff, { target: { value: '100' } });
-    await waitFor(() => expect(location.search).not.toContain('a2e='));
-  });
-  it('communication overlap in Advanced: rows for the classes the run has; writes ove and tbo=1', async () => {
-    mount();
-    await screen.findByTestId('decode-tps');
-    // One device: no communication, no fieldset.
-    expect(screen.queryByTestId('overlap-advanced')).toBeNull();
-    cleanup();
-    history.replaceState(null, '', '/?m=zai-org/GLM-5.3-Flash&d=gb200&n=72&b=72&dp=72&ep=72');
-    mount();
-    await screen.findByTestId('decode-tps');
-    const section = screen.getByTestId('overlap-advanced');
-    expect(within(section).queryByRole('combobox', { name: 'All-reduce (TP)' })).toBeNull();
-    expect(within(section).queryByRole('combobox', { name: 'Stage hand-off (PP)' })).toBeNull();
-    const ep = within(section).getByRole('combobox', { name: 'All-to-all (EP)' });
-    expect(ep.textContent).toContain('Default (full)');
-    fireEvent.click(ep);
-    fireEvent.click(await screen.findByRole('option', { name: 'Partial' }));
-    await waitFor(() => expect(location.search).toContain('ove=50'));
-    const percent = within(section).getByLabelText('All-to-all hidden %') as HTMLInputElement;
-    expect(percent.value).toBe('50');
-    // Typing 0 keeps the percent field open (still Partial while editing).
-    fireEvent.change(percent, { target: { value: '0' } });
-    await waitFor(() => expect(location.search).toContain('ove=0'));
-    expect(within(section).getByLabelText('All-to-all hidden %')).toBeTruthy();
-    fireEvent.change(percent, { target: { value: '25' } });
-    await waitFor(() => expect(location.search).toContain('ove=25'));
-    // Two-batch overlap on clears the explicit EP choice: EP goes to its two-batch default, full.
-    fireEvent.click(within(section).getByLabelText('on'));
-    await waitFor(() => expect(location.search).toContain('tbo=1'));
-    expect(location.search).not.toContain('ove=');
-    expect(ep.textContent).toContain('Default (full)');
-    expect(within(section).queryByLabelText('All-to-all hidden %')).toBeNull();
-    fireEvent.click(ep);
-    fireEvent.click(await screen.findByRole('option', { name: 'None' }));
-    await waitFor(() => expect(location.search).toContain('ove=0'));
-    await screen.findByTestId('decode-tps');
-    fireEvent.click(within(section).getByLabelText('off'));
-    await waitFor(() => expect(location.search).not.toContain('tbo='));
-    fireEvent.click(ep);
-    fireEvent.click(await screen.findByRole('option', { name: 'Default (full)' }));
-    await waitFor(() => expect(location.search).not.toContain('ove='));
-  });
+  it(
+    'expert all-to-all in Advanced: only in MoE mode B; writes dsp, cmb and a2e',
+    async () => {
+      history.replaceState(null, '', '/?m=zai-org/GLM-5.3-Flash&d=gb200&n=72&b=72&dp=72');
+      mount();
+      await screen.findByTestId('decode-tps');
+      expect(screen.queryByTestId('all-to-all-advanced')).toBeNull();
+      cleanup();
+      history.replaceState(null, '', '/?m=zai-org/GLM-5.3-Flash&d=gb200&n=72&b=72&dp=72&ep=72');
+      mount();
+      await screen.findByTestId('decode-tps');
+      const section = screen.getByTestId('all-to-all-advanced');
+      const eff = within(section).getByLabelText('All-to-all efficiency %') as HTMLInputElement;
+      expect(eff.value).toBe('100');
+      fireEvent.change(eff, { target: { value: '70' } });
+      await waitFor(() => expect(location.search).toContain('a2e=70'));
+      fireEvent.click(within(section).getByRole('combobox', { name: 'Dispatch format' }));
+      fireEvent.click(await screen.findByRole('option', { name: 'NVFP4' }));
+      await waitFor(() => expect(location.search).toContain('dsp=nvfp4'));
+      fireEvent.click(within(section).getByRole('combobox', { name: 'Combine format' }));
+      fireEvent.click(await screen.findByRole('option', { name: 'FP8' }));
+      await waitFor(() => expect(location.search).toContain('cmb=fp8_e4m3'));
+      await screen.findByTestId('decode-tps');
+      fireEvent.change(eff, { target: { value: '100' } });
+      await waitFor(() => expect(location.search).not.toContain('a2e='));
+    },
+    HEAVY_APP_TEST_TIMEOUT_MS,
+  );
+  it(
+    'communication overlap in Advanced: rows for the classes the run has; writes ove and tbo=1',
+    async () => {
+      mount();
+      await screen.findByTestId('decode-tps');
+      // One device: no communication, no fieldset.
+      expect(screen.queryByTestId('overlap-advanced')).toBeNull();
+      cleanup();
+      history.replaceState(null, '', '/?m=zai-org/GLM-5.3-Flash&d=gb200&n=72&b=72&dp=72&ep=72');
+      mount();
+      await screen.findByTestId('decode-tps');
+      const section = screen.getByTestId('overlap-advanced');
+      expect(within(section).queryByRole('combobox', { name: 'All-reduce (TP)' })).toBeNull();
+      expect(within(section).queryByRole('combobox', { name: 'Stage hand-off (PP)' })).toBeNull();
+      const ep = within(section).getByRole('combobox', { name: 'All-to-all (EP)' });
+      expect(ep.textContent).toContain('Default (full)');
+      fireEvent.click(ep);
+      fireEvent.click(await screen.findByRole('option', { name: 'Partial' }));
+      await waitFor(() => expect(location.search).toContain('ove=50'));
+      const percent = within(section).getByLabelText('All-to-all hidden %') as HTMLInputElement;
+      expect(percent.value).toBe('50');
+      // Typing 0 keeps the percent field open (still Partial while editing).
+      fireEvent.change(percent, { target: { value: '0' } });
+      await waitFor(() => expect(location.search).toContain('ove=0'));
+      expect(within(section).getByLabelText('All-to-all hidden %')).toBeTruthy();
+      fireEvent.change(percent, { target: { value: '25' } });
+      await waitFor(() => expect(location.search).toContain('ove=25'));
+      // Two-batch overlap on clears the explicit EP choice: EP goes to its two-batch default, full.
+      fireEvent.click(within(section).getByLabelText('on'));
+      await waitFor(() => expect(location.search).toContain('tbo=1'));
+      expect(location.search).not.toContain('ove=');
+      expect(ep.textContent).toContain('Default (full)');
+      expect(within(section).queryByLabelText('All-to-all hidden %')).toBeNull();
+      fireEvent.click(ep);
+      fireEvent.click(await screen.findByRole('option', { name: 'None' }));
+      await waitFor(() => expect(location.search).toContain('ove=0'));
+      await screen.findByTestId('decode-tps');
+      fireEvent.click(within(section).getByLabelText('off'));
+      await waitFor(() => expect(location.search).not.toContain('tbo='));
+      fireEvent.click(ep);
+      fireEvent.click(await screen.findByRole('option', { name: 'Default (full)' }));
+      await waitFor(() => expect(location.search).not.toContain('ove='));
+    },
+    HEAVY_APP_TEST_TIMEOUT_MS,
+  );
   it('keeps Advanced closed until opened, then its subsections are open', async () => {
     const { container } = mount();
     await screen.findByTestId('decode-tps');
