@@ -7,10 +7,12 @@
  * 2. Apply the device and link modifiers once (docs §4 "Device variants and modifiers"); everything after sees
  *    plain specs.
  * 3. Resolve the offload placement and the host side, if any (docs §12); `hardware.host` is read only then.
- * 4. For each phase: lower the model (`seqs = b_mb`) → per-op times (transfer ops on their stage's tier paths) →
- *    per-stage times → pipeline + DP.
- * 4b. Labelled what-if figures next to the headline (docs §7): prefill under `overlap 'none'` when there is
- *    inter-device communication, and decode with the engine dispatch overlay when it is on. Neither changes the
+ * 4. For each phase: lower the model (`seqs = b_mb`; with two-batch overlap as two merged halves, `twoBatch.ts`) →
+ *    per-op times (transfer ops on their stage's tier paths) → per-stage times under the resolved overlap fractions
+ *    (`overlap.ts: resolveOverlap, coreTime`) → pipeline + DP.
+ * 4b. Labelled what-if figures next to the headline (docs §7): prefill with every overlap fraction 0 and two-batch
+ *    overlap off when some fraction is above 0 and there is inter-device communication, and decode with the engine
+ *    dispatch overlay when it is on. Neither changes the
  *    headline phases.
  * 5. Memory fit (device and the off-device tiers).
  */
@@ -42,7 +44,15 @@ import {
   unifiedMemoryWarnings,
 } from './memory';
 import { engineMemBandwidthBytesPerSec, opTime, type OpTimeContext } from './opTime';
-import { layerResult, microbatching, phaseResult, stageResult, type PhaseShape } from './pipeline';
+import { anyOverlap, coreTime, NO_OVERLAP, resolveOverlap, type OverlapFractions } from './overlap';
+import {
+  layerResult,
+  microbatching,
+  phaseResult,
+  stageCoreTimeInput,
+  stageResult,
+  type PhaseShape,
+} from './pipeline';
 import {
   checkPlacement,
   collectivePath,
@@ -54,6 +64,7 @@ import {
 import { resolveSpeculative } from './specdec';
 import { resolveHostStaging, type HostStaging } from './staging';
 import { stageNStream, type TransferPath } from './transfer';
+import { mergeTwoBatch, twoBatchHalves, TWO_BATCH_NOTHING_TO_SPLIT_WARNING } from './twoBatch';
 import { computedPromptTokens } from './types';
 import type {
   OffloadTier,
@@ -62,6 +73,7 @@ import type {
   SimInput,
   SimOptions,
   SimResult,
+  StageResult,
 } from './types';
 import { DEFAULT_DISPATCH_SEC_PER_KERNEL, stageKernelCount, withDispatch } from './dispatch';
 import { validateInput } from './validate';
@@ -221,6 +233,8 @@ function simulatePhase(
   input: SimInput,
   topology: TopologySpec,
   options: SimOptions,
+  /** Resolved overlap fractions of the run (`overlap.ts: resolveOverlap`). */
+  overlap: OverlapFractions,
   shape: { sequencesPerReplica: number; microbatches: number; microbatchSize: number },
   offload: PhaseOffload | undefined,
   tokensPerStep?: number,
@@ -294,13 +308,21 @@ function simulatePhase(
         collectivePaths: { ...ctx.collectivePaths, pp: returnPath },
       });
     }
-    const original = stageResult(stage.index, layers, send, options.overlap);
-    if (options.overlap !== 'ideal' || options.collectiveAlgorithm !== 'best') return original;
-    // Formula (G7): choose min_assignment [Σα + max(compute_s, Σβ)].
+    const original = stageResult(stage.index, layers, send, overlap);
+    if (!(overlap.tp > 0) || options.collectiveAlgorithm !== 'best') return original;
+    // Formula (G7): choose min_assignment t_core,s (overlap.ts: coreTime; every active f = 1: Σα + max(compute_s, Σβ)).
     // Bounded heuristic: compare per-op min-total, uniform ring, uniform tree; ties keep the original.
     // See docs/simulation-model.md §7 "Stage time and overlap". Explicit algorithms are never overridden.
+    const scoreOf = (st: StageResult): number =>
+      coreTime(
+        stageCoreTimeInput(
+          st.layers.flatMap((l) => l.ops),
+          send,
+        ),
+        overlap,
+      ).coreSec;
     let best = original;
-    let bestCoreSec = best.commLatencySec + Math.max(best.computeSec, best.commBandwidthSec);
+    let bestCoreSec = scoreOf(best);
     for (const collectiveAlgorithm of ['ring', 'tree'] as const) {
       const candidateLayers = layers.map((layer) =>
         layerResult(
@@ -313,9 +335,8 @@ function simulatePhase(
           ),
         ),
       );
-      const candidate = stageResult(stage.index, candidateLayers, send, options.overlap);
-      const coreSec =
-        candidate.commLatencySec + Math.max(candidate.computeSec, candidate.commBandwidthSec);
+      const candidate = stageResult(stage.index, candidateLayers, send, overlap);
+      const coreSec = scoreOf(candidate);
       if (coreSec < bestCoreSec) {
         best = candidate;
         bestCoreSec = coreSec;
@@ -331,7 +352,7 @@ function simulatePhase(
     microbatchSize: shape.microbatchSize,
     promptLen: input.workload.promptLen,
     computedTokens: computedPromptTokens(input.workload),
-    overlap: options.overlap,
+    overlap,
   };
   if (tokensPerStep !== undefined) phaseShape.tokensPerStep = tokensPerStep;
   if (loopBack !== undefined) phaseShape.loopBack = loopBack;
@@ -513,8 +534,33 @@ export function simulate(input: SimInput): SimResult {
           kvLen: decodePastTokens + spec.lowering.verifyTokens,
           speculative: spec.lowering,
         };
-  let prefillLowered = lowerModel(model, prefillCtx);
-  let decodeLowered = lowerModel(model, decodeCtx);
+  // Two-batch overlap (docs §7 "Two-batch overlap"): each step is lowered as two halves, merged per layer
+  // (twoBatch.ts). Off: the full-batch lowering, exactly as before.
+  const twoBatch = input.deployment?.twoBatchOverlap === true;
+  const lowerStep = (ctx: LoweringContext): LoweredModel => {
+    const full = lowerModel(model, ctx);
+    if (!twoBatch) return full;
+    const split = twoBatchHalves(ctx);
+    if (split === undefined) {
+      warnings.push(TWO_BATCH_NOTHING_TO_SPLIT_WARNING);
+      return full;
+    }
+    return mergeTwoBatch(
+      full,
+      lowerModel(model, split.a),
+      lowerModel(model, split.b),
+      split.tokenSplit,
+    );
+  };
+  // Overlap fractions per class of one phase step (docs §7 "Stage time and overlap", "Two-batch overlap"):
+  // f_c = overlapByClass[c] ?? (c = ep ∧ the step is split in two ? 1 : the global default). A step that two-batch
+  // overlap could not split (one-sequence decode) keeps the global EP default: there is no other half to hide behind.
+  const overlapFor = (ctx: LoweringContext): OverlapFractions =>
+    resolveOverlap(options, twoBatch && twoBatchHalves(ctx) !== undefined);
+  const prefillOverlap = overlapFor(prefillCtx);
+  const decodeOverlap = overlapFor(decodeCtx);
+  let prefillLowered = lowerStep(prefillCtx);
+  let decodeLowered = lowerStep(decodeCtx);
   if (spec !== undefined) {
     const { draft, contextRows, draftLength } = spec.lowering;
     prefillLowered = withDraftLayers(prefillLowered, lowerDraftPrefill(model, draft, prefillCtx));
@@ -530,6 +576,7 @@ export function simulate(input: SimInput): SimResult {
     input,
     hw.topology,
     options,
+    prefillOverlap,
     shape,
     phaseOffload,
   );
@@ -540,6 +587,7 @@ export function simulate(input: SimInput): SimResult {
     input,
     hw.topology,
     options,
+    decodeOverlap,
     shape,
     phaseOffload,
     spec?.expectedTokensPerStep,
@@ -547,31 +595,44 @@ export function simulate(input: SimInput): SimResult {
   if (spec !== undefined) {
     // The same decode with speculative decoding off, for the speedup.
     const off = simulatePhase(
-      lowerModel(model, plainDecodeCtx),
+      lowerStep(plainDecodeCtx),
       'decode',
       base,
       input,
       hw.topology,
       options,
+      overlapFor(plainDecodeCtx),
       shape,
       phaseOffload,
     );
     decode.speculative = speculativeSummary(decode, spec.expectedTokensPerStep, off.tokensPerSec);
   }
   // 5b. Labelled what-if figures next to the headline; neither changes `prefill` or `decode`.
-  // Prefill without overlap (review F7): the same prefill under overlap 'none', when it has inter-device comm.
+  // Prefill without overlap (review F7; docs §7 "Prefill without overlap"): the same prefill with every overlap
+  // fraction 0 and two-batch overlap off (the full-batch lowering), when some fraction is above 0 and the prefill has
+  // inter-device comm. With no class overrides and TBO off: overlap 'ideal' vs 'none', exactly as before.
   let prefillWithoutOverlap: PhaseRates | undefined;
   if (
-    options.overlap === 'ideal' &&
+    anyOverlap(prefillOverlap) &&
     (prefill.comm.latencySec > 0 || prefill.comm.bandwidthSec > 0)
   ) {
+    let fullPrefillLowered = prefillLowered;
+    if (twoBatch) {
+      fullPrefillLowered = lowerModel(model, prefillCtx);
+      if (spec !== undefined)
+        fullPrefillLowered = withDraftLayers(
+          fullPrefillLowered,
+          lowerDraftPrefill(model, spec.lowering.draft, prefillCtx),
+        );
+    }
     const none = simulatePhase(
-      prefillLowered,
+      fullPrefillLowered,
       'prefill',
       base,
       input,
       hw.topology,
       { ...options, overlap: 'none' },
+      NO_OVERLAP,
       shape,
       phaseOffload,
     );
@@ -589,6 +650,7 @@ export function simulate(input: SimInput): SimResult {
       input,
       hw.topology,
       options,
+      decodeOverlap,
       shape,
       phaseOffload,
       spec?.expectedTokensPerStep,
@@ -612,7 +674,7 @@ export function simulate(input: SimInput): SimResult {
   let chunkLowered = prefillLowered;
   if (chunk.seqs !== prefillCtx.seqs || chunk.qLen !== prefillCtx.qLen) {
     const chunkCtx: LoweringContext = { ...prefillCtx, ...chunk };
-    chunkLowered = lowerModel(model, chunkCtx);
+    chunkLowered = lowerStep(chunkCtx);
     if (spec !== undefined)
       chunkLowered = withDraftLayers(
         chunkLowered,

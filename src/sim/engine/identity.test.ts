@@ -554,4 +554,37 @@ describe('deployment identity, knobs absent (after latency audit G1–G8, G6 exc
       ).toEqual(absent);
     },
   );
+  it.each(Object.entries(inputs))(
+    'ID-4 %s: per-collective overlap at its defaults and two-batch overlap off deep-equal the run without them',
+    (key, value) => {
+      const absent = simulate(value);
+      expect(mismatches(fixture[key], pin(absent))).toEqual([]);
+      const options = value.options ?? {};
+      expect(simulate({ ...value, options: { ...options, overlapByClass: {} } })).toEqual(absent);
+      expect(
+        simulate({ ...value, deployment: { ...value.deployment, twoBatchOverlap: false } }),
+      ).toEqual(absent);
+      const ideal = simulate({ ...value, options: { ...options, overlap: 'ideal' } });
+      expect(
+        simulate({
+          ...value,
+          options: { ...options, overlap: 'ideal', overlapByClass: { tp: 1, ep: 1, pp: 1 } },
+        }),
+      ).toEqual(ideal);
+      if (key.startsWith('models/')) return; // the two cross checks below only on the named cases (runtime)
+      const none = simulate({ ...value, options: { ...options, overlap: 'none' } });
+      expect(
+        simulate({
+          ...value,
+          options: { ...options, overlap: 'ideal', overlapByClass: { tp: 0, ep: 0, pp: 0 } },
+        }),
+      ).toEqual(none);
+      expect(
+        simulate({
+          ...value,
+          options: { ...options, overlap: 'none', overlapByClass: { tp: 1, ep: 1, pp: 1 } },
+        }),
+      ).toEqual(ideal);
+    },
+  );
 });

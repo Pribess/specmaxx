@@ -214,6 +214,39 @@ for (const size of ['desktop', 'phone'] as const) {
       await expect(page.getByRole('tooltip').filter({ hasText: 'must divide TP' })).toBeVisible();
       await page.screenshot({ path: name('ep-help') });
     });
+    test(`communication overlap ${size} ${colorScheme}`, async ({ page }) => {
+      await open(page, size, colorScheme);
+      const name = (s: string) => `${DIR}/overlap-${s}-${size}-${colorScheme}.png`;
+      // GLM-5.3-Flash on two GB200 NVL72 racks, TP 2 × PP 2 × DP 36 with EP 72: all three rows; TP full, EP partial.
+      await page.goto(
+        '/?m=zai-org/GLM-5.3-Flash&d=gb200&n=72&nodes=2&tp=2&pp=2&dp=36&ep=72&b=144&ov=none&ovt=100&ove=37.5',
+      );
+      await expect(page.getByTestId('decode-tps')).toHaveText(/[1-9]/);
+      const hardware = page.locator('details.panel', {
+        has: page.locator('> summary', { hasText: 'Hardware' }),
+      });
+      if ((await hardware.getAttribute('open')) === null)
+        await hardware.locator('> summary').click();
+      const advanced = hardwareAdvanced(page);
+      if ((await advanced.getAttribute('open')) === null)
+        await advanced.locator('> summary').click();
+      await page.addStyleTag({ content: '.compact-results { visibility: hidden !important }' });
+      await page.evaluate(() => document.fonts.ready);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
+      const section = page.getByTestId('overlap-advanced');
+      await expect(section.getByRole('spinbutton', { name: 'All-to-all hidden %' })).toHaveValue(
+        '37.5',
+      );
+      await section.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+      await page.waitForTimeout(50);
+      await section.screenshot({ path: name('section') });
+      // The two-batch help, on keyboard focus.
+      await section.getByRole('button', { name: 'About Two-batch overlap' }).focus();
+      await expect(page.getByRole('tooltip').filter({ hasText: 'not enforced' })).toBeVisible();
+      await page.screenshot({ path: name('two-batch-help') });
+    });
     test(`parallelism dp ${size} ${colorScheme}`, async ({ page }) => {
       await open(page, size, colorScheme);
       const name = (s: string) => `${DIR}/parallelism-dp-${s}-${size}-${colorScheme}.png`;

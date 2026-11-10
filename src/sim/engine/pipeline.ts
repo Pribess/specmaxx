@@ -1,18 +1,26 @@
 /**
- * Stage time (with the communication-overlap assumption), pipeline schedule (PP microbatches) and data
+ * Stage time (with the per-collective overlap fractions), pipeline schedule (PP microbatches) and data
  * parallelism → the throughput and latency of one phase.
  * See docs/simulation-model.md §7 ("Stage time and overlap", "Pipeline and DP").
  *
  * Notation: per stage s and microbatch, compute_s = Σ compute-op times (every op but collectives and off-device
- * transfers), lat_s = Σ collective α terms, bw_s = Σ collective β terms, p2p_s = the activation send to stage s+1,
- * xfer_s = the stage's transfer time ({@link stageTransfer}: Σ transfer-op times, design doc §2.6, or the overlapped
- * time of docs §12 "Overlap across tiers" when the stage prefetches from both host RAM and the SSD); m = microbatches
- * in flight per replica, B_r = sequences per DP replica.
+ * transfers), lat_s = Σ collective α terms, bw_s = Σ collective β terms, bw_c,s = the same per overlap class c
+ * (`overlap.ts: overlapClassOf`), p2p_s = the activation send to stage s+1, f_c = the overlap fraction of class c
+ * (`overlap.ts: OverlapFractions`), xfer_s = the stage's transfer time ({@link stageTransfer}: Σ transfer-op times,
+ * design doc §2.6, or the overlapped time of docs §12 "Overlap across tiers" when the stage prefetches from both host
+ * RAM and the SSD); m = microbatches in flight per replica, B_r = sequences per DP replica.
  */
 
 import type { TransferOp } from '../ir/ops';
+import {
+  coreTime,
+  overlapClassOf,
+  sendsOnLatencyPathSec,
+  type CoreTimeInput,
+  type OverlapFractions,
+} from './overlap';
 import { prefetchesFromBothTiers } from './transfer';
-import type { LayerResult, OpResult, PhaseResult, SimOptions, StageResult } from './types';
+import type { LayerResult, OpResult, PhaseResult, StageResult } from './types';
 
 /** Sums a layer's op times (no overlap): `sec = Σ op.sec`. */
 export function layerResult(name: string, layerIndex: number | null, ops: OpResult[]): LayerResult {
@@ -107,60 +115,72 @@ export function stageTransfer(ops: readonly OpResult[]): StageTransfer {
 }
 
 /**
- * Time of one stage for one microbatch on one device. First the core time under the overlap assumption:
- * - `'none'`:  t_core,s = compute_s + lat_s + bw_s + p2p_s
- * - `'ideal'`: t_core,s = lat_s + max(compute_s, bw_s)   (β hides behind independent work, α is on the dependency
- *   chain; the PP send is not in t_s: it lengthens the latency path and, as a link resource, bounds the cycle;
- *   see {@link phaseResult})
+ * The per-stage sums of {@link coreTime} from a stage's op results (one microbatch, one device), in op order:
+ *   compute_s = Σ compute-op times;  lat_s = Σ α;  bw_s = Σ β;  bw_c,s = Σ_{collectives of class c} β
+ *   p2p_s = the send to the next stage (α + β; 0 when there is none)
+ * Throws on a `pp`-group collective among the ops (`overlap.ts: overlapClassOf`). Times in seconds.
+ */
+export function stageCoreTimeInput(
+  ops: readonly OpResult[],
+  sendToNext: OpResult | undefined,
+): CoreTimeInput {
+  const computeSec = ops
+    .filter((o) => o.op.kind !== 'collective' && o.op.kind !== 'transfer')
+    .reduce((s, o) => s + o.sec, 0);
+  const commLatencySec = ops.reduce((s, o) => s + o.commLatencySec, 0);
+  const commBandwidthSec = ops.reduce((s, o) => s + o.commBandwidthSec, 0);
+  // Formula: bw_c,s = Σ_{collectives of class c} β   (c = overlapClassOf(group))
+  const bwBySec = { tp: 0, ep: 0 };
+  for (const o of ops) {
+    if (o.op.kind !== 'collective') continue;
+    bwBySec[overlapClassOf(o.op.group)] += o.commBandwidthSec;
+  }
+  return {
+    computeSec,
+    commLatencySec,
+    commBandwidthSec,
+    bwBySec,
+    p2pSec: sendToNext?.sec ?? 0,
+    hasSendToNext: sendToNext !== undefined,
+  };
+}
+
+/**
+ * Time of one stage for one microbatch on one device. First the core time under the overlap fractions f
+ * (`overlap.ts: coreTime`):
+ *   H_s = f_tp·bw_tp,s + f_ep·bw_ep,s;  E_s = (1 − f_tp)·bw_tp,s + (1 − f_ep)·bw_ep,s
+ *   core_s = max(compute_s, H_s) + E_s + (1 − f_pp)·p2p_s;  t_core,s = lat_s + core_s
+ * which at the endpoints is the former rule, computed by the former expressions:
+ * - every f = 0 (`'none'`):  t_core,s = compute_s + lat_s + bw_s + p2p_s
+ * - every f = 1 (`'ideal'`): t_core,s = lat_s + max(compute_s, bw_s)   (β hides behind independent work, α is on the
+ *   dependency chain; the PP send is not in t_s: it lengthens the latency path and, as a link resource, bounds the
+ *   cycle; see {@link phaseResult})
  * Then the off-device transfers, by how much of them is prefetched (docs §12 "Expert prefetch"; each transfer op
  * carries its prefetched share q, set by lowering from the prefetch accuracy p). xfer_s and its prefetched part P_s
  * come from {@link stageTransfer}: the serial sum, or the overlapped time for a stage that prefetches from both host
  * RAM and the SSD (docs §12 "Overlap across tiers"):
  *   pbar_s = P_s / xfer_s                                (serial: Σ_ops q·t_xfer / xfer_s, the time-weighted mean of q)
  *   t_s    = lat_s + core_s + xfer_s − pbar_s · min(core_s, xfer_s)
- * with core_s = max(compute_s, bw_s) under `overlap 'ideal'`, compute_s + bw_s + p2p_s under `'none'`. The
- * prefetched share hides behind the stage's core time, the rest is serialized after it. The window is the whole
- * stage, not one layer: the same relaxation as the former `offloadOverlap 'ideal'`, which this reproduces at
- * pbar_s = 1 (t_s = lat_s + max(core_s, xfer_s)); pbar_s = 0 is the former `'none'` (t_s = t_core,s + xfer_s).
- * Both endpoints, and xfer_s = 0 (t_s = t_core,s), are computed by their own expressions, bit-identical to before.
- * Always lat_s + max(core_s, xfer_s) ≤ t_s ≤ t_core,s + xfer_s.
+ * with core_s = t_core,s − lat_s from above. The prefetched share hides behind the stage's core time, the rest is
+ * serialized after it. The window is the whole stage, not one layer: the same relaxation as the former
+ * `offloadOverlap 'ideal'`, which this reproduces at pbar_s = 1 (t_s = lat_s + max(core_s, xfer_s)); pbar_s = 0 is
+ * the former `'none'` (t_s = t_core,s + xfer_s). Both endpoints, and xfer_s = 0 (t_s = t_core,s), are computed by their
+ * own expressions, bit-identical to before. Always lat_s + max(core_s, xfer_s) ≤ t_s ≤ t_core,s + xfer_s.
  */
 export function stageResult(
   index: number,
   layers: LayerResult[],
   sendToNext: OpResult | undefined,
-  overlap: SimOptions['overlap'],
+  overlap: OverlapFractions,
 ): StageResult {
   const ops = layers.flatMap((l) => l.ops);
-  const computeSec = ops
-    .filter((o) => o.op.kind !== 'collective' && o.op.kind !== 'transfer')
-    .reduce((s, o) => s + o.sec, 0);
+  const core = stageCoreTimeInput(ops, sendToNext);
+  const { computeSec, commLatencySec, commBandwidthSec } = core;
   // Formula: xfer_s, P_s = stageTransfer(ops)   (serial Σ, or overlapped across tiers: docs §12)
   const { transferSec, prefetchedSec, allPrefetched, nonePrefetched } = stageTransfer(ops);
-  const commLatencySec = ops.reduce((s, o) => s + o.commLatencySec, 0);
-  const commBandwidthSec = ops.reduce((s, o) => s + o.commBandwidthSec, 0);
-  const p2pSec = sendToNext?.sec ?? 0;
-  // t_core,s keeps today's expression (and its floating-point order) so that xfer_s = 0 is bit-identical.
-  let coreSec: number;
-  let coreTermSec: number;
-  switch (overlap) {
-    case 'none':
-      // Formula: t_core,s = compute_s + lat_s + bw_s + p2p_s;  core_s = compute_s + bw_s + p2p_s
-      // See docs/simulation-model.md §7 ("Stage time and overlap")
-      coreSec = computeSec + commLatencySec + commBandwidthSec + p2pSec;
-      coreTermSec = computeSec + commBandwidthSec + p2pSec;
-      break;
-    case 'ideal':
-      // Formula: t_core,s = lat_s + max(compute_s, bw_s);  core_s = max(compute_s, bw_s)
-      // See docs/simulation-model.md §7 ("Stage time and overlap")
-      coreTermSec = Math.max(computeSec, commBandwidthSec);
-      coreSec = commLatencySec + coreTermSec;
-      break;
-    default: {
-      const _never: never = overlap;
-      throw new Error(`unknown overlap ${String(_never)}`);
-    }
-  }
+  // Formula: t_core,s, core_s = coreTime(sums, f)   (endpoints: the former expressions, bit-identical)
+  // See docs/simulation-model.md §7 ("Stage time and overlap")
+  const { coreSec, coreTermSec } = coreTime(core, overlap);
   let sec: number;
   if (transferSec === 0) {
     sec = coreSec;
@@ -212,8 +232,11 @@ export interface PhaseShape {
   promptLen: number;
   /** Prefill tokens actually computed per sequence, `P_new ≤ promptLen` (prefix cache); absent = `promptLen`. Unit: tokens. */
   computedTokens?: number;
-  /** Overlap assumption (decides whether the PP sends are already inside t_s). */
-  overlap: SimOptions['overlap'];
+  /**
+   * Overlap fractions; f_pp decides which share of each PP send lies on the latency path outside t_s (f_pp·p2p_s) and
+   * which is already inside t_s ((1 − f_pp)·p2p_s).
+   */
+  overlap: OverlapFractions;
   /**
    * Decode with speculative decoding: E[τ], tokens committed per sequence per step (design doc §3.5). Absent = 1
    * token per step (today's rule, bit for bit). Count (real, ≥ 1).
@@ -242,14 +265,14 @@ export function microbatching(
  * Sums of the stage terms and the PP sends, so no rate depends on it:
  *   latency   = Σ_s lat_s + Σ α_p2p
  *   bandwidth = Σ_s bw_s + Σ β_p2p
- *   exposed   = Σ_s exposedComm_s + [overlap 'ideal'] Σ p2p   (under 'none' each send is already inside t_s,
- *               hence inside exposedComm_s)
- * The decode-only loopBack adds its α, β and full time to the respective sums in both overlap modes.
+ *   exposed   = Σ_s exposedComm_s + Σ_s f_pp·p2p_s   (the share (1 − f_pp)·p2p_s of each send is already inside t_s,
+ *               hence inside exposedComm_s; f_pp = 1: Σ p2p, the former 'ideal'; f_pp = 0: 0, the former 'none')
+ * The decode-only loopBack adds its α, β and full time to the respective sums for every f.
  * Unit: seconds.
  */
 export function phaseComm(
   stages: StageResult[],
-  overlap: SimOptions['overlap'],
+  overlap: OverlapFractions,
   loopBack?: OpResult,
 ): PhaseResult['comm'] {
   // Formula: latency = Σ_s lat_s + Σ α_p2p;  bandwidth = Σ_s bw_s + Σ β_p2p
@@ -262,9 +285,11 @@ export function phaseComm(
     (s, st) => s + st.commBandwidthSec + (st.sendToNext?.commBandwidthSec ?? 0),
     0,
   );
-  // Formula: exposed = Σ_s exposedComm_s + [ideal] Σ p2p_s
-  const sendsOnPathSec =
-    overlap === 'ideal' ? stages.reduce((s, st) => s + (st.sendToNext?.sec ?? 0), 0) : 0;
+  // Formula: exposed = Σ_s exposedComm_s + Σ_s f_pp·p2p_s
+  const sendsOnPathSec = sendsOnLatencyPathSec(
+    stages.map((st) => st.sendToNext?.sec ?? 0),
+    overlap.pp,
+  );
   const exposedSec = stages.reduce((s, st) => s + st.exposedCommSec, 0) + sendsOnPathSec;
   return {
     latencySec: latencySec + (loopBack?.commLatencySec ?? 0),
@@ -304,22 +329,23 @@ export function phaseTransfer(stages: StageResult[]): PhaseResult['transfer'] {
  *
  * Every pipeline stage AND every PP boundary link is a resource that each of the m microbatches occupies once per
  * cycle: stage s for t_s, the link after stage s for its bandwidth (β) time `βp2p_s = bytes / B` (α is
- * latency, not occupancy). Even when the sends overlap compute (`'ideal'`), a link cannot move more bytes than
+ * latency, not occupancy). Even when the sends overlap compute (f_pp > 0), a link cannot move more bytes than
  * its bandwidth allows, so the bottleneck per microbatch is
  *   b = max(max_s t_s, max_s βp2p_s, β_return).
- * Under 'none' each t_s contains its forward send. Decode return β is a separate link resource.
+ * Each t_s contains the share (1 − f_pp) of its forward send. Decode return β is a separate link resource.
  *
  * Decode (every sequence makes one token per cycle; a microbatch cannot start its next step before its
  * sampled IDs have returned to stage 0):
  *   cycle = max(m · b, Σ_s t_s + Σ p2p + return_p2p); tokens/s = dp · B_r / cycle; per sequence 1/cycle.
- *   return_p2p = α_return + β_return is present under both overlap modes (G2); latency = cycle.
+ *   return_p2p = α_return + β_return is present for every overlap fraction (G2); latency = cycle.
  *   With speculative decoding each step commits E[τ] tokens per sequence: tokens/s = dp · B_r · E[τ] / cycle;
  *   per sequence E[τ]/cycle; latency (time per output token) = cycle / E[τ].
  * Prefill (a steady stream of replica batches; the bottleneck resource bounds it):
  *   cycle = m · b;  tokens/s = dp · B_r · promptLen / cycle;
  *   latency (TTFT of a replica batch) = Σ t_s + Σ p2p + (m − 1) · b;  per sequence promptLen / latency.
- * Σ p2p is the PP sends' full time (α + β) when `overlap = 'ideal'` (they are not inside t_s); 0 under
- * 'none', where each t_s already contains its forward send. Return is never inside a stage.
+ * Σ p2p = Σ_s f_pp·p2p_s, the share of the PP sends (α + β) not inside t_s (`overlap.ts: sendsOnLatencyPathSec`):
+ * the sends' full time at f_pp = 1 (former 'ideal'), 0 at f_pp = 0 (former 'none', each t_s already contains its
+ * forward send). Return is never inside a stage.
  */
 export function phaseResult(stages: StageResult[], shape: PhaseShape): PhaseResult {
   const m = shape.microbatches;
@@ -334,8 +360,11 @@ export function phaseResult(stages: StageResult[], shape: PhaseShape): PhaseResu
   // See docs/simulation-model.md §7 ("Pipeline and DP")
   const bottleneckSec = Math.max(maxStageSec, maxLinkServiceSec);
   const sumStageSec = stages.reduce((s, st) => s + st.sec, 0);
-  const p2pOnPathSec =
-    shape.overlap === 'ideal' ? stages.reduce((s, st) => s + (st.sendToNext?.sec ?? 0), 0) : 0;
+  // Formula: Σ p2p = Σ_s f_pp·p2p_s   (the PP sends' share on the latency path, outside t_s)
+  const p2pOnPathSec = sendsOnLatencyPathSec(
+    stages.map((st) => st.sendToNext?.sec ?? 0),
+    shape.overlap.pp,
+  );
   const base: Pick<
     PhaseResult,
     'phase' | 'microbatches' | 'microbatchSize' | 'stages' | 'comm' | 'transfer' | 'loopBack'

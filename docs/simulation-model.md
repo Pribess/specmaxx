@@ -2319,23 +2319,67 @@ polynomial costs ~10 FMA, so each 1 % of FMA-pipe time buys ~1/10 of an exp per 
 
 ### Stage time and overlap
 
-`src/sim/engine/pipeline.ts: stageResult, stageTransfer, layerResult`. Per stage and microbatch: `compute_s` = Σ op
-times of every op that is neither a collective nor an off-device transfer, `lat_s` = Σ collective α terms, `bw_s` =
-Σ collective β terms, `p2p_s` = the send to the next stage, `xfer_s` = Σ transfer op times (0 unless something is
-offloaded) or, for a stage that prefetches from both host RAM and the SSD, the overlapped time of §12 "Overlap
-across tiers" (`pipeline.ts: stageTransfer`).
+`src/sim/engine/pipeline.ts: stageResult, stageCoreTimeInput, stageTransfer, layerResult`; `src/sim/engine/overlap.ts:
+coreTime, resolveOverlap, overlapClassOf`. Tests: `engine/overlap.test.ts`, `engine/pipeline.test.ts`. Per stage and
+microbatch: `compute_s` = Σ op times of every op that is neither a collective nor an off-device transfer, `lat_s` = Σ
+collective α terms, `bw_s` = Σ collective β terms, `p2p_s` = the send to the next stage (α + β), `xfer_s` = Σ
+transfer op times (0 unless something is offloaded) or, for a stage that prefetches from both host RAM and the SSD, the
+overlapped time of §12 "Overlap across tiers" (`pipeline.ts: stageTransfer`).
 
-First the core time `t_core,s`:
+**Overlap classes.** Each collective belongs to one class by its parallel group (`overlap.ts: overlapClassOf`):
 
-- `overlap = 'none'`: `t_core,s = compute_s + lat_s + bw_s + p2p_s`
-- `overlap = 'ideal'` (**default**): `t_core,s = lat_s + max(compute_s, bw_s)`. β can hide behind independent work
+| Class | Groups              | Collectives                                                                                 |
+| ----- | ------------------- | ------------------------------------------------------------------------------------------- |
+| `tp`  | `tp`, `etp`, `dcp`  | TP all-reduces / all-gathers, expert-TP pairs, decode context-parallel exchanges            |
+| `ep`  | `ep`                | MoE mode B dispatch / combine all-to-alls; with DP attention the dense gathers and head A2A |
+| `pp`  | `pp` (`sendToNext`) | the activation send to the next stage                                                       |
+
+`bw_c,s` = Σ β of the class-c collectives of stage s. A `pp` collective inside a stage's layers is an invariant
+violation (it throws). Each class has an **overlap fraction** `f_c ∈ [0, 1]`: the share of its β time that may run
+concurrently with the stage's compute (`pp`: the share of the send that leaves the stage and lies on the latency path
+instead). `SimOptions.overlapByClass` sets it; an absent class takes the default (`overlap.ts: resolveOverlap`):
+
+```
+f_c = overlapByClass[c] ?? (c = ep ∧ the step is split by two-batch overlap ? 1 : overlap = 'ideal' ? 1 : 0)
+```
+
+The global `overlap` switch (**default `'ideal'`**) stays and is the default of every class; two-batch overlap (below)
+makes the EP default full in each phase step it splits. The fractions are resolved per step (`simulate.ts: overlapFor`).
+
+First the core time `t_core,s` (`overlap.ts: coreTime`):
+
+```
+H_s      = f_tp·bw_tp,s + f_ep·bw_ep,s                          hideable β
+E_s      = (1 − f_tp)·bw_tp,s + (1 − f_ep)·bw_ep,s              serial β
+core_s   = max(compute_s, H_s) + E_s + (1 − f_pp)·p2p_s        (the in-stage share of the PP send)
+t_core,s = lat_s + core_s
+         = lat_s + compute_s + bw_s + (1 − f_pp)·p2p_s − min(compute_s, H_s)
+```
+
+α is on the dependency chain and never hidden; hidden time never exceeds compute. This is not a linear blend of the
+`max` and `sum` rules: a share f of the class's **bytes** moves while compute runs, the rest moves serially, which is
+what "partly hidden" means physically. (The prefetch rule for off-device transfers below, `pbar·min(core, xfer)`, is a
+different, blended rule; it is unchanged.) Endpoints:
+
+- every f = 0 (`overlap = 'none'`): `t_core,s = compute_s + lat_s + bw_s + p2p_s`
+- every f = 1 (`overlap = 'ideal'`): `t_core,s = lat_s + max(compute_s, bw_s)`. β can hide behind independent work
   (other token or column chunks); α is on the dependency chain. The PP send is not in `t_s`; it lengthens the
-  latency path and, as a link resource, bounds the cycle (below).
+  latency path and, as a link resource, bounds the cycle ("Pipeline and DP").
+- Always `lat_s + max(compute_s, bw_s) ≤ t_core,s ≤ compute_s + lat_s + bw_s + p2p_s`, non-increasing in each f.
 - `exposedCommSec = t_core,s − compute_s`.
 
+**Branch rule (bit-identity).** A class is _active_ in a stage when it has time there (`tp`, `ep`: `bw_c,s > 0`;
+`pp`: a send to the next stage). If every active class has f = 1 the code takes the former `'ideal'` expression
+verbatim, if every active class has f = 0 the former `'none'` expression, else the general formula. The endpoint
+expressions sum β in op order, while `H_s` and `E_s` sum per class (a reassociation), so only this keeps the default
+results bit-identical (`identity.test.ts` ID-4). With no active class both endpoints give `compute_s`.
+
+Worked example (`overlap.test.ts`): compute 10, lat 1, `bw_tp` 4, `bw_ep` 8, p2p 2 (seconds), f = {tp 0.5, ep 1,
+pp 0.25}: H = 2 + 8 = 10, E = 2, core = max(10, 10) + 2 + 0.75·2 = 13.5, `t_core` = 14.5 (none: 25; ideal: 13).
+
 Then the off-device transfers, by their prefetched share (§12 "Expert prefetch"). Each transfer op carries
-`q = prefetchedFraction`, set by lowering from the prefetch accuracy p. With `core_s = max(compute_s, bw_s)` under
-`overlap 'ideal'` and `compute_s + bw_s + p2p_s` under `'none'`:
+`q = prefetchedFraction`, set by lowering from the prefetch accuracy p. With `core_s = t_core,s − lat_s` from above
+(`max(compute_s, bw_s)` under `overlap 'ideal'`, `compute_s + bw_s + p2p_s` under `'none'`):
 
 ```
 pbar_s = P_s / xfer_s                                     P_s = Σ_ops q·t_xfer: the time-weighted mean of q
@@ -2350,13 +2394,63 @@ t_s    = lat_s + core_s + xfer_s − pbar_s·min(core_s, xfer_s)
 - `exposedTransferSec = t_s − t_core,s`. With `xfer_s = 0`, `t_s = t_core,s` exactly. The code computes `xfer_s = 0`
   and both endpoints with their own (former) expressions, so those results are bit-identical to before.
 
-Under `overlap 'ideal'` and `collectiveAlgorithm 'best'`, `engine/simulate.ts: simulatePhase` compares
-three assignments per stage: (a) each all-reduce's min-total choice (including mesh-direct where applicable),
-(b) all ring, and (c) all tree. It picks the minimum exact core score `Σα + max(compute_s, Σβ)`;
-ties preserve the original assignment. With β hidden this prefers exposed α, rather than total α+β
-(audit G7). Explicit ring/tree choices and `overlap 'none'` are unchanged. This is a **bounded heuristic**,
-not a search over every mixed ring/tree assignment. It cannot worsen the candidate core time; it does not
-optimize algorithm assignment against the independent offload-transfer overlap floor.
+When `f_tp > 0` (by default: `overlap 'ideal'`) and `collectiveAlgorithm 'best'`, `engine/simulate.ts:
+simulatePhase` compares three assignments per stage: (a) each all-reduce's min-total choice (including mesh-direct
+where applicable), (b) all ring, and (c) all tree. It picks the minimum exact core score `t_core,s` (`coreTime`; with
+every active class at f = 1 that is `Σα + max(compute_s, Σβ)`, the same expression as before); ties preserve the
+original assignment. With β hidden this prefers exposed α, rather than total α+β (audit G7). Explicit ring/tree
+choices and `f_tp = 0` are unchanged. This is a **bounded heuristic**, not a search over every mixed ring/tree
+assignment. It cannot worsen the candidate core time; it does not optimize algorithm assignment against the
+independent offload-transfer overlap floor.
+
+### Two-batch overlap
+
+`src/sim/engine/twoBatch.ts: twoBatchHalves, mergeTwoBatch`; `simulate.ts: simulate` (`lowerStep`);
+`DeploymentConfig.twoBatchOverlap`. Tests: `engine/twoBatch.test.ts`.
+
+Two-batch overlap (TBO; SGLang "two-batch overlap", vLLM "dual-batch overlap") splits each microbatch in two so one
+half's EP dispatch/combine runs while the other half computes. It is an opt-in deployment-scenario knob, off by
+default; with it off nothing changes. The model lowers the two halves as real half-batches:
+
+- `b_mb ≥ 2`: a sequence split, halves of `ceil(b_mb/2)` and `floor(b_mb/2)` sequences, same `qLen`, `kvLen`.
+- `b_mb = 1`, prefill (`qLen ≥ 2`): a causal token split of the q new tokens, `A = {qLen: ceil(q/2), kvLen −
+  floor(q/2)}`, `B = {qLen: floor(q/2), kvLen}` (with a prefix cache q = P_new, kvLen = P).
+- otherwise (one-sequence decode): no split, warning `two-batch overlap: one sequence per microbatch, nothing to split`.
+
+**Merge** (per stage, per layer): `ops = ops_A ++ ops_B`, so the stage sums count both halves and the layer list is
+the full batch's. Token split: the `head` comes from half B alone (prefill computes the logits of the last position,
+which only B holds; `lower/head.ts: headTokens`). The stage sends (`sendToNext`, `sendToFirst`) are the full batch's:
+the activations are handed over once per microbatch. Speculative-decoding draft layers stay lowered at the full
+context and are appended as before. The chunked-prefill step of the memory fit is split the same way.
+
+In each step it splits, TBO sets the EP class's default fraction to 1; a step it could not split (one-sequence decode)
+keeps the global default, since there is no other half to hide the all-to-alls behind, so that decode is exactly the
+run without TBO. An explicit `overlapByClass.ep` always wins. The stage then follows the core-time formula above. What
+falls out of the per-op model, with no extra rule:
+
+- GEMMs at half the rows (shape efficiency, the GEMV path), and every weight read once per half: why TBO loses at
+  small batch, where decode is weight-bandwidth bound.
+- The expected distinct experts per half (§5 "Expected distinct experts"), α paid once per half, β about the same
+  in total.
+- The activation peak (max single op, §8 "Activation peak") is the larger half's: about half (exactly half for a
+  dense op at even `b_mb`).
+
+Physics check (`twoBatch.test.ts`): REF_MOE_30B_A3B, ep 16 = dp 16 over two `SYNTH_CLUSTER` nodes with the
+inter-node link at 12.5 GB/s, global `overlap 'none'`, decode @ 1024: TBO / no TBO = 0.585× at 4 tokens per device
+and 1.173× at 256 tokens per device. Under the default `overlap 'ideal'` there is nothing left to hide, so TBO never
+helps decode there.
+
+Caveats:
+
+- The overlap window is the whole stage, not the per-layer ping-pong of the engines (one half's attention against
+  the other half's all-to-all): an upper bound of it.
+- The drafter is not split; TBO with offloading is not modelled (validation error), and it needs a MoE model in mode
+  B (`ep > tp`; validation error otherwise).
+- The minimum batch for a gain is an engine property and is not enforced: SGLang reports +27–35% prefill and +25.5%
+  decode at 256 tokens/device, and ≤ 0 below about 64–128 tokens/device
+  ([LMSYS large-scale EP](https://lmsys.org/blog/2025-05-05-large-scale-ep/)); vLLM's dual-batch overlap needs DP + EP
+  ([vLLM DBO docs](https://docs.vllm.ai/en/latest/design/dbo/)); SGLang turned it off on GB200 NVL72, where
+  communication is small ([LMSYS GB200 part 1](https://lmsys.org/blog/2025-06-16-gb200-part-1/)).
 
 ### Prefill without overlap
 
@@ -2364,11 +2458,13 @@ optimize algorithm assignment against the independent offload-transfer overlap f
 prefill headline ("Without overlap: 2,530" under "4,210 tok/s @ 8k"). Tests: `engine/whatIf.test.ts`.
 
 The default `overlap 'ideal'` hides every collective's bandwidth term behind compute, which vLLM, SGLang and llama.cpp
-do not achieve by default (review F7). When the run uses `'ideal'` and its prefill has inter-device communication
-(`comm.latencySec + comm.bandwidthSec > 0`: a TP/EP collective or a PP send over a link), the engine also costs the
-same lowered prefill under `overlap 'none'` (`t_core,s = compute_s + lat_s + bw_s + p2p_s`, above) and reports its
-rates, a labelled what-if; the headline stays `'ideal'`. Absent on one device, and when the run already uses `'none'`
-(then the headline is that figure). It equals a separate run with `overlap: 'none'`, bit for bit.
+do not achieve by default (review F7). When some resolved overlap fraction is above 0 ("Stage time and overlap"; by
+default: `overlap 'ideal'`) and the prefill has inter-device communication (`comm.latencySec + comm.bandwidthSec > 0`:
+a TP/EP collective or a PP send over a link), the engine also costs the same prefill with every fraction 0 and
+two-batch overlap off, i.e. the full-batch lowering under `overlap 'none'` (`t_core,s = compute_s + lat_s + bw_s +
+p2p_s`, above), and reports its rates, a labelled what-if; the headline is unchanged. Absent on one device, and when
+every fraction is already 0 (then the headline is that figure). It equals a separate run with `overlap: 'none'`, no
+class overrides and two-batch overlap off, bit for bit; with no overrides and TBO off it is the figure of before.
 
 Review probes (`whatIf.test.ts`; the review's exact workloads are not recorded, and the PCIe payload efficiency and
 the softmax cost landed since): 4× RTX 4090 TP4 (direct P2P), Llama-3-70B Q4_K_M, prefill @ 8k: −38.3% (review
@@ -2382,9 +2478,11 @@ sums of numbers the engine already computes, so no rate depends on them (design 
 
 - `comm.latencySec = Σ_s lat_s + Σ α_forward + α_return` (return 0 for pp1 or prefill).
 - `comm.bandwidthSec = Σ_s bw_s + Σ β_forward + β_return`.
-- `comm.exposedSec = Σ_s exposedComm_s + Σ p2p` under `overlap 'ideal'` (the sends are on the latency path, not
-  in `t_s`); under `'none'` each forward send is already inside `t_s` and is not added again.
-  Return α+β is added in both modes (never inside a stage). `PhaseResult.loopBack` exposes its op cost.
+- `comm.exposedSec = Σ_s exposedComm_s + Σ_s f_pp·p2p_s` (`overlap.ts: sendsOnLatencyPathSec`): the share f_pp of
+  each send is on the latency path, not in `t_s`; the share `(1 − f_pp)` is inside `t_s`, hence inside
+  `exposedComm_s`, and is not added again. f_pp = 1 (`'ideal'`): `Σ p2p`; f_pp = 0 (`'none'`): 0, each computed by
+  its former expression. Return α+β is added for every f (never inside a stage). `PhaseResult.loopBack` exposes its
+  op cost.
 - `transfer = { sec: Σ_s xfer_s, exposedSec: Σ_s exposedTransfer_s, bytes: Σ usefulBytes, requests: Σ reads.count }`
   for one microbatch through every stage; absent when no stage has a transfer op.
 - Example (`pipeline.test.ts`, design doc §8.3): REF_DENSE_8B on `SYNTH_CLUSTER`, decode @ 1024. tp 4: 73 tree
@@ -2398,16 +2496,17 @@ sums of numbers the engine already computes, so no rate depends on them (design 
 `src/sim/engine/pipeline.ts: microbatching, phaseResult`; `src/sim/engine/simulate.ts: simulate`.
 
 - `B_r = batch/dp`, `m = min(pp, B_r)` microbatches of `b_mb = ceil(B_r/m)` sequences. Each phase is lowered
-  once with `seqs = b_mb`. `Σ p2p` below is the sends' full time (α + β) under `'ideal'` and 0 under `'none'`
-  (already in t_s).
+  once with `seqs = b_mb` (with two-batch overlap: as two halves, "Two-batch overlap"). `Σ p2p` below is
+  `Σ_s f_pp·p2p_s`, the share of the sends' full time (α + β) outside `t_s`: all of it under `'ideal'` (f_pp = 1),
+  0 under `'none'` (already in t_s).
 - **Resources.** Each stage and each PP boundary link is a resource every microbatch occupies once per cycle:
   stage s for `t_s`, the link after stage s for the send's bandwidth time `βp2p_s = bytes/B` (α is latency,
   not occupancy). Overlapping a send with compute does not let the link carry more bytes than its bandwidth, so
   the bottleneck per microbatch is `b = max(max_s t_s, max_s βp2p_s, β_return)`.
   The decode return is another link resource; prefill has β_return = 0.
-  (Under `'none'`, t_s ≥ the forward βp2p_s already.)
+  (With f_pp = 0, t_s ≥ the forward βp2p_s already.)
 - **Decode**: `cycle = max(m·b, Σ_s t_s + Σ p2p + return_p2p)` (the sampled IDs must return to stage 0).
-  `return_p2p = α_return + β_return` in both overlap modes; it can be hidden by the `m·b` branch,
+  `return_p2p = α_return + β_return` for every overlap fraction; it can be hidden by the `m·b` branch,
   so adding it need not increase cycle time. `tokensPerSec = dp·B_r/cycle`, `perSequenceTokensPerSec = 1/cycle`,
   `latency = cycle`.
 - **Prefill** (a steady stream of replica batches; the bottleneck resource bounds it): `cycle = m·b`,
@@ -2557,6 +2656,9 @@ vLLM's for its `LLM` class and H100-class API servers; smaller budgets only lowe
 prefill tok/s @ P is still the whole prompt in one pass (§7). With `prefillChunkTokens ≥ b_mb·P` the fit is the
 one-pass peak of before.
 
+With two-batch overlap (§7 "Two-batch overlap") the decode step and this chunk are lowered as two halves, so the
+peak is the larger half's largest op: about half (exactly half for a dense op at even `b_mb`).
+
 ### GPU-usable capacity
 
 `memory.ts: resolveGpuUsableFraction, unifiedMemoryWarnings`; `MemorySpec.gpuUsableFraction`,
@@ -2660,6 +2762,12 @@ Documented approximations (each isolated in one constant or rule):
   iid-uniform routing, an expectation rather than a bound (§5 "Expected distinct experts").
 - Elementwise FLOP-per-element table (§3) and the fp32-accumulate default.
 - The activation peak in the memory fit is the largest single op.
+- Per-collective overlap (§7 "Stage time and overlap"): a fraction f_c of a class's β time overlaps the whole
+  stage's compute (a share of the bytes, not a blend of the max and sum rules); α is never hidden. The fraction is
+  a user assumption, not derived from kernels or streams.
+- Two-batch overlap (§7 "Two-batch overlap"): the overlap window is the whole stage (an upper bound of the engines'
+  per-layer ping-pong); the drafter is not split; not combined with offloading; the minimum batch for a gain is not
+  enforced. A one-sequence decode is not split and keeps the global EP default (identical to the run without TBO).
 - Fabric shapes (§6 "Fabric shapes"): a TP / EP group covering part of a ring is a chain (the long way round is
   ignored); PP flows on a ring are not split over both directions (conservative by at most 2× on that send's β);
   relays go through the host and count against the all-ports cap C (no in-NIC switching is assumed: L3-routed RoCE

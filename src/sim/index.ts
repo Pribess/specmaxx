@@ -40,6 +40,8 @@ export * from './engine/collectives';
 export * from './engine/placement';
 export * from './engine/opTime';
 export * from './engine/pipeline';
+export * from './engine/overlap';
+export * from './engine/twoBatch';
 export * from './engine/dispatch';
 export * from './engine/memory';
 export * from './engine/validate';

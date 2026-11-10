@@ -11,6 +11,7 @@ export * from './url';
 export * from './quant';
 export * from './hardware';
 export * from './parallelism';
+export * from './overlap';
 export * from './buildInput';
 export * from './summary';
 export * from './sweep';

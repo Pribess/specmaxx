@@ -36,6 +36,38 @@ import type { LayerRange, SimInput } from './types';
 /** The exact error for speculative decoding with pipeline parallelism (design doc §3.6). */
 export const SPEC_DEC_PP_ERROR = 'speculative decoding with pp > 1 is not supported yet';
 
+/** The exact error for two-batch overlap without MoE expert parallelism across TP groups (docs §7 "Two-batch overlap"). */
+export const TWO_BATCH_OVERLAP_MODE_B_ERROR =
+  'deployment.twoBatchOverlap needs a MoE model with expert parallelism across TP groups (ep > tp)';
+
+/** The exact error for two-batch overlap together with off-device weights (not modelled; docs §7 "Two-batch overlap"). */
+export const TWO_BATCH_OVERLAP_OFFLOAD_ERROR =
+  'deployment.twoBatchOverlap with weights offloaded is not modelled';
+
+/**
+ * Errors of `options.overlapByClass` (docs §7 "Stage time and overlap"): keys must be overlap classes (`tp`, `ep`,
+ * `pp`), values finite numbers in [0, 1] (dimensionless fractions). Absent or `{}`: none.
+ */
+export function overlapByClassErrors(byClass: unknown): string[] {
+  if (byClass === undefined) return [];
+  if (typeof byClass !== 'object' || byClass === null || Array.isArray(byClass))
+    return ['options.overlapByClass must be an object of fractions by class (tp, ep, pp)'];
+  const errors: string[] = [];
+  for (const [key, value] of Object.entries(byClass)) {
+    if (key !== 'tp' && key !== 'ep' && key !== 'pp') {
+      errors.push(`options.overlapByClass.${key}: unknown overlap class (expected tp, ep or pp)`);
+    } else if (
+      value !== undefined &&
+      !(typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1)
+    ) {
+      errors.push(
+        `options.overlapByClass.${key} (${String(value)}) must be a finite number in [0, 1]`,
+      );
+    }
+  }
+  return errors;
+}
+
 /**
  * The exact error for an off-device token embedding (`deployment.offload.embeddings` on host RAM or NVMe) on a model
  * with tied embeddings: the table is also the LM head's weight, read whole every step, so it stays on the device
@@ -198,6 +230,7 @@ export function validateInput(input: SimInput): string[] {
   if (reserve !== undefined && !(Number.isFinite(reserve) && reserve >= 0)) {
     errors.push(`hardware.runtimeReserveBytes (${reserve}) must be a finite number ≥ 0`);
   }
+  errors.push(...overlapByClassErrors(input.options?.overlapByClass));
   const floor = input.options?.perOpLatencyFloorSec;
   if (floor !== undefined && !(Number.isFinite(floor) && floor >= 0)) {
     errors.push(`options.perOpLatencyFloorSec (${floor}) must be a finite number ≥ 0`);
@@ -341,6 +374,9 @@ function inRange(x: number, lo: number, hi: number, hiOpen = false): boolean {
  * ({@link TIED_EMBEDDINGS_OFFLOAD_ERROR}). Any off-device group on a dedicated-memory device needs a host
  * link: `hardware.host.link`, the device's cited `hostLink`, or its PCIe `hostInterface`. `hardware.host`, when given, is validated.
  *
+ * Two-batch overlap: needs a MoE model with ep > tp ({@link TWO_BATCH_OVERLAP_MODE_B_ERROR}) and nothing off the
+ * device ({@link TWO_BATCH_OVERLAP_OFFLOAD_ERROR}).
+ *
  * Speculative decoding: rejected with pp > 1 (§3.6, {@link SPEC_DEC_PP_ERROR}); `draftLength` k an integer in
  * 1..16; `'mtp'` needs `model.draft.kind === 'mtp'`; a block method needs a `drafter` of the same method with
  * `k + 1 ≤ blockSize`; acceptance i.i.d. α in [0, 1), per-position α_j in [0, 1] (non-empty); the drafter's own MoE
@@ -352,6 +388,8 @@ export function deploymentErrors(input: SimInput): string[] {
   const errors: string[] = [];
   if (hardware.host !== undefined) errors.push(...validateHost(hardware.host, 'hardware.host'));
   const offload = input.deployment?.offload;
+  // Anything placed off the device (routed experts, lookup tables, the token embedding); set in the offload block.
+  let offDevice = false;
   if (offload !== undefined) {
     const L = model.layers.length;
     if (offload.mode === 'cpu_compute') {
@@ -453,7 +491,7 @@ export function deploymentErrors(input: SimInput): string[] {
     if (offDeviceEmbeddings && model.tieEmbeddings) {
       errors.push(TIED_EMBEDDINGS_OFFLOAD_ERROR);
     }
-    const offDevice = experts.length > 0 || offDeviceTables || offDeviceEmbeddings;
+    offDevice = experts.length > 0 || offDeviceTables || offDeviceEmbeddings;
     const device = hardware.device;
     if (
       offDevice &&
@@ -465,6 +503,13 @@ export function deploymentErrors(input: SimInput): string[] {
         `deployment.offload: no host link known for ${device.id}; set hardware.host.link`,
       );
     }
+  }
+  // Two-batch overlap (docs §7 "Two-batch overlap"): it exists to hide the EP all-to-alls (MoE mode B, ep > tp), and
+  // its interplay with offload transfers (staging, prefetch per half) is not modelled.
+  if (input.deployment?.twoBatchOverlap === true) {
+    const hasMoe = model.layers.some((l) => l.blocks.some((b) => b.kind === 'moe'));
+    if (!hasMoe || !(parallel.ep > parallel.tp)) errors.push(TWO_BATCH_OVERLAP_MODE_B_ERROR);
+    if (offDevice) errors.push(TWO_BATCH_OVERLAP_OFFLOAD_ERROR);
   }
   const spec = input.deployment?.speculative;
   if (spec !== undefined) {

@@ -118,6 +118,41 @@ describe('prefill without overlap (F7)', () => {
   );
 });
 
+describe('prefill without overlap with per-collective overlap and two-batch overlap (docs §7)', () => {
+  const rates = (p: SimResult['prefill']) => ({
+    tokensPerSec: p.tokensPerSec,
+    perSequenceTokensPerSec: p.perSequenceTokensPerSec,
+    latencySec: p.latencySec,
+    cycleSec: p.cycleSec,
+  });
+  const tp4 = CASES['tp 4 on the synthetic cluster'];
+  it("is present with a partial fraction under global 'none', and equals the run with every fraction 0", () => {
+    const r = simulate({ ...tp4, options: { overlap: 'none', overlapByClass: { tp: 0.5 } } });
+    const none = simulate({ ...tp4, options: { overlap: 'none' } });
+    expect(r.prefillWithoutOverlap).toEqual(rates(none.prefill));
+    expect(r.prefill.tokensPerSec).toBeGreaterThan(none.prefill.tokensPerSec);
+  });
+  it('is absent when every fraction is 0, even under global ideal', () => {
+    const r = simulate({
+      ...tp4,
+      options: { overlap: 'ideal', overlapByClass: { tp: 0, ep: 0, pp: 0 } },
+    });
+    expect(r.prefillWithoutOverlap).toBeUndefined();
+  });
+  it('a two-batch-overlap run: equals a separate run with every fraction 0 and two-batch overlap off', () => {
+    const moe = input({
+      model: REF_MOE_30B_A3B,
+      hardware: { device: SYNTH_GPU, topology: SYNTH_CLUSTER },
+      parallel: { ...P1, ep: 2, dp: 2 },
+      workload: { batch: 4, promptLen: 1024, decodeContextLen: 2048 },
+      options: { overlap: 'none' },
+    });
+    const r = simulate({ ...moe, deployment: { twoBatchOverlap: true } });
+    expect(r.prefillWithoutOverlap).toEqual(rates(simulate(moe).prefill));
+    expect(simulate(moe).prefillWithoutOverlap).toBeUndefined();
+  });
+});
+
 describe('per-op latency floor (F1a)', () => {
   /** A bare op result: `sec` split into latency `lat` and the rest (bandwidth/service) for collectives and transfers. */
   const op = (kind: 'gemm' | 'collective' | 'transfer', sec: number, lat = 0) =>

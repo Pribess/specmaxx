@@ -8,7 +8,7 @@ import {
 } from '../__fixtures__/synthetic';
 import { decoderLayer, decoderModel } from '../ir/builders';
 import type { BlockDraftSpec, ModelSpec, ParallelConfig, QuantConfig } from '../ir/model';
-import { REF_DENSE_8B, TINY_HC_NGRAM, TINY_HYBRID } from '../models/reference';
+import { REF_DENSE_8B, REF_MOE_30B_A3B, TINY_HC_NGRAM, TINY_HYBRID } from '../models/reference';
 import { singleDevice } from '../hw/presets';
 import type { TopologySpec } from '../hw/types';
 import type {
@@ -23,6 +23,8 @@ import {
   deploymentErrors,
   SPEC_DEC_PP_ERROR,
   TIED_EMBEDDINGS_OFFLOAD_ERROR,
+  TWO_BATCH_OVERLAP_MODE_B_ERROR,
+  TWO_BATCH_OVERLAP_OFFLOAD_ERROR,
   validateInput,
 } from './validate';
 import { simulate } from './simulate';
@@ -697,5 +699,61 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
       ),
     );
     expect(errors.some((e) => e.startsWith('hardware.host.link'))).toBe(true);
+  });
+});
+
+describe('per-collective overlap and two-batch overlap (docs §7 "Stage time and overlap", "Two-batch overlap")', () => {
+  it('options.overlapByClass: classes tp, ep, pp with finite fractions in [0, 1]', () => {
+    expect(
+      validateInput(input({}, { options: { overlapByClass: { tp: 0, ep: 0.5, pp: 1 } } })),
+    ).toEqual([]);
+    expectError(
+      input({}, { options: { overlapByClass: { tp: 1.5 } } }),
+      /^options\.overlapByClass\.tp \(1\.5\) must be a finite number in \[0, 1\]$/,
+    );
+    expectError(input({}, { options: { overlapByClass: { ep: -0.1 } } }), /overlapByClass\.ep/);
+    expectError(
+      input({}, { options: { overlapByClass: { pp: NaN } } }),
+      /overlapByClass\.pp \(NaN\)/,
+    );
+    expectError(
+      input({}, { options: { overlapByClass: { dp: 1 } as never } }),
+      /^options\.overlapByClass\.dp: unknown overlap class \(expected tp, ep or pp\)$/,
+    );
+  });
+  const moe = (parallel: Partial<ParallelConfig>, deployment: DeploymentConfig) =>
+    input(parallel, {
+      model: REF_MOE_30B_A3B,
+      workload: { batch: 4, promptLen: 128, decodeContextLen: 256 },
+      deployment,
+    });
+  it('two-batch overlap is valid for a MoE model in mode B (ep > tp)', () => {
+    expect(validateInput(moe({ ep: 2, dp: 2 }, { twoBatchOverlap: true }))).toEqual([]);
+    expect(validateInput(moe({}, { twoBatchOverlap: false }))).toEqual([]);
+  });
+  it('two-batch overlap needs a MoE model with ep > tp', () => {
+    expect(validateInput(input({}, { deployment: { twoBatchOverlap: true } }))).toContain(
+      TWO_BATCH_OVERLAP_MODE_B_ERROR,
+    );
+    expect(validateInput(moe({}, { twoBatchOverlap: true }))).toContain(
+      TWO_BATCH_OVERLAP_MODE_B_ERROR,
+    );
+    expect(validateInput(moe({ tp: 2, ep: 2 }, { twoBatchOverlap: true }))).toContain(
+      TWO_BATCH_OVERLAP_MODE_B_ERROR,
+    );
+  });
+  it('two-batch overlap with weights offloaded is not modelled', () => {
+    const offload: OffloadConfig = {
+      routedExperts: { tier: 'host_ram', residentFraction: 0.5, hitRatio: { kind: 'uniform' } },
+    };
+    expect(validateInput(moe({ ep: 2, dp: 2 }, { twoBatchOverlap: true, offload }))).toContain(
+      TWO_BATCH_OVERLAP_OFFLOAD_ERROR,
+    );
+    // An offload block that keeps everything on the device is fine.
+    expect(
+      validateInput(
+        moe({ ep: 2, dp: 2 }, { twoBatchOverlap: true, offload: { prefetchAccuracy: 1 } }),
+      ),
+    ).toEqual([]);
   });
 });

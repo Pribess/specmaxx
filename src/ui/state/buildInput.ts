@@ -13,16 +13,22 @@ import { resolveHardware, type ResolvedHardware } from './hardware';
 import { effectiveParallel, fieldIssues, hasErrors, type FieldIssue } from './parallelism';
 import { REFERENCE_QUANT_DEFAULTS, applyQuantOverride } from './quant';
 import { deploymentConfig, type DrafterStatus } from './deploymentInput';
+import { effectiveOptions, twoBatchOverlapApplies } from './overlap';
 
-/** The panel an engine validation message belongs to, by its wording (speculative decoding, offloading, else general). */
+/**
+ * The panel an engine validation message belongs to, by its wording (speculative decoding, two-batch overlap,
+ * offloading, per-class overlap, else general).
+ */
 function engineIssueField(message: string): FieldIssue['field'] {
   if (/speculative|draft/i.test(message)) return 'specDec';
+  if (/two-batch|twoBatch/i.test(message)) return 'twoBatchOverlap';
   if (
     /offload|host link|host_ram|nvme|queue depth|resident|hit ratio|lookup|cpu_compute/i.test(
       message,
     )
   )
     return 'offload';
+  if (/overlap/i.test(message)) return 'overlap';
   return 'general';
 }
 
@@ -137,6 +143,26 @@ export function buildSimInput(
     ),
     ...deployment.issues,
   ];
+  // Two-batch overlap only where it applies (MoE mode B, nothing offloaded); with offload it is not modelled.
+  const offloads = deployment.config?.offload !== undefined;
+  const twoBatchOverlap =
+    state.deployment.twoBatchOverlap === true &&
+    twoBatchOverlapApplies(loaded.model, parallel, offloads);
+  if (
+    state.deployment.twoBatchOverlap === true &&
+    offloads &&
+    twoBatchOverlapApplies(loaded.model, parallel, false)
+  )
+    issues.push({
+      field: 'twoBatchOverlap',
+      level: 'warning',
+      message: 'Two-batch overlap is not modelled with offloaded weights; it is off for this run.',
+    });
+  const deploymentInput = twoBatchOverlap
+    ? { ...deployment.config, twoBatchOverlap: true }
+    : deployment.config;
+  // Per-class overlap only for the classes the run has: a stale choice (a hidden row) changes nothing.
+  const options = effectiveOptions(state.options, loaded.model, parallel);
   if (hasErrors(issues)) return { kind: 'issues', issues, hardware };
   const input: SimInput = {
     model: loaded.model,
@@ -165,9 +191,9 @@ export function buildSimInput(
     },
     workload: state.workload,
     hardware: hardware.stack,
-    ...(Object.keys(state.options).length > 0 ? { options: state.options } : {}),
+    ...(Object.keys(options).length > 0 ? { options } : {}),
     // Only when a knob is on: with every knob off the input is exactly the one from before deployment knobs.
-    ...(deployment.config !== undefined ? { deployment: deployment.config } : {}),
+    ...(deploymentInput !== undefined ? { deployment: deploymentInput } : {}),
     // The dispatch overlay adds a labelled figure only; off, the input has no `overlays` at all.
     ...(state.engineDispatchOverlay ? { overlays: { engineDispatch: {} } } : {}),
   };

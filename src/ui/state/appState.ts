@@ -9,7 +9,7 @@
 
 import type { Dtype } from '../../sim/ir/dtype';
 import type { ParallelConfig } from '../../sim/ir/model';
-import type { SimOptions, Workload } from '../../sim/engine/types';
+import type { OverlapClass, SimOptions, Workload } from '../../sim/engine/types';
 import type { UnlockSelection } from '../../sim/hw/unlocks';
 import { DEFAULT_SIM_OPTIONS } from '../../sim/engine/simulate';
 import { DEFAULT_EP_IMBALANCE } from '../../sim/lower/moe';
@@ -338,7 +338,17 @@ export type AppAction =
       value: number | undefined;
     }
   /** Turn the engine dispatch overlay on or off (Hardware → Advanced). */
-  | { type: 'setEngineDispatchOverlay'; on: boolean };
+  | { type: 'setEngineDispatchOverlay'; on: boolean }
+  /**
+   * Set (a fraction in [0, 1], dimensionless) or clear (undefined: the default, which follows `overlap` and two-batch
+   * overlap) the overlap of one class (`SimOptions.overlapByClass`, Hardware → Advanced → "Communication overlap").
+   */
+  | { type: 'setOverlapClass'; overlapClass: OverlapClass; fraction: number | undefined }
+  /**
+   * Turn two-batch overlap on or off (`DeploymentChoice.twoBatchOverlap`). Turning it on clears an explicit EP
+   * overlap, so EP takes the two-batch default (full).
+   */
+  | { type: 'setTwoBatchOverlap'; on: boolean };
 
 /** The `HardwareChoice` field holding the edits of `target`. */
 export function editsKey(target: EditTarget): 'deviceEdits' | 'intraEdits' | 'interEdits' {
@@ -352,14 +362,23 @@ function without<T extends object, K extends keyof T>(record: T, key: K): T {
   return copy;
 }
 
-/** Options with default values (and undefined) removed, so equal choices encode equally. */
+/**
+ * Options with default values (and undefined) removed, so equal choices encode equally. `overlapByClass` keeps its
+ * set entries, even one equal to the default ("Default" is its own choice: it follows the global switch), and is
+ * removed when none is set.
+ */
 export function normalizeOptions(options: Partial<SimOptions>): Partial<SimOptions> {
   const out: Partial<SimOptions> = {};
   for (const key of Object.keys(options) as (keyof SimOptions)[]) {
+    if (key === 'overlapByClass') continue;
     const value = options[key];
     if (value !== undefined && value !== DEFAULT_SIM_OPTIONS[key])
       Object.assign(out, { [key]: value });
   }
+  const byClass: Partial<Record<OverlapClass, number>> = {};
+  for (const [c, f] of Object.entries(options.overlapByClass ?? {}))
+    if (f !== undefined) byClass[c as OverlapClass] = f;
+  if (Object.keys(byClass).length > 0) out.overlapByClass = byClass;
   return out;
 }
 
@@ -553,6 +572,34 @@ export function reduce(state: AppState, action: AppAction): AppState {
     case 'setHost': {
       const host = normalizeHost(action.host);
       return { ...state, hw: Object.keys(host).length > 0 ? { ...hw, host } : without(hw, 'host') };
+    }
+    case 'setOverlapClass':
+      return {
+        ...state,
+        options: normalizeOptions({
+          ...state.options,
+          overlapByClass: {
+            ...state.options.overlapByClass,
+            [action.overlapClass]: action.fraction,
+          },
+        }),
+      };
+    case 'setTwoBatchOverlap': {
+      // On: EP goes to the two-batch default (full), so an explicit EP choice is cleared.
+      const options = action.on
+        ? normalizeOptions({
+            ...state.options,
+            overlapByClass: { ...state.options.overlapByClass, ep: undefined },
+          })
+        : state.options;
+      return {
+        ...state,
+        options,
+        deployment: normalizeDeployment({
+          ...state.deployment,
+          twoBatchOverlap: action.on ? true : undefined,
+        }),
+      };
     }
     default: {
       const _never: never = action;

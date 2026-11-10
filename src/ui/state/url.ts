@@ -27,6 +27,8 @@
  * | `b`, `p`, `c` | batch, prefill length (default 8192), decode context (default 8192) | `b=8` |
  * | `pc` | prefill chunk of the memory fit, tokens (default 8192) | `pc=2048` |
  * | `ov`, `fu`, `ar` | overlap, elementwise fusion, all-reduce algorithm | `ov=none` |
+ * | `ovt`, `ove`, `ovp` | overlap of the TP / EP / PP class (`overlapByClass`) in percent, 0–100 (absent: the default, which follows `ov` and `tbo`) | `ove=50` |
+ * | `tbo` | two-batch overlap on: `1` (absent: off) | `tbo=1` |
  * | `lf` | per-op latency floor in µs, 0–1000 (default 0: off) | `lf=1` |
  * | `ed` | engine dispatch overlay on: `1` (absent: off) | `ed=1` |
  * | `hr`, `hrc` | host-RAM preset id (default `ddr5-6000-2ch`), its capacity in GB (1e9 B) | `hr=ddr5-6400-8ch&hrc=512` |
@@ -50,7 +52,7 @@
  * | `sdk`, `sdu`, `sda` | draft length k 1–16 (default per method), use case `code`, `math`, `reasoning`, `agentic` (default `prose`), acceptance α 0–0.99 (custom; overrides the use case) | `sdk=3&sda=0.8` |
  */
 
-import type { SimOptions } from '../../sim/engine/types';
+import type { OverlapClass, SimOptions } from '../../sim/engine/types';
 import { isA2aFormat } from '../../sim/ir/a2aFormat';
 import { DEFAULT_EP_IMBALANCE } from '../../sim/lower/moe';
 import type { DeviceSpec } from '../../sim/hw/types';
@@ -126,6 +128,13 @@ const OPTION_KEYS: [string, keyof SimOptions, readonly string[]][] = [
   ['ar', 'collectiveAlgorithm', ['best', 'ring', 'tree']],
 ];
 
+/** URL key of each overlap class's fraction (`SimOptions.overlapByClass`), in percent. */
+const OVERLAP_KEYS: [string, OverlapClass][] = [
+  ['ovt', 'tp'],
+  ['ove', 'ep'],
+  ['ovp', 'pp'],
+];
+
 /** Largest per-op latency floor the URL and the UI accept. Unit: µs. */
 export const MAX_LATENCY_FLOOR_US = 1000;
 
@@ -188,6 +197,10 @@ export const URL_KEYS = [
   'pc',
   'ph',
   'ov',
+  'ovt',
+  'ove',
+  'ovp',
+  'tbo',
   'fu',
   'ar',
   'lf',
@@ -360,7 +373,17 @@ export function encodeState(s: AppState): string {
   // Percent with at most 4 decimals (0.9 encodes as 90).
   if (w.prefixCacheHitRatio !== undefined) put('ph', Math.round(w.prefixCacheHitRatio * 1e6) / 1e4);
   const options = normalizeOptions(s.options);
-  for (const [key, field] of OPTION_KEYS) put(key, options[field]);
+  for (const [key, field] of OPTION_KEYS) {
+    put(key, options[field] as string | undefined);
+    // The per-class overlaps and two-batch overlap come right after `ov`.
+    if (key !== 'ov') continue;
+    for (const [classKey, c] of OVERLAP_KEYS) {
+      const f = options.overlapByClass?.[c];
+      // Percent with at most 4 decimals (0.7 encodes as 70).
+      if (f !== undefined) put(classKey, Math.round(f * 1e6) / 1e4);
+    }
+    if (s.deployment.twoBatchOverlap === true) put('tbo', '1');
+  }
   // µs with at most 3 decimals (ns), so 0.6 µs encodes as 0.6 (not 0.6000000000000001).
   if (options.perOpLatencyFloorSec !== undefined)
     put('lf', Math.round(options.perOpLatencyFloorSec * 1e9) / 1e3);
@@ -816,6 +839,16 @@ export function decodeState(search: string): DecodedState {
     if (values.includes(v)) Object.assign(options, { [field]: v });
     else drop(key, v);
   }
+  // Per-class overlap in percent, 0–100; an explicit value is kept even when it equals the default.
+  const overlapByClass: Partial<Record<OverlapClass, number>> = {};
+  for (const [key, c] of OVERLAP_KEYS) {
+    const v = get(key);
+    if (v === undefined) continue;
+    const percent = parseNumberIn(v, 0, 100);
+    if (percent === undefined) drop(key, v);
+    else overlapByClass[c] = percent / 100;
+  }
+  if (Object.keys(overlapByClass).length > 0) options.overlapByClass = overlapByClass;
   // Per-op latency floor in µs (0 = off, the default, so it stays absent from the state).
   const lf = get('lf');
   if (lf !== undefined) {
@@ -844,6 +877,9 @@ export function decodeState(search: string): DecodedState {
     else drop('rr', rr);
   }
   const deployment = decodeDeployment(get, drop);
+  const tbo = get('tbo');
+  if (tbo === '1') deployment.twoBatchOverlap = true;
+  else if (tbo !== undefined) drop('tbo', tbo);
 
   const state: AppState = {
     model,

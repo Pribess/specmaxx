@@ -67,14 +67,38 @@ export function computedPromptTokens(
 }
 
 /**
+ * Overlap class of a collective (docs/simulation-model.md §7 "Stage time and overlap"), by its
+ * `CollectiveOp.group` (`engine/overlap.ts: overlapClassOf`):
+ * - `'tp'`: tensor- and context-parallel collectives (groups `tp`, `etp`, `dcp`): all-reduces, all-gathers;
+ * - `'ep'`: collectives over the EP group (group `ep`): the MoE dispatch/combine all-to-alls, and with DP attention the
+ *   dense all-gather / reduce-scatter and the head's sample all-to-all;
+ * - `'pp'`: the activation send to the next pipeline stage (`StageResult.sendToNext`, group `pp`).
+ */
+export type OverlapClass = 'tp' | 'ep' | 'pp';
+/**
  * Documented ideal-vs-none physical assumptions (not inference-engine knobs).
  */
 export interface SimOptions {
   /**
-   * Communication/compute overlap. `'ideal'` (default): collective bandwidth time hides behind compute, latency
-   * (α) does not: `t = lat + max(compute, bw)`. `'none'`: `t = compute + lat + bw`.
+   * Communication/compute overlap, the DEFAULT fraction of every overlap class ({@link OverlapClass}): `'ideal'`
+   * (default) = 1, `'none'` = 0, unless {@link SimOptions.overlapByClass} sets a class (or two-batch overlap sets EP to
+   * 1, {@link DeploymentConfig.twoBatchOverlap}). With every class at its endpoint the stage core time is the former
+   * rule: `'ideal'`: collective bandwidth time hides behind compute, latency (α) does not, `t = lat + max(compute,
+   * bw)` (the PP send off-stage, on the latency path); `'none'`: `t = compute + lat + bw + p2p`. General fractions:
+   * `engine/overlap.ts: coreTime`, docs/simulation-model.md §7 "Stage time and overlap".
    */
   overlap: 'ideal' | 'none';
+  /**
+   * Per-collective overlap (docs/simulation-model.md §7 "Stage time and overlap"): for each overlap class c, the
+   * fraction f_c of the class's collective bandwidth (β) time that may run concurrently with the stage's compute
+   * (`tp`: TP / expert-TP / DCP collectives; `ep`: the EP all-to-alls and the other EP-group collectives; `pp`: the
+   * share of the send to the next stage that leaves the stage and goes on the latency path). α is never hidden, and
+   * hidden time never exceeds compute: `t_core,s = lat_s + max(compute_s, Σ_c f_c·bw_c,s) + Σ_c (1 − f_c)·bw_c,s +
+   * (1 − f_pp)·p2p_s`. An absent class takes the default: 1 for `ep` in a step two-batch overlap splits, else 1 under
+   * `overlap 'ideal'` and 0 under `'none'`. Absent or `{}` = every class at its default, results bit-identical to
+   * before. Dimensionless, each a finite number in [0, 1].
+   */
+  overlapByClass?: Partial<Record<OverlapClass, number>>;
   /**
    * Elementwise fusion. `'none'` (default): every elementwise op reads and writes its activations from memory.
    * `'ideal'`: elementwise activation traffic is 0 (fused into neighbours); weight and state bytes stay.
@@ -124,6 +148,18 @@ export interface DeploymentConfig {
   offload?: OffloadConfig;
   /** Speculative decoding (draft + verify). Absent = off. */
   speculative?: SpecDecodeConfig;
+  /**
+   * Two-batch overlap (TBO; docs/simulation-model.md §7 "Two-batch overlap"): each microbatch runs as two halves,
+   * lowered separately (`engine/twoBatch.ts`), so one half's EP all-to-alls can run while the other half computes.
+   * Sequence split (`ceil(b/2)` and `floor(b/2)` sequences) when a microbatch holds two or more sequences; a causal
+   * token split of the prompt for a one-sequence prefill; no split (a warning) for a one-sequence decode. In a step it
+   * splits, the EP overlap class's default becomes full (f_ep = 1); a step it cannot split keeps the global default; an
+   * explicit `SimOptions.overlapByClass.ep` always wins. The halves pay
+   * the costs that come with them: GEMMs at half the rows, every weight read twice, α twice. Needs a MoE model in mode
+   * B (`ep > tp`); not modelled together with offloading (validation errors). Absent or false = off, results
+   * bit-identical to before.
+   */
+  twoBatchOverlap?: boolean;
 }
 
 /** Off-device storage tier a weight group can be placed on (`hardware.host.ram` / `hardware.host.ssd`). */
@@ -421,13 +457,15 @@ export interface StageResult {
   /** Σ collective bandwidth (β) terms. Unit: seconds. */
   commBandwidthSec: number;
   /**
-   * Communication time not hidden behind compute under the overlap option: `t_core,s − compute_s`, where `t_core,s`
-   * is the stage time without transfers (docs §7). Unit: seconds.
+   * Communication time not hidden behind compute under the overlap fractions: `t_core,s − compute_s`, where
+   * `t_core,s` is the stage time without transfers (docs §7 "Stage time and overlap", `engine/overlap.ts: coreTime`).
+   * Unit: seconds.
    */
   exposedCommSec: number;
   /**
-   * Stage time per microbatch, docs §7: `t_core,s` (`ideal`: lat + max(compute, bw); `none`: compute + lat + bw
-   * + p2p) extended by the transfers not hidden by prefetching (docs §12 "Expert prefetch"). Unit: seconds.
+   * Stage time per microbatch, docs §7: `t_core,s = lat_s + max(compute_s, H_s) + E_s + (1 − f_pp)·p2p_s` (H_s / E_s
+   * the hideable / serial collective β time; every f = 1: lat + max(compute, bw); every f = 0: compute + lat + bw +
+   * p2p) extended by the transfers not hidden by prefetching (docs §12 "Expert prefetch"). Unit: seconds.
    */
   sec: number;
   /**
@@ -473,8 +511,8 @@ export interface PhaseResult {
    * Communication of the phase on its critical path, split into latency and bandwidth (design doc §4.2). Sums of
    * numbers the engine already computes, display only (`cycleSec` does not depend on them):
    * `latencySec = Σ_s lat_s + Σ α_p2p`, `bandwidthSec = Σ_s bw_s + Σ β_p2p`,
-   * `exposedSec = Σ_s exposedComm_s + the PP sends on the latency path (overlap 'ideal'; under 'none' they are
-   * already inside exposedComm_s) + loopBack.sec`. The α/β sums also include loopBack, once, in both modes.
+   * `exposedSec = Σ_s exposedComm_s + Σ_s f_pp·p2p_s (the share of the PP sends on the latency path; the rest is
+   * inside exposedComm_s) + loopBack.sec`. The α/β sums also include loopBack, once, in every mode.
    * Unit: seconds.
    */
   comm: { latencySec: number; bandwidthSec: number; exposedSec: number };
@@ -632,10 +670,11 @@ export interface SimResult {
   /** Peak fallbacks, unused devices, applied modifiers, unified-memory notes (human-readable lines). */
   warnings: string[];
   /**
-   * Prefill with the communication/compute overlap removed (the same input under `overlap: 'none'`), a labelled
-   * what-if next to the `'ideal'` headline (review F7; docs/simulation-model.md §7 "Prefill without overlap").
-   * Present only when the run uses `overlap: 'ideal'` and its prefill has inter-device communication (any collective
-   * or PP send with a nonzero time); absent otherwise.
+   * Prefill with the communication/compute overlap removed (the same input with every overlap fraction 0 and
+   * two-batch overlap off, i.e. `overlap: 'none'` on the full-batch lowering), a labelled what-if next to the headline
+   * (review F7; docs/simulation-model.md §7 "Prefill without overlap"). Present only when some resolved overlap
+   * fraction is above 0 (by default: `overlap: 'ideal'`) and the run's prefill has inter-device communication (any
+   * collective or PP send with a nonzero time); absent otherwise.
    */
   prefillWithoutOverlap?: PhaseRates;
   /**

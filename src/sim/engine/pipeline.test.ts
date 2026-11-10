@@ -14,8 +14,12 @@ import {
   stageResult,
   stageTransfer,
 } from './pipeline';
+import { IDEAL_OVERLAP, NO_OVERLAP } from './overlap';
 import { simulate } from './simulate';
 import type { LayerResult, OpResult, SimInput, StageResult } from './types';
+
+/** The former overlap modes as resolved fractions. */
+const OVERLAP = { ideal: IDEAL_OVERLAP, none: NO_OVERLAP } as const;
 
 function expectClose(actual: number, expected: number, rel = 1e-9): void {
   expect(Math.abs(actual - expected)).toBeLessThanOrEqual(rel * Math.abs(expected));
@@ -119,7 +123,7 @@ describe('stageResult overlap rules', () => {
     const send = s0.sendToNext?.sec ?? NaN;
     expectClose(s0.sec, s0.computeSec + s0.commLatencySec + s0.commBandwidthSec + send);
     // Rebuilding with 'ideal' from the same layers drops the send from t_s.
-    const ideal = stageResult(s0.index, s0.layers, s0.sendToNext, 'ideal');
+    const ideal = stageResult(s0.index, s0.layers, s0.sendToNext, IDEAL_OVERLAP);
     expectClose(ideal.sec, s0.computeSec); // tp = 1: no collectives inside the stage
     // Under 'none' the decode cycle does not add the sends a second time.
     const phase = phaseResult(r.decode.stages, {
@@ -129,7 +133,7 @@ describe('stageResult overlap rules', () => {
       microbatches: 2,
       microbatchSize: 1,
       promptLen: 512,
-      overlap: 'none',
+      overlap: NO_OVERLAP,
     });
     const [a, b] = r.decode.stages;
     expectClose(phase.cycleSec, Math.max(2 * Math.max(a.sec, b.sec), a.sec + b.sec));
@@ -308,7 +312,7 @@ describe('U-5 stage formula with transfers: compute 2, bw 1, lat 0.5, xfer 3, p2
     ['none', 0.5, 5.25, 1.5], // 0.5 + 3.25 + 3 − 0.5·min(3.25, 3)
   ] as const;
   it.each(cases)('overlap %s, q %s: t_s = %s, exposedTransfer = %s', (overlap, q, t, exposed) => {
-    const s = stageResult(0, layers(3, q), send, overlap);
+    const s = stageResult(0, layers(3, q), send, OVERLAP[overlap]);
     expect(s.sec).toBe(t);
     expect(s.computeSec).toBe(2); // the transfer op is not compute
     expect(s.transferSec).toBe(3);
@@ -317,7 +321,7 @@ describe('U-5 stage formula with transfers: compute 2, bw 1, lat 0.5, xfer 3, p2
     expect(s.exposedCommSec).toBe(overlap === 'ideal' ? 0.5 : 1.75);
   });
   it('q 0.8 (the default p at batch 1): t_s = 0.5 + 2 + 3 − 0.8·2 = 3.9', () => {
-    expect(stageResult(0, layers(3, 0.8), send, 'ideal').sec).toBeCloseTo(3.9, 12);
+    expect(stageResult(0, layers(3, 0.8), send, IDEAL_OVERLAP).sec).toBeCloseTo(3.9, 12);
   });
   it('mixed q: a table-row fetch (q 1, 1 s) and an expert fetch (q 0.5, 2 s) give pbar = 2/3', () => {
     const mixed = [
@@ -332,7 +336,7 @@ describe('U-5 stage formula with transfers: compute 2, bw 1, lat 0.5, xfer 3, p2
       ]),
     ];
     // Formula: t = 0.5 + 2 + 3 − (2/3)·min(2, 3)
-    expect(stageResult(0, mixed, send, 'ideal').sec).toBeCloseTo(5.5 - 4 / 3, 12);
+    expect(stageResult(0, mixed, send, IDEAL_OVERLAP).sec).toBeCloseTo(5.5 - 4 / 3, 12);
   });
   it('lat + max(core, xfer) ≤ t_s ≤ t_core + xfer for every q and both overlap modes', () => {
     for (const overlap of ['ideal', 'none'] as const) {
@@ -340,7 +344,7 @@ describe('U-5 stage formula with transfers: compute 2, bw 1, lat 0.5, xfer 3, p2
       const tCore = 0.5 + core;
       for (const xfer of [0.5, 2, 3, 10]) {
         for (const q of [0, 0.1, 0.5, 0.8, 0.95, 1]) {
-          const t = stageResult(0, layers(xfer, q), send, overlap).sec;
+          const t = stageResult(0, layers(xfer, q), send, OVERLAP[overlap]).sec;
           expect(t).toBeGreaterThanOrEqual(0.5 + Math.max(core, xfer) - 1e-12);
           expect(t).toBeLessThanOrEqual(tCore + xfer + 1e-12);
         }
@@ -349,7 +353,7 @@ describe('U-5 stage formula with transfers: compute 2, bw 1, lat 0.5, xfer 3, p2
   });
   it('xfer 0 reproduces the transfer-free stage bit for bit', () => {
     for (const overlap of ['ideal', 'none'] as const) {
-      const s = stageResult(0, layers(0), send, overlap);
+      const s = stageResult(0, layers(0), send, OVERLAP[overlap]);
       expect(s.sec).toBe(overlap === 'ideal' ? 2.5 : 3.75);
       expect(s.transferSec).toBe(0);
       expect(s.exposedTransferSec).toBe(0);
@@ -357,8 +361,8 @@ describe('U-5 stage formula with transfers: compute 2, bw 1, lat 0.5, xfer 3, p2
   });
   it('phaseTransfer sums useful bytes and expected requests; absent without transfer ops', () => {
     const stages = [
-      stageResult(0, layers(3), send, 'ideal'),
-      stageResult(1, layers(3), undefined, 'ideal'),
+      stageResult(0, layers(3), send, IDEAL_OVERLAP),
+      stageResult(1, layers(3), undefined, IDEAL_OVERLAP),
     ];
     expect(phaseTransfer(stages)).toEqual({
       sec: 6,
@@ -366,7 +370,7 @@ describe('U-5 stage formula with transfers: compute 2, bw 1, lat 0.5, xfer 3, p2
       bytes: 2 * 21_233_664,
       requests: 2 * 8.5,
     });
-    expect(phaseTransfer([stageResult(0, layers(0), send, 'ideal')])).toBeUndefined();
+    expect(phaseTransfer([stageResult(0, layers(0), send, IDEAL_OVERLAP)])).toBeUndefined();
     const phase = phaseResult(stages, {
       phase: 'decode',
       dp: 1,
@@ -374,7 +378,7 @@ describe('U-5 stage formula with transfers: compute 2, bw 1, lat 0.5, xfer 3, p2
       microbatches: 1,
       microbatchSize: 1,
       promptLen: 1,
-      overlap: 'ideal',
+      overlap: IDEAL_OVERLAP,
     });
     expect(phase.transfer?.bytes).toBe(42_467_328);
   });
@@ -441,7 +445,7 @@ describe('overlap across tiers (docs §12): a stage prefetching from host RAM an
       nonePrefetched: false,
       overlapped: true,
     });
-    const s = stageResult(0, layers, undefined, 'ideal');
+    const s = stageResult(0, layers, undefined, IDEAL_OVERLAP);
     expect(s.transferSec).toBe(3);
     expect(s.sec).toBe(3.5); // lat + max(core, P)
     expect(serialStageSec(layers, 'ideal')).toBe(4.5);
@@ -449,7 +453,7 @@ describe('overlap across tiers (docs §12): a stage prefetching from host RAM an
   it('p = 1, link bound: SSD 1.2 s ⇒ P = Σ link = 1.8', () => {
     const layers = stage([ram(1), ssd(1, 1.2)]);
     expect(stageTransfer(layers[0].ops).transferSec).toBe(1.8);
-    expect(stageResult(0, layers, undefined, 'ideal').sec).toBe(2.5); // 0.5 + max(2, 1.8)
+    expect(stageResult(0, layers, undefined, IDEAL_OVERLAP).sec).toBe(2.5); // 0.5 + max(2, 1.8)
   });
   it('p = 1, host RAM bound: host 0.8 + 1.1, link 0.1 each ⇒ P = 1.9', () => {
     const layers = stage([ram(1, 1, 0.1, 0.8), ssd(1, 1.2, 0.1, 1.1)]);
@@ -462,13 +466,13 @@ describe('overlap across tiers (docs §12): a stage prefetching from host RAM an
     expect(st.allPrefetched || st.nonePrefetched).toBe(false);
     expect(st.transferSec).toBeCloseTo(3.2, 12);
     expect(st.prefetchedSec).toBeCloseTo(2.4, 12);
-    expect(stageResult(0, layers, undefined, 'ideal').sec).toBeCloseTo(4.2, 12);
+    expect(stageResult(0, layers, undefined, IDEAL_OVERLAP).sec).toBeCloseTo(4.2, 12);
     expect(serialStageSec(layers, 'ideal')).toBeCloseTo(4.9, 12);
   });
   it('p = 0 with both tiers ≡ the serial formula, bit for bit', () => {
     for (const overlap of ['ideal', 'none'] as const) {
       const layers = stage([ram(0), ssd(0), ram(0, 0.37)]);
-      const s = stageResult(0, layers, undefined, overlap);
+      const s = stageResult(0, layers, undefined, OVERLAP[overlap]);
       expect(stageTransfer(layers[0].ops).overlapped).toBe(false);
       expect(s.sec).toBe(serialStageSec(layers, overlap));
       expect(s.transferSec).toBe(1 + 3 + 0.37);
@@ -481,7 +485,7 @@ describe('overlap across tiers (docs §12): a stage prefetching from host RAM an
         stage([ram(0), ssd(0.8)]),
       ]) {
         expect(stageTransfer(layers[0].ops).overlapped).toBe(false);
-        expect(stageResult(0, layers, undefined, overlap).sec).toBe(
+        expect(stageResult(0, layers, undefined, OVERLAP[overlap]).sec).toBe(
           serialStageSec(layers, overlap),
         );
       }
@@ -496,7 +500,7 @@ describe('overlap across tiers (docs §12): a stage prefetching from host RAM an
         for (const q of [0, 0.3, 0.8, 1]) {
           for (const qSsd of [q, 1]) {
             const layers = stage([ram(q), ssd(qSsd), ram(q, 0.4, 0.3, 0.2)], compute);
-            const s = stageResult(0, layers, undefined, overlap);
+            const s = stageResult(0, layers, undefined, OVERLAP[overlap]);
             expect(s.sec).toBeGreaterThanOrEqual(0.5 + Math.max(core, s.transferSec) - 1e-12);
             expect(s.sec).toBeLessThanOrEqual(tCore + s.transferSec + 1e-12);
             expect(s.sec).toBeLessThanOrEqual(serialStageSec(layers, overlap) + 1e-12);
@@ -585,12 +589,70 @@ describe('PhaseResult.comm: the latency vs bandwidth split equals the hand sums 
           hand.exposedSec += phase.loopBack?.sec ?? 0;
           for (const key of ['latencySec', 'bandwidthSec', 'exposedSec'] as const)
             expectClose(phase.comm[key], hand[key]);
-          expect(phaseComm(phase.stages, overlap, phase.loopBack)).toEqual(phase.comm);
+          expect(phaseComm(phase.stages, OVERLAP[overlap], phase.loopBack)).toEqual(phase.comm);
           expect(phase.transfer).toBeUndefined();
           expect(phase.speculative).toBeUndefined();
         }
       }
     expectClose(run(cases[0]).decode.comm.latencySec, 8e-6); // 4 dispatch + 4 combine a2a, α 1 µs
     expectClose(run(cases[1]).decode.comm.latencySec, 18e-6 + 1e-6 + 2e-6); // 9 AR + sampling AG + forward and return
+  });
+});
+
+describe('per-class overlap with a partial f_pp (docs §7 "Stage time and overlap", "Pipeline and DP"; seconds)', () => {
+  // compute 2; TP all-reduce lat 0.5, bw 1; EP all-to-all lat 0.25, bw 3; send p2p 0.25 (α 0.2, β 0.05).
+  const A2A: CollectiveOp = {
+    ...ALL_REDUCE,
+    name: 'moe.dispatch',
+    collective: 'all_to_all',
+    group: 'ep',
+  };
+  const layers = () => [
+    layerResult('layer.0', 0, [
+      result(ELEMENTWISE, { sec: 2 }),
+      result(ALL_REDUCE, { sec: 1.5, lat: 0.5, bw: 1 }),
+      result(A2A, { sec: 3.25, lat: 0.25, bw: 3 }),
+    ]),
+  ];
+  const send = result(SEND, { sec: 0.25, lat: 0.2, bw: 0.05 });
+  const f = { tp: 1, ep: 0.5, pp: 0.5 };
+  const s0 = stageResult(0, layers(), send, f);
+  const s1 = stageResult(1, layers(), undefined, f);
+
+  it('stage: H = 1 + 1.5, E = 1.5, core = max(2, 2.5) + 1.5 + 0.5·0.25 = 4.125, t = 0.75 + 4.125 = 4.875', () => {
+    expect(s0.sec).toBeCloseTo(4.875, 12);
+    expect(s0.exposedCommSec).toBeCloseTo(2.875, 12);
+    // Last stage, no send: core = 2.5 + 1.5 = 4, t = 4.75.
+    expect(s1.sec).toBeCloseTo(4.75, 12);
+  });
+
+  it('phase: the share f_pp·p2p = 0.125 lies on the latency path; comm.exposed = 2.875 + 2.75 + 0.125', () => {
+    const shape = {
+      dp: 1,
+      sequencesPerReplica: 1,
+      microbatches: 1,
+      microbatchSize: 1,
+      promptLen: 1,
+      overlap: f,
+    };
+    const decode = phaseResult([s0, s1], { ...shape, phase: 'decode' });
+    // cycle = max(1·max(4.875, 4.75, β 0.05), 4.875 + 4.75 + 0.125)
+    expect(decode.cycleSec).toBeCloseTo(9.75, 12);
+    expect(decode.comm.exposedSec).toBeCloseTo(5.75, 12);
+    expect(decode.comm.latencySec).toBeCloseTo(0.75 + 0.75 + 0.2, 12);
+    expect(decode.comm.bandwidthSec).toBeCloseTo(4 + 4 + 0.05, 12);
+    const prefill = phaseResult([s0, s1], { ...shape, phase: 'prefill' });
+    expect(prefill.cycleSec).toBeCloseTo(4.875, 12);
+    expect(prefill.latencySec).toBeCloseTo(9.75, 12);
+    // Moving the share: f_pp = 0 puts the whole send in t_0 and none on the path; the totals agree.
+    const allIn = stageResult(0, layers(), send, { ...f, pp: 0 });
+    expect(allIn.sec).toBeCloseTo(4.875 + 0.125, 12);
+    const p0 = phaseResult([allIn, s1], { ...shape, overlap: { ...f, pp: 0 }, phase: 'prefill' });
+    expect(p0.latencySec).toBeCloseTo(9.75, 12);
+  });
+
+  it('a pp-group collective inside a stage is an invariant violation', () => {
+    const bad = [layerResult('layer.0', 0, [result(SEND, { sec: 1, lat: 0.5, bw: 0.5 })])];
+    expect(() => stageResult(0, bad, undefined, IDEAL_OVERLAP)).toThrow(/pp-group/);
   });
 });

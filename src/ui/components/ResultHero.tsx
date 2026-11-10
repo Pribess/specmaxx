@@ -214,7 +214,7 @@ export function ResultHero({
                         <HelpIcon term="Prefill without overlap">
                           {helpLines([
                             'Prefill when sending data between devices does not overlap with compute.',
-                            'The headline assumes it fully overlaps; most engines do not.',
+                            'The headline hides as much as the overlap settings allow; most engines hide less.',
                           ])}
                         </HelpIcon>
                       </span>

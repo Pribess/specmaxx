@@ -30,8 +30,9 @@ import type { AppState } from './appState';
  * A field the UI can mark. `devices` is the device/node count; `denseTp` is the "Dense layers" DP | TP control of
  * the DP attention + EP layout; `dcp` is the DCP field of the Parallelism panel's Advanced; `epImbalance` and
  * `redundantExperts` are the EP balance fields (ρ, EPLB replicas); `allToAllEfficiency` is the all-to-all efficiency
- * η; `offload` and `specDec` are the deployment
- * sections (offloading, speculative decoding); `general` is anything else.
+ * η; `overlap` is the per-class overlap rows and `twoBatchOverlap` the two-batch switch of Hardware → Advanced →
+ * "Communication overlap"; `offload` and `specDec` are the deployment sections (offloading, speculative decoding);
+ * `general` is anything else.
  */
 export type IssueField =
   | 'tp'
@@ -43,6 +44,8 @@ export type IssueField =
   | 'epImbalance'
   | 'redundantExperts'
   | 'allToAllEfficiency'
+  | 'overlap'
+  | 'twoBatchOverlap'
   | 'batch'
   | 'promptLen'
   | 'decodeContextLen'

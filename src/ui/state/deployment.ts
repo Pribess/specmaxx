@@ -152,6 +152,13 @@ export interface DeploymentChoice {
   offload?: OffloadChoice;
   /** Speculative decoding; absent = off. */
   specDec?: SpecDecChoice;
+  /**
+   * Two-batch overlap (engine `DeploymentConfig.twoBatchOverlap`, docs/simulation-model.md "Two-batch overlap"): each
+   * microbatch runs as two halves so one half's expert all-to-all hides behind the other's compute. Absent = off
+   * (never stored as `false`). Applies only to a MoE model with EP > TP and nothing offloaded (`overlap.ts:
+   * twoBatchOverlapApplies`); kept in the state otherwise, but not sent to the engine.
+   */
+  twoBatchOverlap?: true;
 }
 
 /** A PCIe host link override: generation and electrical lanes (engine `HostInterfaceSpec`). */
@@ -274,6 +281,7 @@ export function normalizeDeployment(d: DeploymentChoice): DeploymentChoice {
   return compact({
     offload: offload && offloadsAnything(offload) ? offload : undefined,
     specDec: d.specDec && normalizeSpecDec(d.specDec),
+    twoBatchOverlap: d.twoBatchOverlap === true ? true : undefined,
   });
 }
 
