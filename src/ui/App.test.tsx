@@ -566,6 +566,30 @@ describe('estimator inputs', () => {
     fireEvent.click(within(section).getByLabelText('off'));
     await waitFor(() => expect(location.search).not.toContain('ed='));
   });
+  it('expert all-to-all in Advanced: only in MoE mode B; writes dsp, cmb and a2e', async () => {
+    history.replaceState(null, '', '/?m=zai-org/GLM-5.3-Flash&d=gb200&n=72&b=72&dp=72');
+    mount();
+    await screen.findByTestId('decode-tps');
+    expect(screen.queryByTestId('all-to-all-advanced')).toBeNull();
+    cleanup();
+    history.replaceState(null, '', '/?m=zai-org/GLM-5.3-Flash&d=gb200&n=72&b=72&dp=72&ep=72');
+    mount();
+    await screen.findByTestId('decode-tps');
+    const section = screen.getByTestId('all-to-all-advanced');
+    const eff = within(section).getByLabelText('All-to-all efficiency %') as HTMLInputElement;
+    expect(eff.value).toBe('100');
+    fireEvent.change(eff, { target: { value: '70' } });
+    await waitFor(() => expect(location.search).toContain('a2e=70'));
+    fireEvent.click(within(section).getByRole('combobox', { name: 'Dispatch format' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'NVFP4' }));
+    await waitFor(() => expect(location.search).toContain('dsp=nvfp4'));
+    fireEvent.click(within(section).getByRole('combobox', { name: 'Combine format' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'FP8' }));
+    await waitFor(() => expect(location.search).toContain('cmb=fp8_e4m3'));
+    await screen.findByTestId('decode-tps');
+    fireEvent.change(eff, { target: { value: '100' } });
+    await waitFor(() => expect(location.search).not.toContain('a2e='));
+  });
   it('keeps Advanced closed until opened, then its subsections are open', async () => {
     const { container } = mount();
     await screen.findByTestId('decode-tps');

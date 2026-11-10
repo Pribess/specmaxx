@@ -77,6 +77,12 @@ export interface OpTimeContext {
    * roofline time is returned as is). Unit: seconds.
    */
   perOpLatencyFloorSec?: number;
+  /**
+   * Achieved fraction η of the link bandwidth every all-to-all reaches (`ParallelConfig.allToAllEfficiency`, docs §6
+   * "All-to-all efficiency"): its bandwidth term is divided by η. Absent = 1 (the modelled link bandwidth; the time
+   * is returned untouched). Dimensionless, in (0, 1].
+   */
+  allToAllEfficiency?: number;
 }
 
 /** Memory-effective bandwidth of `engine` on a device with peak memory bandwidth `deviceMemBandwidthBytesPerSec` (B/s). */
@@ -441,6 +447,11 @@ function collectiveOpTime(op: CollectiveOp, ctx: OpTimeContext): OpResult {
     path,
     ctx.collectiveAlgorithm,
   );
+  // Formula: all_to_all: β′ = β/η,  α unchanged,  t = α + β′   (η = allToAllEfficiency; absent = 1 leaves t as is)
+  // See docs/simulation-model.md §6 "All-to-all efficiency"
+  const eta = op.collective === 'all_to_all' ? ctx.allToAllEfficiency : undefined;
+  const bandwidthSec = eta === undefined ? t.bandwidthSec : t.bandwidthSec / eta;
+  const totalSec = eta === undefined ? t.totalSec : t.latencySec + bandwidthSec;
   const result: OpResult = {
     op,
     flops: 0,
@@ -448,10 +459,10 @@ function collectiveOpTime(op: CollectiveOp, ctx: OpTimeContext): OpResult {
     computeSec: 0,
     memorySec: 0,
     commLatencySec: t.latencySec,
-    commBandwidthSec: t.bandwidthSec,
+    commBandwidthSec: bandwidthSec,
     transferLatencySec: 0,
     transferBandwidthSec: 0,
-    sec: t.totalSec,
+    sec: totalSec,
     bound: 'comm',
   };
   const linkLevel = linkLevelOf(path);

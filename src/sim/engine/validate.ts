@@ -19,6 +19,7 @@ import {
 } from '../hw/validate';
 import { applyDeviceModifiers } from '../hw/modifiers';
 import { deviceHostLink } from '../hw/presets/links';
+import { A2A_FORMATS, isA2aFormat } from '../ir/a2aFormat';
 import { modelSpecErrors } from '../ir/validateModel';
 import { lowerBlock, type LoweringContext } from '../lower/lower';
 import {
@@ -164,6 +165,18 @@ export function validateInput(input: SimInput): string[] {
     errors.push(
       `parallel.epImbalanceScalesAllToAll must be true or false (got ${String(scalesA2a)})`,
     );
+  }
+  for (const field of ['dispatchFormat', 'combineFormat'] as const) {
+    const format = parallel[field];
+    if (format !== undefined && !isA2aFormat(format)) {
+      errors.push(
+        `parallel.${field} must be one of ${A2A_FORMATS.join(', ')} (got ${String(format)})`,
+      );
+    }
+  }
+  const eta = parallel.allToAllEfficiency;
+  if (eta !== undefined && !(Number.isFinite(eta) && eta > 0 && eta <= 1)) {
+    errors.push(`parallel.allToAllEfficiency must be a number in (0, 1] (got ${eta})`);
   }
   errors.push(...positiveIntegerErrors(workload.batch, 'workload.batch'));
   errors.push(...positiveIntegerErrors(workload.promptLen, 'workload.promptLen'));

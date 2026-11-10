@@ -121,6 +121,9 @@ export interface AppState {
    * `epImbalanceScalesAllToAll` (ρ on the all-to-alls) and `redundantExpertsPerRank` (EPLB replicas) are set by the
    * Parallelism panel's EP balance fields and kept only when they differ from the default (ρ `DEFAULT_EP_IMBALANCE`,
    * off, 0 replicas; {@link normalizeEpBalance}); the engine reads them only on MoE models at EP > 1.
+   * `dispatchFormat`, `combineFormat` (all-to-all wire formats) and `allToAllEfficiency` (η) are set by Hardware →
+   * Advanced → "Expert all-to-all" and kept only when set / below 1 ({@link normalizeAllToAll}); the engine reads
+   * them only in MoE mode B (EP > TP).
    */
   parallel: ParallelConfig;
   /**
@@ -200,6 +203,20 @@ function normalizeDcp(
   return layout === 'dpAttentionEp' || parallel.dcp === undefined || parallel.dcp === 1
     ? without(parallel, 'dcp')
     : parallel;
+}
+
+/**
+ * `parallel` with the all-to-all knobs normalized: `allToAllEfficiency` removed when absent or 1 (100%, the default),
+ * `dispatchFormat` / `combineFormat` kept only when set (absent = follow the activation dtype). Other values, invalid
+ * ones included (the fields show their errors), are kept.
+ */
+export function normalizeAllToAll(parallel: ParallelConfig): ParallelConfig {
+  let out = parallel;
+  if (out.allToAllEfficiency === undefined || out.allToAllEfficiency === 1)
+    out = without(out, 'allToAllEfficiency');
+  if (out.dispatchFormat === undefined) out = without(out, 'dispatchFormat');
+  if (out.combineFormat === undefined) out = without(out, 'combineFormat');
+  return out;
 }
 
 /** Device of the default state. */
@@ -489,7 +506,10 @@ export function reduce(state: AppState, action: AppAction): AppState {
           : { ...state, parallelLayout: layout };
       return {
         ...next,
-        parallel: normalizeDcp(normalizeEpBalance(normalizeDenseTp(parallel, layout)), layout),
+        parallel: normalizeDcp(
+          normalizeAllToAll(normalizeEpBalance(normalizeDenseTp(parallel, layout))),
+          layout,
+        ),
       };
     }
     case 'setParallelLayout': {

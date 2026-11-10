@@ -1121,9 +1121,11 @@ offloaded no result depends on them.
 ## 5. Parallelism
 
 `src/sim/lower/` (`lower.ts: lowerModel, lowerBlock`; one file per block kind; shared rules in `common.ts`).
-`ParallelConfig { tp, pp, dp, ep, epImbalance?, epImbalanceScalesAllToAll?, redundantExpertsPerRank?, denseTpGroup?, dcp? }`,
+`ParallelConfig { tp, pp, dp, ep, epImbalance?, epImbalanceScalesAllToAll?, redundantExpertsPerRank?, dispatchFormat?,
+combineFormat?, allToAllEfficiency?, denseTpGroup?, dcp? }`,
 world = `tp·pp·dp` (ep groups live inside it; ρ, its all-to-all switch and the redundant experts:
-[EP load imbalance](#ep-load-imbalance), [Redundant experts](#redundant-experts)).
+[EP load imbalance](#ep-load-imbalance), [Redundant experts](#redundant-experts); the all-to-all wire formats:
+[Dispatch and combine precision](#dispatch-and-combine-precision); η: [All-to-all efficiency](#all-to-all-efficiency)).
 `denseTpGroup` picks the group the dense FFN layers and the LM head are tensor-parallel over: the replica's tp
 ranks (absent / `'tp'`, the rule everywhere below) or the whole EP group (`'ep'`, tp = 1 only; [DP attention +
 EP](#dp-attention--ep)). `dcp` (absent = 1) shards the decode KV cache of full-attention layers along the token axis
@@ -1162,7 +1164,8 @@ sharding").
 
 `lower/common.ts: reduceBpe, reduceDtype`. All-reduce, reduce-scatter and the MoE combine carry
 `reduceBpe = max(bpe(act), 2)` (at least 16-bit, so fp8 activations reduce in bf16). Gathers, dispatch and
-send/recv carry `bpe(act)`.
+send/recv carry `bpe(act)`. The MoE dispatch and combine can take their own wire formats ("Dispatch and combine
+precision"); absent, they are exactly `bpe(act)` and `reduceBpe`.
 
 ### Norms and residuals
 
@@ -1391,11 +1394,12 @@ distinct experts" and "EP load imbalance" below). Valid iff `E % ep == 0` and (`
   every row (FLOP ×≈ρ in prefill), activations of its own `a·mE` rows only, and whole experts in decode
   (`src/sim/engine/ep.test.ts`).
 - **Mode B**: the EP group spans p replicas; each device routes its slice `Ts = ceil(T/tp)`; `A = Ts·k`,
-  `A_max` as in mode A, `etp = 1`. Router → top-k → [`latent_in`] → `all_to_all(ep)` dispatch `R_a2a·l·bpe(act)` →
-  experts (grid and weights as in mode A) → `all_to_all(ep)` combine `R_a2a·l·reduceBpe` → combine (`Ts·k·l`) →
+  `A_max` as in mode A, `etp = 1`. Router → top-k → [`latent_in`] → `all_to_all(ep)` dispatch `R_a2a·l·bpe_dispatch` →
+  experts (grid and weights as in mode A) → `all_to_all(ep)` combine `R_a2a·l·bpe_combine` → combine (`Ts·k·l`) →
   [`latent_norm`] → [`latent_out`] → shared experts (unsharded) on Ts → `all_gather(tp)` of `T·h·bpe(act)` when
   tp > 1 (replaces the all-reduce). `R_a2a = Ts·k` by default, `A_max` with `epImbalanceScalesAllToAll`
-  ([EP load imbalance](#ep-load-imbalance)).
+  ([EP load imbalance](#ep-load-imbalance)); `bpe_dispatch = bpe(act)` and `bpe_combine = reduceBpe` by default
+  ([Dispatch and combine precision](#dispatch-and-combine-precision)).
 - **Latent MoE** (`MoeBlock.latentDim` = l, Muse Spark `moe_hidden_size`, Nemotron `moe_latent_size`, Kimi K3
   `routed_expert_hidden_size`): `latent_in (m Ts, n l, k h)` after the top-k and `latent_out (m Ts, n h, k l)` after
   the combine (Ts = T in mode A), module `moe_latent`. Both are **replicated** (except a split expert-output norm,
@@ -1498,7 +1502,7 @@ A_max = min(T_g·min(k, Eloc), max(A, ceil(ρ·T_g·k/ep)))  the busiest device'
 
   ```
   R_a2a = epImbalanceScalesAllToAll ? A_max : Ts·k
-  S_dispatch = R_a2a·l·bpe(act)        S_combine = R_a2a·l·reduceBpe        (mode B)
+  S_dispatch = R_a2a·l·bpe_dispatch    S_combine = R_a2a·l·bpe_combine      (mode B; bpe_* by default bpe(act), reduceBpe)
   ```
 
   Switched on, the busiest device's all-to-alls carry its `A_max` rows: it sends its own `Ts·k` token copies but
@@ -1529,6 +1533,50 @@ A_max = min(T_g·min(k, Eloc), max(A, ceil(ρ·T_g·k/ep)))  the busiest device'
   dp 4 ep 8 274,549 → 255,701 (−6.9 %); mode A tp 8 ep 8 unchanged at 165,859 (that prefill is bound by the TP
   all-reduce, which hides the extra expert compute). ρ alone moves decode by under 0.1 %. With the switch on, mode B
   also adds ρ's share of all-to-all bytes on top.
+
+### Dispatch and combine precision
+
+`ir/a2aFormat.ts: A2aFormat, A2A_TENSOR_FORMATS, a2aBytesPerElement, a2aWireDtype`;
+`lower/moe.ts: dispatchBpe, dispatchDtype, combineBpe, combineDtype, lowerMoe`; `ParallelConfig.dispatchFormat` and
+`combineFormat` (UI: Hardware → Advanced → "Expert all-to-all" → "Dispatch format", "Combine format", shown for MoE
+models with EP > TP; URL `dsp`, `cmb`). Tests: `lower/dispatchCombine.test.ts`, `engine/a2aEfficiency.test.ts`.
+The two mode B all-to-alls carry each routed token's `l`-wide vector; what one element costs on the wire is the
+deployment's choice, not the weights': DeepSeek-V3 dispatches FP8 and combines BF16, SGLang and vLLM on GB200
+dispatch NVFP4, AMD MoRI dispatches FP4 and combines FP8.
+
+```
+S_dispatch = R_a2a·l·bpe_dispatch      bpe_dispatch = dispatchFormat ? (elementBits + scaleBits)/8 : bpe(act)
+S_combine  = R_a2a·l·bpe_combine       bpe_combine  = combineFormat  ? (elementBits + scaleBits)/8 : max(bpe(act), 2)
+```
+
+The format's bytes per element are the same helper as every stored tensor (`bytesPerElement`, §2 "Quant overheads"):
+element bits plus the amortized bits of its block scales.
+
+| Format (`A2aFormat`) | Bits/element      | B per token at h = 7168 | Note                                                                |
+| -------------------- | ----------------- | ----------------------- | ------------------------------------------------------------------- |
+| `bf16`               | 16                | 14,336                  | DeepSeek-V3 combine                                                 |
+| `fp8_e4m3`           | 8                 | 7,168                   | FP8 with no scale (e.g. MoRI's combine figure)                      |
+| `fp8_block128`       | 8 + 32/128 = 8.25 | 7,392                   | FP8 + one fp32 scale per 128 values (DeepEP / DeepSeek-V3 dispatch) |
+| `mxfp8`              | 8 + 8/32 = 8.25   | 7,392                   | OCP MX, one e8m0 scale per 32                                       |
+| `nvfp4`              | 4 + 8/16 = 4.5    | 4,032                   | e2m1 + one e4m3 scale per 16                                        |
+| `mxfp4`              | 4 + 8/32 = 4.25   | 3,808                   | OCP MX                                                              |
+
+- **Default = before.** Absent, dispatch is `bpe(act)` (which already holds the activation dtype's own block scales,
+  e.g. 0.5625 B for NVFP4 activations) and combine is `reduceBpe = max(bpe(act), 2)` (§5 "Reductions dtype"), so the
+  all-to-all bytes and every result are exactly the ones from before the option existed (`toEqual` identity tests).
+- **Check against a measurement.** AMD MoRI, h = 7168: FP4 dispatch (NVFP4-sized, 4,032 B) + FP8 combine (7,168 B) =
+  11,200 B per token, the figure AMD quotes
+  ([AMD](https://www.amd.com/en/developer/resources/technical-articles/2026/win-on-tco.html));
+  `lower/dispatchCombine.test.ts` pins it. BF16 dispatch and combine at the same width would be 28,672 B.
+- **Only the wire changes.** The ops around the all-to-alls keep their activation-dtype bytes: the quantize before the
+  dispatch and the dequantize after it, and the weighted-sum read of the returned rows (`moe.combine`, `Ts·k·l·bpe(act)`),
+  are on-chip work this model does not cost separately. Accuracy of the narrower formats is not modelled.
+- Mode A has no all-to-all; the formats change nothing there. `CollectiveOp.dtype` carries the format's element dtype
+  (informational).
+- **Sources:** DeepEP (FP8 dispatch, fp32 scale per 128 channels; https://github.com/deepseek-ai/DeepEP), DeepSeek-V3
+  technical report (FP8 dispatch, BF16 combine), SGLang GB200 part 2 (https://lmsys.org/blog/2025-09-25-gb200-part-2/,
+  NVFP4 dispatch), vLLM GB200 blog (https://vllm.ai/blog/dsr1-gb200-part1, about 4× less all-to-all volume with NVFP4
+  dispatch), OCP MX v1.0 and the NVIDIA NVFP4 blog (block scales, §2).
 
 ### Redundant experts
 
@@ -1809,6 +1857,31 @@ sendRecvSec`.
 | ring all-gather (S = output) / reduce-scatter (S = input) | `(n−1)·α + (n−1)/n·S/B`                                         |
 | all-to-all (direct, concurrent)                           | `α + (n−1)/n·S/B`                                               |
 | send/recv                                                 | `α + S/B`                                                       |
+
+### All-to-all efficiency
+
+`engine/opTime.ts: collectiveOpTime`; `ParallelConfig.allToAllEfficiency` η (UI: Hardware → Advanced → "Expert
+all-to-all" → "All-to-all efficiency %", shown for MoE models with EP > TP; URL `a2e`, percent). The formulas above
+are the link's limit. A real all-to-all backend (DeepEP normal and low-latency kernels, NIXL-EP, flashinfer
+one-sided, MoRI, pplx, NCCL) reaches a fraction of it: message sizes and routing skew leave links idle, and kernels
+share SMs with compute. That fraction is a property of the backend, not of the hardware, so it is one user input η,
+with no backend choice:
+
+```
+β′ = β/η        α′ = α        t = α + β′          every all_to_all op, η ∈ (0, 1]
+```
+
+- **Default η = 1** (absent): the op context carries no η at all, and results are identical to before (`toEqual`
+  identity test). η > 1 and η ≤ 0 are rejected (`validateInput`).
+- Only the bandwidth term β scales (it is link occupancy; the latency α is a fixed per-message cost). It applies to
+  both the flat and the hierarchical (intra-/inter-node) all-to-all, since it divides the finished β, and to every
+  `all_to_all` op: the MoE dispatch and combine, plus the small sampling all-to-all of a DP-attention head
+  (`head.sample_all_to_all`, 8 B per row). All-reduce, all-gather, reduce-scatter and send/recv are untouched.
+- The `comm.bandwidthSec` split of a phase includes β′, so overlap `'ideal'` hides it behind compute like any β.
+- A **borderline** knob by the project's principles: it models an engine's implementation quality, so it stays off by
+  default and is a plain number the user states, not a backend preset. Reported figures are in the research notes
+  (`docs/research/large-scale-deployment-gaps.md` §G11); a measured link-efficiency for one setup (e.g. DeepEP's
+  published NVLink and RDMA bandwidths against the link peak) is the right way to choose η.
 
 ### Hierarchical collectives
 

@@ -29,6 +29,8 @@
  * (device-memory bytes unchanged).
  */
 
+import { a2aBytesPerElement, a2aWireDtype } from '../ir/a2aFormat';
+import type { Dtype } from '../ir/dtype';
 import { gemmWeightBytes } from '../ir/metrics';
 import { expertHitsMisses, uniqueExperts, uniqueLocalExperts } from '../engine/transfer';
 import type { MoeBlock, ParallelConfig } from '../ir/model';
@@ -230,6 +232,41 @@ export function a2aRowsOf(routing: MoeRouting, parallel: ParallelConfig): number
   return parallel.epImbalanceScalesAllToAll === true
     ? routing.busiestAssignments
     : routing.assignments;
+}
+
+/**
+ * Bytes per element of the MoE dispatch all-to-all: `parallel.dispatchFormat` (block scales included,
+ * {@link a2aBytesPerElement}), else (default) the activation dtype's `bpe(act)`, as before the option existed.
+ * Unit: bytes/element.
+ */
+export function dispatchBpe(ctx: LoweringContext): number {
+  // Formula: bpe_dispatch = dispatchFormat ? (elementBits + scaleBits)/8 : bpe(act)
+  // See docs/simulation-model.md §5 "Dispatch and combine precision"
+  const format = ctx.parallel.dispatchFormat;
+  return format === undefined ? actBpe(ctx) : a2aBytesPerElement(format);
+}
+
+/** Wire dtype of the MoE dispatch all-to-all: `parallel.dispatchFormat`'s, else the activation dtype. */
+export function dispatchDtype(ctx: LoweringContext): Dtype {
+  const format = ctx.parallel.dispatchFormat;
+  return format === undefined ? ctx.quant.activations : a2aWireDtype(format);
+}
+
+/**
+ * Bytes per element of the MoE combine all-to-all: `parallel.combineFormat` (block scales included), else (default)
+ * {@link reduceBpe} = `max(bpe(act), 2)`, as before the option existed. Unit: bytes/element.
+ */
+export function combineBpe(ctx: LoweringContext): number {
+  // Formula: bpe_combine = combineFormat ? (elementBits + scaleBits)/8 : max(bpe(act), 2)
+  // See docs/simulation-model.md §5 "Dispatch and combine precision"
+  const format = ctx.parallel.combineFormat;
+  return format === undefined ? reduceBpe(ctx) : a2aBytesPerElement(format);
+}
+
+/** Wire dtype of the MoE combine all-to-all: `parallel.combineFormat`'s, else {@link reduceDtype}. */
+export function combineDtype(ctx: LoweringContext): Dtype {
+  const format = ctx.parallel.combineFormat;
+  return format === undefined ? reduceDtype(ctx) : a2aWireDtype(format);
 }
 
 /** An expert-parallel all-to-all of `messageBytes` per device over the EP group. */
@@ -451,9 +488,9 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext, layerIndex?: num
   // and the step waits for it); off (default) they carry the mean volume Ts·k, as before the switch existed.
   const a2aRows = a2aRowsOf(routing, ctx.parallel);
   if (layout.mode === 'B') {
-    // Formula: dispatch S = R_a2a·l·bpe(act)
-    // See docs/simulation-model.md §5 "MoE modes A/B", "EP load imbalance"
-    ops.push(epAllToAll('moe.dispatch', a2aRows * l * act, ctx.quant.activations, ep));
+    // Formula: dispatch S = R_a2a·l·bpe_dispatch   (bpe_dispatch = bpe(act) by default)
+    // See docs/simulation-model.md §5 "MoE modes A/B", "EP load imbalance", "Dispatch and combine precision"
+    ops.push(epAllToAll('moe.dispatch', a2aRows * l * dispatchBpe(ctx), dispatchDtype(ctx), ep));
   }
 
   // Grouped expert GEMMs on the balanced grid of a experts × mE tokens (FLOP, tiles, activations), reading the
@@ -519,8 +556,10 @@ export function lowerMoe(block: MoeBlock, ctx: LoweringContext, layerIndex?: num
     ops.push(normOp('moe.expert_norm', 'rmsnorm', expertRows, lShard, ctx));
 
   if (layout.mode === 'B') {
-    // Formula: combine S = R_a2a·l·reduceBpe   (R_a2a = a2aRowsOf: A_max when switched on, else Ts·k)
-    ops.push(epAllToAll('moe.combine_a2a', a2aRows * l * reduceBpe(ctx), reduceDtype(ctx), ep));
+    // Formula: combine S = R_a2a·l·bpe_combine   (R_a2a = a2aRowsOf: A_max when switched on, else Ts·k;
+    //          bpe_combine = reduceBpe = max(bpe(act), 2) by default)
+    // See docs/simulation-model.md §5 "Dispatch and combine precision"
+    ops.push(epAllToAll('moe.combine_a2a', a2aRows * l * combineBpe(ctx), combineDtype(ctx), ep));
   }
 
   // Weighted sum of the expert outputs: mode A over the R = a·mE expert rows into a T·l_s partial-sum buffer;

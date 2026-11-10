@@ -17,6 +17,7 @@ import type { PickerOption } from './fuzzy';
 import { CustomSpecEditor } from './CustomSpecEditor';
 import { SetupRow } from './SetupRow';
 import { OffloadAdvancedFields, OffloadSection } from './OffloadSection';
+import { AllToAllFields } from './AllToAllFields';
 import { MemoryFitFields } from './MemoryFitFields';
 import { PerOpCostFields } from './PerOpCostFields';
 import type { PanelProps as Props } from './types';
@@ -113,6 +114,7 @@ export function HardwarePanel(props: Props) {
         <summary>Advanced</summary>
         <OffloadAdvancedFields {...props} />
         <MemoryFitFields {...props} />
+        <AllToAllFields {...props} />
         <PerOpCostFields {...props} />
         {device &&
           deviceUnlocks(device.base).map((axis) => (

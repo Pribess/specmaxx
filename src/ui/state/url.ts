@@ -22,6 +22,8 @@
  * | `epi` | EP load imbalance ρ (busiest EP rank's routed load ÷ mean), 1–{@link MAX_EP_IMBALANCE} (default 1.2, `DEFAULT_EP_IMBALANCE`; read by the engine only on MoE models at EP > 1) | `epi=1.5` |
  * | `epa` | ρ also scales the mode-B all-to-alls (`epImbalanceScalesAllToAll`): `1` = on (absent: off) | `epa=1` |
  * | `rex` | redundant experts (EPLB replicas) per EP rank, integer ≥ 0 (default 0) | `rex=32` |
+ * | `dsp`, `cmb` | MoE all-to-all wire format of the dispatch / combine (`bf16`, `fp8_e4m3`, `fp8_block128`, `mxfp8`, `nvfp4`, `mxfp4`; absent: follow the activation dtype; read only in MoE mode B) | `dsp=nvfp4&cmb=fp8_e4m3` |
+ * | `a2e` | all-to-all efficiency η in percent, above 0 and at most 100 (default 100, absent) | `a2e=70` |
  * | `b`, `p`, `c` | batch, prefill length (default 8192), decode context (default 8192) | `b=8` |
  * | `pc` | prefill chunk of the memory fit, tokens (default 8192) | `pc=2048` |
  * | `ov`, `fu`, `ar` | overlap, elementwise fusion, all-reduce algorithm | `ov=none` |
@@ -49,6 +51,7 @@
  */
 
 import type { SimOptions } from '../../sim/engine/types';
+import { isA2aFormat } from '../../sim/ir/a2aFormat';
 import { DEFAULT_EP_IMBALANCE } from '../../sim/lower/moe';
 import type { DeviceSpec } from '../../sim/hw/types';
 import type { UnlockSelection } from '../../sim/hw/unlocks';
@@ -176,6 +179,9 @@ export const URL_KEYS = [
   'epi',
   'epa',
   'rex',
+  'dsp',
+  'cmb',
+  'a2e',
   'b',
   'p',
   'c',
@@ -340,6 +346,11 @@ export function encodeState(s: AppState): string {
   put('epi', s.parallel.epImbalance);
   if (s.parallel.epImbalanceScalesAllToAll === true) put('epa', '1');
   put('rex', s.parallel.redundantExpertsPerRank);
+  put('dsp', s.parallel.dispatchFormat);
+  put('cmb', s.parallel.combineFormat);
+  // Percent with at most 4 decimals (0.7 encodes as 70).
+  if (s.parallel.allToAllEfficiency !== undefined)
+    put('a2e', Math.round(s.parallel.allToAllEfficiency * 1e6) / 1e4);
   const w = s.workload;
   const dw = DEFAULT_STATE.workload;
   if (w.batch !== dw.batch) put('b', w.batch);
@@ -760,6 +771,22 @@ export function decodeState(search: string): DecodedState {
     const r = parseInteger(rex, 0, MAX_VALUE);
     if (r === undefined) drop('rex', rex);
     else if (r > 0) parallel.redundantExpertsPerRank = r;
+  }
+  // All-to-all wire formats and efficiency η (percent in the URL); the default (100%) stays absent.
+  for (const [key, field] of [
+    ['dsp', 'dispatchFormat'],
+    ['cmb', 'combineFormat'],
+  ] as const) {
+    const v = get(key);
+    if (v === undefined) continue;
+    if (isA2aFormat(v)) parallel[field] = v;
+    else drop(key, v);
+  }
+  const a2e = get('a2e');
+  if (a2e !== undefined) {
+    const percent = parseNumberIn(a2e, Number.MIN_VALUE, 100);
+    if (percent === undefined) drop('a2e', a2e);
+    else if (percent < 100) parallel.allToAllEfficiency = percent / 100;
   }
   const workload = { ...DEFAULT_STATE.workload };
   for (const [key, field] of [

@@ -132,6 +132,7 @@ Effort: S ≈ a day or less, M ≈ days, L ≈ a week+.
 - **Evidence:** DeepSeek FP8 dispatch/BF16 combine; SGLang NVFP4 dispatch halves traffic [part 2](https://lmsys.org/blog/2025-09-25-gb200-part-2/); vLLM GB200 blog ~4× less all-to-all volume with NVFP4 dispatch; AMD MoRI FP4 dispatch + FP8 combine, 28,672 → 11,200 B/token [AMD](https://www.amd.com/en/developer/resources/technical-articles/2026/win-on-tco.html). Backend choice itself: only 3–4 recipes set it; pplx 0.
 - **Fit:** dtype = legitimate (bytes). Backend = engine implementation → model only as a per-link achieved-bandwidth efficiency factor (**borderline**); pplx/DeepEP choice out of scope.
 - **Effort: S.** `lower/moe.ts` dtypes (today dispatch=`bpe(act)`, combine=`max(bpe(act),2)`), a dispatch-dtype option.
+- **Status: done.** `ParallelConfig.dispatchFormat` / `combineFormat` (`bf16`, `fp8_e4m3`, `fp8_block128` = FP8 + fp32 scale per 128 as DeepEP, `mxfp8`, `nvfp4`, `mxfp4`; block scales counted through `bytesPerElement`; absent = today's `bpe(act)` / `max(bpe(act),2)`) and `allToAllEfficiency` η ∈ (0, 1] (divides every all-to-all's bandwidth term; absent/1 = today; no backend choice). UI: Hardware → Advanced → "Expert all-to-all" for MoE models with EP > TP (URL `dsp`, `cmb`, `a2e` in percent). AMD MoRI's 11,200 B/token is reproduced (NVFP4 4,032 + FP8 7,168 at h = 7168). See `docs/simulation-model.md` §5 "Dispatch and combine precision", §6 "All-to-all efficiency".
 
 ### G12. FP8/FP4 KV cache and low-precision GEMM — **A** (FP8 KV), **B** (FP4 KV), mostly modeled
 

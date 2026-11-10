@@ -265,6 +265,9 @@ function simulatePhase(
       ...(base.perOpLatencyFloorSec === undefined
         ? {}
         : { perOpLatencyFloorSec: base.perOpLatencyFloorSec }),
+      ...(base.allToAllEfficiency === undefined
+        ? {}
+        : { allToAllEfficiency: base.allToAllEfficiency }),
     };
     if (offload !== undefined) {
       ctx.transferPaths = stageTransferPaths(
@@ -437,6 +440,10 @@ export function simulate(input: SimInput): SimResult {
     // The per-op latency floor only when set: with 0 the op contexts are exactly as before.
     ...(options.perOpLatencyFloorSec > 0
       ? { perOpLatencyFloorSec: options.perOpLatencyFloorSec }
+      : {}),
+    // The all-to-all efficiency only when below 1: absent or 1 leaves the op contexts exactly as before.
+    ...(parallel.allToAllEfficiency !== undefined && parallel.allToAllEfficiency !== 1
+      ? { allToAllEfficiency: parallel.allToAllEfficiency }
       : {}),
   };
 

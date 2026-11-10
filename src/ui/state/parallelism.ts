@@ -29,7 +29,8 @@ import type { AppState } from './appState';
 /**
  * A field the UI can mark. `devices` is the device/node count; `denseTp` is the "Dense layers" DP | TP control of
  * the DP attention + EP layout; `dcp` is the DCP field of the Parallelism panel's Advanced; `epImbalance` and
- * `redundantExperts` are the EP balance fields (ρ, EPLB replicas); `offload` and `specDec` are the deployment
+ * `redundantExperts` are the EP balance fields (ρ, EPLB replicas); `allToAllEfficiency` is the all-to-all efficiency
+ * η; `offload` and `specDec` are the deployment
  * sections (offloading, speculative decoding); `general` is anything else.
  */
 export type IssueField =
@@ -41,6 +42,7 @@ export type IssueField =
   | 'dcp'
   | 'epImbalance'
   | 'redundantExperts'
+  | 'allToAllEfficiency'
   | 'batch'
   | 'promptLen'
   | 'decodeContextLen'
@@ -156,16 +158,24 @@ export function placementField(message: string): IssueField {
  * (there is no EP group), whatever the state or URL holds. The EP balance knobs (`epImbalance`,
  * `epImbalanceScalesAllToAll`, `redundantExpertsPerRank`) are dropped unless the model is MoE and EP > 1: the engine
  * reads them only then, and the panel hides their fields otherwise, so a stale value cannot block the simulation.
- * Every other field is kept.
+ * The all-to-all knobs (`dispatchFormat`, `combineFormat`, `allToAllEfficiency`) likewise unless the model is MoE and
+ * EP > TP (MoE mode B, the only layout with an all-to-all). Every other field is kept.
  */
 function onModel(parallel: ParallelConfig, model: ModelSpec): ParallelConfig {
   const moe = hasMoe(model);
-  if (moe && parallel.ep > 1) return parallel;
   const out: ParallelConfig = moe ? { ...parallel } : { ...parallel, ep: 1 };
   if (!moe) delete out.denseTpGroup;
-  delete out.epImbalance;
-  delete out.redundantExpertsPerRank;
-  delete out.epImbalanceScalesAllToAll;
+  if (!(moe && parallel.ep > 1)) {
+    delete out.epImbalance;
+    delete out.redundantExpertsPerRank;
+    delete out.epImbalanceScalesAllToAll;
+  }
+  // The all-to-all knobs only where an all-to-all exists: MoE mode B (EP spans DP replicas: ep > tp).
+  if (!(moe && parallel.ep > parallel.tp)) {
+    delete out.dispatchFormat;
+    delete out.combineFormat;
+    delete out.allToAllEfficiency;
+  }
   return out;
 }
 
@@ -195,7 +205,7 @@ export function effectiveParallel(
  * ({@link effectiveParallel} of the user's); on a dense model it is checked with EP 1 and no `denseTpGroup`:
  * - every degree (EP only on MoE models) and workload value is an integer ≥ 1 (if not, nothing else is checked);
  * - the EP balance knobs, when kept (MoE, EP > 1): `epImbalance` ≥ 1 on `epImbalance`, `redundantExpertsPerRank` a
- *   whole number ≥ 0 on `redundantExperts`;
+ *   whole number ≥ 0 on `redundantExperts`; `allToAllEfficiency` in (0, 1] on `allToAllEfficiency` (MoE, EP > TP);
  * - `tp·pp·dp` ≠ devices is an error on `devices` (the device count must equal TP × PP × DP: EP uses the TP and DP
  *   devices); in the DP attention + EP `layout` on a MoE model (TP 1, DP = EP, so TP and DP are not shown) it is
  *   worded as EP × PP;
@@ -241,6 +251,11 @@ export function fieldIssues(
   const replicas = effective.redundantExpertsPerRank;
   if (replicas !== undefined && !(Number.isSafeInteger(replicas) && replicas >= 0)) {
     error('redundantExperts', 'Redundant experts must be a whole number ≥ 0.');
+  }
+  // The all-to-all efficiency η (kept by onModel only in MoE mode B): in (0, 1].
+  const eta = effective.allToAllEfficiency;
+  if (eta !== undefined && !(Number.isFinite(eta) && eta > 0 && eta <= 1)) {
+    error('allToAllEfficiency', 'All-to-all efficiency must be above 0 and at most 100%.');
   }
 
   // EP lies inside the TP group (mode A) or spans DP replicas (mode B): the device count must equal TP × PP × DP.

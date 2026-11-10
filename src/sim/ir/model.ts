@@ -10,6 +10,7 @@
  * an EARLIER layer by its index in `ModelSpec.layers`; `modelSpecErrors` (ir/validateModel.ts) checks them.
  */
 
+import type { A2aFormat } from './a2aFormat';
 import type { Dtype, TensorFormat } from './dtype';
 
 /** A decoder-only language model. */
@@ -804,6 +805,26 @@ export interface ParallelConfig {
    * when ep > 1. Default 0 (absent). Count per device, integer ≥ 0.
    */
   redundantExpertsPerRank?: number;
+  /**
+   * Wire format of the MoE mode B dispatch all-to-all (tokens to their experts' devices), block scales included
+   * ({@link A2aFormat}; docs §5 "Dispatch and combine precision"). Absent (default) = the activation dtype
+   * (`QuantConfig.activations`), the format from before this field existed. Only read in mode B (ep > tp).
+   */
+  dispatchFormat?: A2aFormat;
+  /**
+   * Wire format of the MoE mode B combine all-to-all (expert outputs back to the token's device). Absent (default)
+   * = the activation dtype, at least 16-bit (`max(bpe(activations), 2)`: reductions are never carried below
+   * 16-bit), the format from before this field existed. Only read in mode B (ep > tp).
+   */
+  combineFormat?: A2aFormat;
+  /**
+   * Achieved fraction η of the link bandwidth an all-to-all reaches, in (0, 1]: its bandwidth term becomes
+   * `(n−1)/n · S/(η·B)`, the latency term is unchanged (docs §6 "All-to-all efficiency"). Stands for the
+   * communication backend (DeepEP, NIXL-EP, flashinfer one-sided, MoRI, …) not reaching the link's peak; there is no
+   * backend choice, the user supplies η. Absent or 1 (default) = the link's modelled bandwidth, the time from before
+   * this field existed. Applies to every all-to-all op of the EP group. Dimensionless.
+   */
+  allToAllEfficiency?: number;
   /**
    * Group the dense FFN layers (`mlp` blocks) and the LM head are tensor-parallel over; size G (count).
    * - `'tp'` (default, also when absent): the replica's own tp ranks, G = tp. At tp = 1 they are whole on every

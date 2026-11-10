@@ -157,6 +157,11 @@ export function buildSimInput(
         ? { redundantExpertsPerRank: parallel.redundantExpertsPerRank }
         : {}),
       ...(parallel.dcp !== undefined && parallel.dcp > 1 ? { dcp: parallel.dcp } : {}),
+      ...(parallel.dispatchFormat !== undefined ? { dispatchFormat: parallel.dispatchFormat } : {}),
+      ...(parallel.combineFormat !== undefined ? { combineFormat: parallel.combineFormat } : {}),
+      ...(parallel.allToAllEfficiency !== undefined
+        ? { allToAllEfficiency: parallel.allToAllEfficiency }
+        : {}),
     },
     workload: state.workload,
     hardware: hardware.stack,
