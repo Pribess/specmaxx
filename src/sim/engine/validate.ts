@@ -95,6 +95,10 @@ export function validateInput(input: SimInput): string[] {
   if (workload.prefillChunkTokens !== undefined) {
     errors.push(...positiveIntegerErrors(workload.prefillChunkTokens, 'workload.prefillChunkTokens'));
   }
+  const hit = workload.prefixCacheHitRatio;
+  if (hit !== undefined && !(Number.isFinite(hit) && hit >= 0 && hit < 1)) {
+    errors.push(`workload.prefixCacheHitRatio (${hit}) must be a number in [0, 1)`);
+  }
   const usable = hardware.gpuUsableFraction;
   if (usable !== undefined && !(usable > 0 && usable <= 1)) {
     errors.push(`hardware.gpuUsableFraction (${usable}) must be in (0, 1]`);

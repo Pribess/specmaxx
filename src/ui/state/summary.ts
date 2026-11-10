@@ -28,6 +28,8 @@ export interface PhaseSummary {
   contextTokens: number;
   /** Aggregate rate over all DP replicas. Unit: tokens/s. */
   tokensPerSec: number;
+  /** Prefill with a prefix-cache hit: computed (not cached) tokens per second; absent otherwise. Unit: tokens/s. */
+  computedTokensPerSec?: number;
   /** Rate seen by one sequence. Unit: tokens/s. */
   perSequenceTokensPerSec: number;
   /** Prefill: time to first token of a replica batch; decode: time per output token. Unit: seconds. */
@@ -259,6 +261,7 @@ function phaseSummary(p: PhaseResult, contextTokens: number): PhaseSummary {
   return {
     contextTokens,
     tokensPerSec: p.tokensPerSec,
+    ...(p.computedTokensPerSec !== undefined && { computedTokensPerSec: p.computedTokensPerSec }),
     perSequenceTokensPerSec: p.perSequenceTokensPerSec,
     latencySec: p.latencySec,
     cycleSec: p.cycleSec,

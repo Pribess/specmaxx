@@ -54,6 +54,7 @@ import {
 import { resolveSpeculative } from './specdec';
 import { resolveHostStaging, type HostStaging } from './staging';
 import { stageNStream, type TransferPath } from './transfer';
+import { computedPromptTokens } from './types';
 import type { OffloadTier, PhaseRates, PhaseResult, SimInput, SimOptions, SimResult } from './types';
 import { DEFAULT_DISPATCH_SEC_PER_KERNEL, stageKernelCount, withDispatch } from './dispatch';
 import { validateInput } from './validate';
@@ -292,6 +293,7 @@ function simulatePhase(
     microbatches: shape.microbatches,
     microbatchSize: shape.microbatchSize,
     promptLen: input.workload.promptLen,
+    computedTokens: computedPromptTokens(input.workload),
     overlap: options.overlap,
   };
   if (tokensPerStep !== undefined) phaseShape.tokensPerStep = tokensPerStep;
@@ -437,11 +439,12 @@ export function simulate(input: SimInput): SimResult {
   const sequencesPerReplica = workload.batch / parallel.dp;
   const mb = microbatching(parallel.pp, sequencesPerReplica);
   const shape = { sequencesPerReplica, ...mb };
-  // Prefill @ P: the whole P-token prompt from an empty KV cache, so past = 0 and qLen = kvLen = P.
+  // Prefill @ P: P_new = P − floor(P·h) new tokens (h = prefix-cache hit ratio, 0 = empty cache) attend over all P
+  // keys (cached past + new), so qLen = P_new, kvLen = P. At h = 0 this is qLen = kvLen = P (docs §7 "Prefix cache").
   const prefillCtx: LoweringContext = {
     phase: 'prefill',
     seqs: mb.microbatchSize,
-    qLen: workload.promptLen,
+    qLen: computedPromptTokens(workload),
     kvLen: workload.promptLen,
     quant,
     parallel,
@@ -558,6 +561,7 @@ export function simulate(input: SimInput): SimResult {
     workload.promptLen,
     prefillCtx.seqs,
     workload.prefillChunkTokens ?? DEFAULT_PREFILL_CHUNK_TOKENS,
+    prefillCtx.qLen,
   );
   let chunkLowered = prefillLowered;
   if (chunk.seqs !== prefillCtx.seqs || chunk.qLen !== prefillCtx.qLen) {

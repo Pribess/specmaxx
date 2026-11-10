@@ -35,6 +35,31 @@ export interface Workload {
    * `engine/memory.ts`, sourced there); an integer ≥ 1. Unit: tokens. See docs/simulation-model.md §8.
    */
   prefillChunkTokens?: number;
+  /**
+   * Prefix-cache hit ratio h ∈ [0, 1): the fraction of each prompt already in the device KV cache from earlier requests
+   * (production prefix caching: DeepSeek reports 56%, Mooncake 34–55%). Prefill then computes only the new tokens
+   * `P_new = P − floor(P·h)` while their attention still reads the `P − P_new` cached tokens' KV (`qLen = P_new`,
+   * `kvLen = P`). The cached KV is assumed resident in device memory; fetching it from a lower tier is not modeled
+   * (hook: {@link cachedPrefixTokens}). Absent or 0 = today's behaviour, bit for bit. Dimensionless. See
+   * docs/simulation-model.md §7 "Prefix cache".
+   */
+  prefixCacheHitRatio?: number;
+}
+
+/**
+ * Prompt tokens served from the prefix cache, `floor(P·h)`. They are never computed; their KV is assumed already in
+ * device memory. HOOK for the KV-tiering task (report §G10): a cache held in a lower tier would add a fetch of
+ * `cached · kvBytesPerToken` bytes here. Unit: tokens.
+ */
+export function cachedPrefixTokens(workload: Pick<Workload, 'promptLen' | 'prefixCacheHitRatio'>): number {
+  // Formula: cached = floor(P · h)
+  return Math.floor(workload.promptLen * (workload.prefixCacheHitRatio ?? 0));
+}
+
+/** Prompt tokens prefill actually computes, `P_new = P − floor(P·h)` (≥ 1 since h < 1). Unit: tokens. */
+export function computedPromptTokens(workload: Pick<Workload, 'promptLen' | 'prefixCacheHitRatio'>): number {
+  // Formula: P_new = P − cached
+  return workload.promptLen - cachedPrefixTokens(workload);
 }
 
 /**
@@ -432,6 +457,12 @@ export interface PhaseResult {
   latencySec: number;
   /** Aggregate rate over all DP replicas (prefill: prompt tokens; decode: generated tokens). Unit: tokens/s. */
   tokensPerSec: number;
+  /**
+   * Prefill with a prefix-cache hit only: COMPUTED tokens per second, `dp·B_r·P_new / cycle`, counting just the
+   * tokens prefill actually ran (`tokensPerSec` counts every prompt token, cached ones included). Absent without a
+   * prefix cache (then both are equal). Unit: tokens/s.
+   */
+  computedTokensPerSec?: number;
   /** Rate seen by one sequence. Unit: tokens/s. */
   perSequenceTokensPerSec: number;
   /**

@@ -167,6 +167,28 @@ export function ResultHero({
                       </span>
                     )}
                   </div>
+                  {phase === 'prefill' && result.prefill.computedTokensPerSec !== undefined && (
+                    <div className="what-if" data-testid="prefill-computed">
+                      <span>Computed: </span>
+                      <span className="what-if-value">
+                        <span>
+                          <span data-testid="prefill-computed-tps">
+                            <Num>{formatTokensPerSec(result.prefill.computedTokensPerSec)}</Num>
+                          </span>
+                          <span className="answer-unit">
+                            {' '}
+                            tok/s @ {formatContextTokens(result.prefill.contextTokens)}
+                          </span>
+                        </span>
+                        <HelpIcon term="Computed prefill rate">
+                          {helpLines([
+                            'The headline counts every prompt token, cached ones included.',
+                            'This counts only the tokens prefill actually computed.',
+                          ])}
+                        </HelpIcon>
+                      </span>
+                    </div>
+                  )}
                   {phase === 'prefill' && result.prefill.withoutOverlap && (
                     <div className="what-if" data-testid="prefill-no-overlap">
                       <span>Without overlap: </span>

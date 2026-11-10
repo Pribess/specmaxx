@@ -210,6 +210,8 @@ export interface PhaseShape {
   microbatchSize: number;
   /** Prompt length (prefill tokens per sequence). Unit: tokens. */
   promptLen: number;
+  /** Prefill tokens actually computed per sequence, `P_new ≤ promptLen` (prefix cache); absent = `promptLen`. Unit: tokens. */
+  computedTokens?: number;
   /** Overlap assumption (decides whether the PP sends are already inside t_s). */
   overlap: SimOptions['overlap'];
   /**
@@ -375,11 +377,15 @@ export function phaseResult(stages: StageResult[], shape: PhaseShape): PhaseResu
       // See docs/simulation-model.md §7 ("Pipeline and DP")
       const cycleSec = m * bottleneckSec;
       const latencySec = sumStageSec + p2pOnPathSec + (m - 1) * bottleneckSec;
+      const hit = shape.computedTokens !== undefined && shape.computedTokens !== shape.promptLen;
       return {
         ...base,
         cycleSec,
         latencySec,
         tokensPerSec: (shape.dp * shape.sequencesPerReplica * shape.promptLen) / cycleSec,
+        ...(hit
+          ? { computedTokensPerSec: (shape.dp * shape.sequencesPerReplica * shape.computedTokens!) / cycleSec }
+          : {}),
         perSequenceTokensPerSec: shape.promptLen / latencySec,
       };
     }

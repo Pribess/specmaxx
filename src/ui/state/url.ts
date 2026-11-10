@@ -101,7 +101,7 @@ export function latencyFloorSecFromMicros(us: number): number {
  */
 export const URL_KEYS = [
   'm', 'rev', 'w', 'bpw', 'hbpw', 'a', 'kv', 'lt', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'fab', 'x', 'xi', 'xe',
-  'hr', 'hrc', 'ssd', 'hl', 'gpu', 'rr', 'tp', 'pp', 'dp', 'ep', 'b', 'p', 'c', 'pc', 'ov', 'fu', 'ar', 'lf', 'ed', 'oo',
+  'hr', 'hrc', 'ssd', 'hl', 'gpu', 'rr', 'tp', 'pp', 'dp', 'ep', 'b', 'p', 'c', 'pc', 'ph', 'ov', 'fu', 'ar', 'lf', 'ed', 'oo',
   'ox', 'oxl', 'oxf', 'oxh', 'odl', 'odt', 'olt', 'ols', 'oet', 'oqd', 'osr', 'opf', 'sd', 'sdr', 'sdk', 'sdu', 'sda',
   'oxr', 'oxe',
   'olr', 'ole',
@@ -224,6 +224,8 @@ export function encodeState(s: AppState): string {
   if (w.promptLen !== dw.promptLen) put('p', w.promptLen);
   if (w.decodeContextLen !== dw.decodeContextLen) put('c', w.decodeContextLen);
   if (w.prefillChunkTokens !== undefined) put('pc', w.prefillChunkTokens);
+  // Percent with at most 4 decimals (0.9 encodes as 90).
+  if (w.prefixCacheHitRatio !== undefined) put('ph', Math.round(w.prefixCacheHitRatio * 1e6) / 1e4);
   const options = normalizeOptions(s.options);
   for (const [key, field] of OPTION_KEYS) put(key, options[field]);
   // µs with at most 3 decimals (ns), so 0.6 µs encodes as 0.6 (not 0.6000000000000001).
@@ -518,6 +520,12 @@ export function decodeState(search: string): DecodedState {
     const parsed = parseInteger(v, 1, MAX_VALUE);
     if (parsed !== undefined) workload[field] = parsed;
     else drop(key, v);
+  }
+  const ph = get('ph');
+  if (ph !== undefined) {
+    const percent = parseNumberIn(ph, Number.MIN_VALUE, 99.9999);
+    if (percent !== undefined) workload.prefixCacheHitRatio = percent / 100;
+    else drop('ph', ph);
   }
 
   // Options.

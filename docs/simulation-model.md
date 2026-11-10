@@ -2033,13 +2033,48 @@ sums of numbers the engine already computes, so no rate depends on them (design 
   microbatch → `cycle = 1,024 s`.
 - **Context of each rate** (`src/sim/engine/simulate.ts: simulate`, `types.ts: Workload`). Every rate is quoted
   at the context it applies to ("33.9 tok/s @ 8k"):
-  - **Prefill @ P** (`promptLen = P`): the whole P-token prompt from an _empty_ KV cache, so `past = 0` and
+  - **Prefill @ P** (`promptLen = P`): the whole P-token prompt from an _empty_ KV cache (with a prefix-cache hit
+    ratio, only `P_new` tokens are computed over `kvLen = P`; see "Prefix cache"), so `past = 0` and
     `qLen = kvLen = P`. Prefill tok/s @ P = `P / latency` per sequence (`dp·B_r·P/cycle` aggregate).
   - **Decode @ N** (`decodeContextLen = N`): one decode step with N tokens _already_ in the KV cache. The new
     token's query also sees its own key, so `qLen = 1` and `kvLen = past + qLen = N + 1`. Attention FLOP
     (`2·seqs·heads·(N + 1)·(qk + v)`) and KV reads (`seqs·(N + 1)·elemsPerToken·bpe(kv)`) grow linearly in N
     (full attention; a window or top-k selection caps both, §3 "Attended pairs").
     Decode tok/s @ N = `1/cycle` per sequence (`dp·B_r/cycle` aggregate). Test: `simulate.test.ts`.
+
+### Prefix cache
+
+`src/sim/engine/types.ts: Workload.prefixCacheHitRatio, cachedPrefixTokens, computedPromptTokens`;
+`src/sim/engine/simulate.ts: simulate`; `src/sim/engine/pipeline.ts: phaseResult`; test `prefixCache.test.ts`.
+
+A scenario knob (production serving reuses cached prompt prefixes: DeepSeek reports a 56.3% hit rate
+([DeepSeek inference system overview](https://github.com/deepseek-ai/open-infra-index/blob/main/202502OpenSourceWeek/day_6_one_more_thing_deepseekV3R1_inference_system_overview.md)),
+Mooncake 34–55% with prefill GPU time −36…−64% ([Mooncake, arXiv 2407.00079](https://arxiv.org/html/2407.00079));
+report `docs/research/large-scale-deployment-gaps.md` §G7). With hit ratio `h ∈ [0, 1)` (default 0 = off):
+
+```
+cached = floor(P·h)            prompt tokens whose KV is already in device memory
+P_new  = P − cached            tokens prefill computes (≥ 1 since h < 1)
+prefill step: qLen = P_new, kvLen = P   (the new tokens attend over cached + new keys)
+```
+
+- GEMM, norm, MoE and elementwise costs scale with `qLen = P_new`; the weights are read once per pass as before.
+  Exception: the MLA dense-prefill `kv_b` GEMM has `m = seqs·kvLen` (it decompresses every visible key, cached
+  included, §5 "MLA forms"), so it stays at `P`.
+- Attention pairs per head, full causal attention (§3 "Attended pairs"): `P_new·cached + P_new(P_new+1)/2`
+  (every new query sees all cached keys plus the causal triangle of the new block; at `h = 0` this is `P(P+1)/2`).
+  Windowed and top-k attention keep their caps (`min(cap, …)`), so a long cached prefix adds no pairs beyond the
+  window. KV reads cover all `kvLen = P` keys (`kvTokensRead`), so they shrink less than the GEMMs. Recurrent/conv layers start from the cached state
+  (`kvLen > qLen`, `hasPriorState`).
+- Two throughputs, always quoted at context P: **effective** `tokensPerSec = dp·B_r·P/cycle` (every prompt token,
+  cached ones included; the headline, and per sequence `P/latency`) and **computed**
+  `computedTokensPerSec = dp·B_r·P_new/cycle` (only tokens prefill ran). At `h = 0` they are equal and the computed
+  field is absent. Decode is unchanged.
+- Memory fit: the activation-peak step uses `P_new` as its token count with `kvLen = P`
+  (`prefillChunkShape(P, seqs, C, P_new)`).
+- Not modelled: the cached KV is assumed resident in device memory. Fetching it from host RAM / SSD / a remote pool is
+  the KV-tiering task (§G10); `cachedPrefixTokens` is the hook where its fetch bytes (`cached · kvBytesPerToken`)
+  would attach. Radix/paging mechanics and routing are out of scope.
 
 ### Engine dispatch overlay
 

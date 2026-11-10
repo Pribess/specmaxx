@@ -86,22 +86,26 @@ export interface PrefillChunkShape {
 
 /**
  * The prefill step whose activations the memory fit counts, under chunked prefill with a budget of C tokens per
- * step: a microbatch of `seqs` prompts of P tokens.
- * - `seqs·P ≤ C`: the whole microbatch in one step (`seqs, qLen = kvLen = P`), as the rate is costed.
- * - `P ≤ C < seqs·P`: as many whole prompts as fit the budget (`floor(C/P)` sequences, `qLen = kvLen = P`).
- * - `C < P`: one sequence's LAST chunk (`qLen = C`, `kvLen = P`): the chunk that sees the whole prompt.
+ * step: a microbatch of `seqs` prompts of P tokens, of which `N = newTokens` are computed (`N = P` without a prefix
+ * cache; with a prefix-cache hit `N = P − floor(P·h) < P` and the cached tokens only add keys, so `kvLen` stays P).
+ * - `seqs·N ≤ C`: the whole microbatch in one step (`seqs, qLen = N, kvLen = P`), as the rate is costed.
+ * - `N ≤ C < seqs·N`: as many whole prompts as fit the budget (`floor(C/N)` sequences, `qLen = N`, `kvLen = P`).
+ * - `C < N`: one sequence's LAST chunk (`qLen = C`, `kvLen = P`): the chunk that sees the whole prompt.
+ * Without a cache (`N = P`) these are `qLen = kvLen = P` as before.
  * Activations of every op grow with the step's tokens `seqs·qLen`, so this step bounds the peak of all chunks.
  */
 export function prefillChunkShape(
   promptLen: number,
   seqs: number,
   chunkTokens: number,
+  newTokens: number = promptLen,
 ): PrefillChunkShape {
-  // Formula: seqs·P ≤ C → (seqs, P, P);  P ≤ C → (floor(C/P), P, P);  else (1, C, P)
+  // `newTokens` = P_new ≤ P: prompt tokens actually computed (prefix cache); the cached P − P_new tokens only add keys.
+  // Formula: seqs·N ≤ C → (seqs, N, P);  N ≤ C → (floor(C/N), N, P);  else (1, C, P)   [N = P_new; P_new = P: no cache]
   // See docs/simulation-model.md §8 ("Activation peak")
-  if (seqs * promptLen <= chunkTokens) return { seqs, qLen: promptLen, kvLen: promptLen };
-  if (promptLen <= chunkTokens)
-    return { seqs: Math.floor(chunkTokens / promptLen), qLen: promptLen, kvLen: promptLen };
+  if (seqs * newTokens <= chunkTokens) return { seqs, qLen: newTokens, kvLen: promptLen };
+  if (newTokens <= chunkTokens)
+    return { seqs: Math.floor(chunkTokens / newTokens), qLen: newTokens, kvLen: promptLen };
   return { seqs: 1, qLen: chunkTokens, kvLen: promptLen };
 }
 

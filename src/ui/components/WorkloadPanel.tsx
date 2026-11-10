@@ -12,7 +12,7 @@ const METHOD_NAMES = { mtp: 'MTP', dflash2: 'DFlash 2', dspark: 'DSpark' } as co
 
 export function WorkloadPanel(props: PanelProps & { drafter?: DrafterStatus }) {
   const { state, dispatch, built } = props;
-  const { batch, promptLen, decodeContextLen } = state.workload;
+  const { batch, promptLen, decodeContextLen, prefixCacheHitRatio } = state.workload;
   const spec = state.deployment.specDec;
   return (
     <Panel
@@ -40,6 +40,24 @@ export function WorkloadPanel(props: PanelProps & { drafter?: DrafterStatus }) {
             'Length of the prompt, in tokens.',
             'Prefill speed is measured while reading a prompt this long.',
             K_NOTE,
+          ])}
+        />
+        <NumberField
+          label="Prefix cache hit %"
+          value={Math.round((prefixCacheHitRatio ?? 0) * 1e6) / 1e4}
+          min={0}
+          max={99.9999}
+          step="any"
+          onChange={(v) =>
+            dispatch({
+              type: 'setWorkload',
+              workload: { prefixCacheHitRatio: v > 0 && v < 100 ? v / 100 : undefined },
+            })
+          }
+          help={helpLines([
+            'Share of each prompt already cached from earlier requests.',
+            'Prefill computes only the rest, but still reads the cached part.',
+            'Production caches hit 35–55% (DeepSeek, Mooncake). 0 means no cache.',
           ])}
         />
         <NumberField

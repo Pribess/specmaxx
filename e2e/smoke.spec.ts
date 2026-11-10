@@ -35,3 +35,25 @@ test('EXL3 weights at 2.5 bpw change the rate and survive a reload', async ({ pa
   await expect(page.getByRole('combobox', { name: 'Weights' })).toHaveText(/EXL3 2\.5bpw/);
   await expect(page.getByTestId('decode-tps')).toHaveText(after ?? '');
 });
+
+test('prefix cache hit 50% shows a computed prefill rate and survives a reload', async ({ page }) => {
+  await mockHf(page);
+  await page.goto('/');
+  await expect(page.getByTestId('prefill-tps')).toHaveText(/[1-9]/);
+  await expect(page.getByTestId('prefill-computed')).toHaveCount(0);
+  const num = async (id: string) =>
+    Number((await page.getByTestId(id).textContent())!.replace(/[^\d.]/g, ''));
+  const before = await num('prefill-tps');
+  await page.getByRole('spinbutton', { name: 'Prefix cache hit %' }).fill('50');
+  await expect(page).toHaveURL(/ph=50/);
+  await expect(page.getByTestId('prefill-computed')).toBeVisible();
+  // Effective rate rises (~2× less compute, attention still reads the cache); computed ≈ half of effective.
+  await expect.poll(() => num('prefill-tps')).toBeGreaterThan(before * 1.3);
+  const effective = await num('prefill-tps');
+  const computed = await num('prefill-computed-tps');
+  expect(computed / effective).toBeGreaterThan(0.45);
+  expect(computed / effective).toBeLessThan(0.55);
+  await page.reload();
+  await expect(page.getByRole('spinbutton', { name: 'Prefix cache hit %' })).toHaveValue('50');
+  await expect(page.getByTestId('prefill-computed')).toBeVisible();
+});
