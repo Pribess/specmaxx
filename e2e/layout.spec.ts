@@ -105,6 +105,10 @@ test('phone: headline, figures and memory first, then inputs, then the analysis'
     els.map((el) => el.getBoundingClientRect().height),
   ))
     expect(box).toBe(12);
+  // The sweep's axis titles sit over their own axes with clear space between them.
+  const left = (await page.locator('.sweep-stream-title').boundingBox())!;
+  const right = (await page.locator('.sweep-agg-title').boundingBox())!;
+  expect(right.x - (left.x + left.width)).toBeGreaterThan(24);
 });
 
 for (const width of [360, 390]) {

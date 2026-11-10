@@ -157,7 +157,7 @@ it('shows sweep x/y/context and memory-fit status on hover, keyboard navigation 
   expect(screen.queryByRole('tooltip')).toBeNull();
   fireEvent.pointerEnter(points[0]);
   expect(screen.getByRole('tooltip').textContent).toBe(
-    'batch 1 · 33.9 tok/s aggregate · 33.9 per stream @ 8k',
+    'batch 1 · 33.9 tok/s per stream · 33.9 aggregate @ 8k',
   );
   fireEvent.focus(points[0]);
   fireEvent.keyDown(points[0], { key: 'ArrowRight' });
@@ -165,17 +165,46 @@ it('shows sweep x/y/context and memory-fit status on hover, keyboard navigation 
   fireEvent.pointerLeave(svg);
   expect(screen.getByRole('tooltip').textContent).toContain('batch 8');
   expect(screen.getByRole('tooltip').textContent).toBe(
-    'batch 8 · 412.3 tok/s aggregate · 51.5 per stream @ 8k · does not fit in memory',
+    'batch 8 · 51.5 tok/s per stream · 412.3 aggregate @ 8k · does not fit in memory',
   );
   expect(container.querySelector('.chart-crosshair')).toBeTruthy();
   expect(container.querySelector('.sweep-line')).toBeTruthy();
   expect(container.querySelector('.sweep-line-stream')).toBeTruthy();
-  expect(container.querySelectorAll('svg > g > .sweep-point-stream').length).toBe(2);
-  expect(container.textContent).toContain('aggregate tok/s @ 8k');
-  expect(container.textContent).toContain('per-stream tok/s @ 8k');
-  expect(container.querySelector('.sweep-legend')?.textContent).toBe('AggregatePer stream');
-  const ticks = [...container.querySelectorAll('.sweep-right-tick')].map((t) => t.textContent);
-  expect(ticks).toEqual(['0.0', '25.8', '51.5']);
+  expect(
+    container.querySelectorAll('svg > g:not(.sweep-title-sample) > .sweep-point-stream').length,
+  ).toBe(2);
+  // Left axis: per stream (its ticks top out at the per-stream max); right axis: aggregate.
+  const leftTitle = container.querySelector('.sweep-stream-title')!;
+  const rightTitle = container.querySelector('.sweep-agg-title')!;
+  expect(leftTitle.textContent).toBe('per stream, tok/s @ 8k');
+  expect(leftTitle.getAttribute('text-anchor')).toBe('start');
+  expect(Number(leftTitle.getAttribute('x'))).toBeLessThan(60);
+  expect(rightTitle.textContent).toBe('aggregate, tok/s @ 8k');
+  expect(rightTitle.getAttribute('text-anchor')).toBe('end');
+  expect(Number(rightTitle.getAttribute('x'))).toBeGreaterThan(640);
+  const tickTexts = (sel: string) => [...container.querySelectorAll(sel)].map((t) => t.textContent);
+  const tickXs = (sel: string) =>
+    [...container.querySelectorAll(sel)].map((t) => Number(t.getAttribute('x')));
+  expect(tickTexts('.sweep-stream-tick')).toEqual(['0.0', '25.8', '51.5']);
+  expect(tickXs('.sweep-stream-tick').every((v) => v < 60)).toBe(true);
+  expect(tickTexts('.sweep-agg-tick')).toEqual(['0.0', '206', '412']);
+  expect(tickXs('.sweep-agg-tick').every((v) => v > 640)).toBe(true);
+  // Each series is drawn against its own axis: both series' maxima reach the plot top (y = 40).
+  const streamTop = Math.min(
+    ...[
+      ...container.querySelectorAll('svg > g:not(.sweep-title-sample) > .sweep-point-stream'),
+    ].map((r) => Number(r.getAttribute('y')) + 5),
+  );
+  const aggTop = Math.min(
+    ...[...container.querySelectorAll('svg > g:not(.sweep-title-sample) > .sweep-point')].map((c) =>
+      Number(c.getAttribute('cy')),
+    ),
+  );
+  expect(streamTop).toBe(40);
+  expect(aggTop).toBe(40);
+  expect(container.querySelector('.sweep-legend')?.textContent).toBe(
+    'Per stream (left axis)Aggregate (right axis)',
+  );
   fireEvent.keyDown(points[1], { key: 'Home' });
   expect(document.activeElement).toBe(points[0]);
   fireEvent.keyDown(points[0], { key: 'End' });
@@ -184,7 +213,7 @@ it('shows sweep x/y/context and memory-fit status on hover, keyboard navigation 
   expect(screen.queryByRole('tooltip')).toBeNull();
   fireEvent.pointerDown(points[0]);
   expect(screen.getByRole('tooltip').textContent).toContain('batch 1');
-  expect(screen.getByText('aggregate tok/s @ 8k')).toBeTruthy();
+  expect(screen.getByText('aggregate, tok/s @ 8k')).toBeTruthy();
   expect(screen.queryByText(/Aggregate tok\/s\. Hollow/)).toBeNull();
 });
 it('shows roofline x/y units and per-phase contexts on hover, focus, arrows and tap', async () => {

@@ -567,7 +567,9 @@ tbody td:last-child { text-align: left; }
 .sweep-point-stream { fill: var(--paper); stroke: var(--link); stroke-width: 2; pointer-events: none; }
 .sweep-point-stream.fits { fill: var(--link); }
 .sweep-point-stream.is-active { stroke: var(--primary); stroke-width: 3; }
-.sweep-right-tick, .sweep-right-title { fill: var(--link); }
+.sweep-stream-tick, .sweep-stream-title { fill: var(--link); }
+.sweep-agg-title { fill: var(--ink); }
+.sweep-stream-title, .sweep-agg-title { font-weight: 600; }
 .sweep-legend {
   display: flex;
   gap: var(--space-4);
