@@ -142,7 +142,8 @@ S_tot(P) = Σ_s S_s(P)            bytes per request;   bytes/token (display) = S
 This covers GQA KV (windows capped), MLA latents, indexer keys, CSA, shared-KV layers (counted once), recurrent /
 conv state (constant in P), each at the KV dtype with its scale overhead, and the drafter's own cache (MTP modules'
 layer state or a block drafter's KV; `draft` is `resolveSpeculative(...).lowering.draft`, the one `simulate` uses;
-spec-dec forces pp = 1, so the last stage is stage 0). The drafter state is therefore **transferred**, not rebuilt.
+on the prefill pool's last stage, where the drafter runs at any pp since spec-dec supports PP > 1; docs/simulation-model.md
+§13 "Pipeline parallelism"). The drafter state is therefore **transferred**, not rebuilt.
 All P tokens move even with a prefix-cache hit (the decode instance needs the whole cache). Quoted "147kB/token,
 1.2GB per request @ 8k".
 

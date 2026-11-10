@@ -64,6 +64,54 @@ test('DFlash 2 loads its released drafter config from the Hub', async ({ page })
   await expect(page.getByTestId('hypothetical-badge')).toHaveCount(0);
 });
 
+test('MTP k 7: the batch chart marks the break-even batch between two sweep batches; off has no marker', async ({
+  page,
+}) => {
+  await mockHf(page);
+  await page.goto('/?sd=mtp&sdk=7');
+  const marker = page.getByTestId('specdec-break-even');
+  await expect(marker).toBeVisible();
+  const text = (await marker.locator('text').textContent()) ?? '';
+  expect(text).toMatch(/^break-even batch \d+$/);
+  const breakEven = Number(text.replace('break-even batch ', ''));
+  // Strictly between two adjacent sweep batches (dp·2^k), i.e. not a sweep batch itself.
+  const batches = (
+    await page.locator('[data-chart="sweep"] svg > g > text[y="177"]').allTextContents()
+  ).map(Number);
+  const hi = batches.findIndex((b) => b > breakEven);
+  expect(hi).toBeGreaterThan(0);
+  expect(batches[hi - 1]).toBeLessThan(breakEven);
+  await expect(page.getByTestId('sweep-legend-off')).toBeVisible();
+  // A sweep point past the marker: spec-dec is slower there.
+  const past = page.locator('[data-chart="sweep"] [data-chart-point]').nth(hi);
+  await past.scrollIntoViewIfNeeded();
+  await past.focus();
+  const tooltip = page.locator('[data-chart="sweep"] [role="tooltip"]');
+  await expect(tooltip).toContainText('without spec-dec');
+  await expect(tooltip).toContainText('×0.');
+  await expect(tooltip).toContainText('@ 8k');
+  await pick(page, 'Speculative decoding', 'Off');
+  await expect(page).not.toHaveURL(/sd=/);
+  await expect(page.getByTestId('specdec-break-even')).toHaveCount(0);
+  await expect(page.getByTestId('sweep-legend-off')).toHaveCount(0);
+});
+
+test('speculative decoding works with pipeline parallelism (PP 2 on two GPUs)', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await mockHf(page);
+  await page.goto('/?n=2&pp=2&sd=mtp');
+  await expect(
+    page.getByRole('combobox', { name: 'Speculative decoding', exact: true }),
+  ).toHaveText(/MTP \(model head\)/);
+  await expect(page.getByTestId('spec-dec')).toBeVisible();
+  await expect(page.getByTestId('decode-tps')).toHaveText(/[1-9]/);
+  await expect(page.getByText(/not supported/)).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test('expert offload to host RAM shows the tier bar and survives a reload', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));

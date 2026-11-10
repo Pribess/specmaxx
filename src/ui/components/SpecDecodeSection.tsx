@@ -51,12 +51,12 @@ const CUSTOM = 'custom';
 const METHOD_HELP = [
   'A cheap draft guesses several tokens, then the model checks them all in one pass.',
   'Accepted guesses give more tokens per step, so decode is faster.',
+  'At large batch the check costs more than the extra tokens bring; the batch chart marks where.',
 ];
-const PP_HELP = ['Needs PP 1: pipeline parallelism is not supported yet.'];
 
 /**
  * Workload → "Speculative decoding" (design doc §6.1): method, drafter (block methods), draft length k, use case and
- * acceptance α. MTP is offered only when the model has an MTP head; every method is unavailable at PP > 1.
+ * acceptance α. MTP is offered only when the model has an MTP head. Every method works at any PP.
  */
 export function SpecDecodeSection({
   state,
@@ -67,16 +67,12 @@ export function SpecDecodeSection({
 }: PanelProps & { drafter?: DrafterStatus }) {
   const spec = state.deployment.specDec;
   const model = loaded?.model;
-  const ppBlocked = state.parallel.pp > 1;
-  const methods: SpecDecMethod[] = ppBlocked
-    ? []
-    : model?.draft?.kind === 'mtp'
-      ? ['mtp', 'dflash2', 'dspark']
-      : ['dflash2', 'dspark'];
+  const methods: SpecDecMethod[] =
+    model?.draft?.kind === 'mtp' ? ['mtp', 'dflash2', 'dspark'] : ['dflash2', 'dspark'];
   const methodOptions: PickerOption[] = [
     { value: 'off', label: 'Off' },
     ...methods.map((m) => ({ value: m, label: METHOD_LABELS[m] })),
-    // A method from the URL that this model or PP does not allow stays visible, so it can be turned off.
+    // A method from the URL that this model does not allow stays visible, so it can be turned off.
     ...(spec !== undefined && !methods.includes(spec.method)
       ? [{ value: spec.method, label: METHOD_LABELS[spec.method] }]
       : []),
@@ -124,7 +120,7 @@ export function SpecDecodeSection({
             specDec: v === 'off' ? undefined : { method: v as SpecDecMethod },
           })
         }
-        help={helpLines(ppBlocked ? [...METHOD_HELP, ...PP_HELP] : METHOD_HELP)}
+        help={helpLines(METHOD_HELP)}
       />
       {spec !== undefined && spec.method !== 'mtp' && model !== undefined && (
         <DrafterField

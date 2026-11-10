@@ -286,6 +286,12 @@ export function App({
       ? pdResult.decodeSweep
       : undefined
     : simulation.result?.sweep;
+  // The break-even batch of the sweep shown (spec-dec on): the decode pool's with disaggregation on.
+  const breakEvenBatch = pdResult
+    ? editingPool === 'decode'
+      ? pdResult.decodeBreakEvenBatch
+      : undefined
+    : simulation.result?.breakEvenBatch;
   const error = modelState.key === choiceKey ? modelState.error : undefined;
   const stacked = useStacked();
   const workspaceRef = useRef<HTMLElement>(null);
@@ -415,7 +421,7 @@ export function App({
         />
       )}
       <BreakdownTable result={result} phases={detailPhases} />
-      {sweep && <BatchSweepChart points={sweep} />}
+      {sweep && <BatchSweepChart points={sweep} breakEvenBatch={breakEvenBatch} />}
       {result.warnings.length > 0 && (
         <details className="notes">
           <summary>Notes and approximations ({result.warnings.length})</summary>

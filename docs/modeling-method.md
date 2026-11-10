@@ -118,7 +118,13 @@ How many tokens a step yields on average follows from the **acceptance rate** yo
 
 The default acceptance per method and use case is fitted to published measurements, at the draft lengths they were taken at. At any other draft length the app marks the default with ⚠, because the real acceptance per position need not stay constant as the draft grows.
 
-More: [speculative decoding](simulation-model.md#13-speculative-decoding), [accepted tokens](simulation-model.md#accepted-tokens), [acceptance defaults](simulation-model.md#acceptance-defaults).
+At large batch the check step gets expensive: it runs several positions per sequence, so its matrix multiplies hit the compute limit sooner than plain decode does. Past that point the step costs more than its extra tokens bring, and speculative decoding is slower. The batch chart shows the rate without speculative decoding next to the rate with it, and marks the **break-even batch** where it stops paying. The acceptance rate stays what you set at every batch; only the cost of the check changes.
+
+It works with pipeline parallelism. The draft runs on the last stage; a block drafter's inputs from earlier layers travel with the normal stage-to-stage send, and the last stage keeps its own copy of the token embedding.
+
+Not modelled: draft trees (several candidates checked at once), separate small draft models, drafting by copying from the prompt (n-gram or prompt lookup), acceptance that changes with batch, and changing the draft length on the fly.
+
+More: [speculative decoding](simulation-model.md#13-speculative-decoding), [accepted tokens](simulation-model.md#accepted-tokens), [acceptance defaults](simulation-model.md#acceptance-defaults), [pipeline parallelism](simulation-model.md#pipeline-parallelism), [break-even batch](simulation-model.md#break-even-batch), [not modeled](simulation-model.md#not-modeled).
 
 ## Prefill/decode disaggregation
 

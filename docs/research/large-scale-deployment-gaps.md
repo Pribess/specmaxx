@@ -147,6 +147,7 @@ Effort: S ≈ a day or less, M ≈ days, L ≈ a week+.
 - **What:** acceptance is batch-dependent in practice; PP>1 is rejected; trees and small-draft-LM/ngram methods are absent.
 - **Evidence:** 49/76 recipes (41 opt-in); Qwen3.8-2.4T guide: MTP-1 +3.4% at concurrency 1 but −9% at 128, −23% at 256; SGLang assumed 70% acceptance. EAGLE3 is in 8 recipes.
 - **Fit:** an extension of the existing legit knob; pp>1 support is feasible math. Draft trees borderline (engine/verification strategy). **Effort: M.**
+- **Status: done.** Spec-dec works at PP > 1 with the PP math of before: a block drafter's target features ride on the stage sends (all k + 1 verify rows), the last stage keeps its own token-embedding copy (none for a tied head in the same format), and pp > 1 with the token embedding off-device is rejected. `PhaseResult.speculative` makes the verify cost explicit (`stepCostRatio`, speedup = E[τ]/stepCostRatio), and the batch chart shows the rate with spec-dec off and marks the break-even batch where it stops paying (e.g. bundled Qwen3.8-27B, one RTX 5090, MTP k 7: batch 49 @ 8k). Acceptance stays a user input at every batch: under chain verification it is a property of the draft and target, and the observed large-batch loss is the verify cost. Draft trees, small separate draft LMs, n-gram drafting and dynamic k are listed as not modeled. See `docs/simulation-model.md` §13 "Pipeline parallelism", "Break-even batch", "Not modeled".
 
 ### G14. Sparse (DSA/CSA/MSA), SWA, linear/hybrid attention — already modeled
 

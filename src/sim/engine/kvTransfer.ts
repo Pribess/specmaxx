@@ -71,7 +71,8 @@ export interface KvTransferResult {
 /**
  * S_s(P) for every prefill stage s: the cache one request holds at P tokens on stage s, unreplicated (as if tp = 1,
  * no DCP), at the shared KV dtype. With spec-dec the drafter's own cache (MTP modules' layer state, or a block
- * drafter's KV) is added to the last stage, where the drafter runs (spec-dec forces pp = 1). Uneven PP splits
+ * drafter's KV) is added to the last stage, where the drafter runs at any pp (docs/simulation-model.md §13
+ * "Pipeline parallelism"). Uneven PP splits
  * (`stageLayerRange`) give uneven stages. Unit: bytes per request, one entry per stage.
  */
 export function stageRequestKvBytes(

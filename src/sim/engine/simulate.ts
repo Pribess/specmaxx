@@ -25,8 +25,9 @@ import {
 } from '../hw/modifiers';
 import type { DeviceSpec, HardwareStack, TopologySpec } from '../hw/types';
 import { crossLayerReferences } from '../ir/validateModel';
-import type { ModelSpec } from '../ir/model';
-import { lowerDraftDecode, lowerDraftPrefill } from '../lower/draft';
+import type { DraftSpec, ModelSpec } from '../ir/model';
+import { actBpe, stepTokens } from '../lower/common';
+import { lowerDraftDecode, lowerDraftPrefill, ppBoundaryDraftFeatureVectors } from '../lower/draft';
 import {
   lowerModel,
   stageLayerRange,
@@ -364,28 +365,47 @@ function simulatePhase(
 }
 
 /**
- * Appends `draft.*` layers to the last stage of a lowered phase (speculative decoding, design doc §3.3–3.4): the
- * drafter runs on the last stage after the target's head (pp = 1 is enforced by validation), so the stage sums,
- * overlap and collectives apply to it unchanged.
+ * Adds the drafter to a lowered phase (speculative decoding, design doc §3.3–3.6): appends its `draft.*` layers to the
+ * last stage, after the target's head, so the stage sums, overlap and collectives apply to it unchanged; and at
+ * pp > 1 widens each stage's activation send by the block drafter's target features that boundary relays
+ * (`draft.ts: ppBoundaryDraftFeatureVectors`). `ctx` is the phase's lowering context (the one `lowered` came from).
+ *   S_s = T·(N_live + F_s)·h·bpe(act),  T = stepTokens(ctx),  F_s = F(draft, end_s)
+ * A stage with F_s = 0 (MTP, every pp = 1 lowering: no send at all) keeps its send object untouched.
+ * See docs/simulation-model.md §13 "Pipeline parallelism".
  */
-function withDraftLayers(lowered: LoweredModel, draftLayers: LoweredLayer[]): LoweredModel {
-  const stages = lowered.stages.map((stage, s) =>
-    s === lowered.stages.length - 1
-      ? { ...stage, layers: [...stage.layers, ...draftLayers] }
-      : stage,
-  );
+function withDrafter(
+  lowered: LoweredModel,
+  model: ModelSpec,
+  draft: DraftSpec,
+  ctx: LoweringContext,
+  draftLayers: LoweredLayer[],
+): LoweredModel {
+  const last = lowered.stages.length - 1;
+  const stages = lowered.stages.map((stage, s) => {
+    const layers = s === last ? [...stage.layers, ...draftLayers] : stage.layers;
+    const send = stage.sendToNext;
+    if (send === undefined) return s === last ? { ...stage, layers } : stage;
+    const end = stageLayerRange(model.layers.length, lowered.stages.length, s)[1];
+    const F = ppBoundaryDraftFeatureVectors(draft, end);
+    if (F === 0) return stage;
+    // Formula: S_s = T·(N_live + F_s)·h·bpe(act)  (the target's T·N_live·h·bpe plus T·F_s·h·bpe of features)
+    // See docs/simulation-model.md §13 "Pipeline parallelism"
+    const featureBytes = stepTokens(ctx) * F * model.hidden * actBpe(ctx);
+    return { ...stage, sendToNext: { ...send, messageBytes: send.messageBytes + featureBytes } };
+  });
   return { stages };
 }
 
 /**
  * Speculative-decoding summary of a decode phase (design doc §3.5, §4.2): `draftSec` = Σ op times of the `draft.*`
- * layers, `verifySec` = Σ of every other layer (the verify pass), both without overlap (seconds); E[τ]; and the
- * speedup over the same input with speculative decoding off (tokens/s ratio, dimensionless).
+ * layers, `verifySec` = Σ of every other layer (the verify pass), both without overlap (seconds); E[τ]; the same
+ * input's spec-off rate and cycle (`off`); the step cost ratio `cycle / offCycle` (dimensionless); and the speedup
+ * over spec-dec off (tokens/s ratio, dimensionless), which equals E[τ] / stepCostRatio.
  */
 function speculativeSummary(
   decode: PhaseResult,
   expectedTokensPerStep: number,
-  offTokensPerSec: number,
+  off: PhaseResult,
 ): NonNullable<PhaseResult['speculative']> {
   let draftSec = 0;
   let verifySec = 0;
@@ -395,13 +415,16 @@ function speculativeSummary(
       else verifySec += layer.sec;
     }
   }
-  // Formula: speedup = tokens/s(spec-dec) / tokens/s(off)
-  // See docs/simulation-model.md §13 ("Accepted tokens")
+  // Formula: stepCostRatio = cycle / cycle_off;  speedup = tokens/s(spec-dec) / tokens/s(off) = E[τ] / stepCostRatio
+  // See docs/simulation-model.md §13 ("Accepted tokens", "Break-even batch")
   return {
     draftSec,
     verifySec,
     expectedTokensPerStep,
-    speedup: decode.tokensPerSec / offTokensPerSec,
+    offTokensPerSec: off.tokensPerSec,
+    offCycleSec: off.cycleSec,
+    stepCostRatio: decode.cycleSec / off.cycleSec,
+    speedup: decode.tokensPerSec / off.tokensPerSec,
   };
 }
 
@@ -563,9 +586,18 @@ export function simulate(input: SimInput): SimResult {
   let decodeLowered = lowerStep(decodeCtx);
   if (spec !== undefined) {
     const { draft, contextRows, draftLength } = spec.lowering;
-    prefillLowered = withDraftLayers(prefillLowered, lowerDraftPrefill(model, draft, prefillCtx));
-    decodeLowered = withDraftLayers(
+    prefillLowered = withDrafter(
+      prefillLowered,
+      model,
+      draft,
+      prefillCtx,
+      lowerDraftPrefill(model, draft, prefillCtx),
+    );
+    decodeLowered = withDrafter(
       decodeLowered,
+      model,
+      draft,
+      decodeCtx,
       lowerDraftDecode(model, draft, decodeCtx, contextRows, draftLength),
     );
   }
@@ -605,7 +637,7 @@ export function simulate(input: SimInput): SimResult {
       shape,
       phaseOffload,
     );
-    decode.speculative = speculativeSummary(decode, spec.expectedTokensPerStep, off.tokensPerSec);
+    decode.speculative = speculativeSummary(decode, spec.expectedTokensPerStep, off);
   }
   // 5b. Labelled what-if figures next to the headline; neither changes `prefill` or `decode`.
   // Prefill without overlap (review F7; docs §7 "Prefill without overlap"): the same prefill with every overlap
@@ -620,8 +652,11 @@ export function simulate(input: SimInput): SimResult {
     if (twoBatch) {
       fullPrefillLowered = lowerModel(model, prefillCtx);
       if (spec !== undefined)
-        fullPrefillLowered = withDraftLayers(
+        fullPrefillLowered = withDrafter(
           fullPrefillLowered,
+          model,
+          spec.lowering.draft,
+          prefillCtx,
           lowerDraftPrefill(model, spec.lowering.draft, prefillCtx),
         );
     }
@@ -676,8 +711,11 @@ export function simulate(input: SimInput): SimResult {
     const chunkCtx: LoweringContext = { ...prefillCtx, ...chunk };
     chunkLowered = lowerStep(chunkCtx);
     if (spec !== undefined)
-      chunkLowered = withDraftLayers(
+      chunkLowered = withDrafter(
         chunkLowered,
+        model,
+        spec.lowering.draft,
+        chunkCtx,
         lowerDraftPrefill(model, spec.lowering.draft, chunkCtx),
       );
   }

@@ -7,6 +7,7 @@ import {
 } from '../../sim/engine/disaggregation';
 import {
   batchSweep,
+  speculativeBreakEvenBatch,
   summarize,
   summarizeDisaggregated,
   type DisaggregatedSummary,
@@ -25,6 +26,8 @@ export interface DisaggregatedRun {
 export interface RunResult {
   summary: ResultSummary;
   sweep: SweepPoint[];
+  /** Speculative decoding on: the smallest batch where it stops paying (sequences); absent when none was found. */
+  breakEvenBatch?: number;
   /**
    * Disaggregated results; present only when the run had a {@link DisaggregatedRun} (absent key otherwise, so a
    * run without it is exactly the one from before disaggregation).
@@ -34,6 +37,11 @@ export interface RunResult {
     summary: DisaggregatedSummary;
     /** Batch sweep of the decode pool's own input. */
     decodeSweep: SweepPoint[];
+    /**
+     * Speculative decoding on: the decode pool's break-even batch over its own sweep (its own parallel layout, PP
+     * included); absent when none was found. Unit: sequences.
+     */
+    decodeBreakEvenBatch?: number;
   };
 }
 export interface SimRunner {
@@ -46,14 +54,21 @@ export interface SimRunner {
 }
 export const inlineRunner: SimRunner = {
   async run(input, notes, disaggregated) {
-    const result: RunResult = {
-      summary: summarize(simulate(input), input, notes),
-      sweep: batchSweep(input),
-    };
-    if (disaggregated === undefined) return result;
+    const sweep = batchSweep(input);
+    const summary = summarize(simulate(input), input, notes);
+    if (disaggregated === undefined) {
+      const breakEvenBatch = speculativeBreakEvenBatch(input, sweep);
+      return { summary, sweep, ...(breakEvenBatch === undefined ? {} : { breakEvenBatch }) };
+    }
+    // Disaggregated: the chart shows the decode pool's sweep, so the break-even batch is searched on the decode
+    // pool's input (its own hardware, parallel layout and batch); the single-pool input is the prefill pool's.
     const pd = disaggregated.input;
+    const decodeInput = poolInput(pd.shared, pd.decodePool, 'decode');
+    const decodeSweep = batchSweep(decodeInput);
+    const decodeBreakEvenBatch = speculativeBreakEvenBatch(decodeInput, decodeSweep);
     return {
-      ...result,
+      summary,
+      sweep,
       pd: {
         summary: summarizeDisaggregated(
           simulateDisaggregated(pd),
@@ -61,7 +76,8 @@ export const inlineRunner: SimRunner = {
           notes,
           disaggregated.decodeNotes,
         ),
-        decodeSweep: batchSweep(poolInput(pd.shared, pd.decodePool, 'decode')),
+        decodeSweep,
+        ...(decodeBreakEvenBatch === undefined ? {} : { decodeBreakEvenBatch }),
       },
     };
   },

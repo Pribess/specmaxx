@@ -20,8 +20,10 @@
  *   target features of `targetLayerIds` through `fc` and per-layer context K/V. DeepSeek-V4-style MoE drafters
  *   (`moeLayers`) lower their layers through {@link lowerBlock} with block rows (see {@link lowerMoeDrafterLayer}).
  *
- * The shared embedding and LM head are the target's: at pp = 1 they are on this device, so their gathers and reads
- * are costed per pass, but they add no resident bytes ({@link draftResidentWeightBytes}). With the target's
+ * The shared embedding and LM head are the target's. The LM head is on the last stage, where the drafter runs; the
+ * embedding is too at pp = 1, and at pp > 1 the last stage holds its own copy (memory.ts: `draftEmbeddingCopyBytes`).
+ * So their gathers and reads are costed per pass, but they add no resident bytes here ({@link draftResidentWeightBytes}).
+ * At pp > 1 a block drafter's target features cross the stage boundaries ({@link ppBoundaryDraftFeatureVectors}). With the target's
  * token embedding off-device (`offload.embeddings`), each shared-embedding gather first fetches its rows from the
  * tier, like the target's (`draft.embed.row_fetch`, `draft.noise_embed.row_fetch`; docs/simulation-model.md §12
  * "Token embedding off-device").
@@ -252,8 +254,37 @@ export function lowerDraftPrefill(
 }
 
 /**
+ * Target-feature vectors per token, each `model.hidden` wide, that the PP boundary in front of target layer
+ * `boundaryLayer` (the first layer of the next stage) must relay to the drafter on the last stage ON TOP OF the
+ * activation send itself. Count (multiply by `T·h·bpe(act)` for bytes).
+ *
+ * A block drafter (DFlash 2, DSpark) conditions on the hidden states of the target layers `targetLayerIds`. An id i
+ * is the OUTPUT of target layer i (DFlash `extract_context_feature`: `hidden_states[layer_id + 1]`, where HF's
+ * `hidden_states[0]` is the embedding output; https://github.com/z-lab/dflash/blob/main/dflash/model.py#L37-L43), so
+ * it is produced on the stage holding layer i and must cross every boundary from there to the last stage. The output
+ * of the boundary's own last layer (`boundaryLayer − 1`) is the state the activation send already carries (the
+ * `N_live` vectors the next layer reads, from which that output follows), so it adds nothing there; it becomes an
+ * extra vector only at the following boundaries:
+ *   F = |{ i ∈ targetLayerIds : i < boundaryLayer − 1 }|
+ * Ids at or past the boundary's last layer need no extra vector here (ids ≥ L count as last-stage features).
+ * MTP: 0, since it reads only the last stage's final hidden state.
+ *
+ * The features of all k + 1 verify rows (prefill: all P rows) ride on the existing activation send, one message per
+ * boundary. An earlier stage cannot know which rows the last stage will accept, so sending every verify row needs no
+ * round trip after acceptance and adds no α. Per-feature-layer sends of only the m_ctx accepted rows (design doc
+ * §3.6) would carry fewer bytes but add one α per feature layer and boundary plus that round trip.
+ * See docs/simulation-model.md §13 "Pipeline parallelism".
+ */
+export function ppBoundaryDraftFeatureVectors(draft: DraftSpec, boundaryLayer: number): number {
+  if (draft.kind !== 'block_drafter') return 0;
+  // Formula: F = |{ i ∈ targetLayerIds : i < boundaryLayer − 1 }|   (layer boundaryLayer − 1's output is the send itself)
+  return draft.targetLayerIds.filter((i) => i < boundaryLayer - 1).length;
+}
+
+/**
  * Weight bytes the drafter keeps resident on ONE device of the last stage (after TP sharding), NOT counting the
- * shared embedding and LM head (already on the device at pp = 1). MTP: each module's layer (all local experts of a
+ * shared embedding and LM head (the head is on the last stage already; the embedding is on the device at pp = 1, and
+ * its pp > 1 copy is `memory.ts: draftEmbeddingCopyBytes`). MTP: each module's layer (all local experts of a
  * MoE layer), `eh_proj` and its three norms; block drafter: its layers, `fc`, norms, DFlash 2 conv kernels and
  * projections and selector (both codebooks whole), DSpark Markov `W1` and `W2`. Unit: bytes.
  */

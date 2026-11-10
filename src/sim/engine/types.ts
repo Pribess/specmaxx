@@ -304,7 +304,11 @@ export type AcceptanceModel =
 
 /** Speculative decoding (design doc §3): a drafter proposes k tokens per step, the target verifies k + 1. */
 export interface SpecDecodeConfig {
-  /** `'mtp'` needs `model.draft.kind === 'mtp'`; the block methods need `drafter`. Rejected when pp > 1 (§3.6). */
+  /**
+   * `'mtp'` needs `model.draft.kind === 'mtp'`; the block methods need `drafter`. Works at any pp: the drafter runs on
+   * the last stage (docs/simulation-model.md §13 "Pipeline parallelism"); with pp > 1 the token embedding must stay
+   * on the device.
+   */
   method: 'mtp' | 'dflash2' | 'dspark';
   /**
    * The block drafter: a Hugging Face repo whose config the loader read, or the labelled hypothetical stand-in.
@@ -523,15 +527,26 @@ export interface PhaseResult {
    */
   transfer?: { sec: number; exposedSec: number; bytes: number; requests: number };
   /**
-   * Decode with speculative decoding on (design doc §3.5); absent otherwise. `draftSec` / `verifySec`: the draft
-   * (`draft.*` layers) and verify shares of one step (seconds); `expectedTokensPerStep`: E[τ], tokens committed per
-   * sequence per step incl. the bonus token (count, real, in [1, k + 1]); `speedup`: tokens/s over tokens/s with
-   * spec-dec off (dimensionless).
+   * Decode with speculative decoding on (design doc §3.5); absent otherwise. The step from verify cost to accepted
+   * tokens: one spec-dec step costs `stepCostRatio` plain decode steps and commits E[τ] tokens per sequence, so
+   *   speedup = E[τ] / stepCostRatio   (same dp and B_r; exact up to float error)
+   * and spec-dec pays iff stepCostRatio < E[τ]. See docs/simulation-model.md §13 ("Accepted tokens", "Break-even
+   * batch").
    */
   speculative?: {
+    /** Draft share of one step: Σ op times of the `draft.*` layers, without overlap. Unit: seconds. */
     draftSec: number;
+    /** Verify share of one step: Σ op times of every other layer, without overlap. Unit: seconds. */
     verifySec: number;
+    /** E[τ], tokens committed per sequence per step incl. the bonus token. Count (real, in [1, k + 1]). */
     expectedTokensPerStep: number;
+    /** Aggregate decode rate of the same input with speculative decoding off. Unit: tokens/s. */
+    offTokensPerSec: number;
+    /** Pipeline cycle of the same input with speculative decoding off (docs §7). Unit: seconds. */
+    offCycleSec: number;
+    /** Cost of one spec-dec step in plain decode steps, `cycleSec / offCycleSec`. Dimensionless. */
+    stepCostRatio: number;
+    /** `tokensPerSec / offTokensPerSec` (= E[τ] / stepCostRatio). Dimensionless. */
     speedup: number;
   };
 }
@@ -564,7 +579,10 @@ export interface DeviceMemory {
    * source (`memory.ts: stageStagingBytes`). 0 when nothing streams. Unit: bytes.
    */
   stagingBytes: number;
-  /** Draft weights and draft KV/state (speculative decoding on; last stage); 0 otherwise. Unit: bytes. */
+  /**
+   * Draft weights, the drafter's own token-embedding copy at pp > 1 (`memory.ts: draftEmbeddingCopyBytes`) and draft
+   * KV/state (speculative decoding on; last stage); 0 otherwise. Unit: bytes.
+   */
   draftBytes: number;
   /**
    * Per-position recurrent/conv state snapshots of a k+1-token verify, × B_r (spec-dec on, hybrid models; design doc

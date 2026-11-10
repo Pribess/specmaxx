@@ -21,7 +21,7 @@ import type {
 import {
   blockShardingErrors,
   deploymentErrors,
-  SPEC_DEC_PP_ERROR,
+  SPEC_DEC_PP_OFFLOADED_EMBEDDING_ERROR,
   TIED_EMBEDDINGS_OFFLOAD_ERROR,
   TWO_BATCH_OVERLAP_MODE_B_ERROR,
   TWO_BATCH_OVERLAP_OFFLOAD_ERROR,
@@ -353,10 +353,16 @@ describe('deployment knobs (design doc §2, §3.6; U-3, U-13)', () => {
     }
   });
 
-  it('U-13: spec-dec with pp 2 is rejected with the exact §3.6 message', () => {
-    expect(SPEC_DEC_PP_ERROR).toBe('speculative decoding with pp > 1 is not supported yet');
-    const errors = validateInput(input({ pp: 2 }, { deployment: { speculative: spec() } }));
-    expect(errors).toContain('speculative decoding with pp > 1 is not supported yet');
+  it('U-13: spec-dec with pp 2 is valid; with the token embedding off-device it gets the exact error', () => {
+    expect(validateInput(input({ pp: 2 }, { deployment: { speculative: spec() } }))).toEqual([]);
+    const offloaded = input(
+      { pp: 2 },
+      { deployment: { speculative: spec(), offload: { embeddings: { tier: 'host_ram' } } } },
+    );
+    expect(SPEC_DEC_PP_OFFLOADED_EMBEDDING_ERROR).toBe(
+      'speculative decoding with pp > 1 and the token embedding off-device is not supported',
+    );
+    expect(errorsOf(offloaded)).toContain(SPEC_DEC_PP_OFFLOADED_EMBEDDING_ERROR);
     expect(errorsOf(input({}, { deployment: { speculative: spec() } }))).toEqual([]);
   });
 

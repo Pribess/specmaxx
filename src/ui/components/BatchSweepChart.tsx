@@ -18,9 +18,32 @@ const SAMPLE_GAP = 6;
 
 /** Marker half-size of the per-stream series (square), in viewBox units. */
 const SQUARE = 5;
+/** Baseline of the break-even label, inside the plot below the axis titles; and its gap to the marker line. */
+const BREAK_EVEN_LABEL_Y = 46;
+const BREAK_EVEN_LABEL_GAP = 6;
 
-export function BatchSweepChart({ points }: { points: SweepPoint[] }) {
-  const maxAgg = Math.max(...points.map((p) => p.decodeTokensPerSec), 1);
+/** Text of the break-even marker (also its accessible title). */
+export function breakEvenText(batch: number): string {
+  return `break-even batch ${batch}`;
+}
+
+export function BatchSweepChart({
+  points,
+  breakEvenBatch,
+}: {
+  points: SweepPoint[];
+  /** Speculative decoding on: the smallest batch where it stops paying (sequences); absent = no marker. */
+  breakEvenBatch?: number;
+}) {
+  const offPoints = points.flatMap((p) =>
+    p.offDecodeTokensPerSec === undefined ? [] : [{ batch: p.batch, off: p.offDecodeTokensPerSec }],
+  );
+  const hasOff = offPoints.length > 0;
+  const maxAgg = Math.max(
+    ...points.map((p) => p.decodeTokensPerSec),
+    ...offPoints.map((p) => p.off),
+    1,
+  );
   const maxStream = Math.max(...points.map((p) => p.perSeqTokensPerSec), 1);
   const x = (n: number) =>
     PLOT_LEFT +
@@ -34,10 +57,17 @@ export function BatchSweepChart({ points }: { points: SweepPoint[] }) {
     points.map((p) => x(p.batch)),
     700,
   );
+  const specText = (p: SweepPoint) =>
+    p.offDecodeTokensPerSec === undefined || p.speedup === undefined
+      ? ''
+      : ` · ${formatTokensPerSec(p.offDecodeTokensPerSec)} without spec-dec · ×${p.speedup.toFixed(2)}`;
   const label = (p: SweepPoint) =>
-    `batch ${p.batch} · ${formatTokensPerSec(p.perSeqTokensPerSec)} tok/s per stream · ${formatTokensPerSec(p.decodeTokensPerSec)} aggregate @ ${formatContextTokens(p.contextTokens)}${p.fits ? '' : ' · does not fit in memory'}`;
+    `batch ${p.batch} · ${formatTokensPerSec(p.perSeqTokensPerSec)} tok/s per stream · ${formatTokensPerSec(p.decodeTokensPerSec)} aggregate${specText(p)} @ ${formatContextTokens(p.contextTokens)}${p.fits ? '' : ' · does not fit in memory'}`;
   const active = chart.active === null ? undefined : points[chart.active];
   const context = formatContextTokens(points[0]?.contextTokens ?? 0);
+  const breakEvenX = breakEvenBatch === undefined ? undefined : x(breakEvenBatch);
+  // The label sits on the side of the marker with more room.
+  const breakEvenLeft = breakEvenX !== undefined && breakEvenX > (PLOT_LEFT + AXIS_RIGHT) / 2;
   return (
     <section className="sweep">
       <h2>Decode throughput by batch size</h2>
@@ -100,6 +130,26 @@ export function BatchSweepChart({ points }: { points: SweepPoint[] }) {
             <path className="sweep-line" d={`M${TITLE_RIGHT - SAMPLE_W} 13.5h${SAMPLE_W}`} />
             <circle className="sweep-point fits" cx={TITLE_RIGHT - SAMPLE_W / 2} cy="13.5" r="4" />
           </g>
+          {breakEvenBatch !== undefined && breakEvenX !== undefined && (
+            <g className="sweep-break-even" data-testid="specdec-break-even">
+              <title>{breakEvenText(breakEvenBatch)}</title>
+              <path className="sweep-break-even-line" d={`M${breakEvenX} 30V155`} />
+              <text
+                className="sweep-break-even-label"
+                x={breakEvenX + (breakEvenLeft ? -BREAK_EVEN_LABEL_GAP : BREAK_EVEN_LABEL_GAP)}
+                y={BREAK_EVEN_LABEL_Y}
+                textAnchor={breakEvenLeft ? 'end' : 'start'}
+              >
+                {breakEvenText(breakEvenBatch)}
+              </text>
+            </g>
+          )}
+          {hasOff && (
+            <polyline
+              className="sweep-line-off"
+              points={offPoints.map((p) => `${x(p.batch)},${y(p.off)}`).join(' ')}
+            />
+          )}
           <polyline
             className="sweep-line"
             points={points.map((p) => `${x(p.batch)},${y(p.decodeTokensPerSec)}`).join(' ')}
@@ -149,6 +199,14 @@ export function BatchSweepChart({ points }: { points: SweepPoint[] }) {
             </svg>
             Aggregate (right axis)
           </li>
+          {hasOff && (
+            <li data-testid="sweep-legend-off">
+              <svg viewBox="0 0 28 12" aria-hidden="true">
+                <path className="sweep-line-off" d="M0 6H28" />
+              </svg>
+              Aggregate, spec-dec off (right axis)
+            </li>
+          )}
         </ul>
         {active && <ChartTooltip id={chart.id}>{label(active)}</ChartTooltip>}
       </div>

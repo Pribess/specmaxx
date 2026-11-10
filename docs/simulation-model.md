@@ -1785,6 +1785,9 @@ not one per intermediate stage; prefill has none (`lower/lower.ts: sendToFirst`,
 `engine/placement.ts: ppSendPath(..., destinationStage = 0)` resolves the actual return endpoints,
 including node crossings and ring/chain hop counts.
 
+With speculative decoding, a block drafter's target features ride on these sends, `S = T·(N_live + F_s)·h·bpe(act)`
+(§13 ["Pipeline parallelism"](#pipeline-parallelism), `simulate.ts: withDrafter`).
+
 ### DP
 
 DP replicas are independent and not lowered separately: `B_r = batch/dp` (must divide), aggregate tok/s = dp ×
@@ -2702,9 +2705,10 @@ Excluded on purpose (only hardware and math limits are modeled):
   kernel launch overhead of a specific engine, CUDA graphs. The exception: speculative decoding and weight / expert /
   lookup-table offloading are **opt-in deployment-scenario knobs, off by default** ([§12](#12-offloading),
   [§13](#13-speculative-decoding); design `docs/design/offload-specdec-latency.md`). Off, results are bit-identical;
-  on, they are the hardware/math bound given the stated acceptance, hit ratio and placement. Draft trees, the DSpark
-  confidence scheduler, predictor accuracy and the CPU-compute offload mode (a hook validation rejects) are not
-  modelled. The **engine dispatch overlay** (§7) is the one engine-overhead exception: opt-in only, off by default, a
+  on, they are the hardware/math bound given the stated acceptance, hit ratio and placement. Draft trees, small
+  separate draft LMs, n-gram / prompt-lookup drafting, batch-dependent acceptance, dynamic k and the DSpark
+  confidence scheduler (§13 "Not modeled"), predictor accuracy and the CPU-compute offload mode (a hook validation
+  rejects) are not modelled. The **engine dispatch overlay** (§7) is the one engine-overhead exception: opt-in only, off by default, a
   per-kernel launch cost added to decode and shown as a labelled second figure; the headline never includes it.
 - Dequantization compute of weight-only quantized GEMMs (they run at the wider format's peak, §2).
 - Split-K / stream-K; L2 / cache reuse beyond compulsory traffic.
@@ -3293,7 +3297,8 @@ staging_0   ≥ (q > 0 ? 2 : 1)·R·rowBytes          over the decode step and t
   apart from that warning; `'nvme'` moves the shard to the SSD tier.
 - **Spec-dec.** The drafter's shared-embedding gathers (`draft.embed` of MTP, `draft.noise_embed` of a block
   drafter) read the same off-device table, so each gets the same row fetch (`draft.embed.row_fetch`,
-  `draft.noise_embed.row_fetch`; `draft.ts: draftContext` keeps the embedding placement). Spec-dec forces pp = 1, so
+  `draft.noise_embed.row_fetch`; `draft.ts: draftContext` keeps the embedding placement). With the table off-device,
+  spec-dec needs pp = 1 (`SPEC_DEC_PP_OFFLOADED_EMBEDDING_ERROR`, §13 "Pipeline parallelism"), so
   they all land on stage 0. The MTP prefill pass fetches the prompt rows again (no reuse of the target's rows: an
   upper bound on the transfer, hidden at q = 1).
 - **Worked example** (`engine/e2e-embedding-offload.test.ts`): Qwen3.8-27B (V 248,320, h 5120, bf16, untied) on
@@ -3318,7 +3323,8 @@ Deployment knob `SimInput.deployment.speculative` (design: `docs/design/offload-
 default: absent or `{}` lowers the plain decode (`qLen 1`), appends no `draft.*` layer and gives bit-identical
 results. With it on, the result is the hardware/math bound given the stated acceptance: the engine adds the GEMM,
 attention and state work the draft and verify passes physically need, nothing else (no scheduler, tree, or
-confidence policy). Rejected with pp > 1 (`validate.ts: SPEC_DEC_PP_ERROR`). Works with ep > 1: the drafter's MoE
+confidence policy). Works at any pp: the drafter runs on the last stage ("Pipeline parallelism" below); with pp > 1
+the token embedding must stay on the device (`validate.ts: SPEC_DEC_PP_OFFLOADED_EMBEDDING_ERROR`). Works with ep > 1: the drafter's MoE
 layers lower with the same parallel config, and `deploymentErrors` checks their expert count against ep like the
 target's (it may differ: DeepSeek-V4.1 DSpark has 128 experts against 384; `engine/ep.test.ts`). Worked example W2
 and U-8, U-14, U-18 are tests in `engine/e2e-specdec.test.ts`.
@@ -3344,7 +3350,7 @@ conv state ops in `'step'` mode write `k + 1` per-position snapshots (`Recurrent
 ### Draft ops
 
 `src/sim/lower/draft.ts: lowerDraftDecode`; appended to the LAST stage after the head as layers `draft.<i>`
-(`simulate.ts: withDraftLayers`), so stage sums, overlap and collectives apply unchanged. `m_ctx = ⌈E[τ]⌉`
+(`simulate.ts: withDrafter`), so stage sums, overlap and collectives apply unchanged. `m_ctx = ⌈E[τ]⌉`
 (`specdec.ts: draftContextRows`) newly committed tokens per sequence feed the drafter.
 
 - **MTP**: a catch-up pass of `qLen = m_ctx` (shared `embed`, `enorm`, `hnorm`, `eh_proj` (m b·m_ctx, n h, k 2h),
@@ -3375,11 +3381,14 @@ per-position   E[τ] = 1 + Σ_{i=1..k} Π_{j=1..i} α_j            α_j ∈ [0, 
 cycle          = the decode cycle rule of §7 over the verify stages with draft.* appended
 tokens/s       = dp · B_r · E[τ] / cycle  @ N;   per sequence E[τ] / cycle;   latency (per token) = cycle / E[τ]
 speedup        = tokens/s / tokens/s of the same input with speculative decoding off
+stepCostRatio  = cycle / cycle_off                              one spec-dec step in plain decode steps
+speedup        = E[τ] / stepCostRatio                          same dp, B_r: exact up to float error; pays iff stepCostRatio < E[τ]
 ```
 
-`PhaseResult.speculative = { draftSec, verifySec, expectedTokensPerStep, speedup }`: `draftSec` / `verifySec` are
-the Σ op times of the `draft.*` layers and of every other layer (without overlap). With `tokensPerStep` absent the
-rate expressions are today's, bit for bit.
+`PhaseResult.speculative = { draftSec, verifySec, expectedTokensPerStep, offTokensPerSec, offCycleSec, stepCostRatio,
+speedup }`: `draftSec` / `verifySec` are the Σ op times of the `draft.*` layers and of every other layer (without
+overlap); `offTokensPerSec` and `offCycleSec` are the same input's decode with speculative decoding off (`simulate`
+runs it for the speedup). With `tokensPerStep` absent the rate expressions are today's, bit for bit.
 
 ### Acceptance defaults
 
@@ -3452,18 +3461,19 @@ thinking mode; no universal measured α exists.
 ### Draft memory
 
 `src/sim/lower/draft.ts: draftResidentWeightBytes, draftSequenceStateBytes`; `engine/memory.ts: memoryReport,
-stageSnapshotStateBytesPerSeq`.
+stageSnapshotStateBytesPerSeq, draftEmbeddingCopyBytes`.
 
 ```
 context            = max(P, N + k + 1)                         the verify appends k + 1 rows
-draft_s            = [last stage] W_draft + B_r · S_draft(context)
+draft_s            = [last stage] W_draft + W_copy + B_r · S_draft(context)
                      W_draft: module layers / drafter layers, eh_proj or fc, norms, conv kernels, selector codebooks,
-                     Markov W1/W2; the shared embedding and LM head are not counted again (pp = 1)
+                     Markov W1/W2; the shared embedding and LM head are not in it
+                     W_copy: the drafter's own embedding copy at pp > 1 ("Pipeline parallelism" below); 0 at pp = 1
                      S_draft: MTP the module's layer state over the full context; block drafter L·min(ctx, W)·2·KV·hd·bpe(kv)
 specTransient_s    = B_r · (k + 1) · snap_s                    snap_s = recurrent + conv state of the stage's
                                                                linear-attention, short-conv, n-gram and GQA-conv blocks
 total_s            = W_s + B_r·state_s + act_s + staging_s + draft_s + specTransient_s
-maxSequences       = floor(min_s (capacity − W_s − act_s − staging_s − W_draft) / (state_s + S_draft + (k+1)·snap_s))
+maxSequences       = floor(min_s (capacity − W_s − act_s − staging_s − W_draft − W_copy) / (state_s + S_draft + (k+1)·snap_s))
 ```
 
 ### Spec-dec × offload
@@ -3475,6 +3485,82 @@ draftContext`), get `draft.moe.expert_fetch` ops on the last stage, keep `C = f�
 `draft_s`, and add their full expert set to the tier (`memory.ts: stageTierBytes`). With the token embedding
 off-device, the drafter's shared-embedding gathers fetch their rows from its tier (§12 "Token embedding
 off-device").
+
+### Pipeline parallelism
+
+`src/sim/engine/simulate.ts: withDrafter`; `lower/draft.ts: ppBoundaryDraftFeatureVectors`; `engine/memory.ts:
+draftEmbeddingCopyBytes`; tests `engine/specdecPp.test.ts`. At pp > 1 the verify's `k + 1` rows flow through the
+stages with the PP math of §5 and §7 unchanged: every stage lowers `T = b_mb·(k+1)` rows, the drafter runs on the
+last stage after the head, and the sampled ids return to stage 0. Two physical extras:
+
+```
+S_s       = T·(N_live + F_s)·h·bpe(act)              send after stage s; T = b_mb·(k+1) decode, b_mb·P prefill
+F_s       = |{ i ∈ targetLayerIds : i < end_s − 1 }|   block drafter (DFlash 2, DSpark); MTP 0; end_s = stageLayerRange(L, pp, s)[1]
+W_copy    = [pp > 1 ∧ ¬(tied ∧ same format)] · ceil(V/tp)·h·bpe(emb)        on the last stage, in draft_s
+S_return  = b_mb·(k+1)·4 B                              the loop-back of §5 "PP split", unchanged
+cycle     = max(m·b, Σ t_s + Σ p2p + return_p2p)         §7 "Pipeline and DP", unchanged; tokens/s = dp·B_r·E[τ]/cycle
+```
+
+- **Feature relay.** A block drafter conditions on the outputs of the target layers `targetLayerIds` (DFlash
+  `extract_context_feature` takes `hidden_states[layer_id + 1]`, the output of decoder layer `layer_id`:
+  [z-lab/dflash `dflash/model.py` L37–43](https://github.com/z-lab/dflash/blob/main/dflash/model.py#L37-L43)). A
+  feature made on an earlier stage must reach the last one, so each boundary carries the features made before it as
+  extra vectors, `F_s` per row, on the existing activation send. The output of the stage's own last layer
+  (`end_s − 1`) is not counted there: it is the state the send already carries; it becomes an extra vector from the
+  next boundary on. All `k + 1` verify rows go (an earlier stage cannot
+  know which the last stage will accept), so no extra message, α or round trip after acceptance is added. The
+  alternative of design doc §3.6, one send per feature layer of only the `m_ctx` accepted rows, carries fewer bytes
+  but adds one α per feature layer and boundary and that round trip. Ids ≥ L count as last-stage features.
+- **Embedding copy.** The drafter gathers token-embedding rows on the last stage, while the table lives on stage 0.
+  vLLM's EAGLE proposer shares `embed_tokens` with the target only when the PP world size is 1 and otherwise loads
+  its own ([vLLM v0.11.0 `vllm/v1/spec_decode/eagle.py` L854–881](https://github.com/vllm-project/vllm/blob/v0.11.0/vllm/v1/spec_decode/eagle.py#L854-L881)),
+  so the last stage holds a copy `W_copy`. A tied LM head in the same format is that matrix and is already counted
+  in full on the last stage at pp > 1 (§8 `stageWeightBytes`), so it adds nothing (vLLM loads a copy regardless; the
+  bound keeps the smaller footprint).
+- **Token embedding off-device** with pp > 1 is rejected (`SPEC_DEC_PP_OFFLOADED_EMBEDDING_ERROR`): the last stage
+  may sit on another node, whose host does not hold the table.
+
+With pp = 1 there is no stage send and `W_copy = 0`: results are bit-identical to before. The spec-off comparison
+run lowers the plain decode without the drafter, so its sends carry no features.
+
+### Break-even batch
+
+`src/sim/engine/specdec.ts: breakEvenBracket`; `ui/state/sweep.ts: batchSweep, speculativeBreakEvenBatch`; the batch
+chart (`ui/components/BatchSweepChart.tsx`). Acceptance stays a user input; the batch dependence comes from the
+verify cost alone:
+
+```
+speedup(b)      = E[τ] / stepCostRatio(b)                      Accepted tokens above
+ridge           = peak FLOP/s / memory B/s                     §7 roofline
+verify GEMMs    m = b·(k+1): compute bound from b ≈ ridge/(k+1), k + 1 times earlier than plain decode
+past it         step cost ∝ k + 1  ⇒  speedup → ≈ E[τ]/(k+1) ≤ 1   (less where KV / state reads stay bandwidth bound)
+bracket         first sweep pair (b_i, b_{i+1}) with speedup(b_i) ≥ 1 > speedup(b_{i+1})
+break-even      smallest batch in (b_i, b_{i+1}], a multiple of dp, with speedup < 1 (bisection, ≤ 9 extra runs)
+```
+
+The bisection assumes one crossing inside the bracket; shape quantization can make the speedup wiggle, and then the
+first crossing it finds is returned. The sweep points carry the spec-off rate (`SweepPoint.offDecodeTokensPerSec`)
+and the speedup; the chart draws the spec-off aggregate line and marks the break-even batch. Example (bundled
+Qwen3.8-27B, one RTX 5090, MTP k 7, prose α): ×2.42 at batch 1, ×0.97 at 64, break-even batch 49 @ 8k
+(`ui/state/sweepSpecDec.test.ts`); at the default k 3 it pays at every swept batch (×1.07 at 512 @ 8k), since the
+linear-attention state and KV reads stay bandwidth bound. Field evidence of the effect: the Qwen3.8-2.4T guide
+reports MTP-1 +3.4% at concurrency 1 but −9% at 128 and −23% at 256 (research doc §G13). That is another model on
+other hardware, with engine overheads inside; the bound here can cross later or not at all (the example above with
+MTP k 1 still gives ×1.16 at batch 128 @ 8k).
+
+With prefill/decode disaggregation on (§14), the chart shows the decode pool's sweep, so the break-even batch is
+searched on the decode pool's own input (its hardware, parallel layout, PP included, and batch; `ui/sim/runner.ts`,
+`RunResult.pd.decodeBreakEvenBatch`); the prefill pool shows no sweep.
+
+### Not modeled
+
+- **Draft trees** (tree attention, several candidates per position verified at once): a verification strategy of
+  the engine; only chain verification is lowered.
+- **Small separate draft LMs** (a full small model as drafter, EAGLE-style heads other than MTP / DFlash 2 / DSpark).
+- **n-gram / prompt-lookup drafting** (drafts copied from the context, no drafter compute).
+- **Batch-dependent acceptance**: α is a property of the draft and target distributions under chain verification,
+  so it stays a user input at every batch; the observed large-batch loss is the verify cost above.
+- **Dynamic k or confidence scheduling** (changing k per step or per request): engine policy.
 
 ## 14. Prefill/decode disaggregation
 
@@ -3585,8 +3671,9 @@ R_P,eff = R_P·(cycle_P / cycle_eff)        λ_P,eff = R_P,eff / P
 
 - **Bytes.** `S_s` is the cache stage s holds for one request, counted once (§8 "Memory fit" state functions at
   tp = 1): GQA KV (windows capped), MLA latents, indexer keys, recurrent and conv state (fixed in P), at the KV
-  dtype, plus under spec-dec the drafter's own cache on the last stage (`draftSequenceStateBytes`; spec-dec forces
-  pp = 1). All P tokens move even with a prefix-cache hit. An uneven PP split (`stageLayerRange`) makes the stage
+  dtype, plus under spec-dec the drafter's own cache on the prefill pool's last stage, where the drafter runs at any
+  pp (`draftSequenceStateBytes`; §13 "Pipeline parallelism"). All P tokens move even with a prefix-cache hit. An
+  uneven PP split (`stageLayerRange`) makes the stage
   with the most layers the busiest sender.
 - **Sender.** Each of a stage's tp ranks sends a distinct 1/tp of the stage's bytes (sharded heads are distinct;
   replicated MLA latents and DCP-sharded caches can still be split). DCP in either pool changes none of S, Y or

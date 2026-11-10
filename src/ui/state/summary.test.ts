@@ -328,6 +328,9 @@ describe('summarize', () => {
       draftSec: stage.layers.at(-1)!.sec,
       verifySec: 10e-3,
       expectedTokensPerStep: 2.31,
+      offTokensPerSec: 100,
+      offCycleSec: 1e-2,
+      stepCostRatio: 2.31 / 1.67,
       speedup: 1.67,
     };
     const input: SimInput = {

@@ -840,6 +840,26 @@ tbody td:last-child {
   stroke: var(--primary);
   stroke-width: 3;
 }
+.sweep-line-off {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  stroke-dasharray: 2 3;
+}
+.sweep-break-even-line {
+  fill: none;
+  stroke: var(--danger);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+.sweep-break-even-label {
+  fill: var(--danger);
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: var(--paper);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
 .sweep-stream-tick,
 .sweep-stream-title {
   fill: var(--link);
@@ -853,7 +873,9 @@ tbody td:last-child {
 }
 .sweep-legend {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-4);
+  row-gap: var(--space-1);
   margin: var(--space-2) 0 0;
   padding: 0;
   list-style: none;

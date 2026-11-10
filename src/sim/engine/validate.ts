@@ -33,8 +33,14 @@ import { checkPlacement, expertTpCollectivePath } from './placement';
 import { expertRules, lookupTableRules } from './offloadRules';
 import type { LayerRange, SimInput } from './types';
 
-/** The exact error for speculative decoding with pipeline parallelism (design doc §3.6). */
-export const SPEC_DEC_PP_ERROR = 'speculative decoding with pp > 1 is not supported yet';
+/**
+ * The exact error for speculative decoding with pipeline parallelism and the token embedding off the device
+ * (`offload.embeddings` on host RAM or NVMe). At pp > 1 the drafter on the last stage gathers from its own copy of the
+ * table (docs/simulation-model.md §13 "Pipeline parallelism"); that stage may sit on another node, whose host does
+ * not hold the off-device table, so the combination is not modelled.
+ */
+export const SPEC_DEC_PP_OFFLOADED_EMBEDDING_ERROR =
+  'speculative decoding with pp > 1 and the token embedding off-device is not supported';
 
 /** The exact error for two-batch overlap without MoE expert parallelism across TP groups (docs §7 "Two-batch overlap"). */
 export const TWO_BATCH_OVERLAP_MODE_B_ERROR =
@@ -377,7 +383,8 @@ function inRange(x: number, lo: number, hi: number, hiOpen = false): boolean {
  * Two-batch overlap: needs a MoE model with ep > tp ({@link TWO_BATCH_OVERLAP_MODE_B_ERROR}) and nothing off the
  * device ({@link TWO_BATCH_OVERLAP_OFFLOAD_ERROR}).
  *
- * Speculative decoding: rejected with pp > 1 (§3.6, {@link SPEC_DEC_PP_ERROR}); `draftLength` k an integer in
+ * Speculative decoding: with pp > 1 the token embedding must stay on the device
+ * ({@link SPEC_DEC_PP_OFFLOADED_EMBEDDING_ERROR}); `draftLength` k an integer in
  * 1..16; `'mtp'` needs `model.draft.kind === 'mtp'`; a block method needs a `drafter` of the same method with
  * `k + 1 ≤ blockSize`; acceptance i.i.d. α in [0, 1), per-position α_j in [0, 1] (non-empty); the drafter's own MoE
  * blocks (MTP layers, a block drafter's `moeLayers`) follow the same expert-parallel rules as the target's
@@ -513,7 +520,9 @@ export function deploymentErrors(input: SimInput): string[] {
   }
   const spec = input.deployment?.speculative;
   if (spec !== undefined) {
-    if (parallel.pp > 1) errors.push(SPEC_DEC_PP_ERROR);
+    const embeddingTier: unknown = input.deployment?.offload?.embeddings?.tier;
+    if (parallel.pp > 1 && (embeddingTier === 'host_ram' || embeddingTier === 'nvme'))
+      errors.push(SPEC_DEC_PP_OFFLOADED_EMBEDDING_ERROR);
     const k = spec.draftLength;
     if (!Number.isInteger(k) || k < 1 || k > MAX_DRAFT_LENGTH) {
       errors.push(

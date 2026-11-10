@@ -84,6 +84,21 @@ for (const size of ['desktop', 'phone'] as const) {
       await expect(breakdown.getByTestId('breakdown-section').first()).toBeVisible();
       await breakdown.screenshot({ path: name('breakdown-draft-verify') });
 
+      // The batch sweep with spec-dec on: the spec-dec-off line and the break-even marker (MTP k 7, one GPU).
+      await load('?sd=mtp&sdk=7');
+      const sweep = page.locator('section.sweep');
+      await expect(page.getByTestId('specdec-break-even')).toBeVisible();
+      await sweep.scrollIntoViewIfNeeded();
+      await sweep.screenshot({ path: name('specdec-sweep') });
+      const pastBreakEven = page.locator('[data-chart="sweep"] [data-chart-point]').nth(6);
+      await pastBreakEven.scrollIntoViewIfNeeded();
+      await pastBreakEven.hover({ force: true });
+      await pastBreakEven.focus();
+      await expect(page.locator('[data-chart="sweep"] [role="tooltip"]')).toContainText(
+        'without spec-dec',
+      );
+      await sweep.screenshot({ path: name('specdec-sweep-tooltip') });
+
       // The hypothetical drafter (no released DSpark drafter for this model).
       await load('?w=fp8_e4m3&n=2&tp=2&sd=dspark', ['Workload']);
       await expect(page.getByTestId('hypothetical-badge')).toBeVisible();

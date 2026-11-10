@@ -4,6 +4,7 @@ import { REF_DENSE_8B_MTP } from '../models/referenceDraft';
 import type { AcceptanceModel } from './types';
 import {
   ACCEPTANCE_PRESETS,
+  breakEvenBracket,
   DEFAULT_DRAFT_LENGTH,
   SPEC_USE_CASES,
   defaultDraftLength,
@@ -28,6 +29,66 @@ function expectClose(actual: number, expected: number, rel = 1e-9): void {
 
 const MTP_DRAFT = REF_DENSE_8B_MTP.draft as MtpDraftSpec;
 const MULTI_STEP: MtpDraftSpec = { ...MTP_DRAFT, maxReliableDepth: undefined };
+
+describe('breakEvenBracket: first adjacent pair with speedup ≥ 1 then < 1', () => {
+  const pts = (pairs: [number, number][]) => pairs.map(([batch, speedup]) => ({ batch, speedup }));
+  it('a crossing between 32 and 64 → [32, 64]', () => {
+    expect(
+      breakEvenBracket(
+        pts([
+          [1, 2.4],
+          [16, 1.9],
+          [32, 1.3],
+          [64, 0.97],
+          [128, 0.79],
+        ]),
+      ),
+    ).toEqual([32, 64]);
+  });
+  it('exactly 1 still pays: [1, 1.0], [2, 0.9] → [1, 2]', () => {
+    expect(
+      breakEvenBracket(
+        pts([
+          [1, 1],
+          [2, 0.9],
+        ]),
+      ),
+    ).toEqual([1, 2]);
+  });
+  it('pays everywhere → undefined', () => {
+    expect(
+      breakEvenBracket(
+        pts([
+          [1, 2],
+          [2, 1.5],
+          [4, 1.01],
+        ]),
+      ),
+    ).toBeUndefined();
+  });
+  it('never pays → undefined (nothing to bracket)', () => {
+    expect(
+      breakEvenBracket(
+        pts([
+          [1, 0.9],
+          [2, 0.8],
+        ]),
+      ),
+    ).toBeUndefined();
+    expect(breakEvenBracket([])).toBeUndefined();
+  });
+  it('non-monotone: the first crossing wins, and input order does not matter', () => {
+    const wiggle = pts([
+      [8, 0.98],
+      [1, 1.5],
+      [2, 1.2],
+      [4, 0.99],
+      [16, 1.02],
+      [32, 0.9],
+    ]);
+    expect(breakEvenBracket(wiggle)).toEqual([2, 4]);
+  });
+});
 
 describe('expectedTokens (U-7, design doc §3.5)', () => {
   it('iid α .85, k 1 → 1 + .85 = 1.85', () =>

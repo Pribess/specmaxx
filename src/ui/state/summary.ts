@@ -64,12 +64,17 @@ export interface PhaseSummary {
   /**
    * Decode with speculative decoding (`PhaseResult.speculative`); absent otherwise. `draftSec` / `verifySec`: shares
    * of one step (seconds); `expectedTokensPerStep`: E[τ] (tokens per sequence per step, incl. the bonus token);
-   * `speedup`: tokens/s over tokens/s with spec-dec off (dimensionless).
+   * `offTokensPerSec`: the rate with spec-dec off (tokens/s); `offCycleSec`: its cycle (seconds); `stepCostRatio`:
+   * cycle over the off cycle (dimensionless); `speedup`: tokens/s over tokens/s with spec-dec off
+   * (= E[τ] / stepCostRatio, dimensionless).
    */
   speculative?: {
     draftSec: number;
     verifySec: number;
     expectedTokensPerStep: number;
+    offTokensPerSec: number;
+    offCycleSec: number;
+    stepCostRatio: number;
     speedup: number;
   };
   /**

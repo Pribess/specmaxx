@@ -824,6 +824,29 @@ export function draftContextRows(expected: number): number {
   return Math.ceil(expected - 1e-9);
 }
 
+/**
+ * The first adjacent pair of `points` (ascending batch) whose speedup goes from ≥ 1 to < 1: speculative decoding stops
+ * paying somewhere in `(lo, hi]`. Undefined when it pays at every batch or at none before the first loss (a sweep that
+ * starts below 1 has no crossing to bracket). Batches: count (sequences); speedup: dimensionless (tokens/s with
+ * spec-dec over tokens/s without).
+ *
+ * Why a crossing exists (nothing new is modelled, the roofline produces it): the verify's GEMMs have m = b·(k + 1)
+ * rows, so they turn compute bound at b ≈ ridge/(k + 1), k + 1 times earlier than plain decode; past it the step
+ * cost grows ∝ k + 1 and speedup = E[τ]/stepCostRatio tends to E[τ]/(k + 1) < 1.
+ * See docs/simulation-model.md §13 "Break-even batch".
+ */
+export function breakEvenBracket(
+  points: readonly { batch: number; speedup: number }[],
+): [lo: number, hi: number] | undefined {
+  const sorted = [...points].sort((a, b) => a.batch - b.batch);
+  for (let i = 1; i < sorted.length; i++) {
+    // Formula: first i with speedup(i−1) ≥ 1 ∧ speedup(i) < 1
+    if (sorted[i - 1].speedup >= 1 && sorted[i].speedup < 1)
+      return [sorted[i - 1].batch, sorted[i].batch];
+  }
+  return undefined;
+}
+
 /** A resolved speculative-decoding run: what lowering applies, E[τ], and the notes it produced. */
 export interface ResolvedSpeculative {
   /** The verify / draft shape lowering applies. */

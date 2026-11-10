@@ -277,7 +277,7 @@ describe('spec-dec off is today: validation and identity of the knob', () => {
     expect(b).toEqual(a);
     expect(a.decode.speculative).toBeUndefined();
   });
-  it('pp > 1 is rejected with the §3.6 message', () => {
+  it('pp > 1 is valid (docs §13 "Pipeline parallelism")', () => {
     const input: SimInput = {
       model: REF_DENSE_8B_MTP,
       quant: BF16,
@@ -286,7 +286,8 @@ describe('spec-dec off is today: validation and identity of the knob', () => {
       hardware: GPU,
       deployment: mtp(1, { kind: 'iid', alpha: 0.8 }),
     };
-    expect(validateInput(input)).toContain('speculative decoding with pp > 1 is not supported yet');
+    // One RTX 5090 cannot hold pp 2 (the device-count error stays); nothing about speculative decoding is rejected.
+    expect(validateInput(input).filter((e) => e.includes('speculative'))).toEqual([]);
   });
   it('a single-step head drafted past its depth warns', () => {
     const r = run(REF_DENSE_8B_MTP, mtp(3, { kind: 'iid', alpha: 0.85 }));

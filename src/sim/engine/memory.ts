@@ -181,6 +181,28 @@ export function stageWeightBytes(model: ModelSpec, ctx: LoweringContext, s: numb
   return layerBytes + embedBytes + headBytes;
 }
 
+/**
+ * Bytes of the drafter's own token-embedding copy on ONE device of the last stage (speculative decoding at pp > 1).
+ * Unit: bytes.
+ *
+ * The drafter (MTP `embed`, block-drafter `noise_embed`) gathers rows of the target's token embedding on the last
+ * stage. At pp = 1 the table is already on the device (0). At pp > 1 it lives on stage 0, so the last stage keeps a
+ * copy of the shard `ceil(V/tp)·h·bpe(emb)`, as vLLM's EAGLE proposer does: it shares `embed_tokens` with the target
+ * only when the PP world size is 1, else loads its own (vLLM v0.11.0 `vllm/v1/spec_decode/eagle.py: load_model`,
+ * https://github.com/vllm-project/vllm/blob/v0.11.0/vllm/v1/spec_decode/eagle.py#L854-L881). Exception: a tied
+ * LM head stored in the same format IS that matrix, and {@link stageWeightBytes} already counts it in full on the
+ * last stage at pp > 1, so no copy is added (an upper-bound choice; vLLM loads a copy regardless).
+ *   W_copy = [pp > 1 ∧ ¬(tied ∧ same format)] · ceil(V/tp)·h·bpe(emb)
+ * See docs/simulation-model.md §13 "Pipeline parallelism".
+ */
+export function draftEmbeddingCopyBytes(model: ModelSpec, ctx: LoweringContext): number {
+  if (ctx.parallel.pp === 1) return 0;
+  const tiedSameFormat =
+    model.tieEmbeddings && sameStoredFormat(embeddingFormat(ctx), lmHeadFormat(ctx));
+  // Formula: W_copy = [pp > 1 ∧ ¬(tied ∧ same format)] · ceil(V/tp)·h·bpe(emb)
+  return tiedSameFormat ? 0 : embeddingShardBytes(model, ctx);
+}
+
 /** Per-sequence state bytes on one device of stage `s` for `contextTokens` of context. Unit: bytes per sequence. */
 export function stageSequenceStateBytesPerSeq(
   model: ModelSpec,
@@ -504,8 +526,8 @@ export function memoryReport(input: MemoryInput): MemoryReport {
     // Deployment terms (design doc §2.7, §3.3): 0 with nothing offloaded / spec-dec off.
     // Token-embedding rows are staged per prefill chunk (the activation phases), other groups per costed phase.
     const stagingBytes = stageStagingBytes(input.lowered, s, activationLowered);
-    // Spec-dec (last stage): draft weights (shared embedding / head excluded) + B_r · draft KV/state at the context;
-    // every stage: the verify's (k + 1) per-position state snapshots × B_r.
+    // Spec-dec (last stage): draft weights (shared embedding / head excluded) + the pp > 1 embedding copy + B_r · draft
+    // KV/state at the context; every stage: the verify's (k + 1) per-position state snapshots × B_r.
     const spec = ctx.speculative;
     let draftBytes = 0;
     let draftStatePerSeqBytes = 0;
@@ -513,10 +535,11 @@ export function memoryReport(input: MemoryInput): MemoryReport {
     if (spec !== undefined) {
       if (s === ctx.parallel.pp - 1) {
         draftStatePerSeqBytes = draftSequenceStateBytes(spec.draft, ctx, input.contextTokens);
-        // Formula: draft_s = W_draft + B_r·S_draft(ctx)
-        // See docs/simulation-model.md §13 ("Draft memory")
+        // Formula: draft_s = W_draft + W_copy + B_r·S_draft(ctx)   (W_copy = 0 at pp = 1)
+        // See docs/simulation-model.md §13 ("Draft memory", "Pipeline parallelism")
         draftBytes =
           draftResidentWeightBytes(model, spec.draft, ctx) +
+          draftEmbeddingCopyBytes(model, ctx) +
           input.sequencesPerReplica * draftStatePerSeqBytes;
       }
       // Formula: specTransient_s = B_r·(k + 1)·snap_s

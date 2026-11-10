@@ -215,6 +215,51 @@ it('shows sweep x/y/context and memory-fit status on hover, keyboard navigation 
   expect(screen.getByRole('tooltip').textContent).toContain('batch 1');
   expect(screen.getByText('aggregate, tok/s @ 8k')).toBeTruthy();
   expect(screen.queryByText(/Aggregate tok\/s\. Hollow/)).toBeNull();
+  // Spec-dec off: no off line, no legend item, no break-even marker.
+  expect(container.querySelector('.sweep-line-off')).toBeNull();
+  expect(screen.queryByTestId('sweep-legend-off')).toBeNull();
+  expect(screen.queryByTestId('specdec-break-even')).toBeNull();
+});
+it('with spec-dec: draws the spec-dec-off line, its legend item, the break-even marker and the tooltip rates', () => {
+  const point = (batch: number, agg: number, off: number) => ({
+    batch,
+    contextTokens: 8192,
+    decodeTokensPerSec: agg,
+    perSeqTokensPerSec: agg / batch,
+    fits: true,
+    offDecodeTokensPerSec: off,
+    speedup: agg / off,
+  });
+  const { container } = render(
+    <BatchSweepChart
+      points={[point(1, 80, 33), point(32, 1500, 1000), point(64, 1900, 2000)]}
+      breakEvenBatch={48}
+    />,
+  );
+  const offLine = container.querySelector('polyline.sweep-line-off');
+  expect(offLine).toBeTruthy();
+  expect(offLine?.getAttribute('points')?.split(' ')).toHaveLength(3);
+  // The off rate shares the aggregate (right) axis: its 2,000 tok/s sets the top tick.
+  expect([...container.querySelectorAll('.sweep-agg-tick')].map((t) => t.textContent)).toEqual([
+    '0.0',
+    '1.0k',
+    '2.0k',
+  ]);
+  expect(screen.getByTestId('sweep-legend-off').textContent).toBe(
+    'Aggregate, spec-dec off (right axis)',
+  );
+  const marker = screen.getByTestId('specdec-break-even');
+  expect(marker.querySelector('title')?.textContent).toBe('break-even batch 48');
+  expect(marker.querySelector('text')?.textContent).toBe('break-even batch 48');
+  const points = container.querySelectorAll<SVGElement>('[data-chart-point]');
+  fireEvent.pointerEnter(points[2]);
+  expect(screen.getByRole('tooltip').textContent).toBe(
+    'batch 64 · 29.7 tok/s per stream · 1,900 aggregate · 2,000 without spec-dec · ×0.95 @ 8k',
+  );
+  fireEvent.pointerEnter(points[0]);
+  expect(screen.getByRole('tooltip').textContent).toBe(
+    'batch 1 · 80.0 tok/s per stream · 80.0 aggregate · 33.0 without spec-dec · ×2.42 @ 8k',
+  );
 });
 it('shows roofline x/y units and per-phase contexts on hover, focus, arrows and tap', async () => {
   const { summary } = await defaultResult();
@@ -300,6 +345,9 @@ it('annotates a spec-dec decode: speedup with E[τ] help, verify and draft layer
         draftSec: 1.2e-3,
         verifySec: 9.8e-3,
         expectedTokensPerStep: 2.31,
+        offTokensPerSec: 100,
+        offCycleSec: 1e-2,
+        stepCostRatio: 2.31 / 1.67,
         speedup: 1.67,
       },
     },
