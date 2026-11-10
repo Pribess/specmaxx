@@ -9,7 +9,7 @@
 
 import type {
   LayerRange,
-  OffloadTier,
+  KvTier,
   OpResult,
   PhaseResult,
   SimInput,
@@ -198,14 +198,14 @@ export interface Breakdown {
 export interface OffloadPlacement {
   /** Which group: routed (MoE) experts, the n-gram lookup tables, the token-embedding table, or the KV cache. */
   group: 'routed_experts' | 'lookup_tables' | 'token_embeddings' | 'kv_cache';
-  /** Tier holding the group (the KV cache: host RAM when any of it is there, else the SSD). */
-  tier: OffloadTier;
+  /** Tier holding the group (the KV cache: the remote pool when its share is the pool alone, else host RAM when any of it is there, else the SSD). */
+  tier: KvTier;
   /**
-   * KV cache only: shares of each offloadable layer's per-sequence KV on the device (f_dev), in host RAM (f_ram) and on
-   * the SSD (f_ssd), summing to 1, and the share of a cached prefix on the device (f_pre) when it differs from f_dev.
-   * Dimensionless, in [0, 1].
+   * KV cache only: shares of each offloadable layer's per-sequence KV on the device (f_dev), in host RAM (f_ram), on
+   * the SSD (f_ssd) and in the remote pool (f_pool, absent = 0), summing to 1, and the share of a cached prefix on the
+   * device (f_pre) when it differs from f_dev. Dimensionless, in [0, 1].
    */
-  kvShares?: { device: number; hostRam: number; ssd: number; prefixDevice?: number };
+  kvShares?: { device: number; hostRam: number; ssd: number; pool?: number; prefixDevice?: number };
   /**
    * Routed experts only: the configured hit ratio h(f) of the resident cache (the hit-ratio model at the resident
    * fraction, before the engine's physical clamp). Dimensionless, in [0, 1].
@@ -629,19 +629,28 @@ export function offloadPlacements(input: SimInput): OffloadPlacement[] {
     out.push({ group: 'token_embeddings', tier: embeddings.tier });
   const kv = offload.kvCache;
   if (kv !== undefined) {
-    // Formula: f_ram = hostRamFraction ?? 1 − f_dev;  f_ssd = 1 − f_dev − f_ram   (engine KvCacheOffloadConfig)
+    // Formula: f_pool = remotePool.fraction ?? 0 (0 at f_dev = 1);  f_ram = hostRamFraction ?? 1 − f_dev − f_pool;
+    //          f_ssd = 1 − f_dev − f_ram − f_pool   (engine KvCacheOffloadConfig, host.ts: resolveKvCache)
     const device = kv.deviceFraction;
-    const hostRam = kv.hostRamFraction ?? 1 - device;
-    const ssd = Math.max(0, 1 - device - hostRam);
+    const pool = device >= 1 ? 0 : Math.max(0, Math.min(1 - device, kv.remotePool?.fraction ?? 0));
+    const hostRam = kv.hostRamFraction ?? 1 - device - pool;
+    const ssd = Math.max(0, 1 - device - hostRam - pool);
     const prefixDevice = kv.prefixDeviceFraction;
+    // The tier named: the pool when it holds all of the off-device share (also a prefix-only placement with a pool);
+    // else host RAM unless a given hostRamFraction of 0 means the SSD (also for a prefix-only placement, f_dev = 1).
+    const poolOnly = kv.remotePool !== undefined && hostRam <= 0 && ssd <= 0;
     out.push({
       group: 'kv_cache',
-      // A given hostRamFraction of 0 means the SSD (also for a prefix-only placement, f_dev = 1).
-      tier: kv.hostRamFraction === undefined || hostRam > 0 ? 'host_ram' : 'nvme',
+      tier: poolOnly
+        ? 'remote_pool'
+        : kv.hostRamFraction === undefined || hostRam > 0
+          ? 'host_ram'
+          : 'nvme',
       kvShares: {
         device,
         hostRam,
         ssd,
+        ...(pool > 0 ? { pool } : {}),
         ...(prefixDevice !== undefined && prefixDevice !== device ? { prefixDevice } : {}),
       },
     });

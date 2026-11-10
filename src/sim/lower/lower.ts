@@ -89,19 +89,25 @@ export interface EmbeddingPlacement {
 /**
  * The resolved KV-cache placement (`KvCacheOffloadConfig` with every default filled in, docs/simulation-model.md §12
  * "KV cache off-device"): of each offloadable attention layer's per-sequence KV, a share `deviceFraction` is in device
- * memory; the rest is split between host RAM and the SSD as `ramShare : nvmeShare` (shares of the off-device part,
- * summing to 1). Every attention step reads its non-resident past tokens from those tiers (`lower/kvOffload.ts`).
+ * memory; the rest is split between host RAM, the SSD and the remote KV pool as `ramShare : nvmeShare :
+ * remotePoolShare` (shares of the off-device part, summing to 1). Every attention step reads its non-resident past
+ * tokens from those tiers (`lower/kvOffload.ts`).
  */
 export interface KvCachePlacement {
   /** f_dev ∈ [0, 1]: share of each offloadable layer's per-sequence KV in device memory (decode). Dimensionless. */
   deviceFraction: number;
   /**
-   * Share of the OFF-device KV in host RAM, `f_ram / (1 − f_dev)` (1 when f_dev = 1 and no split was given).
-   * Dimensionless, in [0, 1]; `ramShare + nvmeShare = 1`.
+   * Share of the OFF-device KV in host RAM, `f_ram / (1 − f_dev)` (1 when f_dev = 1 and no split or pool was given).
+   * Dimensionless, in [0, 1]; `ramShare + nvmeShare + remotePoolShare = 1`.
    */
   ramShare: number;
   /** Share of the OFF-device KV on the SSD, `f_ssd / (1 − f_dev)`. Dimensionless, in [0, 1]. */
   nvmeShare: number;
+  /**
+   * Share of the OFF-device KV in the remote KV pool, `f_pool / (1 − f_dev)` (1 when f_dev = 1 and a pool was given).
+   * 0 without a pool. Dimensionless, in [0, 1].
+   */
+  remotePoolShare: number;
   /**
    * h: probability that an attended past token of a top-k (sparse) layer is device-resident, already evaluated by
    * the hit model (`'uniform'` → f_dev), before the physical clamp. Unused by full-attention layers.

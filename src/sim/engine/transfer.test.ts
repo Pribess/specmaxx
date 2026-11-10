@@ -13,7 +13,7 @@ import {
   expertHitsMisses,
   hitRatio,
   nStream,
-  prefetchesFromBothTiers,
+  prefetchesFromMultipleTiers,
   stageNStream,
   transferTime,
   uniqueExperts,
@@ -202,25 +202,31 @@ describe('transferTime resource use (link bytes, host RAM bytes and time) for th
   });
 });
 
-describe('prefetchesFromBothTiers: some host_ram op and some nvme op with q > 0', () => {
-  const op = (source: 'host_ram' | 'nvme', prefetchedFraction: number) => ({
+describe('prefetchesFromMultipleTiers: ops with q > 0 from two or more sources', () => {
+  const op = (source: 'host_ram' | 'nvme' | 'remote_pool', prefetchedFraction: number) => ({
     source,
     prefetchedFraction,
   });
   it('both tiers with q > 0 ⇒ true', () => {
-    expect(prefetchesFromBothTiers([op('host_ram', 0.8), op('nvme', 1)])).toBe(true);
-    expect(prefetchesFromBothTiers([op('nvme', 0), op('nvme', 0.3), op('host_ram', 0.8)])).toBe(
+    expect(prefetchesFromMultipleTiers([op('host_ram', 0.8), op('nvme', 1)])).toBe(true);
+    expect(prefetchesFromMultipleTiers([op('nvme', 0), op('nvme', 0.3), op('host_ram', 0.8)])).toBe(
       true,
     );
   });
   it('one tier, any q ⇒ false', () => {
-    expect(prefetchesFromBothTiers([op('host_ram', 0.8), op('host_ram', 1)])).toBe(false);
-    expect(prefetchesFromBothTiers([op('nvme', 1), op('nvme', 0)])).toBe(false);
-    expect(prefetchesFromBothTiers([])).toBe(false);
+    expect(prefetchesFromMultipleTiers([op('host_ram', 0.8), op('host_ram', 1)])).toBe(false);
+    expect(prefetchesFromMultipleTiers([op('nvme', 1), op('nvme', 0)])).toBe(false);
+    expect(prefetchesFromMultipleTiers([])).toBe(false);
+  });
+  it('the remote pool counts as a source: pool + RAM or pool + SSD ⇒ true, pool alone ⇒ false', () => {
+    expect(prefetchesFromMultipleTiers([op('remote_pool', 1), op('host_ram', 1)])).toBe(true);
+    expect(prefetchesFromMultipleTiers([op('remote_pool', 0.5), op('nvme', 1)])).toBe(true);
+    expect(prefetchesFromMultipleTiers([op('remote_pool', 1), op('remote_pool', 1)])).toBe(false);
+    expect(prefetchesFromMultipleTiers([op('remote_pool', 0), op('host_ram', 1)])).toBe(false);
   });
   it('both tiers, but one (or both) only at q = 0 ⇒ false', () => {
-    expect(prefetchesFromBothTiers([op('host_ram', 0), op('nvme', 0)])).toBe(false);
-    expect(prefetchesFromBothTiers([op('host_ram', 0.8), op('nvme', 0)])).toBe(false);
+    expect(prefetchesFromMultipleTiers([op('host_ram', 0), op('nvme', 0)])).toBe(false);
+    expect(prefetchesFromMultipleTiers([op('host_ram', 0.8), op('nvme', 0)])).toBe(false);
   });
 });
 

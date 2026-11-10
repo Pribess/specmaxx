@@ -123,12 +123,18 @@ export interface OffloadChoice {
 }
 
 /**
+ * Where the off-device KV lives: host RAM, the SSD, a host-RAM + SSD split, or the remote KV pool reached over the
+ * inter-node network (engine `KvCacheOffloadConfig.remotePool`; docs/simulation-model.md §12 "Remote KV pool").
+ */
+export type KvTierChoice = PlacementChoice | 'remote_pool';
+
+/**
  * KV-cache tiering choice. Fractions are shares of each offloadable layer's per-sequence KV, by token. A choice with
  * every fraction at 1 (all on the device) is removed by {@link normalizeOffload}.
  */
 export interface KvCacheChoice {
-  /** Where the off-device share lives: host RAM, the SSD, or `'split'` between them (see `ramFraction`). */
-  tier: PlacementChoice;
+  /** Where the off-device share lives: host RAM, the SSD, `'split'` between them (see `ramFraction`), or the remote pool. */
+  tier: KvTierChoice;
   /** f_dev: share kept in device memory, in [0, 1]; absent = 1 (only the cached prefix may be off-device). */
   deviceFraction?: number;
   /**
@@ -136,6 +142,16 @@ export interface KvCacheChoice {
    * off-device share is on the SSD. Absent = half of the off-device share. Dimensionless.
    */
   ramFraction?: number;
+  /**
+   * With `tier: 'remote_pool'`: the `kvLinkIdOf` id of the link preset one device reaches the pool over (the RDMA NIC
+   * presets of `kvLink.ts`); absent = the stack's own inter-node link, or InfiniBand NDR400 on a stack without one.
+   */
+  poolLinkId?: string;
+  /**
+   * With `tier: 'remote_pool'`: the pool's usable capacity shared by every GPU; absent = unlimited. Unit: bytes
+   * (whole GB, 1e9 B, in the URL).
+   */
+  poolCapacityBytes?: number;
   /**
    * Top-k (sparse-attention) models: custom hit ratio h in [0, 1], the chance an attended past token is on the device;
    * absent = uniform (h = f_dev). Dimensionless.
@@ -231,7 +247,8 @@ export function offloadsToSsd(offload: OffloadChoice | undefined): boolean {
 }
 
 /**
- * The KV-cache choice with defaults removed (f_dev 1, f_pre equal to f_dev, a host-RAM share without a split);
+ * The KV-cache choice with defaults removed (f_dev 1, f_pre equal to f_dev, a host-RAM share without a split, pool
+ * fields without the pool tier);
  * undefined when everything stays on the device (f_dev = 1 and f_pre = 1), so that state encodes like no choice.
  */
 export function normalizeKvCache(kv: KvCacheChoice | undefined): KvCacheChoice | undefined {
@@ -243,6 +260,8 @@ export function normalizeKvCache(kv: KvCacheChoice | undefined): KvCacheChoice |
     tier: kv.tier,
     deviceFraction: f >= 1 ? undefined : f,
     ramFraction: kv.tier === 'split' ? kv.ramFraction : undefined,
+    poolLinkId: kv.tier === 'remote_pool' ? kv.poolLinkId : undefined,
+    poolCapacityBytes: kv.tier === 'remote_pool' ? kv.poolCapacityBytes : undefined,
     hitRatio: kv.hitRatio,
     prefixDeviceFraction: pre === f ? undefined : pre,
   });

@@ -2702,9 +2702,9 @@ prefill step: qLen = P_new, kvLen = P   (the new tokens attend over cached + new
 - Memory fit: the activation-peak step uses `P_new` as its token count with `kvLen = P`
   (`prefillChunkShape(P, seqs, C, P_new)`).
 - The cached KV is in device memory unless KV-cache offload (`OffloadConfig.kvCache`, §12 "KV cache off-device")
-  puts a share `1 − f_pre` of it in host RAM / on the SSD: then each offloadable layer first reads
-  `(1 − f_pre)·cached` tokens per sequence from its tier (`lower/kvOffload.ts: kvFetchOps`). A remote pool is not
-  modelled. Radix/paging mechanics and routing are out of scope.
+  puts a share `1 − f_pre` of it in host RAM / on the SSD / in the remote KV pool: then each offloadable layer first
+  reads `(1 − f_pre)·cached` tokens per sequence from its tier (`lower/kvOffload.ts: kvFetchOps`). Radix/paging
+  mechanics and routing are out of scope.
 
 ### Engine dispatch overlay
 
@@ -2991,8 +2991,9 @@ Shortlist-model approximations (sub-percent unless noted):
   bandwidth and endurance are not modelled); a consumer layer of a shared latent fetches its misses again; the
   staging buffer holds a whole layer's fetch from every tier at once (Σ over host RAM and the SSD, double-buffered
   when prefetched); the top-k hit ratio h and the one-layer-ahead prefetch accuracy p of
-  top-k decode are scenario inputs, not derived; the prefix-cache pool's own capacity and a remote KV pool (Mooncake
-  store, LMCache remote) are not modelled.
+  top-k decode are scenario inputs, not derived; the prefix-cache pool's own capacity (finished requests' KV kept for
+  reuse) is not modelled, and the remote KV pool (Mooncake store, LMCache remote) is costed by its NIC share only
+  (§12 "Remote KV pool": no pool-side bandwidth or sharing, no RDMA software overhead, no KV writes).
 
 ---
 
@@ -3303,25 +3304,26 @@ least as long as the copy: many experts resident, or a fast link (GH200 C2C, uni
 
 ### Overlap across tiers
 
-`src/sim/engine/pipeline.ts: stageTransfer`; `engine/transfer.ts: prefetchesFromBothTiers, TransferTime.linkSec,
+`src/sim/engine/pipeline.ts: stageTransfer`; `engine/transfer.ts: prefetchesFromMultipleTiers, TransferTime.linkSec,
 TransferTime.hostRamSec` (passed up as `OpResult.transferResources`); `engine/memory.ts: stageStagingBytes`. Design
 doc §2.11, follow-up 1.
 
-A device can read from host RAM and the SSD in the same step (mixed placement, or experts in RAM next to lookup
-tables on the SSD). The experts fetched after the router (the 1 − q share) stay serial: a layer's demand fetch
+A device can read from host RAM, the SSD and the remote KV pool ("Remote KV pool" below) in the same step (mixed
+placement, experts in RAM next to lookup tables on the SSD, or a KV cache split across tiers). The experts fetched after the router (the 1 − q share) stay serial: a layer's demand fetch
 waits for its router, and the layers run in order. The prefetched share q is fetched during earlier compute, so an
 SSD → host RAM read of one layer can run while another layer's host RAM → GPU copy is in flight. Per stage s (one
 device), with t_op = the op's time (`OpResult.sec`, α and the latency floor included):
 
 ```
-overlapped_s ⇔ some op with q > 0 reads host_ram  and  some op with q > 0 reads nvme
+overlapped_s ⇔ the ops with q > 0 read two or more sources (host_ram, nvme, remote_pool)
 
 not overlapped_s:  xfer_s = Σ_ops t_op;   P_s = Σ_ops q·t_op                 (the serial rule, unchanged)
 overlapped_s:
   D_s    = Σ_ops (1 − q)·t_op                                   demand share, serial (router-bound)
   P_s    = max( Σ_{ram ops} q·t_op,                             host RAM stream (its ops in order, α each)
                 Σ_{nvme ops} q·t_op,                            SSD stream
-                Σ_ops q·usefulBytes / B_link,                   this device's PCIe link
+                Σ_{pool ops} q·t_op,                            remote-pool stream (the NIC)
+                Σ_ops q·usefulBytes / B_link,                   this device's PCIe link (pool RDMA writes too)
                 Σ_ops q·hostRamSec_op )                        host RAM bandwidth, shared by n_host:
                                                                   ram op  bytes_tier / (B_ram / n_host)
                                                                   nvme op bytes_tier / (B_ram / (2·n_host))
@@ -3338,16 +3340,17 @@ then (both cases, §7 "Stage time and overlap"):
 - **Hiding.** `P_s` takes the place of `Σ q·t_op`. At p = 1, `t_s = lat_s + max(core_s, P_s)`; at p = 0 nothing
   changes. Since each t_op is at least its link and host RAM times, `P_s ≤ Σ q·t_op`, so the overlapped xfer_s and
   t_s are never above the serial ones, and `lat_s + max(core_s, xfer_s) ≤ t_s ≤ t_core,s + xfer_s` still holds.
-- **Scope.** Within one device and stage. Sharing across stages (n_stream, n_host) is unchanged. Unified memory never
-  has two sources (host_ram rules are dropped), so it is unchanged.
+- **Scope.** Within one device and stage. Sharing across stages (n_stream, n_host) is unchanged. Unified memory has
+  two sources only with the KV cache on the SSD and in the remote pool (host_ram rules are dropped); a pool op has no
+  host RAM term and, on unified memory, no link term.
 - **Bit-identity.** Only an overlapped stage takes the new branch; every other stage (one source, or p = 0) runs the
   former expressions in the same order, so its results are bit-identical (`pipeline.test.ts`,
   `e2e-mixed-offload.test.ts` "one source per device is unchanged").
 - **Reported time.** `StageResult.transferSec` (and so `PhaseResult.transfer.sec`) is the effective `xfer_s` = D_s +
   P_s; the per-op breakdown still shows each op's own time.
 - **Staging.** With two streams in flight the stage keeps one buffer being read plus one being filled per source:
-  `staging = max_all buffer + max_{ram, q>0} buffer + max_{nvme, q>0} buffer` per phase ("Memory tiers"). With one
-  source this is the former 2·max.
+  `staging = max_all buffer + max_{ram, q>0} buffer + max_{nvme, q>0} buffer + max_{pool, q>0} buffer` per phase
+  ("Memory tiers"). With one source this is the former 2·max.
 - **Token-embedding rows** ("Token embedding off-device") join by their source like any op: in prefill (q = 1) they
   are part of their tier's stream, so e.g. the embedding in host RAM next to experts on the SSD overlaps; in decode
   (q = 0) they are demand share only, in D_s, and never make a stage overlapped on their own.
@@ -3358,7 +3361,7 @@ PLE table on the SSD, f = 0, b 1, p 0.8. 24 expert layers in RAM + 24 on the SSD
 ms, 5.555 → 6.269 tok/s @ 8k). All experts in RAM (the PLE table on the SSD makes it two sources): 41.06 → 41.00 ms,
 23.731 → 23.763 tok/s @ 8k. All on the SSD: one source, 3.124 tok/s @ 8k unchanged.
 
-Which configs move: any device that prefetches from both tiers at p > 0, including experts in RAM next to PLE /
+Which configs move: any device that prefetches from two or more tiers at p > 0, including experts in RAM next to PLE /
 Engram tables on the SSD (DeepSeek-V4.1-Flash, experts in RAM + Engram on the SSD: 12.456 → 12.476 tok/s @ 8k), and
 an Engram table split across the tiers at p > 0.
 
@@ -3483,9 +3486,10 @@ stageResidentSequenceStateBytesPerSeq, stageTierBreakdown, tierMaxSequencesPerRe
 `engine/validate.ts: kvCacheErrors`. Tests: `lower/kvOffload.test.ts`, `engine/kvOffload.test.ts`,
 `engine/e2e-kv-offload.test.ts`, `engine/identity.test.ts` (ID-6).
 
-Deployment knob `OffloadConfig.kvCache = { deviceFraction f_dev, hostRamFraction? f_ram, hitRatio?, prefixDeviceFraction?
-f_pre }` (KV-cache tiering, report §G10). Of each offloadable layer's per-sequence KV, a share f_dev (by token) is in
-device memory, f_ram in host RAM and `f_ssd = 1 − f_dev − f_ram` on the SSD; every step, the attention first reads
+Deployment knob `OffloadConfig.kvCache = { deviceFraction f_dev, hostRamFraction? f_ram, remotePool? { fraction f_pool,
+link?, capacityBytes? }, hitRatio?, prefixDeviceFraction? f_pre }` (KV-cache tiering, report §G10). Of each offloadable
+layer's per-sequence KV, a share f_dev (by token) is in device memory, f_ram in host RAM, f_pool in a remote KV pool
+("Remote KV pool" below) and `f_ssd = 1 − f_dev − f_ram − f_pool` on the SSD; every step, the attention first reads
 its non-resident past tokens from those tiers, through the same transfer machinery as the weight groups ("Transfer
 path", "Sharing", "Expert prefetch", "Overlap across tiers", "Memory tiers"), with its own `TransferOp.group
 'kv_cache'`. Off by default: `kvCache` absent, or `f_dev = 1` with no prefix share off the device (`f_pre = 1`, or no
@@ -3520,15 +3524,15 @@ U        = full attention, prefill: past;  top-k decode: min(past, topK·qLen)  
 hits     = full, prefill: N_res;
            top-k decode: clamp(U·h, max(0, U + N_res − past), min(U, N_res))   (the expert rule, experts → tokens)
 M        = U − hits                                                missed (fetched) tokens per sequence
-M_t      = M·share_t,  share_ram = f_ram/(1 − f_dev),  share_ssd = f_ssd/(1 − f_dev)
+M_t      = M·share_t,  share_ram = f_ram/(1 − f_dev),  share_ssd = f_ssd/(1 − f_dev),  share_pool = f_pool/(1 − f_dev)
 reads_t  = full, prefill: [{ b, M_t·kvB }]        one contiguous span per sequence
-           top-k decode:  [{ b·M_t, kvB }]        one row per selected token (an SSD pays its 4 KiB page per row)
+           top-k decode:  [{ b·M_t, kvB }]        one row per selected token (an SSD pays its 4 KiB page per row; the pool none)
 useful_t = b·M_t·kvB
 q        = p = 0: 0;  full, prefill: 1;  top-k decode: max(p, M/(past − N_res))
 ```
 
-- **Ops.** One `TransferOp` per tier with `M_t > 0`: `attn.kv_fetch` (host RAM) and `attn.kv_fetch_ssd`, right
-  before the attention core (after the indexer of a top-k layer; before the DCP Q all-gather; before `kv_b` in the
+- **Ops.** One `TransferOp` per tier with `M_t > 0`: `attn.kv_fetch` (host RAM), `attn.kv_fetch_ssd` and
+  `attn.kv_fetch_pool` (remote pool), right before the attention core (after the indexer of a top-k layer; before the DCP Q all-gather; before `kv_b` in the
   MLA dense-prefill form, which decompresses every latent). The attention op is unchanged, so its device-memory
   bytes are identical: as for experts, the staged copy is read from HBM.
 - **Hit ratio h** (`KvHitRatioModel`): only top-k layers, where the selected tokens may or may not be the resident
@@ -3542,23 +3546,25 @@ q        = p = 0: 0;  full, prefill: 1;  top-k decode: max(p, M/(past − N_res)
   prefetches layer i's important tokens during layer i−1; HiSparse queues later layers' copies behind earlier
   layers' compute) with accuracy p, or copy every non-resident token.
 - **Prefix cache.** With `Workload.prefixCacheHitRatio > 0`, the `cached = floor(P·h_pc)` tokens' KV is in device
-  memory at the share f_pre (default f_dev) and the rest is read at prefill from the tiers in the `f_ram : f_ssd`
-  proportion. With `f_dev = 1` (a prefix-only placement) `hostRamFraction` absent puts it in host RAM, and
-  `hostRamFraction: 0` on the SSD. The prefix-cache pool's own capacity (finished requests' KV kept for reuse) is
+  memory at the share f_pre (default f_dev) and the rest is read at prefill from the tiers in the `f_ram : f_ssd :
+  f_pool` proportion. With `f_dev = 1` (a prefix-only placement) a given `remotePool` reads it from the pool; else
+  `hostRamFraction` absent puts it in host RAM, and `hostRamFraction: 0` on the SSD. The prefix-cache pool's own capacity (finished requests' KV kept for reuse) is
   not modelled; only live sequences' KV counts against the tiers.
 - **Memory.** The device keeps `state_dev,s = state_s − (1 − f_dev)·Σ S_off,s` per sequence
   (`stageResidentSequenceStateBytesPerSeq`, `S_off = N_rank·kvB` of each offloadable owning block at the fit's
-  context); each tier holds `B_r·f_t·Σ S_off,s` per device (`TierBytes.kvCache`, f_ram and f_ssd), summed per node
-  as for the weight groups. Staging: a layer's KV fetches from host RAM and the SSD feed the same attention op, so
-  they are ONE buffer, `buffer_kv,ℓ = Σ_t useful_t,ℓ` (`memory.ts: stagingUnits`); the largest layer's buffer, ×2 when
-  q > 0, and with both tiers prefetched `max_all + max_ram + max_ssd` takes that sum as the buffer being read and its
-  host-RAM and SSD parts as the next layer's fills (`2·Σ` for equal layers; `Σ` at p = 0, not the larger tier
+  context); each tier holds `B_r·f_t·Σ S_off,s` per device (`TierBytes.kvCache`, f_ram, f_ssd and f_pool), summed per
+  node as for the weight groups (the pool: over every node, "Remote KV pool"). Staging: a layer's KV fetches from host
+  RAM, the SSD and the pool feed the same attention op, so they are ONE buffer, `buffer_kv,ℓ = Σ_t useful_t,ℓ`
+  (`memory.ts: stagingUnits`); the largest layer's buffer, ×2 when q > 0, and with two or more tiers prefetched
+  `max_all + max_ram + max_ssd + max_pool` takes that sum as the buffer being read and its per-tier parts as the next
+  layer's fills (`2·Σ` for equal layers; `Σ` at p = 0, not the larger tier
   alone). `maxSequencesPerReplica` takes the device bound with the resident state AND, per tier and node,
   `floor((cap_t − static_t,node) / Σ_{node devices} f_t·S_off,s)` (`tierMaxSequencesPerReplica`; static = the weight
   groups on that tier). The prefill→decode KV transfer (§14) still moves the FULL cache
   (`stageSequenceStateBytesPerSeq`), whichever tier it sits on.
-- **Unified memory.** Host RAM is the device pool: f_ram folds into f_dev (`f_dev' = 1 − (1 − f_dev)·share_ssd`, f_pre
-  likewise) with a warning, and only the SSD share moves; all of it in host RAM is then a no-op.
+- **Unified memory.** Host RAM is the device pool: f_ram folds into f_dev (`f_dev' = 1 − (1 − f_dev)·(share_ssd +
+  share_pool)`, f_pre likewise) with a warning, and only the SSD and pool shares move (renormalised to sum to 1); all
+  of it in host RAM is then a no-op.
 - **Decode bound on PCIe.** With the off-device KV in host RAM and `B_link < B_ram/n_host` (an RTX 5090's PCIe 5.0
   x16, 57.6 GB/s, against DDR5-6000 ×2, 96 GB/s), each layer's fetch is `α + useful/B_link`, and once it exceeds the
   step's compute `t_s = max(core, Σ_ℓ t_fetch)`: decode tok/s ≈ `B / Σ_ℓ (α + useful_ℓ/B_link)`. InfiniGen measured
@@ -3573,10 +3579,67 @@ q        = p = 0: 0;  full, prefill: 1;  top-k decode: max(p, M/(past − N_res)
 - **Approximations** (§9): KV writes to the tiers are not costed; a layer reading another layer's latent
   (`kvCacheFromLayer`) fetches its misses again (no cross-layer reuse, conservative); the per-layer staging buffer
   holds a whole layer's fetch (chunked streaming with an online softmax would need less); with DCP the prefill (not
-  token-sharded) fetches the whole cached prefix on every rank; no remote pool (below).
-- **Not modelled: a remote KV pool** (Mooncake store, LMCache remote backends, llm-d's shared file system). It would
-  be a third tier behind the NIC, with its own capacity, bandwidth and sharing across instances; only host RAM and
-  the local SSD are tiers here.
+  token-sharded) fetches the whole cached prefix on every rank; the remote pool's own approximations are below.
+
+### Remote KV pool
+
+`src/sim/engine/types.ts: RemoteKvPoolConfig`; `engine/host.ts: resolveKvCache, resolveRemotePool, remotePoolPath`;
+`engine/transfer.ts: RemotePoolPath, remotePoolTransferTime`; `engine/memory.ts: tierScopeBreakdowns,
+tierCapacityBytes`; `lower/kvOffload.ts: kvFetchOps` (`attn.kv_fetch_pool`). Report §G10: Mooncake store
+([arXiv 2407.00079](https://arxiv.org/abs/2407.00079), [FAST'25](https://www.usenix.org/conference/fast25/presentation/qin)),
+LMCache remote backends ([docs](https://docs.lmcache.ai/)), SGLang HiCache L3
+([design](https://docs.sglang.io/docs/advanced_features/hicache_design)).
+
+The third KV tier: DRAM (or flash) on other machines, pooled and reached over this device's inter-node link by RDMA.
+`OffloadConfig.kvCache.remotePool = { fraction f_pool, link?, capacityBytes? }` puts the share f_pool of each
+offloadable layer's per-sequence KV there (`share_pool = f_pool/(1 − f_dev)` of the off-device part, next to host RAM
+and the SSD), and a prefix-only placement (`f_dev = 1`) with a pool reads the cached prefix from it. Off by default:
+no `remotePool`, or `fraction` 0, resolves to `remotePoolShare` 0, so no pool op, no pool tier, and the topology's
+inter-node link is never read (ID-6; `e2e-remote-pool.test.ts` "identity").
+
+- **Link.** One device's link to the pool, per direction: `link` when given; else the stack's inter-node link as one
+  device sees it (`hw/nics.ts: interNodeLinkPerDevice`: `B_dev = min(N_nic·B_nic/dpn, C)`, the node's NICs shared by
+  its devices, the convention of the collectives in §6 "Multi-NIC nodes"); else, on a stack without an inter-node
+  link, one InfiniBand NDR400 NIC per device (`IB_NDR_400`, 50 GB/s, α 1 µs, the P→D transfer's default of §14) with a
+  warning.
+- **Cost of a fetch** (`remotePoolTransferTime`), the place of "Transfer path" for the pool:
+
+```
+bytes_pool = usefulBytes                       the pool serves whole KV rows: no read granularity
+α_path     = α_pool                            one latency per fetch (RDMA reads posted together: no Little's-law term)
+service    = max( usefulBytes / B_pool,        this device's NIC share
+                  usefulBytes / B_link )       its PCIe link, which the RDMA write into device memory crosses too
+                                               (B_link = ∞ on unified memory: no link term)
+t_path     = α_pool + service
+```
+
+No host RAM term (`hostRamBytes` = `hostRamSec` = 0: the bytes land in device memory from the NIC, GPUDirect
+RDMA), no IOPS term, no n_stream: the NIC share B_dev already assumes every device of the node reads at once. The
+pool side (its DRAM bandwidth, its own NICs, other instances reading the same pool) is **not a limit**: an explicit
+upper bound. q follows the KV rule above (full attention and prefill 1, top-k decode the expert rule), and the
+stage combines a pool stream with host-RAM / SSD streams by "Overlap across tiers" (its own stream term, plus the
+shared PCIe link term).
+
+- **Memory.** The pool is ONE pool for the whole deployment: its `TierMemory` entry (`tier 'remote_pool'`) sums
+  `B_r·f_pool·Σ S_off,s` over EVERY device of every node (host RAM and the SSD take the fullest node), against
+  `capacityBytes`; absent = unlimited (`capacityBytes: Infinity`, always fits, no sequence bound, with a warning that
+  says so). With a capacity, `maxSequencesPerReplica` also takes `floor(cap_pool / Σ_{all devices} f_pool·S_off,s)`
+  (`tierMaxSequencesPerReplica`). Staging in device memory is as for the other tiers (the pool's part of the layer's
+  one buffer).
+- **Worked example** (`engine/e2e-remote-pool.test.ts`): the "KV cache off-device" setup (REF_DENSE_8B fp8, bf16 KV,
+  one RTX 5090, b 8, N 32768) with the 75 % off-device share in a pool over the default NDR400 NIC (50 GB/s, below
+  the GPU's PCIe 5.0 x16 at 57.6 GB/s): each layer's 805,306,368 B take `1 µs + useful/B_pool` = 16.107 ms, the step
+  36 × that = 0.580 s: **13.80 tok/s @ 32k**, NIC-bound (15.90 tok/s @ 32k with the same share in host RAM over PCIe).
+  A split f_ram 0.25 / f_pool 0.5 overlaps the two streams: the shared PCIe link term (all 805 MB per layer over
+  B_link) binds, below the serial sum. On a 2-node B200 stack with 4 NICs per 8 GPUs the pool link is 25 GB/s per GPU.
+- **Sanity check** (not a test): Mooncake measures 87 GB/s per node on 4 × 200 Gb RoCE and 190 GB/s on 8 × 400 Gb
+  ([IETF 125 slides](https://datatracker.ietf.org/meeting/125/materials/slides-125-irtfopen-disaggregated-architecture-for-llm-inference-mooncake-01);
+  `transfer.ts: MOONCAKE_MEASURED_POOL_BYTES_PER_SEC_PER_NODE`), 87 % and 48 % of the line rates (100 and 400 GB/s per
+  node) this bound uses: a pool fetch here is at least that much faster than measured.
+- **Approximations** (§9): no RDMA software overhead, memory registration or page-table lookup; no pool-side bandwidth
+  or capacity sharing between instances (each deployment is modelled alone); KV writes into the pool (new tokens,
+  finished requests) are not priced; a pool fetch has no read granularity; the pool's per-device bandwidth is the NIC
+  share under the all-devices-at-once convention, so a lone reader on a shared-NIC node is pessimistic.
 
 ## 13. Speculative decoding
 

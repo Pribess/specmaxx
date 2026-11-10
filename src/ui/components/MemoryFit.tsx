@@ -27,7 +27,11 @@ interface Segment {
 }
 
 /** Display name of a storage tier. */
-const TIER_LABEL: Record<TierMemory['tier'], string> = { host_ram: 'Host RAM', nvme: 'SSD' };
+const TIER_LABEL: Record<TierMemory['tier'], string> = {
+  host_ram: 'Host RAM',
+  nvme: 'SSD',
+  remote_pool: 'Remote pool',
+};
 
 /**
  * The allocations of one stage's device: weights (the n-gram table split out, hatched, when it stays on the
@@ -97,6 +101,11 @@ function tierSegments(tier: TierMemory, placements: readonly OffloadPlacement[])
   })).filter((s) => s.bytes > 0);
 }
 
+/** A tier's capacity for display: `unlimited` for a remote pool without a stated capacity (`Infinity`). */
+function capacityText(capacityBytes: number): string {
+  return Number.isFinite(capacityBytes) ? formatBytes(capacityBytes) : 'unlimited';
+}
+
 /** Fit state of an off-device tier, with the same thresholds as a device. */
 function tierState(tier: TierMemory): MemoryState {
   if (!tier.fits) return 'danger';
@@ -105,7 +114,7 @@ function tierState(tier: TierMemory): MemoryState {
 
 /**
  * Per-device capacity and its allocations, one bar per pipeline stage, then one bar per off-device tier (host RAM,
- * SSD).
+ * SSD, remote KV pool).
  * `onPlaceTablesOnHost`, when given, adds a button that moves an on-device n-gram table to host RAM.
  */
 export function MemoryFit({
@@ -266,7 +275,7 @@ export function MemoryFit({
         return (
           <div className="memory-stage memory-tier" key={tier.tier} data-testid="memory-tier">
             <div className={`memory-${state}`}>
-              {TIER_LABEL[tier.tier]} {formatBytes(tier.bytes)} / {formatBytes(tier.capacityBytes)}
+              {TIER_LABEL[tier.tier]} {formatBytes(tier.bytes)} / {capacityText(tier.capacityBytes)}
               {!tier.fits && ': does not fit'}
             </div>
             {renderBar(
@@ -275,7 +284,8 @@ export function MemoryFit({
               state,
               tier.fits,
               tier.bytes,
-              tier.capacityBytes,
+              // An unlimited pool's bar is drawn full: its capacity is the bytes it holds.
+              Number.isFinite(tier.capacityBytes) ? tier.capacityBytes : tier.bytes,
             )}
             <ul
               className="memory-legend"
@@ -300,7 +310,7 @@ export function MemoryFit({
                 </li>
               ))}
               <li>
-                Node total{' '}
+                {tier.tier === 'remote_pool' ? 'Pool total' : 'Node total'}{' '}
                 <strong>
                   <Num>{formatBytes(tier.bytes)}</Num>
                 </strong>

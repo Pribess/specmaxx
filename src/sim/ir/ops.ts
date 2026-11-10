@@ -408,7 +408,15 @@ export interface CollectiveOp {
 }
 
 /**
- * A read of off-device weight bytes (host RAM or NVMe) into this device's memory, issued in front of the op that
+ * Where a {@link TransferOp} reads its bytes from: the node's host RAM, its NVMe SSD, or a remote KV pool reached
+ * over the inter-node network (`'remote_pool'`: Mooncake store, LMCache remote backends; KV cache only,
+ * docs/simulation-model.md §12 "KV cache off-device" / "Remote KV pool"). `'host_ram'` on a unified-memory device
+ * is never emitted: it is device memory.
+ */
+export type TransferSource = 'host_ram' | 'nvme' | 'remote_pool';
+
+/**
+ * A read of off-device bytes (host RAM, NVMe, or the remote KV pool) into this device's memory, issued in front of the op that
  * needs them (deployment knob `offload`, design doc §2). Its time comes from the tier and host-link model
  * (engine/transfer.ts, design doc §2.3), not from the roofline: it has no FLOP, and moves no HBM bytes in this
  * model (the DMA write into device memory, at most `B_link / memBW` of the step, is a documented approximation).
@@ -420,7 +428,7 @@ export interface TransferOp {
   kind: 'transfer';
   /**
    * Stable dotted name, e.g. `'moe.expert_fetch'`, `'ngram.row_fetch'`, `'embed.row_fetch'`, `'attn.kv_fetch'`
-   * (KV from host RAM), `'attn.kv_fetch_ssd'` (KV from the SSD).
+   * (KV from host RAM), `'attn.kv_fetch_ssd'` (KV from the SSD), `'attn.kv_fetch_pool'` (KV from the remote pool).
    */
   name: string;
   /**
@@ -431,8 +439,11 @@ export interface TransferOp {
    * that are not in device memory; docs §12 "KV cache off-device").
    */
   group: 'routed_experts' | 'lookup_table' | 'token_embedding' | 'kv_cache';
-  /** Storage tier the bytes come from (`'host_ram'` on a unified-memory device is never emitted: it is device memory). */
-  source: 'host_ram' | 'nvme';
+  /**
+   * Storage tier the bytes come from ({@link TransferSource}). Weight groups use host RAM or the SSD; only the KV
+   * cache may come from the remote pool.
+   */
+  source: TransferSource;
   /**
    * Physical read classes issued this step: `count` reads of `bytesEach` bytes each (before rounding to the tier's
    * read granularity). Experts: `[{ count: M, bytesEach: W_expert }]`; table rows per the scale layout of design

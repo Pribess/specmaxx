@@ -45,9 +45,10 @@
  * | `olt`, `ols` | lookup-tables tier `ram`, `ssd`, `split` (host RAM + SSD) (absent: on the device); (with `olt`) scale layout `separate`, `pinned`, `interleaved` (default: the tier's; with `split`, each side's tier's) | `olt=ram` |
  * | `olr`, `ole` | (with `olt=split`) layers with a table kept in host RAM, integer ≥ 0 (default: half, rounded down), which end is in host RAM: `last` (default `first`, never written) | `olr=24` |
  * | `oet` | token-embedding table tier `ram`, `ssd` (absent: on the device; `split` is not allowed) | `oet=ssd` |
- * | `okt` | KV-cache tier `ram`, `ssd`, `split` (host RAM + SSD) (absent: the whole KV cache on the device) | `okt=ram` |
+ * | `okt` | KV-cache tier `ram`, `ssd`, `split` (host RAM + SSD), `pool` (remote KV pool over the network) (absent: the whole KV cache on the device) | `okt=ram` |
  * | `okd`, `okh`, `okp` | (with `okt`) KV cache on the device in percent 0–100 (default 100), custom hit ratio of top-k layers in percent 0–100 (default: uniform, h = the device share), cached prefix on the device in percent 0–100 (default: `okd`) | `okt=ram&okd=25` |
  * | `okr` | (with `okt=split`) KV cache in host RAM in percent, 0 to 100 − `okd` (default: half of the off-device share) | `okt=split&okd=25&okr=50` |
+ * | `okl`, `okc` | (with `okt=pool`) pool link preset id (default: the stack's network link) and pool capacity in GB (default: unlimited) | `okt=pool&okd=25&okl=infiniband-hdr200-one-nic-per-gpu&okc=2048` |
  * | `oqd` | (with offload) queue depth, integer ≥ 1 (default: the tier's rated maximum) | `oqd=32` |
  * | `osr` | (with SSD offload) SSD read rate: `datasheet` (default), `sustained` | `osr=sustained` |
  * | `opf` | (with offload) prefetch accuracy p 0–1 (default 0.8) | `opf=0.9` |
@@ -102,6 +103,7 @@ import {
   type ScaleLayoutChoice,
   type SpecDecChoice,
   type SpecDecMethod,
+  type KvTierChoice,
   type PlacementChoice,
   type TierChoice,
   type TierSplitChoice,
@@ -242,6 +244,8 @@ export const URL_KEYS = [
   'okt',
   'okd',
   'okr',
+  'okl',
+  'okc',
   'okh',
   'okp',
   'oqd',
@@ -312,6 +316,9 @@ const TIER_KEYS: Record<TierChoice, string> = { host_ram: 'ram', nvme: 'ssd' };
 
 /** URL value of a placement of experts or lookup tables: a tier, or `split` (host RAM + SSD). */
 const PLACEMENT_KEYS: Record<PlacementChoice, string> = { ...TIER_KEYS, split: 'split' };
+
+/** URL value of the KV-cache tier: a placement, or `pool` (the remote KV pool). */
+const KV_TIER_KEYS: Record<KvTierChoice, string> = { ...PLACEMENT_KEYS, remote_pool: 'pool' };
 
 /** Puts a split's `<ram>` (layers in host RAM) and `<end>` (`last` only) keys; nothing without a split. */
 function putSplit(
@@ -515,9 +522,11 @@ export function encodeState(s: AppState): string {
     // Percent with at most 4 decimals, so 0.25 encodes as 25.
     const percent = (f: number | undefined) =>
       f === undefined ? undefined : Math.round(f * 1e6) / 1e4;
-    put('okt', PLACEMENT_KEYS[kv.tier]);
+    put('okt', KV_TIER_KEYS[kv.tier]);
     put('okd', percent(kv.deviceFraction));
     put('okr', percent(kv.ramFraction));
+    put('okl', kv.poolLinkId);
+    if (kv.poolCapacityBytes !== undefined) put('okc', kv.poolCapacityBytes / 1e9);
     put('okh', percent(kv.hitRatio));
     put('okp', percent(kv.prefixDeviceFraction));
   }
@@ -701,7 +710,7 @@ function decodeDeployment(
     offload.tables = { tier: tablesTier, split: tablesSplit, scaleLayout };
   const embeddingsTier = read('oet', true, (r) => keyOf(TIER_KEYS, r));
   if (embeddingsTier !== undefined) offload.embeddings = { tier: embeddingsTier };
-  const kvTier = read('okt', true, placement);
+  const kvTier = read('okt', true, (raw) => keyOf(KV_TIER_KEYS, raw));
   const kvFraction = (key: string, allowed: boolean) =>
     read(key, allowed, (r) => {
       const percent = parseNumberIn(r, 0, 100);
@@ -709,6 +718,10 @@ function decodeDeployment(
     });
   const kvDevice = kvFraction('okd', kvTier !== undefined);
   const kvRam = kvFraction('okr', kvTier === 'split');
+  const kvPoolLink = read('okl', kvTier === 'remote_pool', (r) =>
+    findKvLink(r) === undefined ? undefined : r,
+  );
+  const kvPoolGb = read('okc', kvTier === 'remote_pool', (r) => parseNumberIn(r, 0, MAX_VALUE));
   const kvHit = kvFraction('okh', kvTier !== undefined);
   const kvPrefix = kvFraction('okp', kvTier !== undefined);
   if (kvTier !== undefined) {
@@ -717,6 +730,9 @@ function decodeDeployment(
       deviceFraction: kvDevice,
       // f_ram ≤ 1 − f_dev: a larger share is clamped (written back clamped).
       ramFraction: kvRam === undefined ? undefined : Math.min(kvRam, 1 - (kvDevice ?? 1)),
+      poolLinkId: kvPoolLink,
+      poolCapacityBytes:
+        kvPoolGb === undefined || kvPoolGb <= 0 ? undefined : Math.round(kvPoolGb * 1e9),
       hitRatio: kvHit,
       prefixDeviceFraction: kvPrefix,
     });

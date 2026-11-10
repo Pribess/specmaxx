@@ -13,8 +13,16 @@ import {
   DGX_SPARK_SSD_4TB,
   NVME_GEN4_X4_GENERIC,
 } from '../hw/presets/storage';
-import { deviceHostLink } from '../hw/presets/links';
-import type { DeviceSpec, HardwareStack, HostMemorySpec, LinkSpec, NvmeSpec } from '../hw/types';
+import { deviceHostLink, IB_NDR_400 } from '../hw/presets/links';
+import { interNodeLinkPerDevice } from '../hw/nics';
+import type {
+  DeviceSpec,
+  HardwareStack,
+  HostMemorySpec,
+  LinkSpec,
+  NvmeSpec,
+  TopologySpec,
+} from '../hw/types';
 import type { ModelSpec } from '../ir/model';
 import type {
   ExpertPlacement,
@@ -28,9 +36,16 @@ import {
   DEFAULT_PREFETCH_ACCURACY,
   hitRatio,
   resolveQueueDepth,
+  type RemotePoolPath,
   type TransferPath,
 } from './transfer';
-import type { KvCacheOffloadConfig, LayerRange, OffloadConfig, OffloadTier } from './types';
+import type {
+  KvCacheOffloadConfig,
+  LayerRange,
+  OffloadConfig,
+  OffloadTier,
+  RemoteKvPoolConfig,
+} from './types';
 
 /** The warning for KV-cache offload on a model with CSA blocks, whose compressed caches stay on the device. */
 export const KV_CACHE_CSA_WARNING =
@@ -160,12 +175,13 @@ export function resolveOffload(
 
 /**
  * The resolved KV-cache placement (docs/simulation-model.md §12 "KV cache off-device"), or undefined when it moves
- * nothing (absent; or f_dev = 1 and, with a prefix-cache hit, f_pre = 1). Defaults: `f_ram = 1 − f_dev`,
- * `f_pre = f_dev`, uniform hit `h = f_dev`. The off-device part splits as `ramShare = f_ram/(1 − f_dev)`,
- * `nvmeShare = f_ssd/(1 − f_dev)`. With f_dev = 1 (only the prefix share moves) the tier comes from whether
- * `hostRamFraction` is given: absent ⇒ host RAM, given (it must be 0) ⇒ the SSD. On unified memory host RAM IS the
- * device pool: f_ram folds into the device (`f_dev' = 1 − (1 − f_dev)·nvmeShare`, likewise f_pre), with a warning
- * when that changes anything, and only the SSD share moves.
+ * nothing (absent; or f_dev = 1 and, with a prefix-cache hit, f_pre = 1). Defaults: `f_pool = remotePool.fraction ??
+ * 0`, `f_ram = 1 − f_dev − f_pool`, `f_pre = f_dev`, uniform hit `h = f_dev`. The off-device part splits as `ramShare =
+ * f_ram/(1 − f_dev)`, `nvmeShare = f_ssd/(1 − f_dev)`, `remotePoolShare = f_pool/(1 − f_dev)`. With f_dev = 1 (only the
+ * prefix share moves) the tier comes from what is given: a `remotePool` ⇒ the pool; else `hostRamFraction` absent ⇒
+ * host RAM, given (it must be 0) ⇒ the SSD. On unified memory host RAM IS the device pool: f_ram folds into the device
+ * (`f_dev' = 1 − (1 − f_dev)·(nvmeShare + remotePoolShare)`, likewise f_pre), with a warning when that changes
+ * anything, and only the SSD and pool shares move (renormalised to sum to 1).
  */
 export function resolveKvCache(
   config: KvCacheOffloadConfig | undefined,
@@ -175,30 +191,37 @@ export function resolveKvCache(
 ): KvCachePlacement | undefined {
   if (config === undefined) return undefined;
   const fDev = config.deviceFraction;
-  // Formula: f_ram = hostRamFraction ?? 1 − f_dev;  f_ssd = 1 − f_dev − f_ram;  f_pre = prefixDeviceFraction ?? f_dev
-  const fRam = config.hostRamFraction ?? 1 - fDev;
-  const fSsd = Math.max(0, 1 - fDev - fRam);
+  // Formula: f_pool = remotePool.fraction ?? 0 (0 at f_dev = 1);  f_ram = hostRamFraction ?? 1 − f_dev − f_pool;
+  //          f_ssd = 1 − f_dev − f_ram − f_pool;  f_pre = prefixDeviceFraction ?? f_dev
+  const fPool = fDev >= 1 ? 0 : Math.max(0, Math.min(1 - fDev, config.remotePool?.fraction ?? 0));
+  const fRam = config.hostRamFraction ?? 1 - fDev - fPool;
+  const fSsd = Math.max(0, 1 - fDev - fRam - fPool);
   const fPre = config.prefixDeviceFraction ?? fDev;
-  const off = fRam + fSsd;
-  // Formula: ramShare = f_ram/(f_ram + f_ssd), nvmeShare = f_ssd/(f_ram + f_ssd)
-  //          (f_dev = 1: hostRamFraction absent ⇒ host RAM; given ⇒ SSD)
-  const ramWhenNone = config.hostRamFraction === undefined ? 1 : 0;
+  const off = fRam + fSsd + fPool;
+  // Formula: ramShare = f_ram/off, nvmeShare = f_ssd/off, remotePoolShare = f_pool/off   (off = f_ram + f_ssd + f_pool)
+  //          (f_dev = 1: remotePool given ⇒ the pool; else hostRamFraction absent ⇒ host RAM; given ⇒ SSD)
+  const poolWhenNone = config.remotePool !== undefined ? 1 : 0;
+  const ramWhenNone = poolWhenNone === 0 && config.hostRamFraction === undefined ? 1 : 0;
   let ramShare = off > 0 ? fRam / off : ramWhenNone;
-  let nvmeShare = off > 0 ? fSsd / off : 1 - ramWhenNone;
+  let nvmeShare = off > 0 ? fSsd / off : 1 - ramWhenNone - poolWhenNone;
+  let remotePoolShare = off > 0 ? fPool / off : poolWhenNone;
   let deviceFraction = fDev;
   let prefixDeviceFraction = fPre;
   if (memoryKind === 'unified') {
-    // Formula: f_dev' = 1 − (1 − f_dev)·nvmeShare;  f_pre' = 1 − (1 − f_pre)·nvmeShare;  ramShare' = 0
+    // Formula: s = nvmeShare + remotePoolShare;  f_dev' = 1 − (1 − f_dev)·s;  f_pre' = 1 − (1 − f_pre)·s;
+    //          ramShare' = 0;  nvmeShare' = nvmeShare/s;  remotePoolShare' = remotePoolShare/s   (s = 0: SSD 1, moot)
     const ramMoves = ramShare > 0 && (fDev < 1 || (prefixCacheHitRatio > 0 && fPre < 1));
     if (ramMoves) {
       warnings.push(
         'offload: on unified memory host RAM is the device memory; the KV cache in host RAM stays on the device',
       );
     }
-    deviceFraction = nvmeShare > 0 ? 1 - (1 - fDev) * nvmeShare : 1;
-    prefixDeviceFraction = nvmeShare > 0 ? 1 - (1 - fPre) * nvmeShare : 1;
+    const offShare = nvmeShare + remotePoolShare;
+    deviceFraction = offShare > 0 ? 1 - (1 - fDev) * offShare : 1;
+    prefixDeviceFraction = offShare > 0 ? 1 - (1 - fPre) * offShare : 1;
     ramShare = 0;
-    nvmeShare = 1;
+    nvmeShare = offShare > 0 ? nvmeShare / offShare : 1;
+    remotePoolShare = offShare > 0 ? remotePoolShare / offShare : 0;
   }
   const movesDecode = deviceFraction < 1;
   const movesPrefix = prefixCacheHitRatio > 0 && prefixDeviceFraction < 1;
@@ -210,12 +233,16 @@ export function resolveKvCache(
     deviceFraction,
     ramShare,
     nvmeShare,
+    remotePoolShare,
     hitRatio,
     prefixDeviceFraction: movesPrefix ? prefixDeviceFraction : 1,
   };
 }
 
-/** The off-device tiers a resolved placement uses (the union over every rule of every group). */
+/**
+ * The off-device tiers a resolved placement uses (the union over every rule of every group), the storage tiers of
+ * `hardware.host` only: the remote KV pool is resolved apart ({@link resolveRemotePool}).
+ */
 export function offloadTiers(offload: OffloadLowering): Set<OffloadTier> {
   const tiers = new Set<OffloadTier>();
   for (const rule of offload.routedExperts ?? []) tiers.add(rule.tier);
@@ -251,8 +278,74 @@ export interface ResolvedHost {
   ram?: HostMemorySpec;
   /** The node's SSD (when something is placed on `'nvme'`). */
   ssd?: NvmeSpec;
+  /** The remote KV pool (when a share of the KV cache is placed in it; {@link resolveRemotePool}). */
+  remotePool?: ResolvedRemotePool;
   /** One line per default taken, and the SSD's missing random-read rating. */
   warnings: string[];
+}
+
+/** The remote KV pool a run's KV fetches read from, with every default filled in (docs/simulation-model.md §12 "Remote KV pool"). */
+export interface ResolvedRemotePool {
+  /** The link of ONE device to the pool, per direction: B_pool (B/s) and α_pool (s). */
+  link: Pick<LinkSpec, 'name' | 'bandwidthPerDirectionBytesPerSec' | 'latencySec'>;
+  /** Usable capacity of the pool, shared by every device of the deployment; `Infinity` = unlimited. Unit: bytes. */
+  capacityBytes: number;
+}
+
+/**
+ * The remote KV pool's link and capacity (docs/simulation-model.md §12 "Remote KV pool"): `config.link` when given;
+ * else the stack's inter-node link as one device sees it (`interNodeLinkPerDevice`: the node's NICs shared evenly by
+ * its devices, the convention of the collectives); else, on a stack without an inter-node link, one InfiniBand NDR400
+ * NIC per device (`IB_NDR_400`, the P→D transfer's default too), with a warning. `capacityBytes` absent = `Infinity`,
+ * with a warning that the pool is treated as unlimited.
+ */
+export function resolveRemotePool(
+  config: RemoteKvPoolConfig,
+  topology: TopologySpec,
+  warnings: string[],
+): ResolvedRemotePool {
+  let link: ResolvedRemotePool['link'];
+  const stackLink = interNodeLinkPerDevice(topology);
+  if (config.link !== undefined) {
+    link = config.link;
+  } else if (stackLink !== undefined) {
+    link = stackLink;
+  } else {
+    link = IB_NDR_400;
+    warnings.push(
+      `offload: the stack has no inter-node link for the remote KV pool; using ${IB_NDR_400.name} per device`,
+    );
+  }
+  const capacityBytes = config.capacityBytes ?? Infinity;
+  if (config.capacityBytes === undefined) {
+    warnings.push('offload: the remote KV pool has no stated capacity; it is treated as unlimited');
+  }
+  return {
+    link: {
+      name: link.name,
+      bandwidthPerDirectionBytesPerSec: link.bandwidthPerDirectionBytesPerSec,
+      latencySec: link.latencySec,
+    },
+    capacityBytes,
+  };
+}
+
+/**
+ * The transfer path of the remote KV pool on one device (docs/simulation-model.md §12 "Remote KV pool"): the pool's
+ * link (B_pool, α_pool) and, on dedicated memory, the device's host link (PCIe), which the RDMA write into device
+ * memory also crosses. Throws when the host has no resolved pool.
+ */
+export function remotePoolPath(host: ResolvedHost): RemotePoolPath {
+  if (host.remotePool === undefined)
+    throw new Error('offload: no remote KV pool resolved for a transfer');
+  const path: RemotePoolPath = {
+    bandwidthPerDirectionBytesPerSec: host.remotePool.link.bandwidthPerDirectionBytesPerSec,
+    latencySec: host.remotePool.link.latencySec,
+  };
+  if (host.link !== undefined) {
+    path.link = { bandwidthPerDirectionBytesPerSec: host.link.bandwidthPerDirectionBytesPerSec };
+  }
+  return path;
 }
 
 /**

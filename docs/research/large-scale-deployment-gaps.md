@@ -127,7 +127,7 @@ Effort: S ≈ a day or less, M ≈ days, L ≈ a week+.
 - **Evidence:** 22 vLLM recipes verified (Simple CPU, Mooncake store in 5, LMCache in 3); SGLang HiCache; llm-d hierarchical offload 13.9× throughput at 250 users [blog](https://llm-d.ai/blog/kvcache-wins-you-can-see); Kimi-K3 GB200 lane Mooncake store.
 - **Fit:** deployment-scenario knob like existing offload. Absent today.
 - **Effort: M.** `engine` offload (new group "kv"), memory fit, UI.
-- **Status: done** (host RAM and SSD tiers; the remote pool is not modelled). `OffloadConfig.kvCache` (`deviceFraction`, `hostRamFraction`, top-k `hitRatio`, `prefixDeviceFraction` for the prefix cache), group `kv_cache` on the existing transfer path, resident-only device fit plus `TierBytes.kvCache`, PD transfer bytes unchanged. Note: the "13.9× at 250 users" figure above was not found in the linked page text and is not used elsewhere. See `docs/simulation-model.md` §12 "KV cache off-device".
+- **Status: done** (host RAM, SSD and remote-pool tiers; the pool is costed by each device's NIC share, `KvCacheOffloadConfig.remotePool`, docs §12 "Remote KV pool"). `OffloadConfig.kvCache` (`deviceFraction`, `hostRamFraction`, top-k `hitRatio`, `prefixDeviceFraction` for the prefix cache), group `kv_cache` on the existing transfer path, resident-only device fit plus `TierBytes.kvCache`, PD transfer bytes unchanged. Note: the "13.9× at 250 users" figure above was not found in the linked page text and is not used elsewhere. See `docs/simulation-model.md` §12 "KV cache off-device".
 
 ### G11. Dispatch/combine precision & all-to-all efficiency — **B**, in scope (S)
 

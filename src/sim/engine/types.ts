@@ -9,8 +9,8 @@
 import type { AccumulateType, MathFormat } from '../ir/dtype';
 import type { ByteBreakdown } from '../ir/metrics';
 import type { BlockDraftSpec, ModelSpec, ParallelConfig, QuantConfig } from '../ir/model';
-import type { Op } from '../ir/ops';
-import type { DeviceSpec, HardwareStack } from '../hw/types';
+import type { Op, TransferSource } from '../ir/ops';
+import type { DeviceSpec, HardwareStack, LinkSpec } from '../hw/types';
 
 /** The request load being evaluated. */
 export interface Workload {
@@ -177,6 +177,12 @@ export interface DeploymentConfig {
 /** Off-device storage tier a weight group can be placed on (`hardware.host.ram` / `hardware.host.ssd`). */
 export type OffloadTier = 'host_ram' | 'nvme';
 
+/**
+ * A tier the KV cache can be placed on: the weight tiers plus the remote KV pool (`'remote_pool'`, reached over the
+ * inter-node network; `KvCacheOffloadConfig.remotePool`). The same values as `TransferOp.source`.
+ */
+export type KvTier = TransferSource;
+
 /** A half-open range of decoder-layer indices `[from, to)` over `ModelSpec.layers`. Zero-based indices. */
 export interface LayerRange {
   /** First layer index in the range (inclusive). */
@@ -250,10 +256,10 @@ export interface OffloadConfig {
    */
   embeddings?: EmbeddingRule;
   /**
-   * KV-cache tiering (vLLM CPU offload, LMCache, SGLang HiCache): a share of each sequence's growing KV cache lives in
-   * host RAM or on the SSD and is read back every step by the attention that needs it. Absent, or a no-op setting
-   * (`deviceFraction` 1 and no prefix share off the device) = everything on the device, results bit-identical. See
-   * docs/simulation-model.md §12 ("KV cache off-device").
+   * KV-cache tiering (vLLM CPU offload, LMCache, SGLang HiCache, Mooncake store): a share of each sequence's growing
+   * KV cache lives in host RAM, on the SSD or in a remote KV pool and is read back every step by the attention that
+   * needs it. Absent, or a no-op setting (`deviceFraction` 1 and no prefix share off the device) = everything on the
+   * device, results bit-identical. See docs/simulation-model.md §12 ("KV cache off-device").
    */
   kvCache?: KvCacheOffloadConfig;
 }
@@ -268,7 +274,8 @@ export interface OffloadConfig {
 export type KvHitRatioModel = { kind: 'uniform' } | { kind: 'custom'; h: number };
 
 /**
- * KV-cache placement across the device, host RAM and the SSD (docs/simulation-model.md §12 "KV cache off-device").
+ * KV-cache placement across the device, host RAM, the SSD and a remote KV pool (docs/simulation-model.md §12 "KV cache
+ * off-device", "Remote KV pool").
  * Only KV that grows with the context is tiered: GQA K/V of full and top-k layers, MLA latents. Sliding-window caches,
  * indexer keys, recurrent/conv state, CSA caches and the drafter's KV stay on the device. Fractions are shares of each
  * offloadable layer's per-sequence KV, by token.
@@ -277,19 +284,55 @@ export interface KvCacheOffloadConfig {
   /** f_dev ∈ [0, 1]: share of each offloadable layer's per-sequence KV kept in device memory. Dimensionless. */
   deviceFraction: number;
   /**
-   * f_ram ∈ [0, 1 − f_dev]: share kept in host RAM; the rest, `f_ssd = 1 − f_dev − f_ram`, is on the SSD. Absent =
-   * `1 − f_dev` (all off-device KV in host RAM). On unified memory host RAM is the device pool, so f_ram counts as
+   * f_ram ∈ [0, 1 − f_dev − f_pool]: share kept in host RAM; the rest, `f_ssd = 1 − f_dev − f_ram − f_pool`, is on
+   * the SSD. Absent = `1 − f_dev − f_pool` (all remaining off-device KV in host RAM). On unified memory host RAM is the
+   * device pool, so f_ram counts as
    * device-resident (a warning). Dimensionless.
    */
   hostRamFraction?: number;
+  /**
+   * The remote KV pool and its share f_pool (`RemoteKvPoolConfig.fraction`): a memory pool on other machines reached
+   * over the inter-node network (Mooncake store, LMCache remote backends, SGLang HiCache L3). Absent = no pool (f_pool
+   * = 0). With `deviceFraction` 1 (a prefix-only placement) a given pool is where the cached prefix is read from.
+   */
+  remotePool?: RemoteKvPoolConfig;
   /** Hit model of top-k (sparse) attention layers; absent = `'uniform'`. No effect on full-attention layers. */
   hitRatio?: KvHitRatioModel;
   /**
    * f_pre ∈ [0, 1]: share of a prefix-cache hit's KV found in device memory at prefill; the rest is read from the
-   * tiers in the `f_ram : f_ssd` proportion (both 0 ⇒ host RAM). Absent = f_dev. Only matters with
+   * tiers in the `f_ram : f_ssd : f_pool` proportion (all 0 ⇒ the pool when `remotePool` is given, else host RAM when
+   * `hostRamFraction` is absent, else the SSD). Absent = f_dev. Only matters with
    * `Workload.prefixCacheHitRatio > 0`. Dimensionless.
    */
   prefixDeviceFraction?: number;
+}
+
+/**
+ * A remote KV pool: DRAM (or flash) on other machines that holds part of the KV cache, read over this device's
+ * inter-node link (RDMA). Only the link's bandwidth and one latency per fetch are costed: the pool side is assumed to
+ * serve every reader at line rate (no pool-side bandwidth or sharing limit, an explicit upper bound), there is no
+ * RDMA software overhead, and writes of new KV into the pool are not priced. See docs/simulation-model.md §12
+ * ("Remote KV pool").
+ */
+export interface RemoteKvPoolConfig {
+  /**
+   * f_pool ∈ [0, 1 − f_dev]: share of each offloadable layer's per-sequence KV kept in the pool. Ignored with
+   * `deviceFraction` 1 (then only the cached prefix, read from the pool, is off the device). Dimensionless.
+   */
+  fraction: number;
+  /**
+   * The link of ONE device to the pool, per direction: `bandwidthPerDirectionBytesPerSec` (B_pool, B/s per device)
+   * and `latencySec` (α_pool, s, the one-way small-message floor of the transport). Absent = the stack's inter-node
+   * link as one device sees it (`hw/nics.ts: interNodeLinkPerDevice`: the node's NICs shared by its devices), and
+   * on a stack without one the default InfiniBand NDR400 NIC per device (`kvTransfer.ts:
+   * DEFAULT_KV_TRANSFER_LINK`, 50e9 B/s, 1 µs) with a warning.
+   */
+  link?: Pick<LinkSpec, 'name' | 'bandwidthPerDirectionBytesPerSec' | 'latencySec'>;
+  /**
+   * Usable capacity of the pool shared by EVERY device of the deployment (all nodes). Absent = unlimited: the pool's
+   * memory-fit entry reports an infinite capacity and always fits. Unit: bytes.
+   */
+  capacityBytes?: number;
 }
 
 /**
@@ -712,25 +755,32 @@ export interface TierBytes {
   tokenEmbeddings: number;
   /**
    * Off-device KV cache of the live sequences (`OffloadConfig.kvCache`): `B_r · Σ_blocks f_t · KV_block(N)` per device
-   * on this tier t (f_ram or f_ssd, N the larger of the prompt and decode contexts); 0 without KV-cache offload.
+   * on this tier t (f_ram, f_ssd or f_pool, N the larger of the prompt and decode contexts); 0 without KV-cache offload.
    * Unit: bytes.
    */
   kvCache: number;
 }
 
-/** Bytes placed on one off-device storage tier of a node, against its capacity (design doc §2.7). */
+/**
+ * Bytes placed on one off-device storage tier, against its capacity (design doc §2.7): host RAM and the SSD per node
+ * (the fullest node), the remote KV pool over the whole deployment (every node's devices share one pool).
+ */
 export interface TierMemory {
   /** Which tier. */
-  tier: OffloadTier;
+  tier: KvTier;
   /**
    * Bytes the node's devices place on the tier: the FULL offloaded groups (all experts of the offloaded layers,
    * whole table shards, the token-embedding shard of each stage-0 device), since the device cache is a copy; plus
-   * pinned table scales on host RAM. Unit: bytes (per node, summed over its devices).
+   * pinned table scales on host RAM. Unit: bytes (per node, summed over its devices; the remote pool: summed over
+   * every device of the deployment).
    */
   bytes: number;
-  /** `bytes` by category, of the fullest node (its parts sum to `bytes`). Unit: bytes. */
+  /** `bytes` by category, of the fullest node (its parts sum to `bytes`; the remote pool: of the whole deployment). Unit: bytes. */
   breakdown: TierBytes;
-  /** Installed capacity of the tier (`HostMemorySpec.capacityBytes` / `NvmeSpec.capacityBytes`). Unit: bytes. */
+  /**
+   * Installed capacity of the tier (`HostMemorySpec.capacityBytes` / `NvmeSpec.capacityBytes` /
+   * `RemoteKvPoolConfig.capacityBytes`; `Infinity` for a pool without a stated capacity). Unit: bytes.
+   */
   capacityBytes: number;
   /** True if `bytes ≤ capacityBytes`. */
   fits: boolean;

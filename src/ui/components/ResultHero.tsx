@@ -75,8 +75,8 @@ function PdRig({
 }
 
 /** Display name of an off-device tier. */
-export function tierName(tier: 'host_ram' | 'nvme'): string {
-  return tier === 'host_ram' ? 'host RAM' : 'SSD';
+export function tierName(tier: 'host_ram' | 'nvme' | 'remote_pool'): string {
+  return tier === 'host_ram' ? 'host RAM' : tier === 'nvme' ? 'SSD' : 'remote pool';
 }
 
 /** A layer range `[from, to)` as the inclusive span users read, e.g. `24–35`. */
@@ -106,8 +106,8 @@ function percentText(share: number): string {
 
 /**
  * The KV-cache chip, e.g. `KV cache: 25% on device, 75% host RAM`, `KV cache: 25% on device, 50% host RAM, 25% SSD`,
- * with `, cached prefix 50% on device` when the prefix share differs; a prefix-only placement reads
- * `KV cache: cached prefix 50% on device, rest SSD`.
+ * `KV cache: 25% on device, 75% remote pool`, with `, cached prefix 50% on device` when the prefix share differs; a
+ * prefix-only placement reads `KV cache: cached prefix 50% on device, rest SSD`.
  */
 function kvChipText(p: OffloadPlacement): string {
   const shares = p.kvShares ?? { device: 1, hostRam: 0, ssd: 0 };
@@ -120,6 +120,9 @@ function kvChipText(p: OffloadPlacement): string {
     `${percentText(shares.device)} on device`,
     ...(shares.hostRam > 0 ? [`${percentText(shares.hostRam)} ${tierName('host_ram')}`] : []),
     ...(shares.ssd > 0 ? [`${percentText(shares.ssd)} ${tierName('nvme')}`] : []),
+    ...((shares.pool ?? 0) > 0
+      ? [`${percentText(shares.pool ?? 0)} ${tierName('remote_pool')}`]
+      : []),
     ...prefix,
   ];
   return `KV cache: ${parts.join(', ')}`;

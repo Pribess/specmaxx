@@ -53,9 +53,29 @@ test('KV cache 25% on GPU in host RAM makes a long context fit, decodes slower, 
   await hardwareAdvanced(page).locator('> summary').click();
   await expect(page.getByLabel('KV cache on GPU %', { exact: true })).toHaveValue('25');
 
+  // The remote pool: the tier picker row, its link and capacity fields, the pool tier bar (unlimited), and a slower
+  // decode than host RAM over PCIe (one NDR400 NIC per GPU, 50 GB/s, on a single-GPU stack).
+  await page.getByRole('combobox', { name: 'KV cache tier', exact: true }).click();
+  await page.getByRole('option', { name: 'Remote pool', exact: true }).click();
+  await expect(page).toHaveURL(/okt=pool&okd=25/);
+  await expect(page.getByRole('combobox', { name: 'Pool link', exact: true })).toHaveText(
+    'Network link of the stack',
+  );
+  await expect(page.getByLabel('Pool capacity GB', { exact: true })).toHaveValue('0');
+  await expect(page.getByTestId('memory-tier').filter({ hasText: 'Remote pool' })).toContainText(
+    'unlimited',
+  );
+  await expect(page.getByText('KV cache: 25% on device, 75% remote pool')).toBeVisible();
+  const pooled = await decodeAt128k(page);
+  expect(pooled).toBeLessThan(offloaded);
+  await page.getByLabel('Pool capacity GB', { exact: true }).fill('2048');
+  await expect(page).toHaveURL(/okc=2048/);
+  await expect(page.getByTestId('memory-tier').filter({ hasText: 'Remote pool' })).toContainText(
+    '2.0TB',
+  );
   // Back to 100%: the KV keys leave the URL and the original result returns.
   await page.getByLabel('KV cache on GPU %', { exact: true }).fill('100');
-  await expect(page).not.toHaveURL(/ok[tdrhp]=/);
+  await expect(page).not.toHaveURL(/ok[tdrhplc]=/);
   expect(await decodeAt128k(page)).toBe(onGpu);
   expect(errors).toEqual([]);
 });

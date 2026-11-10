@@ -35,8 +35,8 @@ import { gemmComputeSec, gemvComputeSec, type GemmShape } from '../hw/efficiency
 import { matmulPeakFlopsPerSec, vectorPeakFlopsPerSec } from '../hw/peaks';
 import type { ComputeEngine } from '../hw/types';
 import { collectiveTime, type AllReduceAlgorithm, type CollectivePath } from './collectives';
-import { transferTime, type TransferPath } from './transfer';
-import type { Bound, OffloadTier, OpResult, SimOptions } from './types';
+import { remotePoolTransferTime, transferTime, type TransferPaths } from './transfer';
+import type { Bound, OpResult, SimOptions } from './types';
 
 /** Everything the per-op cost needs besides the op itself. Plain data, built once per stage by `simulate`. */
 export interface OpTimeContext {
@@ -66,10 +66,10 @@ export interface OpTimeContext {
   /** Elementwise fusion assumption (SimOptions.elementwiseFusion). */
   elementwiseFusion: SimOptions['elementwiseFusion'];
   /**
-   * Transfer paths of this stage's devices per source tier (offloading on; design doc §2.3): tier, host link, queue
-   * depth and n_stream. Absent when nothing is offloaded.
+   * Transfer paths of this stage's devices per source (offloading on; design doc §2.3): tier, host link, queue
+   * depth and n_stream for host RAM and the SSD; the pool link for the remote KV pool. Absent when nothing is offloaded.
    */
-  transferPaths?: Partial<Record<OffloadTier, TransferPath>>;
+  transferPaths?: TransferPaths;
   /** Peak-fallback warnings are appended here (human-readable lines; `simulate` de-duplicates them). */
   warnings: string[];
   /**
@@ -470,19 +470,29 @@ function collectiveOpTime(op: CollectiveOp, ctx: OpTimeContext): OpResult {
   return result;
 }
 
+/** The stage's path for a transfer op's source; throws when the stage has none (a lowering/engine mismatch). */
+function requirePath<P>(path: P | undefined, op: TransferOp): P {
+  if (path === undefined)
+    throw new Error(`transfer op '${op.name}': no transfer path for tier '${op.source}'`);
+  return path;
+}
+
 /**
  * An off-device read: `t = α_path + service` of {@link transferTime} on the stage's path for the op's source tier
- * (design doc §2.3). No FLOP, no device-memory bytes (the DMA write into device memory is not charged). Also records
+ * (design doc §2.3), or of {@link remotePoolTransferTime} for the remote KV pool (docs/simulation-model.md §12 "Remote
+ * KV pool"). No FLOP, no device-memory bytes (the DMA write into device memory is not charged). Also records
  * the op's use of the shared host link and host RAM (`transferResources`) for the overlapped stage transfer
  * (`pipeline.ts: stageTransfer`); the latency floor ({@link withLatencyFloor}) lifts α only and keeps them.
  */
 function transferOpTime(op: TransferOp, ctx: OpTimeContext): OpResult {
-  const path = ctx.transferPaths?.[op.source];
-  if (path === undefined)
-    throw new Error(`transfer op '${op.name}': no transfer path for tier '${op.source}'`);
-  // Formula: t = α_tier + α_link + max(Little, IOPS/n, tier/n, link, host staging)
-  // See docs/simulation-model.md §12 ("Transfer path")
-  const t = transferTime(op.reads, op.usefulBytes, path);
+  const paths = ctx.transferPaths ?? {};
+  // Formula: host RAM / SSD: t = α_tier + α_link + max(Little, IOPS/n, tier/n, link, host staging)
+  //          remote pool:    t = α_pool + max(useful/B_pool, useful/B_link)
+  // See docs/simulation-model.md §12 ("Transfer path", "Remote KV pool")
+  const t =
+    op.source === 'remote_pool'
+      ? remotePoolTransferTime(op.reads, op.usefulBytes, requirePath(paths.remote_pool, op))
+      : transferTime(op.reads, op.usefulBytes, requirePath(paths[op.source], op));
   return {
     op,
     flops: 0,

@@ -9,7 +9,7 @@
  */
 
 import type { HostMemorySpec, NvmeSpec, StorageTierSpec } from '../hw/types';
-import type { TransferOp } from '../ir/ops';
+import type { TransferOp, TransferSource } from '../ir/ops';
 import type { HitRatioModel } from './types';
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -31,19 +31,20 @@ import type { HitRatioModel } from './types';
 export const DEFAULT_PREFETCH_ACCURACY = 0.8;
 
 /**
- * True iff a stage's transfer ops prefetch from BOTH off-device tiers: some op with a prefetched share q > 0 reads
- * host RAM and some op with q > 0 reads the SSD. Only then may the prefetched shares of the two streams overlap
- * within the device (docs/simulation-model.md §12 "Overlap across tiers"); every other stage keeps the serial
- * transfer sum. The one condition shared by the stage time (`pipeline.ts: stageTransfer`) and the staging buffers
- * (`memory.ts: stageStagingBytes`), so the two cannot drift apart. Keyed on `source` only, whatever the group.
+ * True iff a stage's transfer ops prefetch from TWO OR MORE off-device tiers: ops with a prefetched share q > 0 read
+ * at least two distinct sources (host RAM, the SSD, the remote KV pool). Only then may the prefetched shares of the
+ * streams overlap within the device (docs/simulation-model.md §12 "Overlap across tiers"); every other stage keeps
+ * the serial transfer sum. The one condition shared by the stage time (`pipeline.ts: stageTransfer`) and the staging
+ * buffers (`memory.ts: stageStagingBytes`), so the two cannot drift apart. Keyed on `source` only, whatever the group.
+ * With only host RAM and the SSD in play this is the former "both tiers" test, unchanged.
  */
-export function prefetchesFromBothTiers(
+export function prefetchesFromMultipleTiers(
   ops: readonly Pick<TransferOp, 'source' | 'prefetchedFraction'>[],
 ): boolean {
-  // Formula: overlapped_s ⇔ ∃ op: source = host_ram ∧ q > 0  and  ∃ op: source = nvme ∧ q > 0
-  const ram = ops.some((o) => o.source === 'host_ram' && o.prefetchedFraction > 0);
-  const ssd = ops.some((o) => o.source === 'nvme' && o.prefetchedFraction > 0);
-  return ram && ssd;
+  // Formula: overlapped_s ⇔ |{ source(op) : q(op) > 0 }| ≥ 2
+  const sources = new Set<TransferSource>();
+  for (const o of ops) if (o.prefetchedFraction > 0) sources.add(o.source);
+  return sources.size >= 2;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -351,6 +352,94 @@ export function transferTime(
   return result;
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// The remote KV pool (docs/simulation-model.md §12 "Remote KV pool")
+
+/**
+ * Everything a remote-pool transfer op of one device needs to be costed: the device's link to the pool and, on a
+ * dedicated-memory device, its host link (PCIe), which the RDMA write into device memory crosses too. Built once per
+ * run by `simulate` from `RemoteKvPoolConfig` (`host.ts: resolveRemotePool`).
+ */
+export interface RemotePoolPath {
+  /** B_pool: this device's bandwidth to the pool, per direction (its share of the node's NICs). Unit: B/s. */
+  bandwidthPerDirectionBytesPerSec: number;
+  /** α_pool: one-way latency of the inter-node transport, paid once per fetch. Unit: seconds. */
+  latencySec: number;
+  /**
+   * The device's host link (PCIe), per direction: an RDMA write lands in device memory through it (GPUDirect RDMA).
+   * Absent on unified memory. Only its bandwidth is read: the NIC's latency floor already includes the PCIe hop.
+   */
+  link?: { bandwidthPerDirectionBytesPerSec: number };
+}
+
+/**
+ * The bandwidth-and-latency model of the remote pool's link: for the pool's own bandwidth, the number the repo cites
+ * as a sanity check is Mooncake's measured KV-cache transfer rate per node, 87 GB/s on 4 × 200 Gb RoCE and 190 GB/s on
+ * 8 × 400 Gb (IETF 125 slides,
+ * https://datatracker.ietf.org/meeting/125/materials/slides-125-irtfopen-disaggregated-architecture-for-llm-inference-mooncake-01),
+ * i.e. 87 % and 48 % of the line rate (100 and 400 GB/s per node); the bound here is the line rate. Unit: B/s per node.
+ */
+export const MOONCAKE_MEASURED_POOL_BYTES_PER_SEC_PER_NODE = {
+  /** 4 × 200 Gb RoCE (line rate 100e9 B/s per node). */
+  roce_4x200g: 87e9,
+  /** 8 × 400 Gb (line rate 400e9 B/s per node). */
+  rdma_8x400g: 190e9,
+} as const;
+
+/**
+ * Time of one read from the remote KV pool on `path` (docs/simulation-model.md §12 "Remote KV pool"):
+ *   R          = Σ_i count_i                       (informational: RDMA reads are posted together, no per-request term)
+ *   bytes_pool = usefulBytes                        (the pool serves whole KV rows: no read granularity)
+ *   α_path     = α_pool
+ *   service    = max( usefulBytes / B_pool,  usefulBytes / B_link )       (B_link = ∞ on unified memory)
+ *   t_path     = α_pool + service
+ * The pool side (its DRAM, its own NICs, other readers) is not a limit: an explicit upper bound. No Little's-law,
+ * IOPS or host-RAM staging term (the bytes land in device memory straight from the NIC), so `littleSec` is 0 and
+ * `iopsSec` / `hostSec` are absent; `hostRamBytes` and `hostRamSec` are 0. The host-link fields (`linkBytes`,
+ * `linkSec`) carry the PCIe hop, so the overlapped stage transfer (`pipeline.ts: stageTransfer`) shares the host link
+ * between the pool stream and the host-RAM / SSD streams.
+ */
+export function remotePoolTransferTime(
+  reads: readonly { count: number; bytesEach: number }[],
+  usefulBytes: number,
+  path: RemotePoolPath,
+): TransferTime {
+  // Formula: R = Σ count_i;  bytes_pool = usefulBytes
+  const requests = reads.reduce((s, r) => s + r.count, 0);
+  // Formula: α_path = α_pool
+  const latencySec = path.latencySec;
+  // Formula: pool = usefulBytes / B_pool;  link = usefulBytes / B_link (0 without a host link)
+  // See docs/simulation-model.md §12 ("Remote KV pool")
+  const tierSec = usefulBytes / path.bandwidthPerDirectionBytesPerSec;
+  const linkSec =
+    path.link === undefined ? 0 : usefulBytes / path.link.bandwidthPerDirectionBytesPerSec;
+  // Formula: service = max(pool, link);  t_path = α_pool + service
+  const serviceSec = Math.max(tierSec, linkSec);
+  return {
+    requests,
+    tierBytes: usefulBytes,
+    usefulBytes,
+    latencySec,
+    littleSec: 0,
+    tierSec,
+    linkSec,
+    serviceSec,
+    sec: latencySec + serviceSec,
+    linkBytes: path.link === undefined ? 0 : usefulBytes,
+    hostRamBytes: 0,
+    hostRamSec: 0,
+  };
+}
+
+/** The transfer paths of one stage, by source: the tier paths of host RAM and the SSD, and the remote pool's. */
+export interface TransferPaths {
+  /** Host RAM → host link → device. */
+  host_ram?: TransferPath;
+  /** NVMe → host RAM → host link → device (or straight into unified memory). */
+  nvme?: TransferPath;
+  /** Remote KV pool → NIC → device. */
+  remote_pool?: RemotePoolPath;
+}
 // ---------------------------------------------------------------------------------------------------------------
 // Sharing of a node's tier (design doc §2.3, "n_stream")
 

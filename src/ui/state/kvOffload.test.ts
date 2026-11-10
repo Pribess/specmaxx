@@ -73,6 +73,57 @@ describe('KV-cache offload: engine input', () => {
     ).toEqual({ deviceFraction: 0.5, hostRamFraction: 0.5 });
   });
 
+  it('maps the remote pool to remotePool (fraction 1 − f_dev, link preset, capacity) with hostRamFraction 0', () => {
+    expect(kvCacheConfig({ tier: 'remote_pool', deviceFraction: 0.25 }, DENSE, 0)).toEqual({
+      deviceFraction: 0.25,
+      hostRamFraction: 0,
+      remotePool: { fraction: 0.75 },
+    });
+    expect(
+      kvCacheConfig(
+        {
+          tier: 'remote_pool',
+          deviceFraction: 0.5,
+          poolLinkId: 'infiniband-hdr200-one-nic-per-gpu',
+          poolCapacityBytes: 2e12,
+        },
+        DENSE,
+        0,
+      ),
+    ).toEqual({
+      deviceFraction: 0.5,
+      hostRamFraction: 0,
+      remotePool: {
+        fraction: 0.5,
+        link: {
+          name: 'InfiniBand HDR200 (one NIC per GPU)',
+          bandwidthPerDirectionBytesPerSec: 200e9 / 8,
+          latencySec: 1e-6,
+        },
+        capacityBytes: 2e12,
+      },
+    });
+    // An unknown preset id and a zero capacity fall back to the engine defaults (no link, unlimited).
+    expect(
+      kvCacheConfig(
+        { tier: 'remote_pool', deviceFraction: 0.5, poolLinkId: 'nope', poolCapacityBytes: 0 },
+        DENSE,
+        0,
+      ),
+    ).toEqual({ deviceFraction: 0.5, hostRamFraction: 0, remotePool: { fraction: 0.5 } });
+    // Prefix-only with the pool: the pool is sent (fraction 0), so the prefix is read from it.
+    expect(kvCacheConfig({ tier: 'remote_pool', prefixDeviceFraction: 0.5 }, DENSE, 0.5)).toEqual({
+      deviceFraction: 1,
+      hostRamFraction: 0,
+      remotePool: { fraction: 0 },
+      prefixDeviceFraction: 0.5,
+    });
+    // The pool fields are dropped with another tier.
+    expect(
+      normalizeKvCache({ tier: 'host_ram', deviceFraction: 0.25, poolCapacityBytes: 1e12 }),
+    ).toEqual({ tier: 'host_ram', deviceFraction: 0.25 });
+  });
+
   it('sends the custom hit ratio only for top-k models and the prefix share only with prefix hits', () => {
     const kv = { tier: 'host_ram', deviceFraction: 0.5, hitRatio: 0.8 } as const;
     expect(kvCacheConfig(kv, DENSE, 0)).toEqual({ deviceFraction: 0.5 });
@@ -137,6 +188,28 @@ describe('KV-cache offload: URL', () => {
     expect(decodeState('okt=ssd&okd=0&oqd=4&osr=sustained').dropped).toEqual([]);
   });
 
+  it('round-trips okt=pool with okl (link preset id) and okc (capacity in GB)', () => {
+    const q = 'okt=pool&okd=25&okl=infiniband-hdr200-one-nic-per-gpu&okc=2048';
+    const { state, dropped } = decodeState(q);
+    expect(dropped).toEqual([]);
+    expect(state.deployment.offload?.kvCache).toEqual({
+      tier: 'remote_pool',
+      deviceFraction: 0.25,
+      poolLinkId: 'infiniband-hdr200-one-nic-per-gpu',
+      poolCapacityBytes: 2048e9,
+    });
+    expect(encodeState(state)).toBe(q);
+    expect(encodeState(decodeState('okt=pool&okd=25').state)).toBe('okt=pool&okd=25');
+    // Pool keys need okt=pool; an unknown link preset and a zero capacity are dropped.
+    expect(
+      decodeState('okt=ram&okd=25&okl=infiniband-hdr200-one-nic-per-gpu&okc=10').dropped,
+    ).toEqual(['okl=infiniband-hdr200-one-nic-per-gpu', 'okc=10']);
+    expect(decodeState('okt=pool&okd=25&okl=nope').dropped).toEqual(['okl=nope']);
+    expect(encodeState(decodeState('okt=pool&okd=25&okc=0').state)).toBe('okt=pool&okd=25');
+    // The pool is not the SSD: no SSD read rate.
+    expect(decodeState('okt=pool&okd=25&osr=sustained').dropped).toEqual(['osr=sustained']);
+  });
+
   it('drops dependent keys without their parent, and out-of-range values', () => {
     expect(decodeState('okd=25').dropped).toEqual(['okd=25']);
     expect(decodeState('okt=ram&okd=25&okr=10').dropped).toEqual(['okr=10']);
@@ -179,5 +252,11 @@ describe('KV-cache offload: result chip', () => {
     expect(
       chip(withOffload({ kvCache: { tier: 'nvme', prefixDeviceFraction: 0.5 } }, prefix)),
     ).toEqual(['KV cache: cached prefix 50% on device, rest SSD']);
+    expect(chip(withOffload({ kvCache: { tier: 'remote_pool', deviceFraction: 0.25 } }))).toEqual([
+      'KV cache: 25% on device, 75% remote pool',
+    ]);
+    expect(
+      chip(withOffload({ kvCache: { tier: 'remote_pool', prefixDeviceFraction: 0.5 } }, prefix)),
+    ).toEqual(['KV cache: cached prefix 50% on device, rest remote pool']);
   });
 });

@@ -10,6 +10,7 @@
 import type {
   AcceptanceModel,
   KvCacheOffloadConfig,
+  RemoteKvPoolConfig,
   LookupTableRule,
   DeploymentConfig,
   OffloadConfig,
@@ -32,6 +33,7 @@ import {
   type TierRange,
   type TierSplitChoice,
 } from './deployment';
+import { findKvLink } from './kvLink';
 import type { FieldIssue } from './parallelism';
 
 /** Where a block method's drafter comes from. */
@@ -199,7 +201,9 @@ function placementRanges(
  * The engine's `KvCacheOffloadConfig` of a KV-cache choice, or undefined when it moves nothing (f_dev = 1, and f_pre =
  * 1 or no prefix-cache hits), so a no-op choice adds nothing to the input:
  * - host RAM: `hostRamFraction` absent (all off-device KV in RAM); SSD: 0; split: the choice's f_ram, absent = half of
- *   `1 − f_dev`, clamped to `[0, 1 − f_dev]`;
+ *   `1 − f_dev`, clamped to `[0, 1 − f_dev]`; remote pool: `hostRamFraction` 0 and `remotePool` with `fraction = 1 −
+ *   f_dev`, the chosen link preset (`poolLinkId`, absent = the engine's default: the stack's inter-node link) and the
+ *   capacity (`poolCapacityBytes`, absent = unlimited);
  * - a custom hit ratio only for a model with top-k attention (elsewhere it has no effect);
  * - f_pre only with prefix-cache hits (`prefixHitRatio > 0`).
  */
@@ -218,16 +222,42 @@ export function kvCacheConfig(
   const hostRamFraction =
     kv.tier === 'host_ram'
       ? undefined
-      : kv.tier === 'nvme'
+      : kv.tier === 'nvme' || kv.tier === 'remote_pool'
         ? 0
         : Math.min(offDevice, Math.max(0, kv.ramFraction ?? offDevice / 2));
+  const remotePool = kv.tier === 'remote_pool' ? remotePoolConfig(kv, offDevice) : undefined;
   return {
     deviceFraction,
     ...(hostRamFraction !== undefined ? { hostRamFraction } : {}),
+    ...(remotePool !== undefined ? { remotePool } : {}),
     ...(kv.hitRatio !== undefined && modelHasTopKKv(model)
       ? { hitRatio: { kind: 'custom' as const, h: kv.hitRatio } }
       : {}),
     ...(prefix !== undefined ? { prefixDeviceFraction: prefix } : {}),
+  };
+}
+
+/**
+ * The engine's `RemoteKvPoolConfig` of a remote-pool KV choice: the whole off-device share `fraction = 1 − f_dev`, the
+ * chosen link preset's name, bandwidth and latency (an unknown `poolLinkId` falls back to the engine default, i.e. no
+ * `link`), and the capacity when stated.
+ */
+function remotePoolConfig(kv: KvCacheChoice, offDevice: number): RemoteKvPoolConfig {
+  const preset = kv.poolLinkId === undefined ? undefined : findKvLink(kv.poolLinkId);
+  return {
+    fraction: offDevice,
+    ...(preset === undefined
+      ? {}
+      : {
+          link: {
+            name: preset.name,
+            bandwidthPerDirectionBytesPerSec: preset.bandwidthPerDirectionBytesPerSec,
+            latencySec: preset.latencySec,
+          },
+        }),
+    ...(kv.poolCapacityBytes !== undefined && kv.poolCapacityBytes > 0
+      ? { capacityBytes: kv.poolCapacityBytes }
+      : {}),
   };
 }
 

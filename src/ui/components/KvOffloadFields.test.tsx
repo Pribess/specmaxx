@@ -56,6 +56,24 @@ describe('OffloadAdvancedFields: KV cache', () => {
     expect(screen.queryByText('KV hit model')).toBeNull();
   });
 
+  it('the remote pool adds the pool link picker and the capacity field', () => {
+    const dispatch = fields('okt=pool&okd=25&okc=2048');
+    expect(screen.getByRole('combobox', { name: 'KV cache tier' }).textContent).toBe('Remote pool');
+    expect(screen.getByRole('combobox', { name: 'Pool link' }).textContent).toBe(
+      'Network link of the stack',
+    );
+    expect(spin('Pool capacity GB')?.value).toBe('2048');
+    expect(spin('KV in host RAM %')).toBeNull();
+    fireEvent.change(spin('Pool capacity GB')!, { target: { value: '0' } });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        offload: expect.objectContaining({
+          kvCache: { tier: 'remote_pool', deviceFraction: 0.25 },
+        }) as unknown,
+      }),
+    );
+  });
+
   it('top-k models get the hit model; a custom one shows its ratio', () => {
     const sparse = { ...BUNDLED_DEFAULT_MODEL, model: TINY_MLA_SPARSE };
     fields('okt=ram&okd=50&okh=80', sparse);

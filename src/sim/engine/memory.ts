@@ -28,9 +28,9 @@ import { moeLocalExpertBytes } from '../lower/moe';
 import { lookupTableFormat, ngramTableShardBytes, tableRowBytes } from '../lower/ngram';
 import { kvOffloadableStateBytes } from '../lower/kvOffload';
 import { draftExpertPlacement, expertPlacementAt, tablePlacementAt } from '../lower/offload';
-import { prefetchesFromBothTiers } from './transfer';
+import { prefetchesFromMultipleTiers } from './transfer';
 import type { ResolvedHost } from './host';
-import type { DeviceMemory, MemoryReport, OffloadTier, TierBytes, TierMemory } from './types';
+import type { DeviceMemory, KvTier, MemoryReport, TierBytes, TierMemory } from './types';
 
 /** Inputs of {@link memoryReport}. */
 export interface MemoryInput {
@@ -311,15 +311,14 @@ function stageTransferOps(model: LoweredModel, s: number): TransferOp[] {
 }
 
 /**
- * One staging allocation of {@link stageStagingBytes}: the bytes a group's fetch holds at once, `bufferBytes`, of which
- * `ramBytes` come from host RAM and `nvmeBytes` from the SSD, and its prefetch share q. Every weight-group transfer is
- * its own unit (one source). The KV-cache fetches of one layer from host RAM and from the SSD feed the same attention
- * op, so both are resident together: they form ONE unit, their bytes summed. Unit: bytes.
+ * One staging allocation of {@link stageStagingBytes}: the bytes a group's fetch holds at once, `bufferBytes`, split by
+ * source (`bySource`: host RAM, the SSD, the remote KV pool), and its prefetch share q. Every weight-group transfer is
+ * its own unit (one source). The KV-cache fetches of one layer from host RAM, the SSD and the pool feed the same
+ * attention op, so all are resident together: they form ONE unit, their bytes summed. Unit: bytes.
  */
 interface StagingUnit {
   bufferBytes: number;
-  ramBytes: number;
-  nvmeBytes: number;
+  bySource: Record<KvTier, number>;
   prefetchedFraction: number;
 }
 
@@ -338,20 +337,26 @@ function stagingUnits(
       const buffer = bufferBytes(op);
       return {
         bufferBytes: buffer,
-        ramBytes: op.source === 'host_ram' ? buffer : 0,
-        nvmeBytes: op.source === 'nvme' ? buffer : 0,
+        bySource: {
+          host_ram: op.source === 'host_ram' ? buffer : 0,
+          nvme: op.source === 'nvme' ? buffer : 0,
+          remote_pool: op.source === 'remote_pool' ? buffer : 0,
+        },
         prefetchedFraction: op.prefetchedFraction,
       };
     });
   for (const layerOps of kvLayers) {
     if (layerOps.length === 0) continue;
-    // Formula: buffer_kv,ℓ = Σ_{tiers t} useful_t,ℓ   (both tiers' fetches of layer ℓ are resident together)
+    // Formula: buffer_kv,ℓ = Σ_{tiers t} useful_t,ℓ   (every tier's fetch of layer ℓ is resident together)
     const sumOf = (pick: (op: TransferOp) => boolean): number =>
       layerOps.filter(pick).reduce((sum, op) => sum + op.usefulBytes, 0);
     units.push({
       bufferBytes: sumOf(() => true),
-      ramBytes: sumOf((op) => op.source === 'host_ram'),
-      nvmeBytes: sumOf((op) => op.source === 'nvme'),
+      bySource: {
+        host_ram: sumOf((op) => op.source === 'host_ram'),
+        nvme: sumOf((op) => op.source === 'nvme'),
+        remote_pool: sumOf((op) => op.source === 'remote_pool'),
+      },
       prefetchedFraction: Math.max(...layerOps.map((op) => op.prefetchedFraction)),
     });
   }
@@ -369,13 +374,14 @@ function stageKvFetchesByLayer(model: LoweredModel, s: number): TransferOp[][] {
  * Staging buffer of stage `s` for streamed weight groups (design doc §2.7): the largest single transfer of the stage
  * over the given phases, double-buffered when it is prefetched (`prefetchedFraction > 0`: one buffer fills while the
  * other is read), single otherwise.
- * A phase whose transfers prefetch from both host RAM and the SSD ({@link prefetchesFromBothTiers}) has two streams
- * in flight (docs/simulation-model.md §12 "Overlap across tiers"): one buffer being read by the device plus one being
- * filled per source, `max_all + max_ram,q>0 + max_ssd,q>0`. With one source this is today's 2·max.
+ * A phase whose transfers prefetch from two or more tiers ({@link prefetchesFromMultipleTiers}: host RAM, the SSD, the
+ * remote KV pool) has one stream per source in flight (docs/simulation-model.md §12 "Overlap across tiers"): one
+ * buffer being read by the device plus one being filled per source, `max_all + Σ_t max_{t,q>0}`. With one source
+ * this is today's 2·max.
  * A transfer's buffer is `Σ ceil(count)·bytesEach` for experts (capacity is not an average, so
  * expected misses round up) and its `usefulBytes` for table and token-embedding rows (the gathered rows, not the
- * tier's pages). A layer's KV-cache fetches from host RAM and the SSD are one buffer, `Σ_t useful_t` (both feed the
- * same attention op, so they are resident together; {@link StagingUnit}), whose host-RAM and SSD parts fill the
+ * tier's pages). A layer's KV-cache fetches from host RAM, the SSD and the pool are one buffer, `Σ_t useful_t` (all
+ * feed the same attention op, so they are resident together; {@link StagingUnit}), whose per-source parts fill the
  * per-source terms above. Token-embedding transfers are taken from `embeddingLowered` (the decode step and the
  * LAST prefill chunk, as for the activation peak: chunked prefill stages one chunk's rows, not the whole prompt's),
  * every other transfer from `lowered`; phase i of one pairs with phase i of the other (same length), and
@@ -397,7 +403,7 @@ export function stageStagingBytes(
   let largest = 0;
   for (let phase = 0; phase < lowered.length; phase++) {
     // The phase's transfers: every group but the token embedding from `lowered`, the token embedding from the
-    // matching phase of `embeddingLowered` (same source and q, only R per chunk), so the both-tiers test below
+    // matching phase of `embeddingLowered` (same source and q, only R per chunk), so the multi-tier test below
     // agrees with the stage time's (`pipeline.ts: stageTransfer`).
     const transfers = [
       ...stageTransferOps(lowered[phase], s).filter((op) => op.group !== 'token_embedding'),
@@ -411,22 +417,24 @@ export function stageStagingBytes(
       const slots = unit.prefetchedFraction > 0 ? 2 : 1;
       largest = Math.max(largest, slots * unit.bufferBytes);
     }
-    if (prefetchesFromBothTiers(transfers)) {
-      // Formula: staging = max_all buffer + max_{ram,q>0} buffer + max_{ssd,q>0} buffer   (1 read + 1 fill per source)
+    if (prefetchesFromMultipleTiers(transfers)) {
+      // Formula: staging = max_all buffer + Σ_t max_{t,q>0} buffer   (1 read + 1 fill per source t)
       let maxAll = 0;
-      let maxRamPrefetched = 0;
-      let maxNvmePrefetched = 0;
+      const maxPrefetched: Record<KvTier, number> = { host_ram: 0, nvme: 0, remote_pool: 0 };
       for (const unit of units) {
         maxAll = Math.max(maxAll, unit.bufferBytes);
         if (unit.prefetchedFraction <= 0) continue;
-        maxRamPrefetched = Math.max(maxRamPrefetched, unit.ramBytes);
-        maxNvmePrefetched = Math.max(maxNvmePrefetched, unit.nvmeBytes);
+        for (const t of Object.keys(maxPrefetched) as KvTier[])
+          maxPrefetched[t] = Math.max(maxPrefetched[t], unit.bySource[t]);
       }
-      largest = Math.max(largest, maxAll + maxRamPrefetched + maxNvmePrefetched);
+      largest = Math.max(
+        largest,
+        maxAll + maxPrefetched.host_ram + maxPrefetched.nvme + maxPrefetched.remote_pool,
+      );
     }
   }
-  // Formula: staging_s = max_phase ( both tiers prefetched ? max_all + max_ram + max_ssd
-  //                                                       : max_transfer (q > 0 ? 2 : 1)·buffer )
+  // Formula: staging_s = max_phase ( ≥ 2 tiers prefetched ? max_all + max_ram + max_ssd + max_pool
+  //                                                        : max_transfer (q > 0 ? 2 : 1)·buffer )
   //          token-embedding buffers from the decode step and the LAST prefill chunk (R·rowBytes per chunk)
   // See docs/simulation-model.md §12 ("Memory tiers", "Overlap across tiers", "Token embedding off-device")
   return largest;
@@ -450,8 +458,9 @@ export function tierBytesTotal(b: TierBytes): number {
  * (`lookupTables`) — on dedicated memory only: on unified memory (`hostRamIsDevice`) the scales are device bytes counted
  * in {@link stageWeightBytes}, and a `host_ram` group is an error (invariant). The draft's own experts are
  * `draftExperts`. Stage 0 with the token embedding off-device adds its shard `ceil(vocab/tp)·h·bpe(emb)` to its tier
- * (`tokenEmbeddings`). With KV-cache offload, `kv` gives the live sequences and their context: each tier t holds
- * `B_r·f_t·S_off,s` (`kvCache`; f_ram = (1 − f_dev)·ramShare, f_ssd = (1 − f_dev)·nvmeShare); absent `kv` = 0.
+ * (`tokenEmbeddings`). With KV-cache offload, `kv` gives the live sequences and their context: each tier t (host RAM,
+ * SSD, remote pool) holds `B_r·f_t·S_off,s` (`kvCache`; f_ram = (1 − f_dev)·ramShare, f_ssd = (1 − f_dev)·nvmeShare,
+ * f_pool = (1 − f_dev)·remotePoolShare); absent `kv` = 0. Only the KV cache may land on the remote pool.
  * Unit: bytes per device.
  */
 export function stageTierBreakdown(
@@ -459,10 +468,11 @@ export function stageTierBreakdown(
   ctx: LoweringContext,
   s: number,
   kv?: { sequencesPerReplica: number; contextTokens: number },
-): Record<OffloadTier, TierBytes> {
-  const bytes: Record<OffloadTier, TierBytes> = {
+): Record<KvTier, TierBytes> {
+  const bytes: Record<KvTier, TierBytes> = {
     host_ram: emptyTierBytes(),
     nvme: emptyTierBytes(),
+    remote_pool: emptyTierBytes(),
   };
   const [start, end] = stageLayerRange(model.layers.length, ctx.parallel.pp, s);
   for (let i = start; i < end; i++) {
@@ -511,10 +521,13 @@ export function stageTierBreakdown(
   if (kv !== undefined && kvPlacement !== undefined && kv.sequencesPerReplica > 0) {
     const offBytes = stageKvOffloadableBytesPerSeq(model, ctx, s, kv.contextTokens);
     const off = 1 - kvPlacement.deviceFraction;
-    // Formula: tier_t += B_r·f_t·S_off,s,  f_ram = (1 − f_dev)·ramShare,  f_ssd = (1 − f_dev)·nvmeShare
-    // See docs/simulation-model.md §12 ("KV cache off-device")
+    // Formula: tier_t += B_r·f_t·S_off,s,  f_ram = (1 − f_dev)·ramShare,  f_ssd = (1 − f_dev)·nvmeShare,
+    //          f_pool = (1 − f_dev)·remotePoolShare
+    // See docs/simulation-model.md §12 ("KV cache off-device", "Remote KV pool")
     bytes.host_ram.kvCache += kv.sequencesPerReplica * off * kvPlacement.ramShare * offBytes;
     bytes.nvme.kvCache += kv.sequencesPerReplica * off * kvPlacement.nvmeShare * offBytes;
+    bytes.remote_pool.kvCache +=
+      kv.sequencesPerReplica * off * kvPlacement.remotePoolShare * offBytes;
   }
   // Invariant: on unified memory host RAM is the device pool, so no group may land on a `host_ram` tier.
   if (ctx.offload?.hostRamIsDevice === true && tierBytesTotal(bytes.host_ram) > 0) {
@@ -532,9 +545,13 @@ export function stageTierBytes(
   ctx: LoweringContext,
   s: number,
   kv?: { sequencesPerReplica: number; contextTokens: number },
-): Record<OffloadTier, number> {
+): Record<KvTier, number> {
   const b = stageTierBreakdown(model, ctx, s, kv);
-  return { host_ram: tierBytesTotal(b.host_ram), nvme: tierBytesTotal(b.nvme) };
+  return {
+    host_ram: tierBytesTotal(b.host_ram),
+    nvme: tierBytesTotal(b.nvme),
+    remote_pool: tierBytesTotal(b.remote_pool),
+  };
 }
 
 /** The drafter's decoder layers given as `LayerSpec`s: MTP modules, or a DeepSeek-V4-style drafter's `moeLayers`. */
@@ -575,8 +592,8 @@ export function stageSnapshotStateBytesPerSeq(
  * `floor(r/devicesPerNode)`, docs §5 "Rank layout"): `perStage[s][tier]` summed over the node's devices.
  */
 function nodeTierBreakdowns(
-  perStage: Record<OffloadTier, TierBytes>[],
-  tier: OffloadTier,
+  perStage: Record<KvTier, TierBytes>[],
+  tier: KvTier,
   parallel: { tp: number; dp: number; pp: number },
   devicesPerNode: number,
 ): TierBytes[] {
@@ -598,9 +615,48 @@ function nodeTierBreakdowns(
 }
 
 /**
+ * The tier's bytes by category per unit of its capacity: host RAM and the SSD are per node ({@link nodeTierBreakdowns},
+ * one entry per node); the remote KV pool is one pool for the whole deployment, so its one entry sums every node.
+ */
+function tierScopeBreakdowns(
+  perStage: Record<KvTier, TierBytes>[],
+  tier: KvTier,
+  parallel: { tp: number; dp: number; pp: number },
+  devicesPerNode: number,
+): TierBytes[] {
+  const perNode = nodeTierBreakdowns(perStage, tier, parallel, devicesPerNode);
+  if (tier !== 'remote_pool') return perNode;
+  // Formula: bytes_pool = Σ_{nodes} bytes_node   (one pool shared by every device of the deployment)
+  // See docs/simulation-model.md §12 ("Remote KV pool")
+  const whole = emptyTierBytes();
+  for (const node of perNode)
+    for (const k of Object.keys(whole) as (keyof TierBytes)[]) whole[k] += node[k];
+  return [whole];
+}
+
+/**
+ * Capacity of a tier: the node's host RAM or SSD (`0` when the host resolved none), the remote pool's stated capacity
+ * (`Infinity` when unlimited or not resolved). Unit: bytes.
+ */
+function tierCapacityBytes(tier: KvTier, host: ResolvedHost): number {
+  switch (tier) {
+    case 'host_ram':
+      return host.ram?.capacityBytes ?? 0;
+    case 'nvme':
+      return host.ssd?.capacityBytes ?? 0;
+    case 'remote_pool':
+      return host.remotePool?.capacityBytes ?? Infinity;
+  }
+}
+
+/** The tiers of the memory report, in display order. */
+const REPORT_TIERS: readonly KvTier[] = ['host_ram', 'nvme', 'remote_pool'];
+
+/**
  * Off-device tier entries of the report (design doc §2.7): per node, `bytes = Σ over the node's devices` of their
  * {@link stageTierBytes} (a device of rank r sits on stage `floor(r/(tp·dp))` and node `floor(r/devicesPerNode)`,
- * docs §5 "Rank layout"), taking the fullest node; against the tier's capacity. One entry per tier with bytes.
+ * docs §5 "Rank layout"), taking the fullest node; the remote KV pool over every node ({@link tierScopeBreakdowns});
+ * against the tier's capacity ({@link tierCapacityBytes}). One entry per tier with bytes.
  * `kv`: the live sequences and context for the KV-cache share (absent = none counted).
  * On unified memory no `'host_ram'` group reaches here (it is device memory); {@link stageTierBreakdown} enforces it.
  */
@@ -615,10 +671,10 @@ export function tierMemory(
     stageTierBreakdown(model, ctx, s, kv),
   );
   const tiers: TierMemory[] = [];
-  for (const tier of ['host_ram', 'nvme'] as const) {
+  for (const tier of REPORT_TIERS) {
     let bytes = 0;
     let breakdown = emptyTierBytes();
-    for (const nodeBreakdown of nodeTierBreakdowns(perStage, tier, ctx.parallel, devicesPerNode)) {
+    for (const nodeBreakdown of tierScopeBreakdowns(perStage, tier, ctx.parallel, devicesPerNode)) {
       const nodeBytes = tierBytesTotal(nodeBreakdown);
       // The fullest node: its breakdown is the one reported, so the parts always sum to `bytes`.
       if (nodeBytes > bytes) {
@@ -627,18 +683,18 @@ export function tierMemory(
       }
     }
     if (bytes === 0) continue;
-    const spec = tier === 'host_ram' ? host.ram : host.ssd;
-    const capacityBytes = spec?.capacityBytes ?? 0;
+    const capacityBytes = tierCapacityBytes(tier, host);
     tiers.push({ tier, bytes, breakdown, capacityBytes, fits: bytes <= capacityBytes });
   }
   return tiers;
 }
 
 /**
- * The most sequences per replica the off-device tiers can hold with KV-cache offload: per tier t and node, the
- * capacity left after the static groups (experts, tables, embeddings) over the node's per-sequence KV share,
- * `floor((cap_t − static_t,node) / Σ_{node devices} f_t·S_off,s)`, the minimum over tiers and nodes (0 when the static
- * groups alone overflow). Infinity when no tier holds KV. Count.
+ * The most sequences per replica the off-device tiers can hold with KV-cache offload: per tier t and node (the remote
+ * pool: the whole deployment), the capacity left after the static groups (experts, tables, embeddings) over the
+ * node's per-sequence KV share, `floor((cap_t − static_t,node) / Σ_{node devices} f_t·S_off,s)`, the minimum over
+ * tiers and nodes (0 when the static groups alone overflow). Infinity when no tier holds KV, or only a pool without a
+ * stated capacity. Count.
  */
 export function tierMaxSequencesPerReplica(
   model: ModelSpec,
@@ -654,16 +710,16 @@ export function tierMaxSequencesPerReplica(
     stageTierBreakdown(model, ctx, s, { sequencesPerReplica: 1, contextTokens }),
   );
   let maxSeq = Infinity;
-  for (const tier of ['host_ram', 'nvme'] as const) {
-    const spec = tier === 'host_ram' ? host.ram : host.ssd;
-    const statics = nodeTierBreakdowns(staticStages, tier, ctx.parallel, devicesPerNode);
-    const perSeqs = nodeTierBreakdowns(perSeqStages, tier, ctx.parallel, devicesPerNode);
+  for (const tier of REPORT_TIERS) {
+    const capacityBytes = tierCapacityBytes(tier, host);
+    const statics = tierScopeBreakdowns(staticStages, tier, ctx.parallel, devicesPerNode);
+    const perSeqs = tierScopeBreakdowns(perSeqStages, tier, ctx.parallel, devicesPerNode);
     for (let node = 0; node < perSeqs.length; node++) {
       const perSeqBytes = perSeqs[node].kvCache;
       if (!(perSeqBytes > 0)) continue;
       // Formula: maxSeq_t = floor((cap_t − static_t,node) / Σ_{node devices} f_t·S_off,s)
       // See docs/simulation-model.md §12 ("KV cache off-device")
-      const freeBytes = (spec?.capacityBytes ?? 0) - tierBytesTotal(statics[node]);
+      const freeBytes = capacityBytes - tierBytesTotal(statics[node]);
       maxSeq = Math.min(maxSeq, Math.max(0, Math.floor(freeBytes / perSeqBytes)));
     }
   }

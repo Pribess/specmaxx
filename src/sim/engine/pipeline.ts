@@ -7,11 +7,11 @@
  * transfers), lat_s = Σ collective α terms, bw_s = Σ collective β terms, bw_c,s = the same per overlap class c
  * (`overlap.ts: overlapClassOf`), p2p_s = the activation send to stage s+1, f_c = the overlap fraction of class c
  * (`overlap.ts: OverlapFractions`), xfer_s = the stage's transfer time ({@link stageTransfer}: Σ transfer-op times,
- * design doc §2.6, or the overlapped time of docs §12 "Overlap across tiers" when the stage prefetches from both host
- * RAM and the SSD); m = microbatches in flight per replica, B_r = sequences per DP replica.
+ * design doc §2.6, or the overlapped time of docs §12 "Overlap across tiers" when the stage prefetches from two or more
+ * of host RAM, the SSD and the remote KV pool); m = microbatches in flight per replica, B_r = sequences per DP replica.
  */
 
-import type { TransferOp } from '../ir/ops';
+import type { TransferOp, TransferSource } from '../ir/ops';
 import {
   coreTime,
   overlapClassOf,
@@ -19,7 +19,7 @@ import {
   type CoreTimeInput,
   type OverlapFractions,
 } from './overlap';
-import { prefetchesFromBothTiers } from './transfer';
+import { prefetchesFromMultipleTiers } from './transfer';
 import type { LayerResult, OpResult, PhaseResult, StageResult } from './types';
 
 /** Sums a layer's op times (no overlap): `sec = Σ op.sec`. */
@@ -41,7 +41,7 @@ export interface StageTransfer {
   allPrefetched: boolean;
   /** True if every transfer op has q = 0 (also when there is none). */
   nonePrefetched: boolean;
-  /** True if the stage prefetches from both host RAM and the SSD, so the overlapped formula applies. */
+  /** True if the stage prefetches from two or more tiers (host RAM, SSD, remote pool), so the overlapped formula applies. */
   overlapped: boolean;
 }
 
@@ -50,22 +50,23 @@ export interface StageTransfer {
  * Each transfer op has its time t_op (`OpResult.sec`, α and latency floor included), its prefetched share q and its
  * source tier. See docs/simulation-model.md §12 ("Overlap across tiers").
  *
- * A stage that does not prefetch from both tiers (one source, or q = 0 on one of them) keeps the serial rule, with the
- * same expressions and floating-point order as before (bit-identical):
+ * A stage that does not prefetch from two or more tiers (one source, or q = 0 on all but one) keeps the serial rule,
+ * with the same expressions and floating-point order as before (bit-identical):
  *   xfer_s = Σ_ops t_op;   P_s = Σ_ops q·t_op
- * A stage that prefetches from both host RAM and the SSD ({@link prefetchesFromBothTiers}) overlaps the prefetched
- * shares of the two streams; the demand share (fetched after the router) stays serial:
+ * A stage that prefetches from two or more of host RAM, the SSD and the remote KV pool
+ * ({@link prefetchesFromMultipleTiers}) overlaps the prefetched shares of the streams; the demand share (fetched after
+ * the router) stays serial:
  *   D_s    = Σ_ops (1 − q)·t_op
- *   P_s    = max( Σ_ram q·t_op,  Σ_ssd q·t_op,  Σ_ops q·linkSec_op,  Σ_ops q·hostRamSec_op )
+ *   P_s    = max( Σ_ram q·t_op,  Σ_ssd q·t_op,  Σ_pool q·t_op,  Σ_ops q·linkSec_op,  Σ_ops q·hostRamSec_op )
  *   xfer_s = D_s + P_s
- * Each tier's own stream runs its ops one after another (α each); the device's PCIe link and the node's host RAM
- * bandwidth (shared by n_host) are throughput limits on both streams together. Always P_s ≤ Σ q·t_op, so the overlapped
- * xfer_s is at most the serial sum.
+ * Each tier's own stream runs its ops one after another (α each); the device's PCIe link (which the pool's RDMA writes
+ * cross too) and the node's host RAM bandwidth (shared by n_host) are throughput limits on all streams together.
+ * Always P_s ≤ Σ q·t_op, so the overlapped xfer_s is at most the serial sum.
  */
 export function stageTransfer(ops: readonly OpResult[]): StageTransfer {
   const transferOps: TransferOp[] = [];
   for (const o of ops) if (o.op.kind === 'transfer') transferOps.push(o.op);
-  if (!prefetchesFromBothTiers(transferOps)) {
+  if (!prefetchesFromMultipleTiers(transferOps)) {
     // Formula: xfer_s = Σ transfer op sec   (design doc §2.6)
     const transferSec = ops.filter((o) => o.op.kind === 'transfer').reduce((s, o) => s + o.sec, 0);
     // Formula: Σ q·t_xfer over the stage's transfer ops (pbar_s = this / xfer_s)
@@ -82,12 +83,11 @@ export function stageTransfer(ops: readonly OpResult[]): StageTransfer {
     return { transferSec, prefetchedSec, allPrefetched, nonePrefetched, overlapped: false };
   }
   // Formula: D_s = Σ (1 − q)·t_op
-  //          P_s = max(Σ_ram q·t_op, Σ_ssd q·t_op, Σ q·linkSec_op, Σ q·hostRamSec_op)
+  //          P_s = max(Σ_ram q·t_op, Σ_ssd q·t_op, Σ_pool q·t_op, Σ q·linkSec_op, Σ q·hostRamSec_op)
   //          xfer_s = D_s + P_s
   // See docs/simulation-model.md §12 ("Overlap across tiers")
   let demandSec = 0;
-  let ramStreamSec = 0;
-  let ssdStreamSec = 0;
+  const streamSec: Record<TransferSource, number> = { host_ram: 0, nvme: 0, remote_pool: 0 };
   let linkSec = 0;
   let hostRamSec = 0;
   let allPrefetched = true;
@@ -97,13 +97,18 @@ export function stageTransfer(ops: readonly OpResult[]): StageTransfer {
     if (res === undefined) throw new Error(`transfer op '${o.op.name}': no transferResources`);
     const q = o.op.prefetchedFraction;
     demandSec += (1 - q) * o.sec;
-    if (o.op.source === 'host_ram') ramStreamSec += q * o.sec;
-    else ssdStreamSec += q * o.sec;
+    streamSec[o.op.source] += q * o.sec;
     linkSec += q * res.linkSec;
     hostRamSec += q * res.hostRamSec;
     if (q !== 1) allPrefetched = false;
   }
-  const prefetchedSec = Math.max(ramStreamSec, ssdStreamSec, linkSec, hostRamSec);
+  const prefetchedSec = Math.max(
+    streamSec.host_ram,
+    streamSec.nvme,
+    streamSec.remote_pool,
+    linkSec,
+    hostRamSec,
+  );
   // Overlapped implies some q > 0, so nonePrefetched is false.
   return {
     transferSec: demandSec + prefetchedSec,

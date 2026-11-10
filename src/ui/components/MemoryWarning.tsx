@@ -68,7 +68,11 @@ export function MemoryWarningIcon({
   );
 }
 
-const TIER_NAME: Record<TierMemory['tier'], string> = { host_ram: 'Host RAM', nvme: 'SSD' };
+const TIER_NAME: Record<TierMemory['tier'], string> = {
+  host_ram: 'Host RAM',
+  nvme: 'SSD',
+  remote_pool: 'Remote pool',
+};
 
 /** Short names of the failing tiers with their sizes, e.g. "SSD 2.2GB of 2.0GB". */
 function failingTierText(tiers: TierMemory[]): string {

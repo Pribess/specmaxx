@@ -21,7 +21,10 @@ import {
   TIED_EMBEDDINGS_NOTE,
   type HitRatioChoice,
   type HostChoice,
+  KV_LINK_PRESETS,
+  kvLinkIdOf,
   type KvCacheChoice,
+  type KvTierChoice,
   type OffloadChoice,
   type ScaleLayoutChoice,
   type PlacementChoice,
@@ -498,11 +501,20 @@ export function OffloadSection(props: PanelProps) {
   );
 }
 
-/** KV-cache tier picker rows: host RAM, the SSD, or a split between them. */
-const KV_TIER_OPTIONS: PickerOption[] = (['host_ram', 'nvme', 'split'] as const).map((t) => ({
-  value: t,
-  label: TIER_LABELS[t],
-}));
+/** KV-cache tier picker rows: host RAM, the SSD, a split between them, or the remote KV pool. */
+const KV_TIER_OPTIONS: PickerOption[] = [
+  ...(['host_ram', 'nvme', 'split'] as const).map((t) => ({ value: t, label: TIER_LABELS[t] })),
+  { value: 'remote_pool', label: 'Remote pool' },
+];
+
+/** The URL value of "the stack's own network link" in the pool-link picker (no preset chosen). */
+const STACK_LINK = 'stack';
+
+/** Pool-link picker rows: the stack's network link, then the RDMA NIC presets. */
+const POOL_LINK_OPTIONS: PickerOption[] = [
+  { value: STACK_LINK, label: 'Network link of the stack' },
+  ...KV_LINK_PRESETS.map((l) => ({ value: kvLinkIdOf(l), label: l.name })),
+];
 
 /** KV-cache hit-model picker rows (top-k models; custom is a number in the state). */
 const KV_HIT_OPTIONS: PickerOption[] = [
@@ -521,10 +533,11 @@ function shareOf(percent: number, max = 1): number {
 }
 
 /**
- * Hardware → Advanced → Offload: the KV-cache tiering fields (docs/simulation-model.md §12 "KV cache off-device"),
- * for models whose KV cache grows with the context. The GPU share (100 = off) turns it on; then its tier (dedicated
- * memory only: on unified memory the only other tier is the SSD), the host-RAM share of a split, the hit model of
- * top-k models, and the cached prefix's GPU share while the prefix-cache hit ratio is above 0.
+ * Hardware → Advanced → Offload: the KV-cache tiering fields (docs/simulation-model.md §12 "KV cache off-device",
+ * "Remote KV pool"), for models whose KV cache grows with the context. The GPU share (100 = off) turns it on; then its
+ * tier (dedicated memory: host RAM, SSD, split, remote pool; unified memory: SSD or remote pool), the host-RAM share of
+ * a split, the pool's link and capacity, the hit model of top-k models, and the cached prefix's GPU share while the
+ * prefix-cache hit ratio is above 0.
  */
 function KvCacheFields(props: PanelProps) {
   const controls = offloadControls(props);
@@ -540,10 +553,13 @@ function KvCacheFields(props: PanelProps) {
       ...offload,
       kvCache: { ...(kv ?? { tier: unified ? 'nvme' : 'host_ram' }), ...next },
     });
-  // On unified memory host RAM is the device pool: only the SSD is listed, plus a URL-carried tier.
+  // On unified memory host RAM is the device pool: the SSD and the remote pool are listed, plus a URL-carried tier.
   const tierOptions = unified
-    ? KV_TIER_OPTIONS.filter((o) => o.value === 'nvme' || o.value === kv?.tier)
+    ? KV_TIER_OPTIONS.filter(
+        (o) => o.value === 'nvme' || o.value === 'remote_pool' || o.value === kv?.tier,
+      )
     : KV_TIER_OPTIONS;
+  const stackLink = props.built.hardware?.topology.interNode;
   const label = unified ? 'KV cache in memory %' : 'KV cache on GPU %';
   return (
     <div className="kv-fields" data-testid="kv-offload">
@@ -558,8 +574,8 @@ function KvCacheFields(props: PanelProps) {
           help={helpLines([
             `Share of each sequence’s KV cache kept ${onDevice}.`,
             unified
-              ? 'The rest streams in from the SSD every step.'
-              : 'The rest streams in from host RAM or the SSD every step.',
+              ? 'The rest streams in from the SSD or a remote pool every step.'
+              : 'The rest streams in from host RAM, the SSD or a remote pool every step.',
             'More sequences or a longer context fit, but decode can slow to the link speed.',
           ])}
         />
@@ -568,12 +584,45 @@ function KvCacheFields(props: PanelProps) {
             label="KV cache tier"
             value={kv.tier}
             options={tierOptions}
-            onChange={(v) => setKv({ tier: v as PlacementChoice })}
+            onChange={(v) => setKv({ tier: v as KvTierChoice })}
             help={helpLines([
               `Where the KV cache that is not ${onDevice} lives.`,
               'Host RAM is faster; the SSD holds more.',
+              'A remote pool is memory on other machines, read over the network card.',
             ])}
           />
+        )}
+        {kv?.tier === 'remote_pool' && (
+          <>
+            <Picker
+              label="Pool link"
+              value={kv.poolLinkId ?? STACK_LINK}
+              options={POOL_LINK_OPTIONS}
+              onChange={(v) => setKv({ poolLinkId: v === STACK_LINK ? undefined : v })}
+              help={helpLines([
+                'The network card each GPU reads the pool through.',
+                stackLink === undefined
+                  ? 'This stack has no network link, so its default is one InfiniBand NDR 400 card per GPU.'
+                  : `The stack’s link is ${stackLink.name}, shared by the GPUs of a machine.`,
+                'Decode cannot go faster than this card moves the fetched KV.',
+              ])}
+            />
+            <NumberField
+              label="Pool capacity GB"
+              value={kv.poolCapacityBytes === undefined ? 0 : kv.poolCapacityBytes / 1e9}
+              min={0}
+              step="1"
+              onChange={(v) =>
+                setKv({
+                  poolCapacityBytes: Number.isFinite(v) && v > 0 ? Math.round(v * 1e9) : undefined,
+                })
+              }
+              help={helpLines([
+                'Memory of the pool shared by all GPUs, in GB.',
+                '0 means unlimited: the pool always fits.',
+              ])}
+            />
+          </>
         )}
         {kv?.tier === 'split' && (
           <NumberField
@@ -625,7 +674,7 @@ function KvCacheFields(props: PanelProps) {
             onChange={(v) => setKv({ prefixDeviceFraction: shareOf(v) })}
             help={helpLines([
               `Share of a reused prompt prefix’s KV cache found ${onDevice}.`,
-              'Prefill reads the rest from host RAM or the SSD first.',
+              'Prefill reads the rest from its tier (host RAM, SSD or remote pool) first.',
               `Starts equal to the KV cache ${onDevice} share.`,
             ])}
           />

@@ -51,6 +51,7 @@ describe('resolveKvCache', () => {
       deviceFraction: 0.25,
       ramShare: 1,
       nvmeShare: 0,
+      remotePoolShare: 0,
       hitRatio: 0.25,
       prefixDeviceFraction: 1,
     });

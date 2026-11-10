@@ -396,7 +396,9 @@ function kvCacheMovesAnything(
 
 /**
  * Errors of `deployment.offload.kvCache` (docs/simulation-model.md §12 "KV cache off-device"): `deviceFraction`,
- * `prefixDeviceFraction` in [0, 1]; `hostRamFraction` in [0, 1 − deviceFraction]; a custom hit ratio `h` in [0, 1],
+ * `prefixDeviceFraction` in [0, 1]; `hostRamFraction` in [0, 1 − deviceFraction]; `remotePool.fraction` in
+ * [0, 1 − deviceFraction] with `hostRamFraction + remotePool.fraction ≤ 1 − deviceFraction`, a given pool link with a
+ * positive finite bandwidth and a finite latency ≥ 0, a given pool capacity positive; a custom hit ratio `h` in [0, 1],
  * and `h = 0` when no KV is resident (`deviceFraction` 0, the expert rule); and, when it moves anything
  * (`movesAnything`), a model with offloadable KV ({@link KV_CACHE_NO_OFFLOADABLE_ERROR}). Every message names the
  * "KV cache".
@@ -421,6 +423,39 @@ export function kvCacheErrors(
     errors.push(
       `${label}.hostRamFraction: the KV cache share in host RAM must be in [0, 1 − deviceFraction] (got ${fRam})`,
     );
+  }
+  const pool = kv.remotePool;
+  if (pool !== undefined) {
+    const fPool = pool.fraction;
+    if (fOk && !(Number.isFinite(fPool) && inRange(fPool, 0, 1 - f + 1e-12))) {
+      errors.push(
+        `${label}.remotePool.fraction: the KV cache share in the remote pool must be in [0, 1 − deviceFraction] (got ${fPool})`,
+      );
+    } else if (fOk && fRam !== undefined && Number.isFinite(fRam) && fRam + fPool > 1 - f + 1e-12) {
+      errors.push(
+        `${label}: the KV cache shares on the device, in host RAM and in the remote pool exceed 1 (${f} + ${fRam} + ${fPool})`,
+      );
+    }
+    const link = pool.link;
+    if (link !== undefined) {
+      const bw = link.bandwidthPerDirectionBytesPerSec;
+      if (!(Number.isFinite(bw) && bw > 0)) {
+        errors.push(
+          `${label}.remotePool.link.bandwidthPerDirectionBytesPerSec: the remote KV pool link bandwidth must be a positive number of B/s (got ${bw})`,
+        );
+      }
+      if (!(Number.isFinite(link.latencySec) && link.latencySec >= 0)) {
+        errors.push(
+          `${label}.remotePool.link.latencySec: the remote KV pool link latency must be a finite number of seconds ≥ 0 (got ${link.latencySec})`,
+        );
+      }
+    }
+    const cap = pool.capacityBytes;
+    if (cap !== undefined && !(Number.isFinite(cap) && cap > 0)) {
+      errors.push(
+        `${label}.remotePool.capacityBytes: the remote KV pool capacity must be a positive number of bytes, or absent for unlimited (got ${cap})`,
+      );
+    }
   }
   const fPre = kv.prefixDeviceFraction;
   if (fPre !== undefined && !(Number.isFinite(fPre) && inRange(fPre, 0, 1))) {

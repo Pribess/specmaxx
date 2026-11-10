@@ -1,14 +1,14 @@
 /**
  * KV-cache tiering (`OffloadConfig.kvCache`): the one place with its rules. Which attention KV may live off the
- * device, how many bytes one token of it is, and the per-step fetch of the non-resident past tokens from host RAM
- * and the SSD. See docs/simulation-model.md §12 ("KV cache off-device").
+ * device, how many bytes one token of it is, and the per-step fetch of the non-resident past tokens from host RAM,
+ * the SSD and the remote KV pool. See docs/simulation-model.md §12 ("KV cache off-device", "Remote KV pool").
  *
  * Notation (per device, per microbatch step, per offloadable attention layer):
  * - `b` sequences of the microbatch, `qLen` new tokens each, `past = kvLen − qLen` tokens already cached;
  * - `kvB` bytes per cached token on this device (GQA `2·KVl·hd·bpe(kv)`, MLA `(rkv + dr)·bpe(kv)`);
  * - `f` the device-resident share (decode: f_dev; prefill: f_pre, the share of the prefix-cache hit on the device);
  * - `N_res = f·past` resident past tokens, `M` missed (fetched) tokens per sequence, split over the tiers as
- *   `M_ram = M·ramShare`, `M_ssd = M·nvmeShare`.
+ *   `M_ram = M·ramShare`, `M_ssd = M·nvmeShare`, `M_pool = M·remotePoolShare`.
  *
  * Offloadable: GQA K/V of full and top-k layers (no sliding window), and the MLA latent (of the owning layer; a layer
  * reading another layer's latent fetches the same misses again). Stays on the device: sliding-window caches,
@@ -146,10 +146,10 @@ export function kvMisses(
 
 /**
  * The KV fetch ops in front of one offloadable attention op (`attention`, after DCP sharding): one `TransferOp` per
- * tier with missed tokens, `attn.kv_fetch` (host RAM) and `attn.kv_fetch_ssd` (SSD). Per tier t, with
- * `M_t = M·share_t` and `b = attention.seqs`:
+ * tier with missed tokens, `attn.kv_fetch` (host RAM), `attn.kv_fetch_ssd` (SSD) and `attn.kv_fetch_pool` (remote KV
+ * pool). Per tier t, with `M_t = M·share_t` and `b = attention.seqs`:
  * - reads: full attention and prefill `[{ b, M_t·kvB }]` (one contiguous span per sequence); top-k decode
- *   `[{ b·M_t, kvB }]` (one row per selected token; an SSD pays its read granularity for each);
+ *   `[{ b·M_t, kvB }]` (one row per selected token; an SSD pays its read granularity for each, the pool none);
  * - usefulBytes `b·M_t·kvB`;
  * - q from {@link prefetchedFraction} (`kv_cache` target).
  * Empty when the context has no KV placement, or nothing is missed (f = 1, no past tokens).
@@ -176,13 +176,14 @@ export function kvFetchOps(
   const tiers = [
     { source: 'host_ram', share: placement.ramShare, name: 'attn.kv_fetch' },
     { source: 'nvme', share: placement.nvmeShare, name: 'attn.kv_fetch_ssd' },
+    { source: 'remote_pool', share: placement.remotePoolShare, name: 'attn.kv_fetch_pool' },
   ] as const;
   for (const { source, share, name } of tiers) {
     // Formula: M_t = M·share_t
     const missedTokens = miss.misses * share;
     if (!(missedTokens > 0)) continue;
     // Formula: reads_t = full / prefill: [{ b, M_t·kvB }];  top-k decode: [{ b·M_t, kvB }];  useful_t = b·M_t·kvB
-    // See docs/simulation-model.md §12 ("KV cache off-device")
+    // See docs/simulation-model.md §12 ("KV cache off-device", "Remote KV pool")
     const reads = miss.topK
       ? [{ count: b * missedTokens, bytesEach: kvB }]
       : [{ count: b, bytesEach: missedTokens * kvB }];

@@ -72,6 +72,7 @@ function placement(over: Partial<KvCachePlacement> = {}): KvCachePlacement {
     deviceFraction: 0.25,
     ramShare: 1,
     nvmeShare: 0,
+    remotePoolShare: 0,
     hitRatio: 0.25,
     prefixDeviceFraction: 0.25,
     ...over,
@@ -187,6 +188,43 @@ describe('kvFetchOps: tier byte accounting', () => {
     expectClose(split[0].usefulBytes, 0.4 * whole);
     expectClose(split[1].usefulBytes, 0.6 * whole);
     expectClose(split[0].usefulBytes + split[1].usefulBytes, whole);
+  });
+
+  it('RAM/SSD/pool split 0.2 : 0.3 : 0.5: a third op reads the remote pool, the three sum to the whole', () => {
+    const whole = fetches(lowerBlock(GQA, decode(8192, 4, placement())))[0].usefulBytes;
+    const split = fetches(
+      lowerBlock(
+        GQA,
+        decode(8192, 4, placement({ ramShare: 0.2, nvmeShare: 0.3, remotePoolShare: 0.5 })),
+      ),
+    );
+    expect(split.map((o) => [o.name, o.source])).toEqual([
+      ['attn.kv_fetch', 'host_ram'],
+      ['attn.kv_fetch_ssd', 'nvme'],
+      ['attn.kv_fetch_pool', 'remote_pool'],
+    ]);
+    expectClose(split[2].usefulBytes, 0.5 * whole);
+    // Formula: M_pool = 0.5·6144 = 3072 tokens per sequence; reads [{ b, M_pool·kvB }]
+    expect(split[2].reads).toEqual([{ count: 4, bytesEach: 0.5 * 6144 * GQA_KVB }]);
+    expect(split[2].prefetchedFraction).toBe(0);
+    expectClose(split[0].usefulBytes + split[1].usefulBytes + split[2].usefulBytes, whole);
+  });
+
+  it('the pool alone (remotePoolShare 1): one op per layer, scattered rows for top-k decode', () => {
+    const only = placement({ ramShare: 0, nvmeShare: 0, remotePoolShare: 1 });
+    const [full, ...rest] = fetches(lowerBlock(GQA, decode(8192, 4, only)));
+    expect(rest).toHaveLength(0);
+    expect(full).toMatchObject({
+      name: 'attn.kv_fetch_pool',
+      source: 'remote_pool',
+      reads: [{ count: 4, bytesEach: 6144 * GQA_KVB }],
+      usefulBytes: 4 * 6144 * GQA_KVB,
+    });
+    // Top-k MLA: N 32768, f 0.25, U 2048, M 1536 per sequence (as the host-RAM case), one row per token.
+    const [topk] = fetches(lowerBlock(MLA_TOPK, decode(32768, 2, only)));
+    expect(topk.source).toBe('remote_pool');
+    expect(topk.reads).toEqual([{ count: 2 * 1536, bytesEach: MLA_KVB }]);
+    expect(topk.usefulBytes).toBe(2 * 1536 * MLA_KVB);
   });
 
   it('f = 1 or no past tokens: no op', () => {

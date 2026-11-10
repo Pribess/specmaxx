@@ -26,6 +26,7 @@ import {
 import type { DeviceSpec, HardwareStack, TopologySpec } from '../hw/types';
 import { crossLayerReferences } from '../ir/validateModel';
 import type { DraftSpec, ModelSpec } from '../ir/model';
+import type { TransferSource } from '../ir/ops';
 import { actBpe, stepTokens } from '../lower/common';
 import { lowerDraftDecode, lowerDraftPrefill, ppBoundaryDraftFeatureVectors } from '../lower/draft';
 import {
@@ -36,7 +37,15 @@ import {
   type LoweringContext,
 } from '../lower/lower';
 import type { AllReduceAlgorithm, CollectivePath } from './collectives';
-import { offloadTiers, resolveHost, resolveOffload, transferPath, type ResolvedHost } from './host';
+import {
+  offloadTiers,
+  remotePoolPath,
+  resolveHost,
+  resolveOffload,
+  resolveRemotePool,
+  transferPath,
+  type ResolvedHost,
+} from './host';
 import {
   DEFAULT_PREFILL_CHUNK_TOKENS,
   memoryReport,
@@ -64,11 +73,10 @@ import {
 } from './placement';
 import { resolveSpeculative } from './specdec';
 import { resolveHostStaging, type HostStaging } from './staging';
-import { stageNStream, type TransferPath } from './transfer';
+import { stageNStream, type TransferPaths } from './transfer';
 import { mergeTwoBatch, twoBatchHalves, TWO_BATCH_NOTHING_TO_SPLIT_WARNING } from './twoBatch';
 import { computedPromptTokens } from './types';
 import type {
-  OffloadTier,
   PhaseRates,
   PhaseResult,
   SimInput,
@@ -145,7 +153,7 @@ export function crossStageWarnings(model: ModelSpec, pp: number): string[] {
 
 /** The resolved host side of an offloading run, for {@link simulatePhase}. */
 interface PhaseOffload {
-  /** Host link, RAM and SSD. */
+  /** Host link, RAM, SSD and, with a KV share in it, the remote KV pool. */
   host: ResolvedHost;
   /** The deployment's queue depth request (capped per tier). Count. */
   queueDepth: number | undefined;
@@ -165,6 +173,7 @@ interface PhaseOffload {
  *   hostStreams[s] = streams_ram[s] ∨ streams_nvme[s];  n_host = stageNStream(hostStreams)
  * The host-RAM tier is shared by n_host, and the NVMe staging term by n_host; the SSD's own bandwidth and IOPS stay
  * shared by n_nvme. With one tier streaming, hostStreams = streams_tier, so n_host = n_tier (results unchanged).
+ * The remote KV pool's path is the device's own NIC share: no n_stream (docs §12 "Remote KV pool").
  * See docs/simulation-model.md §12 ("Sharing").
  */
 function stageTransferPaths(
@@ -174,9 +183,9 @@ function stageTransferPaths(
   input: SimInput,
   topology: TopologySpec,
   microbatches: number,
-): Partial<Record<OffloadTier, TransferPath>> {
-  const paths: Partial<Record<OffloadTier, TransferPath>> = {};
-  const streamsFrom = (tier: OffloadTier): boolean[] =>
+): TransferPaths {
+  const paths: TransferPaths = {};
+  const streamsFrom = (tier: TransferSource): boolean[] =>
     lowered.stages.map((st) =>
       st.layers.some((l) => l.ops.some((op) => op.kind === 'transfer' && op.source === tier)),
     );
@@ -214,6 +223,10 @@ function stageTransferPaths(
       offload.ssdReadRate,
       n_host,
     );
+  }
+  if (streamsFrom('remote_pool')[s] === true) {
+    // Formula: t_pool = α_pool + max(useful/B_pool, useful/B_link)   (per device; no sharing term)
+    paths.remote_pool = remotePoolPath(offload.host);
   }
   return paths;
 }
@@ -531,6 +544,15 @@ export function simulate(input: SimInput): SimResult {
       warnings.push(
         `offload: no sustained-read data for ${host.ssd.id}; using datasheet SSD read rate`,
       );
+    }
+    // The remote KV pool (docs §12 "Remote KV pool"): resolved only when a KV share is placed in it, so a placement
+    // without one never reads the topology's inter-node link.
+    const kvConfig = input.deployment?.offload?.kvCache;
+    if (
+      (resolved.offload.kvCache?.remotePoolShare ?? 0) > 0 &&
+      kvConfig?.remotePool !== undefined
+    ) {
+      host.remotePool = resolveRemotePool(kvConfig.remotePool, hw.topology, host.warnings);
     }
     warnings.push(...host.warnings);
     phaseOffload = {
