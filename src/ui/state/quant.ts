@@ -19,6 +19,20 @@ export function isQuantDtype(value: string): value is Dtype {
   return (QUANT_DTYPE_CHOICES as string[]).includes(value);
 }
 
+/** KV-cache formats in the Quantization panel itself: bf16 and fp8 (the common `--kv-cache-dtype` choices). */
+export const KV_MAIN_DTYPES: Dtype[] = ['bf16', 'fp8_e4m3'];
+
+/**
+ * KV-cache formats under the panel's "More KV cache formats": every storage dtype the URL accepts for `kv=` that is not
+ * in {@link KV_MAIN_DTYPES}, so no dtype becomes unselectable.
+ */
+export const KV_ADVANCED_DTYPES: Dtype[] = QUANT_DTYPE_CHOICES.filter((d) => !KV_MAIN_DTYPES.includes(d));
+
+/** True when `value` is one of {@link KV_ADVANCED_DTYPES}. */
+export function isKvAdvancedDtype(value: string | undefined): value is Dtype {
+  return value !== undefined && (KV_ADVANCED_DTYPES as string[]).includes(value);
+}
+
 /** Dtypes offered for the lookup tables: the storage formats a row gather can read (no fp32/tf32 math modes). */
 export const LOOKUP_TABLE_DTYPES: Dtype[] = (
   ['bf16', 'fp16', 'fp8_e4m3', 'mxfp8', 'nvfp4', 'mxfp4', 'int8', 'int4'] as Dtype[]

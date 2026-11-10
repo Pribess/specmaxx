@@ -13,6 +13,9 @@ import {
   hasQuantOverride,
   LOOKUP_TABLE_DTYPES,
   isLookupTableDtype,
+  isKvAdvancedDtype,
+  KV_ADVANCED_DTYPES,
+  KV_MAIN_DTYPES,
   isValidBpw,
   isValidHeadBpw,
   isWeightFormat,
@@ -116,6 +119,13 @@ const LOOKUP_TABLES_HELP = helpLines([
   'The Weights setting does not apply to them.',
 ]);
 
+/** Definition of the Advanced KV cache picker. */
+const KV_ADVANCED_HELP = helpLines([
+  'Less common KV cache formats, including the 4-bit ones (FP4, NVFP4, MXFP4).',
+  'Scaled formats (MX, NVFP4) store a block scale next to each group of values; that cost is counted.',
+  'Sets the KV cache field above.',
+]);
+
 export function QuantPanel({ state, dispatch, loaded }: Props) {
   const { bpw, headBpw } = effectiveBpw(state.quant, loaded?.quant.exl3);
   const checkpointBpw = loaded?.quant.exl3?.bpw;
@@ -173,12 +183,23 @@ export function QuantPanel({ state, dispatch, loaded }: Props) {
               />
             );
           }
+          const isKv = f.key === 'kvCache';
+          const current = state.quant[f.key];
+          const options = isKv
+            ? [
+                { value: '', label: defaultLabel },
+                ...[...KV_MAIN_DTYPES, ...(isKvAdvancedDtype(current) ? [current] : [])].map((d) => ({
+                  value: d,
+                  label: d,
+                })),
+              ]
+            : optionsFor(defaultLabel);
           return (
             <Picker
               key={f.key}
               label={f.label}
-              value={state.quant[f.key] ?? ''}
-              options={optionsFor(defaultLabel)}
+              value={current ?? ''}
+              options={options}
               help={help}
               onChange={(v) =>
                 dispatch({
@@ -236,6 +257,23 @@ export function QuantPanel({ state, dispatch, loaded }: Props) {
           />
         )}
       </div>
+      <details className="more-formats">
+        <summary>More KV cache formats</summary>
+        <Picker
+          label="KV cache (other formats)"
+          value={isKvAdvancedDtype(state.quant.kvCache) ? state.quant.kvCache : ''}
+          options={[
+            { value: '', label: 'Not used (see KV cache)' },
+            ...KV_ADVANCED_DTYPES.map((d) => ({ value: d, label: d })),
+          ]}
+          help={KV_ADVANCED_HELP}
+          onChange={(v) => {
+            if (isKvAdvancedDtype(v)) dispatch({ type: 'setQuant', field: 'kvCache', dtype: v });
+            else if (isKvAdvancedDtype(state.quant.kvCache))
+              dispatch({ type: 'setQuant', field: 'kvCache', dtype: undefined });
+          }}
+        />
+      </details>
       {hasQuantOverride(state.quant) && (
         <button className="quiet" onClick={() => dispatch({ type: 'resetQuant' })}>
           Reset to model default

@@ -146,3 +146,18 @@ describe('exl3PickerKey', () => {
     expect(exl3PickerKey(2.5, undefined, true)).toBe(EXL3_CUSTOM_KEY);
   });
 });
+
+describe('KV cache format lists', () => {
+  it('splits the panel formats from the advanced ones with no overlap, all valid dtypes', async () => {
+    const { KV_MAIN_DTYPES, KV_ADVANCED_DTYPES, QUANT_DTYPE_CHOICES, isKvAdvancedDtype, isQuantDtype } = await import('./quant');
+    expect(KV_MAIN_DTYPES).toEqual(['bf16', 'fp8_e4m3']);
+    for (const d of KV_ADVANCED_DTYPES) {
+      expect(KV_MAIN_DTYPES).not.toContain(d);
+      expect(isQuantDtype(d)).toBe(true);
+    }
+    expect([...KV_MAIN_DTYPES, ...KV_ADVANCED_DTYPES].sort()).toEqual([...QUANT_DTYPE_CHOICES].sort());
+    for (const d of ['nvfp4', 'mxfp4', 'fp4_e2m1']) expect(isKvAdvancedDtype(d)).toBe(true);
+    expect(isKvAdvancedDtype('bf16')).toBe(false);
+    expect(isKvAdvancedDtype(undefined)).toBe(false);
+  });
+});

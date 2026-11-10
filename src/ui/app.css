@@ -142,6 +142,7 @@
 }
 .panel > summary::after,
 details.advanced > summary::before,
+details.more-formats > summary::before,
 .spec-editor summary::before,
 .notes summary::before {
   content: '';
@@ -323,8 +324,9 @@ p.hint { margin: var(--space-2) 0 0; }
 .keep-together { white-space: nowrap; }
 
 /* Disclosures (Advanced, spec editor, notes): chevron, 6px, text; the whole row is the target. */
-details.advanced { margin-top: var(--space-5); }
+details.advanced, details.more-formats { margin-top: var(--space-5); }
 details.advanced > summary,
+details.more-formats > summary,
 .spec-editor summary,
 .notes summary {
   display: flex;
@@ -337,9 +339,11 @@ details.advanced > summary,
   font-weight: 600;
 }
 details.advanced > summary::-webkit-details-marker,
+details.more-formats > summary::-webkit-details-marker,
 .spec-editor summary::-webkit-details-marker,
 .notes summary::-webkit-details-marker { display: none; }
 details.advanced > summary::before,
+details.more-formats > summary::before,
 .spec-editor summary::before,
 .notes summary::before {
   margin: 0 3px 0 2px;
@@ -347,9 +351,10 @@ details.advanced > summary::before,
 }
 details[open] > summary::before { transform: translateY(-3px) rotate(45deg) !important; }
 details.advanced > summary:hover,
+details.more-formats > summary:hover,
 .spec-editor summary:hover,
 .notes summary:hover { color: var(--primary); }
-details.advanced > :not(summary) { margin-top: var(--space-4); }
+details.advanced > :not(summary), details.more-formats > :not(summary) { margin-top: var(--space-4); }
 
 /* Device unlocks (Advanced): a small heading, then radio or checkbox rows. */
 .unlock {

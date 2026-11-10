@@ -198,6 +198,28 @@ describe('estimator inputs', () => {
     expect(screen.queryByRole('button', { name: 'Reset to model default' })).toBeNull();
     await screen.findByTestId('decode-tps');
   });
+  it('KV cache: FP4-family formats under "More KV cache formats" show in both pickers; bf16 clears the second', async () => {
+    mount();
+    const main = () => screen.getByRole('combobox', { name: 'KV cache' });
+    const other = () => screen.getByRole('combobox', { name: 'KV cache (other formats)' });
+    fireEvent.click(screen.getByText('More KV cache formats'));
+    expect(other().textContent).toMatch(/Not used/);
+    fireEvent.click(other());
+    fireEvent.click(await screen.findByRole('option', { name: 'nvfp4' }));
+    expect(main().textContent).toBe('nvfp4');
+    expect(other().textContent).toBe('nvfp4');
+    await waitFor(() => expect(new URLSearchParams(location.search).get('kv')).toBe('nvfp4'));
+    fireEvent.click(main());
+    fireEvent.click(await screen.findByRole('option', { name: 'bf16' }));
+    expect(main().textContent).toBe('bf16');
+    expect(other().textContent).toMatch(/Not used/);
+    await waitFor(() => expect(new URLSearchParams(location.search).get('kv')).toBe('bf16'));
+  });
+  it('a kv= dtype outside the main list (int4) still shows in the main picker', async () => {
+    history.replaceState(null, '', '/?kv=int4');
+    mount();
+    expect(screen.getByRole('combobox', { name: 'KV cache' }).textContent).toBe('int4');
+  });
   it('EXL3 weights at 2.5 bpw change the result and survive a URL round-trip', async () => {
     history.replaceState(null, '', '/?m=Qwen/Qwen3.8-27B');
     const first = mount();

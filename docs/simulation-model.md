@@ -138,6 +138,15 @@ parallelism into the ops ONE device runs per stage, with concrete shapes and dty
   matrices (no shared experts, rank-0 gates) store nothing. An op that runs only a slice of one stored matrix sets `GemmOp.sideVectorElems`, its explicit share of the
   side-vector entries: the MLA absorbed `q_absorb` (`Hl·dn + rkv`) and `v_absorb` (`Hl·dv`) split the stored `kv_b`
   (`Hl·(dn+dv)` rows, `rkv` columns), so decode and prefill (MHA `kv_b`) charge identical bytes.
+- **KV-cache dtype.** `QuantConfig.kvCache` (UI: Quantization → KV cache; BF16 and FP8 in the panel, every other dtype (FP16, FP8 E5M2,
+  MXFP8, FP6, INT8, INT4, FP4, NVFP4, MXFP4, …) under "More KV cache formats") uses the same `bpe`, so a scaled format pays its block scales both in
+  the memory fit (`gqaSequenceStateBytes`, `mlaSequenceStateBytes`, …) and in the bytes read per decode step
+  (`kvRead = seqs·kvTokens·elemsPerToken·bpe(kv)`, §3 "Attention"). Per token per layer: GQA `2·KVl·hd·bpe`, MLA `(rkv+dr)·bpe`.
+  `bpe`: bf16 2, fp8 1, mxfp8 1.03125, mxfp4 0.53125, nvfp4 0.5625, fp4 0.5 B. DeepSeek-V3 at FP8:
+  `61 · (512 + 64) · 1 = 35,136 B/token` over all layers (BF16 70,272). No dequantization kernel is modeled beyond
+  the dtype's math rate. Tests: `lower/kvDtype.test.ts`. Sources: NVIDIA NVFP4 KV-cache blog
+  (<https://developer.nvidia.com/blog/optimizing-inference-for-long-context-and-large-batch-sizes-with-nvfp4-kv-cache/>,
+  8-bit scale per 16 values); OCP Microscaling Formats v1.0 (8-bit scale per 32).
 - **GEMM input class** (`resolveGemmMath`): the operand with more element bits wins (int4 × bf16 runs at the
   bf16 rate, because weight-only quantization dequantizes); on a tie the activation's format wins.
 - **Accumulator** (`resolveAccumulate`): integer inputs → `int32`; bf16 / tf32 / fp32 → always `fp32`;
