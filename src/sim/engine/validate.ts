@@ -4,8 +4,9 @@
  * the parallelism fits the topology and its links, the effective device (after modifiers, or the base) and the
  * topology pass hardware validation (incl. positive rates), the modifiers are valid, and the engine and memory
  * capacity selections exist, and the model spec is structurally valid (`modelSpecErrors`: cross-layer references,
- * KDA fields, residual-stream widths), and the deployment knobs (offload placement, speculative decoding) are
- * consistent with the model and hardware ({@link deploymentErrors}).
+ * KDA fields, residual-stream widths), the decode context-parallel degree fits TP and the model ({@link dcpErrors};
+ * its per-block rules come from lowering, through {@link blockShardingErrors}), and the deployment knobs (offload
+ * placement, speculative decoding) are consistent with the model and hardware ({@link deploymentErrors}).
  * See docs/simulation-model.md §5 (Parallelism) and §4 ("Device variants and modifiers"), design doc §2 and §3.
  */
 
@@ -20,6 +21,7 @@ import { applyDeviceModifiers } from '../hw/modifiers';
 import { deviceHostLink } from '../hw/presets/links';
 import { modelSpecErrors } from '../ir/validateModel';
 import { lowerBlock, type LoweringContext } from '../lower/lower';
+import { DCP_BLOCK_DRAFTER_ERROR, dcpDivideTpError, dcpHasCandidateBlock, dcpNoBlockError } from '../lower/dcp';
 import { moeParallelErrors } from '../lower/moe';
 import { checkPlacement, expertTpCollectivePath } from './placement';
 import { expertRules, lookupTableRules } from './offloadRules';
@@ -66,6 +68,27 @@ export function denseTpGroupErrors(input: Pick<SimInput, 'parallel' | 'deploymen
   return errors;
 }
 
+/**
+ * Global errors of `ParallelConfig.dcp` (decode context parallelism, d): d must divide tp (the DCP group lies inside
+ * one TP group), the model needs an attention block DCP applies to (MLA, CSA, or GQA without a sliding window;
+ * unsupported ones report their own error), and a block drafter (DFlash 2, DSpark) is rejected; MTP is allowed. The
+ * per-block rules (GQA `d | tp / kvHeads`, sparse / CSA / relative-bias / K/V-conv rejections) are thrown by lowering
+ * and reported by {@link blockShardingErrors}. Absent, 1, or not an integer ≥ 1 (reported by `validateInput`): none.
+ * Exported so the UI can attribute them to the DCP field. See docs/simulation-model.md §5 "Decode context
+ * parallelism (DCP)".
+ */
+export function dcpErrors(input: Pick<SimInput, 'model' | 'parallel' | 'deployment'>): string[] {
+  const d = input.parallel.dcp;
+  if (d === undefined || !Number.isInteger(d) || d <= 1) return [];
+  const errors: string[] = [];
+  const tp = input.parallel.tp;
+  if (tp % d !== 0) errors.push(dcpDivideTpError(d, tp));
+  if (!dcpHasCandidateBlock(input.model)) errors.push(dcpNoBlockError(d));
+  const spec = input.deployment?.speculative;
+  if (spec !== undefined && spec.method !== 'mtp') errors.push(DCP_BLOCK_DRAFTER_ERROR);
+  return errors;
+}
+
 /** Errors for a field that must be an integer ≥ 1. */
 function positiveIntegerErrors(value: number, label: string): string[] {
   return Number.isInteger(value) && value >= 1 ? [] : [`${label} must be an integer ≥ 1 (got ${value})`];
@@ -79,7 +102,8 @@ function positiveIntegerErrors(value: number, label: string): string[] {
  * Exported so the UI can attribute TP / EP errors to their fields (and list the valid degrees) without a full
  * {@link validateInput}, which calls it too. Only `model`, `quant` and `parallel` are read; the workload and
  * hardware do not affect sharding. Rules: docs/simulation-model.md §5 ("TP sharding", "KV-head replication",
- * "MoE modes A/B").
+ * "MoE modes A/B", and the per-block DCP rules of "Decode context parallelism (DCP)", whose messages contain
+ * `dcp (d)`).
  */
 export function blockShardingErrors(input: Pick<SimInput, 'model' | 'quant' | 'parallel'>): string[] {
   const ctx: LoweringContext = {
@@ -113,6 +137,7 @@ export function validateInput(input: SimInput): string[] {
 
   // Parallel degrees and workload.
   for (const key of ['tp', 'pp', 'dp', 'ep'] as const) errors.push(...positiveIntegerErrors(parallel[key], `parallel.${key}`));
+  if (parallel.dcp !== undefined) errors.push(...positiveIntegerErrors(parallel.dcp, 'parallel.dcp'));
   const rho = parallel.epImbalance;
   if (rho !== undefined && !(Number.isFinite(rho) && rho >= 1)) {
     errors.push(`parallel.epImbalance must be a finite number ≥ 1 (got ${rho})`);
@@ -161,6 +186,7 @@ export function validateInput(input: SimInput): string[] {
   const hasMoe = model.layers.some((l) => l.blocks.some((b) => b.kind === 'moe'));
   if (parallel.ep > 1 && !hasMoe) errors.push(`ep (${parallel.ep}) > 1 but the model has no MoE block`);
   errors.push(...denseTpGroupErrors(input));
+  errors.push(...dcpErrors(input));
   errors.push(...modelSpecErrors(model));
   errors.push(...blockShardingErrors(input));
 

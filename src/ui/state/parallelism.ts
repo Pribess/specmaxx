@@ -6,18 +6,21 @@
  * The UI offers TP, PP, DP and (MoE models only) EP. The device count is TP × PP × DP (`placement.ts` rank layout:
  * DP replicas inside each pipeline stage). EP adds no devices: in the engine's mode A (`lower/moe.ts`, `tp % ep == 0`)
  * the EP group lies inside the TP group; in mode B (`ep % tp == 0` and `(tp·dp) % ep == 0`, so only with DP > 1) it
- * spans `ep/tp` replicas. A valid EP also divides the expert count. See {@link effectiveParallel}.
+ * spans `ep/tp` replicas. A valid EP also divides the expert count. See {@link effectiveParallel}. DCP (decode context
+ * parallelism, `ParallelConfig.dcp`, in the panel's Advanced) adds no devices either: it splits the KV cache by token
+ * over `dcp` consecutive ranks of each TP group, so it must divide TP.
  *
  * Attribution of engine messages relies on their wording (pinned by parallelism.test.ts):
  * - `blockShardingErrors` lines are `'<layer>: <message>'`; a message naming `dense TP group` goes to the dense-layers
- *   control (`denseTp`), one naming `ep (` to EP, else TP. The two MoE EP rules and the dense-TP rule are reworded
- *   in UI words ({@link uiShardingMessage}).
- * - `checkPlacement` errors are prefixed `tp:`, `ep:` or `pp:`; the world-size error starts `tp·pp·dp =`.
+ *   control (`denseTp`), one naming `dcp (` to DCP, one naming `ep (` to EP, else TP. The two MoE EP rules, the
+ *   dense-TP rule and the DCP rules are reworded in UI words ({@link uiShardingMessage}).
+ * - `dcpErrors` (the model-wide DCP rules: DCP divides TP, a block to shard exists) go to DCP.
+ * - `checkPlacement` errors are prefixed `tp:`, `ep:`, `pp:` or `dcp:`; the world-size error starts `tp·pp·dp =`.
  */
 
 import type { Workload } from '../../sim/engine/types';
 import { checkPlacement, expertTpCollectivePath } from '../../sim/engine/placement';
-import { blockShardingErrors } from '../../sim/engine/validate';
+import { blockShardingErrors, dcpErrors } from '../../sim/engine/validate';
 import type { ModelSpec, ParallelConfig, QuantConfig } from '../../sim/ir/model';
 import type { TopologySpec } from '../../sim/hw/types';
 import { hasMoe } from './deploymentInput';
@@ -25,12 +28,13 @@ import type { AppState } from './appState';
 
 /**
  * A field the UI can mark. `devices` is the device/node count; `denseTp` is the "Dense layers" DP | TP control of
- * the DP attention + EP layout; `epImbalance` and `redundantExperts` are the EP balance fields (ρ, EPLB replicas);
- * `offload` and `specDec` are the deployment sections (offloading, speculative decoding); `general` is anything else.
+ * the DP attention + EP layout; `dcp` is the DCP field of the Parallelism panel's Advanced; `epImbalance` and
+ * `redundantExperts` are the EP balance fields (ρ, EPLB replicas); `offload` and `specDec` are the deployment
+ * sections (offloading, speculative decoding); `general` is anything else.
  */
 export type IssueField =
-  | 'tp' | 'pp' | 'dp' | 'ep' | 'denseTp' | 'epImbalance' | 'redundantExperts' | 'batch' | 'promptLen' | 'decodeContextLen'
-  | 'devices' | 'bpw' | 'headBpw' | 'offload' | 'specDec' | 'general';
+  | 'tp' | 'pp' | 'dp' | 'ep' | 'denseTp' | 'dcp' | 'epImbalance' | 'redundantExperts' | 'batch' | 'promptLen'
+  | 'decodeContextLen' | 'devices' | 'bpw' | 'headBpw' | 'offload' | 'specDec' | 'general';
 
 /** One problem with the inputs. Errors stop the simulation; warnings do not. */
 export interface FieldIssue {
@@ -65,10 +69,12 @@ function stripLayer(message: string): string {
 
 /**
  * Field of a sharding message: the dense-layers control (`denseTp`) when it names the dense TP group (dense FFN
- * layers TP over the EP group), EP when it names the expert-parallel degree, else TP.
+ * layers TP over the EP group), DCP when it names the decode context-parallel degree (`dcp (`), EP when it names the
+ * expert-parallel degree, else TP.
  */
-export function shardingField(message: string): 'tp' | 'ep' | 'denseTp' {
+export function shardingField(message: string): 'tp' | 'ep' | 'denseTp' | 'dcp' {
   if (/dense TP group/.test(message)) return 'denseTp';
+  if (/\bdcp \(/.test(message)) return 'dcp';
   return /\bep \(/.test(message) ? 'ep' : 'tp';
 }
 
@@ -77,7 +83,10 @@ export function shardingField(message: string): 'tp' | 'ep' | 'denseTp' {
  * "EP 3 must divide the 512 experts." and "EP 3 must divide TP 2."; with DP > 1 the second names the engine's mode-B
  * alternative too: "EP 3 must divide TP 2, or be a multiple of TP 2 that divides TP × DP = 4.". The dense-TP rule
  * (`lowerMlp`: the intermediate width must split over the dense TP group) becomes "Dense layers on TP need EP 72
- * to divide their width 12288. Use DP." (that group is the EP group). Any other message is kept as is.
+ * to divide their width 12288. Use DP." (that group is the EP group). The DCP rules become "DCP 3 must divide TP 8.",
+ * "DCP 4 must divide TP ÷ KV heads = 2: …" (GQA: only the ranks holding copies of one KV head can split it), "DCP
+ * is not supported with sparse attention." (and with compressed sparse attention, relative-position bias or K/V
+ * convs), and "DCP needs a model with MLA or full-attention GQA layers.". Any other message is kept as is.
  */
 export function uiShardingMessage(message: string): string {
   const experts = message.match(/experts \((\d+)\) must be divisible by ep \((\d+)\)/);
@@ -91,13 +100,29 @@ export function uiShardingMessage(message: string): string {
     if (tpDp === undefined || tpDp === tp) return `EP ${ep} must divide TP ${tp}.`;
     return `EP ${ep} must divide TP ${tp}, or be a multiple of TP ${tp} that divides TP × DP = ${tpDp}.`;
   }
+  const dcpTp = message.match(/dcp \((\d+)\) must divide tp \((\d+)\)/);
+  if (dcpTp) return `DCP ${dcpTp[1]} must divide TP ${dcpTp[2]}.`;
+  const dcpKv = message.match(/dcp \((\d+)\) must divide tp \/ kvHeads \((\d+)\)/);
+  if (dcpKv) {
+    return `DCP ${dcpKv[1]} must divide TP ÷ KV heads = ${dcpKv[2]}: only the GPUs holding copies of the same KV head can split it.`;
+  }
+  if (/dcp \(\d+\) > 1 is not supported/.test(message)) {
+    if (/compressed sparse/.test(message)) return 'DCP is not supported with compressed sparse attention.';
+    if (/sparse/.test(message)) return 'DCP is not supported with sparse attention.';
+    if (/relative-position bias|short conv/.test(message)) {
+      return 'DCP is not supported with relative-position bias or K/V convs.';
+    }
+  }
+  if (/dcp \(\d+\) > 1 but the model has no full-attention/.test(message)) {
+    return 'DCP needs a model with MLA or full-attention GQA layers.';
+  }
   return message;
 }
 
-/** Field of a `checkPlacement` error by its prefix (`tp:`, `ep:`, `pp:`); anything else is about the devices. */
+/** Field of a `checkPlacement` error by its prefix (`tp:`, `ep:`, `pp:`, `dcp:`); anything else is about the devices. */
 export function placementField(message: string): IssueField {
-  const prefix = message.match(/^(tp|ep|pp):/)?.[1];
-  return prefix === 'tp' || prefix === 'ep' || prefix === 'pp' ? prefix : 'devices';
+  const prefix = message.match(/^(tp|ep|pp|dcp):/)?.[1];
+  return prefix === 'tp' || prefix === 'ep' || prefix === 'pp' || prefix === 'dcp' ? prefix : 'devices';
 }
 
 /**
@@ -120,17 +145,23 @@ function onModel(parallel: ParallelConfig, model: ModelSpec): ParallelConfig {
 
 /**
  * The parallel config the UI simulates from the user's degrees and layout: EP is the user's only on a MoE model (a
- * dense model runs with EP 1, whatever the state or URL holds), and `denseTpGroup` (`'ep'`: dense layers TP over the
- * EP group) only on a MoE model in the DP attention + EP layout. Every other field, DP included, is kept, so with
- * no layout and no `denseTpGroup` the result is exactly the one from before the layout existed.
+ * dense model runs with EP 1, whatever the state or URL holds), `denseTpGroup` (`'ep'`: dense layers TP over the
+ * EP group) only on a MoE model in the DP attention + EP layout, and `dcp` on every model but never in that layout
+ * (TP 1 there). Every other field, DP included, is kept, so with no layout, no `denseTpGroup` and no `dcp` the
+ * result is exactly the one from before the layout existed.
  */
 export function effectiveParallel(
   parallel: ParallelConfig,
   model: ModelSpec,
   layout?: AppState['parallelLayout'],
 ): ParallelConfig {
-  const { denseTpGroup, ...rest } = onModel(parallel, model);
-  return layout === 'dpAttentionEp' && denseTpGroup === 'ep' ? { ...rest, denseTpGroup } : rest;
+  const { denseTpGroup, dcp, ...rest } = onModel(parallel, model);
+  const dep = layout === 'dpAttentionEp';
+  return {
+    ...rest,
+    ...(dep && denseTpGroup === 'ep' ? { denseTpGroup } : {}),
+    ...(!dep && dcp !== undefined ? { dcp } : {}),
+  };
 }
 
 /**
@@ -144,8 +175,10 @@ export function effectiveParallel(
  *   worded as EP × PP;
  * - `batch % dp == 0` (on `batch`: each replica serves `batch / dp` sequences), `pp ≤ layers` (on `pp`);
  * - the engine's sharding rules (`blockShardingErrors`; one message per distinct rule, layer prefix dropped;
- *   EP rules such as "EP must divide TP" on `ep`; the dense-TP rule on `denseTp`);
- * - the engine's placement rules (`checkPlacement`) by their prefix;
+ *   EP rules such as "EP must divide TP" on `ep`; the dense-TP rule on `denseTp`; the DCP rules on `dcp`);
+ * - DCP (when set): an integer ≥ 1 (else nothing else is checked), and the engine's model-wide DCP rules
+ *   (`dcpErrors`: DCP divides TP, the model has a block to shard) on `dcp`;
+ * - the engine's placement rules (`checkPlacement`) by their prefix (a `dcp:` one only when no DCP rule failed);
  * - the expert-TP group path (MoE with an expert-output norm and `tp/ep > 1`), on `ep`.
  */
 export function fieldIssues(
@@ -163,6 +196,7 @@ export function fieldIssues(
   for (const key of degrees) {
     if (!isPositiveInteger(effective[key])) error(key, `${DEGREE_LABEL[key]} must be a whole number ≥ 1.`);
   }
+  if (effective.dcp !== undefined && !isPositiveInteger(effective.dcp)) error('dcp', 'DCP must be a whole number ≥ 1.');
   for (const key of ['batch', 'promptLen', 'decodeContextLen'] as const) {
     if (!isPositiveInteger(workload[key])) error(key, `${WORKLOAD_LABEL[key]} must be a whole number ≥ 1.`);
   }
@@ -194,6 +228,15 @@ export function fieldIssues(
   if (pp > layers) error('pp', `PP ${pp} exceeds the ${layers} layers of the model.`);
 
   const seen = new Set<string>();
+  // The model-wide DCP rules (DCP divides TP, a block to shard exists). Only with DCP on: off, nothing changes.
+  if (effective.dcp !== undefined && effective.dcp > 1) {
+    for (const rule of dcpErrors({ model, parallel: effective })) {
+      const message = uiShardingMessage(rule);
+      if (seen.has(message)) continue;
+      seen.add(message);
+      error('dcp', message);
+    }
+  }
   for (const line of blockShardingErrors({ model, quant, parallel: effective })) {
     // One engine error may hold several rules, one per line (e.g. a MoE block's two EP rules).
     for (const rule of stripLayer(line).split('\n')) {
@@ -205,7 +248,12 @@ export function fieldIssues(
   }
   if (world <= devices) {
     const placementErrors = checkPlacement(effective, topology).errors;
-    for (const message of placementErrors) error(placementField(message), message);
+    // A DCP that breaks a DCP rule (e.g. does not divide TP) cannot tile the nodes either: one message is enough.
+    const dcpRuleBroken = issues.some((i) => i.field === 'dcp');
+    for (const message of placementErrors) {
+      const field = placementField(message);
+      if (!(field === 'dcp' && dcpRuleBroken)) error(field, message);
+    }
     // As validateInput: the expert-TP group (etp = tp/ep > 1 ranks sharing experts) of a MoE block with an
     // expert-output norm needs a modeled path. Changing EP is what fixes it, so it goes on EP.
     const usesExpertTp =
@@ -233,15 +281,17 @@ export const MAX_DEGREE_CANDIDATES = 256;
 
 /**
  * The degrees in 1..devices that give no error for `field`, with the other degrees as in `parallel`, except that
- * TP is checked with EP = 1 (EP is chosen after TP: a TP that the current EP does not divide shows the error on EP).
+ * TP is checked with EP = 1 and DCP off (EP and DCP are chosen after TP: a TP that the current EP or DCP does not
+ * divide shows the error on EP or DCP).
  * The device-count equality (TP × PP × DP = devices) is not part of this check: it is a property of the degrees
  * together, shown on the device count field, so a hint lists every degree that is individually valid. Neither is the
  * batch split over DP, which is shown on the batch field. EP is checked at the current TP and DP, so with DP > 1 the
- * hint includes the mode-B values (multiples of TP that divide TP × DP). EP on a dense model is `[1]`.
+ * hint includes the mode-B values (multiples of TP that divide TP × DP). EP on a dense model is `[1]`. DCP is
+ * checked at the current TP, so it lists the divisors of TP the model allows (for GQA, of TP ÷ KV heads).
  * Used for hints like "Valid TP: 1, 2, 4, 8".
  */
 export function validDegrees(
-  field: 'tp' | 'pp' | 'dp' | 'ep',
+  field: 'tp' | 'pp' | 'dp' | 'ep' | 'dcp',
   model: ModelSpec,
   quant: QuantConfig,
   parallel: ParallelConfig,
@@ -253,7 +303,10 @@ export function validDegrees(
   const valid: number[] = [];
   // Bounded so a huge rig cannot stall the UI.
   for (let k = 1; k <= Math.min(devices, MAX_DEGREE_CANDIDATES); k++) {
+    // Only a pruning (dcpErrors rejects them too): a DCP that does not divide TP is never valid.
+    if (field === 'dcp' && Number.isInteger(parallel.tp) && parallel.tp % k !== 0) continue;
     const candidate: ParallelConfig = { ...parallel, [field]: k, ...(field === 'tp' ? { ep: 1 } : {}) };
+    if (field === 'tp') delete candidate.dcp;
     const blocking = fieldIssues(model, quant, candidate, workload, topology).filter(
       (i) => i.level === 'error' && i.field === field,
     );
@@ -303,7 +356,7 @@ export function dpAttentionEpSplits(
 }
 
 /**
- * TP, PP, DP and EP for this model and topology, used when a hardware choice changes the device count:
+ * TP, PP, DP, EP (and DCP) for this model and topology, used when a hardware choice changes the device count:
  * - DP is never raised on its own: the user's `current.dp` is kept when it is > 1, divides the device count, and a
  *   TP × PP split of the remaining `devices / dp` passes {@link fieldIssues} (batch split included); otherwise DP is 1.
  * - TP and PP use every remaining device (TP × PP × DP = devices) and pass {@link fieldIssues} with EP = 1: the
@@ -311,6 +364,9 @@ export function dpAttentionEpSplits(
  *   PP = 1, DP = 1 when no split is valid (the device-count error is then shown).
  * - EP is never raised on its own either: the user's `current.ep` is kept when it is > 1, the model is MoE, and the
  *   chosen TP, PP and DP give no error with it; otherwise EP is 1.
+ * - DCP likewise: when `current.dcp` is given, the result has a `dcp` key, the user's DCP when it is > 1 and the
+ *   chosen TP, PP, DP and EP give no error with it, else `undefined` (the reducer then turns DCP off). TP and PP are
+ *   chosen without it. Without `current.dcp` the result has no `dcp` key, as before DCP.
  * - In the DP attention + EP layout (`current.layout`, MoE models only) the result keeps that shape: TP = 1 and
  *   DP = EP = N = devices / PP. It is the user's `current.pp` when that is one of the {@link dpAttentionEpSplits}
  *   (checked with `current.denseTpGroup`; the batch split aside: it is shown on the batch field), else the split with
@@ -327,7 +383,27 @@ export function chooseDegrees(
     pp?: number;
     layout?: AppState['parallelLayout'];
     denseTpGroup?: ParallelConfig['denseTpGroup'];
+    dcp?: number;
   } = {},
+): { tp: number; pp: number; dp: number; ep: number; dcp?: number } {
+  const degrees = chooseCustomOrLayout(model, quant, workload, topology, current);
+  if (current.dcp === undefined) return degrees;
+  // The layout has TP 1, so no DCP; otherwise the user's DCP only when the chosen degrees allow it.
+  const kept: ParallelConfig = { ...degrees, dcp: current.dcp };
+  const keep =
+    current.dcp > 1 &&
+    !(current.layout === 'dpAttentionEp' && hasMoe(model)) &&
+    !hasErrors(fieldIssues(model, quant, kept, workload, topology));
+  return { ...degrees, dcp: keep ? current.dcp : undefined };
+}
+
+/** {@link chooseDegrees} without DCP: TP, PP, DP and EP of the custom layout or of DP attention + EP. */
+function chooseCustomOrLayout(
+  model: ModelSpec,
+  quant: QuantConfig,
+  workload: Workload,
+  topology: TopologySpec,
+  current: NonNullable<Parameters<typeof chooseDegrees>[4]>,
 ): { tp: number; pp: number; dp: number; ep: number } {
   if (current.layout === 'dpAttentionEp' && hasMoe(model)) return chooseDpAttentionEp(model, quant, workload, topology, current);
   const currentDp = current.dp ?? 1;

@@ -48,11 +48,19 @@ export interface OpTimeContext {
    */
   memBandwidthBytesPerSec: number;
   /**
-   * Where each parallel group's collectives run (from placement): TP group, EP group, this stage's PP send, and the
-   * expert-TP group (`placement.ts: expertTpCollectivePath`). `etp` is set only when the model lowers expert-TP
-   * collectives (a MoE `expertOutputNorm` with etp > 1); an `etp` op without it is an error.
+   * Where each parallel group's collectives run (from placement): TP group, EP group, this stage's PP send, the
+   * expert-TP group (`placement.ts: expertTpCollectivePath`), and the decode context-parallel group (the d
+   * consecutive ranks of a TP group, `collectivePath(groupSpan(dcp))`). `etp` is set only when the model lowers
+   * expert-TP collectives (a MoE `expertOutputNorm` with etp > 1), `dcp` only when the phase lowers DCP collectives
+   * (`parallel.dcp` > 1, decode); an `etp` or `dcp` op without its path is an error.
    */
-  collectivePaths: { tp: CollectivePath; ep: CollectivePath; pp: CollectivePath; etp?: CollectivePath };
+  collectivePaths: {
+    tp: CollectivePath;
+    ep: CollectivePath;
+    pp: CollectivePath;
+    etp?: CollectivePath;
+    dcp?: CollectivePath;
+  };
   /** All-reduce algorithm (SimOptions.collectiveAlgorithm). */
   collectiveAlgorithm: AllReduceAlgorithm;
   /** Elementwise fusion assumption (SimOptions.elementwiseFusion). */

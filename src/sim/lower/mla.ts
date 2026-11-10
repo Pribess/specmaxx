@@ -27,6 +27,7 @@ import {
   stepTokens,
   tpAllReduce,
 } from './common';
+import { dcpActive, dcpDegree, dcpGatherQ, dcpKvTokens, dcpReduceOut, dcpShardAttention, dcpShardsBlock } from './dcp';
 import { indexerSelection, lowerSparseSelection, sparseSelectionStateBytes } from './indexer';
 import type { LoweringContext } from './lower';
 
@@ -37,10 +38,12 @@ export function mlaForm(block: MlaAttentionBlock, ctx: LoweringContext): 'absorb
 
 /**
  * MLA ops, in order: q path (q_a → q_a_norm → q_b, or q) → [g_proj] → [own latent: kv_a → kv_a_norm] → [rope] →
- * [indexer ops] → absorbed (q_absorb → attention → v_absorb) or MHA (kv_b → attention) → [sigmoid_mul gate] →
- * o_proj → [TP all-reduce]. A layer with `kvCacheFromLayer` reads an earlier layer's latent: no kv_a, no kv_a_norm,
- * no k-rope, no cache write. `qkRopeDim` 0 (NoPE) emits no rope op. With `outputGate` (Kimi K3) the gate projection
- * `g_proj` reads the layer input and its sigmoid multiplies the attention output before `o_proj`.
+ * [indexer ops] → absorbed (q_absorb → [DCP Q all-gather] → attention → [DCP output reduce-scatter] → v_absorb) or
+ * MHA (kv_b → attention) → [sigmoid_mul gate] → o_proj → [TP all-reduce]. A layer with `kvCacheFromLayer` reads an
+ * earlier layer's latent: no kv_a, no kv_a_norm, no k-rope, no cache write. `qkRopeDim` 0 (NoPE) emits no rope op.
+ * With `outputGate` (Kimi K3) the gate projection `g_proj` reads the layer input and its sigmoid multiplies the
+ * attention output before `o_proj`. With decode context parallelism (`parallel.dcp` d > 1, decode) the attention
+ * core runs the d·Hl gathered heads over this rank's 1/d of the latent tokens (lower/dcp.ts).
  */
 export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
   const T = stepTokens(ctx);
@@ -53,6 +56,8 @@ export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
   const Hl = shardHeads(block.heads, ctx.parallel.tp, `${block.name} heads`);
   const act = actBpe(ctx);
   const ops: Op[] = [];
+  // Throws for a sparse MLA block with d > 1 (any phase); true when this decode step shards the latent over tokens.
+  const dcpSharded = dcpShardsBlock(block, ctx) && dcpActive(ctx);
 
   // Query path. Formula: rq > 0: q_a (n = rq, k = h, replicated) → rmsnorm(T·rq) → q_b (n = Hl·(dn+dr), k = rq);
   //                      else  q (n = Hl·(dn+dr), k = h)
@@ -130,7 +135,16 @@ export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
         }),
       );
       const attention: AttentionOp = { ...common, kvHeads: 1, qkHeadDim: rkv + dr, vHeadDim: rkv, kvRead: latent };
-      ops.push(attention);
+      if (dcpSharded) {
+        // Formula: S_q = T·(Hl·d)·(rkv + dr)·bpe(act); attention heads Hl·d over 1/d of the latent tokens;
+        //          S_o = T·(Hl·d)·(rkv·reduceBpe + 4)   (the output is still latent; v_absorb runs after the merge)
+        // See docs/simulation-model.md §5 "Decode context parallelism (DCP)"
+        ops.push(dcpGatherQ(T, Hl, rkv + dr, ctx));
+        ops.push(dcpShardAttention(attention, ctx));
+        ops.push(dcpReduceOut(T, Hl, rkv, ctx));
+      } else {
+        ops.push(attention);
+      }
       ops.push(
         linearGemm('mla.v_absorb', { m: T, n: dv, k: rkv }, ctx, { module: 'attention_kv_up', batch: Hl, sideVectorElems: Hl * dv }),
       );
@@ -182,14 +196,17 @@ export function lowerMla(block: MlaAttentionBlock, ctx: LoweringContext): Op[] {
 }
 
 /**
- * Per-sequence latent (+ owned indexer key) cache bytes of an MLA block on one device (replicated per TP rank). A
- * layer reading another layer's latent (`kvCacheFromLayer`) holds none of it. Unit: bytes.
+ * Per-sequence latent (+ owned indexer key) cache bytes of an MLA block on one device (replicated per TP rank, or
+ * with decode context parallelism d > 1 this rank's `ceil(ctx/d)` tokens of it). A layer reading another layer's
+ * latent (`kvCacheFromLayer`) holds none of it. Unit: bytes.
  */
 export function mlaSequenceStateBytes(block: MlaAttentionBlock, ctx: LoweringContext, contextTokens: number): number {
-  // Formula: S = [own latent] ctx·(rkv + dr)·bpe(kv) [+ ceil(ctx/p)·hd_I·bpe(key) if it owns indexer keys]
-  // See docs/simulation-model.md §8 "Memory fit"
+  // Formula: S = [own latent] N_rank·(rkv + dr)·bpe(kv) [+ ceil(ctx/p)·hd_I·bpe(key) if it owns indexer keys],
+  //          N_rank = ceil(ctx/d)   (= ctx without DCP)
+  // See docs/simulation-model.md §8 "Memory fit", §5 "Decode context parallelism (DCP)"
+  const latentTokens = dcpShardsBlock(block, ctx) ? dcpKvTokens(contextTokens, dcpDegree(ctx)) : contextTokens;
   const latentElems = block.kvCacheFromLayer === undefined ? block.kvLoraRank + block.qkRopeDim : 0;
-  const latentBytes = contextTokens * latentElems * bytesPerElement(ctx.quant.kvCache);
+  const latentBytes = latentTokens * latentElems * bytesPerElement(ctx.quant.kvCache);
   const indexerBytes = block.sparse === undefined ? 0 : sparseSelectionStateBytes(block.sparse, ctx, contextTokens);
   return latentBytes + indexerBytes;
 }

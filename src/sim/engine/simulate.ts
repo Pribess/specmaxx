@@ -208,6 +208,15 @@ function simulatePhase(
   const etpPath = usesExpertTp
     ? { etp: expertTpCollectivePath(input.parallel, topology, base.interStaging) }
     : {};
+  // Decode context-parallel collectives (parallel.dcp > 1, decode) run over the d consecutive ranks of a TP group, a
+  // contiguous group placed like TP (docs/simulation-model.md §5 "Decode context parallelism (DCP)"); a phase
+  // without them builds no path, so its contexts are exactly as before.
+  const usesDcp = lowered.stages.some((st) =>
+    st.layers.some((l) => l.ops.some((op) => op.kind === 'collective' && op.group === 'dcp')),
+  );
+  const dcpPath = usesDcp
+    ? { dcp: collectivePath(groupSpan(input.parallel.dcp ?? 1, topology), topology, base.interStaging) }
+    : {};
   const stages = lowered.stages.map((stage) => {
     const ppPath: CollectivePath =
       stage.sendToNext === undefined
@@ -216,7 +225,7 @@ function simulatePhase(
     const ctx: OpTimeContext = {
       engine: base.engine,
       memBandwidthBytesPerSec: base.memBandwidthBytesPerSec,
-      collectivePaths: { tp: base.tpPath, ep: base.epPath, pp: ppPath, ...etpPath },
+      collectivePaths: { tp: base.tpPath, ep: base.epPath, pp: ppPath, ...etpPath, ...dcpPath },
       collectiveAlgorithm: base.collectiveAlgorithm,
       elementwiseFusion: base.elementwiseFusion,
       warnings: base.warnings,

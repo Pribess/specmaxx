@@ -2,6 +2,11 @@ import { expect, test, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { mockHf } from './hf-mock';
 
+/** The Hardware panel's Advanced block (the Parallelism panel has its own Advanced too). */
+function hardwareAdvanced(page: Page) {
+  return page.locator('details.advanced', { has: page.getByTestId('offload-advanced') });
+}
+
 /** Output directory of every screenshot (committed); `SCREENSHOTS_DIR` writes them elsewhere (e.g. a scratch dir). */
 const DIR = process.env.SCREENSHOTS_DIR ?? 'docs/screenshots';
 
@@ -92,7 +97,7 @@ for (const size of ['desktop', 'phone'] as const) {
       const section = page.getByTestId('offload-section');
       await shoot(section, name('offload-panel'));
       // The less common offload knobs are the Offload subsection of the Hardware panel's Advanced.
-      await page.locator('details.advanced > summary').click();
+      await hardwareAdvanced(page).locator('> summary').click();
       await shoot(page.getByTestId('offload-advanced'), name('offload-advanced'));
       await page.evaluate(() => scrollTo(0, 0));
       await expect(page.getByTestId('memory-tier').first()).toBeVisible();
@@ -108,7 +113,7 @@ for (const size of ['desktop', 'phone'] as const) {
       ]);
       await expect(page.getByTestId('split-fields').first()).toBeVisible();
       await shoot(page.getByTestId('offload-section'), name('offload-split-panel'));
-      await page.locator('details.advanced > summary').click();
+      await hardwareAdvanced(page).locator('> summary').click();
       await shoot(page.getByTestId('offload-advanced'), name('offload-split-advanced'));
       await page.evaluate(() => scrollTo(0, 0));
       const memory = page.locator('section.memory');
@@ -125,7 +130,7 @@ for (const size of ['desktop', 'phone'] as const) {
       const storage = page.getByTestId('offload-section');
       await expect(storage.locator('legend')).toHaveText('Storage');
       await shoot(storage, name('storage-panel'));
-      await page.locator('details.advanced > summary').click();
+      await hardwareAdvanced(page).locator('> summary').click();
       await shoot(page.getByTestId('offload-advanced'), name('storage-advanced'));
       await page.evaluate(() => scrollTo(0, 0));
       await page.locator('section.hero').screenshot({ path: name('storage-hero') });
@@ -142,7 +147,7 @@ for (const size of ['desktop', 'phone'] as const) {
         });
         if ((await hardware.getAttribute('open')) === null)
           await hardware.locator('> summary').click();
-        const advanced = page.locator('details.advanced');
+        const advanced = hardwareAdvanced(page);
         if ((await advanced.getAttribute('open')) === null)
           await advanced.locator('> summary').click();
         await page.addStyleTag({ content: '.compact-results { visibility: hidden !important }' });

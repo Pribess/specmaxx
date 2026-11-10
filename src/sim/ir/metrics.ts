@@ -191,14 +191,19 @@ export function kvTokensRead(qLen: number, kvLen: number, sel: KvSelection, toke
 
 /**
  * (query, key) pairs of an attention op per sequence per head: its primary keys plus its secondary (compressed)
- * entries, which share the softmax. Unit: pairs. See docs §3 "Attention".
+ * entries, which share the softmax; with `kvTokenShards` d (decode context parallelism) one rank's 1/d share of
+ * them. Unit: pairs. See docs §3 "Attention".
  */
 export function attentionPairs(op: AttentionOp): number {
   const primary = attendedPairs(op.qLen, op.kvLen, op.causal, op.kvSelection);
   const sec = op.secondaryKv;
   // Formula: pairs = pairs(primary) + pairs(secondary, r)
   const secondary = sec === undefined ? 0 : attendedPairs(op.qLen, op.kvLen, op.causal, sec.kvSelection, sec.tokensPerEntry);
-  return primary + secondary;
+  const shards = op.kvTokenShards;
+  if (shards === undefined) return primary + secondary;
+  // Formula: pairs_rank = pairs / d   (the keys of every query spread evenly over the d DCP ranks)
+  // See docs/simulation-model.md §5 "Decode context parallelism (DCP)"
+  return (primary + secondary) / shards;
 }
 
 /** The scoring cap of an indexer: every visible key, or at most `maxScoredKeys`. */
@@ -347,13 +352,19 @@ export const SOFTMAX_VECTOR_FLOP_PER_SCORE = 5;
 
 /**
  * Memory traffic of the fused attention core: Q in, O out, K/V read for touched tokens, K/V appended for
- * `kvWriteTokens ?? qLen` new tokens. Unit: bytes.
+ * `kvWriteTokens ?? qLen` new tokens; with `kvTokenShards` d, this rank's `ceil(·/d)` share of both token counts.
+ * Unit: bytes.
  */
 function attentionBytes(op: AttentionOp): ByteBreakdown {
   const act = bpeOf(op.activationDtype);
-  const tokensRead = kvTokensRead(op.qLen, op.kvLen, op.kvSelection);
+  const shards = op.kvTokenShards;
+  const allTokensRead = kvTokensRead(op.qLen, op.kvLen, op.kvSelection);
   // Tokens whose K/V are appended: every query token unless the op keeps fewer (block drafter: m_ctx).
-  const writeTokens = op.kvWriteTokens ?? op.qLen;
+  const allWriteTokens = op.kvWriteTokens ?? op.qLen;
+  // Formula (DCP, d = kvTokenShards): tokensRead = ceil(kvTokensRead/d); writeTokens = ceil(writeTokens/d)
+  // See docs/simulation-model.md §5 "Decode context parallelism (DCP)"
+  const tokensRead = shards === undefined ? allTokensRead : Math.ceil(allTokensRead / shards);
+  const writeTokens = shards === undefined ? allWriteTokens : Math.ceil(allWriteTokens / shards);
   // Formula: readQ = seqs·qLen·heads·qk·bpe(act); writeO = seqs·qLen·heads·v·bpe(act)
   // Formula: kvRead = seqs·kvTokensRead·kvRead.elemsPerToken·bpe(kvRead); kvWrite = seqs·writeTokens·kvWrite.elemsPerToken·bpe(kvWrite)
   // Formula: writeTokens = kvWriteTokens ?? qLen

@@ -530,7 +530,9 @@ describe('estimator inputs', () => {
   it('keeps Advanced closed until opened, then its subsections are open', async () => {
     const { container } = mount();
     await screen.findByTestId('decode-tps');
+    // The first Advanced is the Hardware panel's (it comes before the Parallelism panel's).
     const advanced = container.querySelector('details.advanced') as HTMLDetailsElement;
+    expect(advanced.contains(screen.getByTestId('offload-advanced'))).toBe(true);
     expect(advanced.open).toBe(false);
     advanced.open = true;
     expect((container.querySelector('details.spec-editor') as HTMLDetailsElement).open).toBe(true);
@@ -549,12 +551,22 @@ describe('estimator inputs', () => {
       query: '?m=deepseek-ai/DeepSeek-V4.1-Flash&olt=split',
       offload: ['Token embeddings', 'Lookup tables', 'Layers in host RAM', 'Host RAM holds', 'Scale layout', 'Queue depth', 'SSD read rate', 'Prefetch accuracy %'],
     },
-  ])('shows one Advanced, with an Offload subsection for every model ($name)', async ({ query, offload }) => {
+  ])('shows one Advanced in Hardware, with an Offload subsection for every model ($name)', async ({ query, offload }) => {
     history.replaceState(null, '', `/${query}`);
     const { container } = mount();
     await screen.findByTestId('decode-tps');
-    const summaries = [...container.querySelectorAll('summary')].filter((s) => s.textContent === 'Advanced');
+    const panel = (title: string) =>
+      [...container.querySelectorAll('details.panel')].find(
+        (p) => p.querySelector(':scope > summary strong')?.textContent === title,
+      )!;
+    const advancedOf = (title: string) =>
+      [...panel(title).querySelectorAll('summary')].filter((s) => s.textContent === 'Advanced');
+    const summaries = advancedOf('Hardware');
     expect(summaries).toHaveLength(1);
+    // The Parallelism panel has its own Advanced (DCP), and no other panel has one.
+    expect(advancedOf('Parallelism')).toHaveLength(1);
+    expect([...container.querySelectorAll('summary')].filter((s) => s.textContent === 'Advanced')).toHaveLength(2);
+    expect(within(advancedOf('Parallelism')[0].parentElement!).getByTestId('parallel-advanced')).toBeTruthy();
     const advanced = summaries[0].parentElement as HTMLDetailsElement;
     expect(advanced.open).toBe(false);
     expect(within(screen.getByTestId('offload-section')).queryByText('Advanced')).toBeNull();

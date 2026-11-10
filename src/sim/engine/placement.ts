@@ -270,8 +270,9 @@ export interface PlacementCheck {
 }
 
 /**
- * Checks that `par` fits `topo`: world `tp·pp·dp ≤ dpn·nodes` (unused devices are a warning); TP and EP groups
- * place per {@link groupSpanErrors}; every link a TP/EP group or a PP boundary needs exists.
+ * Checks that `par` fits `topo`: world `tp·pp·dp ≤ dpn·nodes` (unused devices are a warning); TP, EP and DCP groups
+ * (DCP: the `dcp ?? 1` consecutive ranks of a TP group, contiguous like TP; size 1 never errs) place per
+ * {@link groupSpanErrors}; every link a TP/EP/DCP group or a PP boundary needs exists.
  */
 export function checkPlacement(par: ParallelConfig, topo: TopologySpec): PlacementCheck {
   const errors: string[] = [];
@@ -287,6 +288,7 @@ export function checkPlacement(par: ParallelConfig, topo: TopologySpec): Placeme
   for (const [name, size] of [
     ['tp', par.tp],
     ['ep', par.ep],
+    ['dcp', par.dcp ?? 1],
   ] as const) {
     const spanErrors = groupSpanErrors(size, topo).map((e) => `${name}: ${e}`);
     errors.push(...spanErrors);

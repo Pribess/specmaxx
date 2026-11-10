@@ -141,6 +141,7 @@ describe('URL codec', () => {
     'm=Qwen/Qwen3.8-Flash-Next&n=4&tp=4&ep=4',
     'n=4&tp=2&dp=2&b=2',
     'm=Qwen/Qwen3.8-Flash-Next&n=4&tp=2&dp=2&ep=4&b=4',
+    'm=moonshotai/Kimi-K3&d=b200&n=8&tp=8&dcp=8',
   ])('keeps a canonical query unchanged: %s', (q) => {
     const { state: s, dropped } = decodeState(q);
     expect(dropped).toEqual([]);

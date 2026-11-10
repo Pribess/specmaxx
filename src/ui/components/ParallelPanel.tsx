@@ -10,6 +10,7 @@ import {
 } from '../state';
 import { Panel } from './Panel';
 import { NumberField } from './NumberField';
+import { ParallelAdvancedFields } from './ParallelAdvancedFields';
 import { Segmented } from './Segmented';
 import { helpLines } from './helpLines';
 import type { PanelProps as Props } from './types';
@@ -89,11 +90,11 @@ export function ParallelPanel({ state, dispatch, loaded, built }: Props) {
   const moe = loaded !== null && hasMoe(loaded.model);
   const dep = moe && state.parallelLayout === 'dpAttentionEp';
   const fields = moe ? (['tp', 'pp', 'dp', 'ep'] as const) : (['tp', 'pp', 'dp'] as const);
-  const { tp, pp, dp, ep } = state.parallel;
+  const { tp, pp, dp, ep, dcp } = state.parallel;
   const denseTp = state.parallel.denseTpGroup === 'ep';
   const value = dep
     ? `DP attention + EP ${ep}${pp > 1 ? `, PP ${pp}` : ''}${denseTp ? ', dense TP' : ''}`
-    : `TP ${tp}, PP ${pp}, DP ${dp}${moe ? `, EP ${ep}` : ''}`;
+    : `TP ${tp}, PP ${pp}, DP ${dp}${moe ? `, EP ${ep}` : ''}${dcp !== undefined && dcp > 1 ? `, DCP ${dcp}` : ''}`;
   const topology = built.hardware?.topology;
   const devices = state.hw.devicesPerNode * state.hw.nodes;
   const checked =
@@ -260,6 +261,23 @@ export function ParallelPanel({ state, dispatch, loaded, built }: Props) {
           </div>
           {balance}
         </>
+      )}
+      {/* DCP splits the KV cache over TP ranks: none in DP attention + EP (TP 1). */}
+      {!dep && (
+        <details className="advanced">
+          <summary>Advanced</summary>
+          <ParallelAdvancedFields
+            state={state}
+            dispatch={dispatch}
+            loaded={loaded}
+            built={built}
+            hint={
+              checked
+                ? `Valid DCP: ${validDegrees('dcp', checked.model, checked.quant, checked.parallel, state.workload, checked.topology).join(', ')}`
+                : undefined
+            }
+          />
+        </details>
       )}
     </Panel>
   );

@@ -57,6 +57,8 @@ export function HardwarePanel(props: Props) {
           pp: next.parallel.pp,
           layout: next.parallelLayout,
           denseTpGroup: next.parallel.denseTpGroup,
+          // Kept only when it still fits the chosen TP; else the result's `dcp: undefined` turns DCP off.
+          dcp: next.parallel.dcp,
         }),
       });
     } catch {

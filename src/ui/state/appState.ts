@@ -109,10 +109,12 @@ export interface AppState {
   /**
    * Parallelism degrees (each an integer ≥ 1 once valid; the state may hold invalid values while editing).
    * `denseTpGroup` is present only as `'ep'` (dense layers TP over the EP group), and only with
-   * {@link AppState.parallelLayout} set. `epImbalance` (EP load imbalance ρ), `epImbalanceScalesAllToAll` (ρ on the
-   * all-to-alls) and `redundantExpertsPerRank` (EPLB replicas) are set by the Parallelism panel's EP balance fields
-   * and kept only when they differ from the default (ρ `DEFAULT_EP_IMBALANCE`, off, 0 replicas;
-   * {@link normalizeEpBalance}); the engine reads them only on MoE models at EP > 1.
+   * {@link AppState.parallelLayout} set; `dcp` (decode context parallelism: the KV cache split by token over DCP of
+   * the TP ranks) is present only when it is not 1, and never in the DP attention + EP layout (TP 1 there); invalid
+   * values (0, 2.5) are kept while editing, like the degrees. `epImbalance` (EP load imbalance ρ),
+   * `epImbalanceScalesAllToAll` (ρ on the all-to-alls) and `redundantExpertsPerRank` (EPLB replicas) are set by the
+   * Parallelism panel's EP balance fields and kept only when they differ from the default (ρ `DEFAULT_EP_IMBALANCE`,
+   * off, 0 replicas; {@link normalizeEpBalance}); the engine reads them only on MoE models at EP > 1.
    */
   parallel: ParallelConfig;
   /**
@@ -171,6 +173,17 @@ export function normalizeEpBalance(parallel: ParallelConfig): ParallelConfig {
   if (out.epImbalanceScalesAllToAll !== true) out = without(out, 'epImbalanceScalesAllToAll');
   if (out.redundantExpertsPerRank === undefined || out.redundantExpertsPerRank === 0) out = without(out, 'redundantExpertsPerRank');
   return out;
+}
+
+/**
+ * `parallel` with `dcp` normalized: removed when absent or 1 (1 = off is the default) and always in DP attention +
+ * EP (TP is 1 there, so there is no TP group to split the KV cache over). Any other value is kept as typed, so an
+ * invalid one shows its error on the field.
+ */
+function normalizeDcp(parallel: ParallelConfig, layout: AppState['parallelLayout']): ParallelConfig {
+  return layout === 'dpAttentionEp' || parallel.dcp === undefined || parallel.dcp === 1
+    ? without(parallel, 'dcp')
+    : parallel;
 }
 
 /** Device of the default state. */
@@ -258,12 +271,13 @@ export type AppAction =
   | { type: 'resetEdits'; target?: EditTarget }
   /**
    * Change some parallel degrees (and `denseTpGroup`: `'ep'` sets dense TP, undefined clears it). In DP attention +
-   * EP, degrees that leave its shape (TP ≠ 1 or DP ≠ EP) drop the layout and `denseTpGroup`.
+   * EP, degrees that leave its shape (TP ≠ 1 or DP ≠ EP) drop the layout and `denseTpGroup`. `dcp`: 1 or undefined
+   * clears it; it is never kept in DP attention + EP.
    */
   | { type: 'setParallel'; parallel: Partial<ParallelConfig> }
   /**
    * Pick the parallel layout. To DP attention + EP: TP 1, DP = EP = devices / PP (PP kept when it divides the
-   * device count, else 1). To custom: the degrees are kept, `denseTpGroup` is dropped.
+   * device count, else 1) and `dcp` is dropped. To custom: the degrees are kept, `denseTpGroup` is dropped.
    */
   | { type: 'setParallelLayout'; layout: ParallelLayout }
   /** Change some workload fields. */
@@ -409,7 +423,7 @@ export function reduce(state: AppState, action: AppAction): AppState {
       const parallel = { ...state.parallel, ...action.parallel };
       const layout = state.parallelLayout !== undefined && isDpAttentionEpShape(parallel) ? state.parallelLayout : undefined;
       const next = layout === undefined ? without(state, 'parallelLayout') : { ...state, parallelLayout: layout };
-      return { ...next, parallel: normalizeEpBalance(normalizeDenseTp(parallel, layout)) };
+      return { ...next, parallel: normalizeDcp(normalizeEpBalance(normalizeDenseTp(parallel, layout)), layout) };
     }
     case 'setParallelLayout': {
       if (action.layout === 'custom') {
@@ -419,7 +433,10 @@ export function reduce(state: AppState, action: AppAction): AppState {
       const devices = hw.devicesPerNode * hw.nodes;
       const pp = devices % state.parallel.pp === 0 ? state.parallel.pp : 1;
       const n = devices / pp;
-      const parallel = normalizeDenseTp({ ...state.parallel, tp: 1, pp, dp: n, ep: n }, action.layout);
+      const parallel = normalizeDcp(
+        normalizeDenseTp({ ...state.parallel, tp: 1, pp, dp: n, ep: n }, action.layout),
+        action.layout,
+      );
       return { ...state, parallelLayout: action.layout, parallel };
     }
     case 'setWorkload':

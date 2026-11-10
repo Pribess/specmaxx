@@ -377,6 +377,11 @@ position p).
   owner of a compressed cache writes `entryElems/r` per token, a consumer 0). Lowering it as two attention ops
   would add a second Q read, an O round trip and a merge, which in batched decode cost as much as the compressed
   KV read itself.
+- decode context parallelism (`AttentionOp.kvTokenShards` d, absent = 1, never written as 1): the op is ONE rank's
+  share of the keys, `pairs_rank = pairs/d`, `tokensRead = ceil(kvTokensRead/d)`, `w = ceil(w/d)` (the busiest rank);
+  Q, O and the per-pair cost are unchanged. Set only with a full selection and no secondary keys; the d·Hl gathered
+  heads make FLOP per rank equal to the unsharded op's (§5 [Decode context parallelism
+  (DCP)](#decode-context-parallelism-dcp)).
 
 ### Indexer
 
@@ -452,7 +457,9 @@ These only feed the vector time; elementwise ops are memory-bound in practice.
 ### Collective
 
 No FLOP, no memory traffic (`opBytes` returns zeros); its time is `messageBytes` through the alpha-beta model
-(§6).
+(§6). Its `group` is `tp`, `ep`, `pp`, `etp` (expert TP, §5 "MoE modes A/B") or `dcp` (the d consecutive ranks of
+a TP group sharing a token-sharded KV cache, §5 [Decode context parallelism (DCP)](#decode-context-parallelism-dcp)),
+and the group selects the path (`engine/opTime.ts: OpTimeContext.collectivePaths`).
 
 ### Transfer
 
@@ -1111,12 +1118,14 @@ offloaded no result depends on them.
 ## 5. Parallelism
 
 `src/sim/lower/` (`lower.ts: lowerModel, lowerBlock`; one file per block kind; shared rules in `common.ts`).
-`ParallelConfig { tp, pp, dp, ep, epImbalance?, epImbalanceScalesAllToAll?, redundantExpertsPerRank?, denseTpGroup? }`,
+`ParallelConfig { tp, pp, dp, ep, epImbalance?, epImbalanceScalesAllToAll?, redundantExpertsPerRank?, denseTpGroup?, dcp? }`,
 world = `tp·pp·dp` (ep groups live inside it; ρ, its all-to-all switch and the redundant experts:
 [EP load imbalance](#ep-load-imbalance), [Redundant experts](#redundant-experts)).
 `denseTpGroup` picks the group the dense FFN layers and the LM head are tensor-parallel over: the replica's tp
 ranks (absent / `'tp'`, the rule everywhere below) or the whole EP group (`'ep'`, tp = 1 only; [DP attention +
-EP](#dp-attention--ep)).
+EP](#dp-attention--ep)). `dcp` (absent = 1) shards the decode KV cache of full-attention layers along the token axis
+over `dcp` ranks of each TP group, adding no devices ([Decode context parallelism
+(DCP)](#decode-context-parallelism-dcp)).
 The divisibility rules (heads, KV heads, widths over tp; experts and MoE modes over ep) are checked by lowering
 each block once for a one-token step: `src/sim/engine/validate.ts: blockShardingErrors` (called by
 `validateInput`; exported so the UI can attribute TP / EP errors to their fields).
@@ -1614,6 +1623,90 @@ Rules (`denseTpGroupErrors`, `blockShardingErrors`): `'ep'` needs tp = 1, reject
 (the draft heads would need the same split), and needs `f % G == 0` for every dense `mlp` block (no hidden padding;
 the error reads `mlp intermediate (f) must be divisible by the dense TP group (G)`). With ep = 1 `'ep'` changes
 nothing. These limits are listed in §9.
+
+### Decode context parallelism (DCP)
+
+`lower/dcp.ts: dcpDegree, dcpActive, dcpKvTokens, dcpKvReplication, dcpBlockRole, dcpShardsBlock, dcpGatherQ,
+dcpReduceOut, dcpShardAttention` and the error builders; `lower/mla.ts: lowerMla, mlaSequenceStateBytes`;
+`lower/gqa.ts: lowerGqa, gqaSequenceStateBytes`; `lower/csa.ts` (rejects d > 1); `ir/metrics.ts: attentionPairs,
+attentionBytes` (`AttentionOp.kvTokenShards`); `engine/validate.ts: dcpErrors`; `engine/placement.ts:
+checkPlacement`; `engine/simulate.ts: simulatePhase` (the `dcp` path); tests `src/sim/lower/dcp.test.ts`,
+`src/sim/engine/dcp.test.ts`.
+
+TP replicates every KV head it cannot split: with `kvHeads < tp` each KV head lives on `r = tp/kvHeads` ranks, and
+MLA's one latent head lives on all `tp` ranks (DeepSeek-V3 / Kimi K2 at TP 8: 8 copies of the latent). DCP
+(`ParallelConfig.dcp` = d, absent = 1; vLLM `-dcp <size>`) shards that copy along the TOKEN axis
+over d consecutive ranks of the TP group, adding no devices. Rank i of a TP group still owns query heads
+`[i·Hl, (i+1)·Hl)`; DCP group g is TP ranks `[g·d, (g+1)·d)`, so it is a contiguous group placed like TP
+(`groupSpan(d)`, §5 "Rank layout"). Tokens are interleaved over the d ranks (vLLM, after Moonshot's
+[arXiv 2507.07120](https://arxiv.org/abs/2507.07120)), so newly generated tokens spread evenly and the busiest rank
+holds `ceil(ctx/d)`.
+
+Per decode step, per sharded layer and rank, with `T = seqs·qLen`, `Hl = heads/tp`:
+
+```
+d = dcp ?? 1                                                                       dcpDegree
+memory (every phase):  N_rank = ceil(ctx/d)                                         dcpKvTokens
+  MLA  state = N_rank·(rkv + dr)·bpe(kv)          GQA  state = N_rank·2·KVl·hd·bpe(kv)
+decode (dcpActive: phase decode ∧ d > 1):
+  attn.dcp_q_all_gather       all_gather(dcp, d)       S_q = T·(Hl·d)·qk·bpe(act)          (full output)
+  attn.core                   heads = Hl·d, kvTokenShards = d                          (dcpShardAttention)
+                              pairs_rank = pairs/d;  tokensRead = ceil(kvTokensRead/d);  w = ceil(w/d)
+                              F_rank = 2·seqs·(Hl·d)·(pairs/d)·(qk + v) = F without DCP
+  attn.dcp_out_reduce_scatter reduce_scatter(dcp, d)   S_o = T·(Hl·d)·(v·reduceBpe + 4)   (full input)
+  qk, v:  MLA (absorbed) rkv + dr, rkv (the output is still latent; v_absorb runs after the merge);  GQA hd, hd
+```
+
+The gather sits right before the attention core (MLA: after `q_absorb`; GQA: after rope), the reduce-scatter right
+after it (MLA: before `v_absorb`; GQA: before the output gate and `o_proj`). Everything else is as without DCP: the
+projections on `Hl` heads, the TP all-reduce after `o_proj`, all weights. The 4 B are one fp32 log-sum-exp per
+(token, head): the partial results of the d key shards merge by the associative online-softmax combine
+(`o = Σ e^{lse_i − lse}·o_i`, `lse = log Σ e^{lse_i}`), so ONE reduce-scatter of (o, lse) carries them, the
+hardware/math minimum. An engine may split it (e.g. exchange the LSEs first, then reduce-scatter the rescaled
+outputs): the same bytes up to the small LSE term plus an extra α, an implementation detail not modelled (§9).
+Q read and O write of the core grow d× (the gathered heads); the KV read drops d×.
+
+Kimi K2 on 8×B200 (fp8 weights and KV, TP 8, EP 8, 128k context): the latent is `61·131073·576 B` = 4.6 GB per
+sequence on every device without DCP and `61·ceil(131073/8)·576 B` with DCP 8, so 10 sequences fit per replica
+without and 87 with (`engine/dcp.test.ts`). DCP pays two collectives per attention layer, 122 per step for K2, whose
+α terms do not shrink with context: at batch 1 or at short context it is slower than TP alone; it wins when the KV
+read dominates the step (large batch at long context).
+
+Which blocks are sharded (`dcpBlockRole`):
+
+| Block                                                | d > 1                                                     |
+| ---------------------------------------------------- | --------------------------------------------------------- |
+| `mla_attention` without `sparse`                     | sharded (latent; `kvCacheFromLayer` consumers read shards) |
+| `gqa_attention`, full attention                      | sharded; needs `d \| r`, `r = tp/kvHeads` (1 if kvHeads ≥ tp) |
+| `gqa_attention` with `slidingWindow`                 | local: unchanged, KV not sharded (≤ W tokens)              |
+| linear attention, Mamba-2, KDA, short convs          | unchanged (fixed-size state, not token-shardable)         |
+| `sparse` (DSA top-k) MLA / GQA, `csa_attention`      | rejected                                                  |
+| GQA with `relativeBias` or `kvConvKernel`            | rejected                                                  |
+
+Rules (`dcpErrors`, and lowering through `blockShardingErrors`, prefixed `<layer>: `; exact messages):
+
+- `parallel.dcp must be an integer ≥ 1 (got X)`;
+- `parallel.dcp (d) must divide tp (t)`: the DCP group lies inside one TP group (so tp = 1, e.g. DP attention + EP,
+  allows only d = 1);
+- GQA: `attn dcp (d) must divide tp / kvHeads (r): KV heads are replicated on r ranks and DCP shards that copy`. The
+  d ranks of a group must hold the same KV head. vLLM requires the same divisibility: `tp % dcp == 0` for MLA and
+  `(tp // kv_heads) % dcp == 0` for GQA ([blog](https://vllm.ai/blog/2026-08-07-decode-context-parallelism)); its
+  [docs](https://docs.vllm.ai/en/latest/serving/context_parallel_deployment/) state the bound `dcp ∈ [1, tp/H]`. MLA
+  has r = tp, so `d | tp` suffices;
+- `attn dcp (d) > 1 is not supported with sparse (top-k) attention` / `… with compressed sparse attention (CSA)` /
+  `… with a relative-position bias or K/V short convs`: modelling limits here, not vLLM claims;
+- `dcp (d) > 1 but the model has no full-attention (MLA or GQA) block to shard`;
+- `parallel.dcp > 1 with a block drafter (dflash2, dspark) is not supported yet`. MTP stays allowed: its layers are
+  target-shaped, lowered through `lowerBlock` and sized through `blockSequenceStateBytes`, so they shard the same way
+  (vLLM: some attention backends combine DCP with MTP);
+- placement: the DCP group is checked by `checkPlacement` like TP and EP (`groupSpanErrors`): intra-node when
+  d ≤ dpn and dpn % d = 0, hierarchical when d % dpn = 0, else a `dcp: …` error. d | tp does not imply a valid
+  span: on 3 nodes of 4, tp 12 is hierarchical but d 6 (6 | 12, 6 > 4, 6 % 4 ≠ 0) is rejected.
+
+Prefill lowers exactly as without DCP (vLLM's prefill context parallelism is "under active development"): the
+prefill still computes the full K/V of the prompt, and only the memory fit stores the rank's shard. With d = 1 (or
+`dcp` absent) no op, field or number differs from before: no `kvTokenShards`, no `dcp` collective, no `dcp` path
+(pinned by `engine/dcp.test.ts` and the unchanged identity fixtures). Limits are listed in §9.
 ### PP split
 
 `lower/lower.ts: lowerModel, stageLayerRange, ppBoundaryResidualVectors`. Stage s holds layers
@@ -1680,6 +1773,14 @@ tp > dpn, ep > dpn       n1 = 1,       n2 = etp, ep/dpn apart    flat inter-node
 switched or full-mesh fabric (one hop between any two nodes); on a ring or chain they are a validation error
 (`etp: …`), since the hop counts there assume adjacent nodes. A model without expert-TP collectives builds no `etp`
 path, so its results are unchanged.
+
+**DCP group** (group `'dcp'`, [Decode context parallelism (DCP)](#decode-context-parallelism-dcp)): the d
+consecutive ranks `[g·d, (g+1)·d)` of a TP group, a contiguous group like TP, so its span is `groupSpan(d)` and
+its path `collectivePath(groupSpan(d))`. `checkPlacement` checks it like TP and EP: intra-node when d ≤ dpn and
+dpn % d = 0, hierarchical when d % dpn = 0, else a `dcp: …` error (d | tp is not enough: dpn 4 × 3 nodes, tp 12,
+d 6 is rejected). A DCP group that crosses nodes lies inside a TP group that does too, so `hasInterNodeTraffic`
+needs no DCP term. `simulatePhase` builds the
+`dcp` path only when the phase lowers a DCP collective (decode with d > 1).
 
 ---
 
@@ -2342,7 +2443,9 @@ Per device of stage s:
   copy and counted in full.
 - `state_s` per sequence at `ctx = max(promptLen, decodeContextLen + 1)` (the cache after prefill, or after the
   decode step appended its token): GQA `min(ctx, W)·2·KVl·hd·bpe(kv)`
-  (a sliding window keeps W tokens) + K/V conv state `(K−1)·2·KVl·hd·bpe(act)`; MLA latent `ctx·(rkv+dr)·bpe(kv)`
+  (a sliding window keeps W tokens; a full-attention layer under DCP d keeps `ceil(ctx/d)`, §5 [Decode context
+  parallelism (DCP)](#decode-context-parallelism-dcp)) + K/V conv state `(K−1)·2·KVl·hd·bpe(act)`; MLA latent
+  `ceil(ctx/d)·(rkv+dr)·bpe(kv)` (d = dcp ?? 1, so `ctx·(rkv+dr)·bpe(kv)` without DCP)
   (0 with `kvCacheFromLayer`); CSA `min(ctx, W)·hd·bpe(kv)` + owner `ceil(ctx/r)·hd·bpe(ckv) + [r > 1] 2·(coff·r)·(coff·hd)·4`;
   owned indexer keys `ceil(ctx/p)·hd_I·bpe(key)` (0 for `reuse` and `ownsKeys: false`); linear attention
   `vL·dk·dv·bpe(state) + C·(K−1)·bpe(act)`; short conv `(K−1)·dim·bpe(act)`; n-gram conv
@@ -2436,6 +2539,14 @@ Excluded on purpose (only hardware and math limits are modeled):
   (`f % G ≠ 0` is rejected rather than split unevenly); the minimal gather + reduce-scatter instead of SGLang's gather +
   all-reduce + scatter; no all-to-all deduplication or DeepEP-specific kernels (the mode-B dispatch sends each
   (token, expert) pair); every device holds the same number of tokens (no DP load imbalance).
+- Decode context parallelism (§5 "Decode context parallelism (DCP)"): prefill is unchanged (no prefill context
+  parallelism; the prompt's full K/V is computed on every rank of the group and only its shard is stored, and no
+  cross-shard KV exchange of chunked prefill is modelled); sliding-window GQA layers keep their whole window
+  (unsharded); sparse (top-k) MLA / GQA, CSA, and GQA with a relative-position bias or K/V convs are rejected rather
+  than approximated; block drafters (DFlash 2, DSpark) are rejected (MTP is supported); `d` must divide tp and, for
+  GQA, `tp/kvHeads` (vLLM's rules too); the partial-output merge is one reduce-scatter of
+  (o, lse), not an engine's LSE gather plus output reduce-scatter; the token interleave is taken as balanced up to
+  `ceil(ctx/d)` on the busiest rank (no uneven load across the group).
 
 Documented approximations (each isolated in one constant or rule):
 

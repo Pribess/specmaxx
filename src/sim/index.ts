@@ -14,6 +14,7 @@ export * from './ir/validateModel';
 
 // Lowering: model + workload step + parallelism → per-device ops.
 export * from './lower/lower';
+export * from './lower/dcp';
 
 // Reference models.
 export * from './models/reference';

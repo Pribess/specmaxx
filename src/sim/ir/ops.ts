@@ -151,6 +151,15 @@ export interface AttentionOp {
    * global entries next to its raw window. Absent = none.
    */
   secondaryKv?: AttentionKvSource;
+  /**
+   * Decode context parallelism (DCP) degree d: the keys of every query are spread evenly over d ranks along the
+   * token axis, and this op is ONE rank's share of them: attended pairs `/ d`, distinct KV tokens read
+   * `ceil(kvTokensRead / d)` and tokens written `ceil((kvWriteTokens ?? qLen) / d)` (the busiest rank). Q, O and
+   * FLOP per (query, key, head) are unchanged. Absent = 1 = unsharded (never written as 1). Only set with
+   * `kvSelection.kind === 'full'` and no `secondaryKv` (lower/dcp.ts). Unit: ranks (count).
+   * See docs/simulation-model.md §5 "Decode context parallelism (DCP)".
+   */
+  kvTokenShards?: number;
   /** Storage dtype of Q (read) and the output O (written). */
   activationDtype: Dtype;
 }
@@ -383,11 +392,13 @@ export interface CollectiveOp {
   /** Collective pattern. */
   collective: 'all_reduce' | 'all_gather' | 'reduce_scatter' | 'all_to_all' | 'send_recv';
   /**
-   * Parallel group it runs over: tensor (`tp`), expert (`ep`), pipeline (`pp`, send/recv between stages), or
+   * Parallel group it runs over: tensor (`tp`), expert (`ep`), pipeline (`pp`, send/recv between stages),
    * expert-TP (`etp`: the `tp/ep` ranks of a TP group that hold the same MoE experts, strided by ep; mode A only;
-   * its links come from `engine/placement.ts: expertTpGroupSpan`).
+   * its links come from `engine/placement.ts: expertTpGroupSpan`), or decode context-parallel (`dcp`: the d
+   * consecutive ranks of a TP group that share one token-sharded KV cache; a contiguous group placed like TP,
+   * `engine/placement.ts: groupSpan`; docs/simulation-model.md §5 "Decode context parallelism (DCP)").
    */
-  group: 'tp' | 'ep' | 'pp' | 'etp';
+  group: 'tp' | 'ep' | 'pp' | 'etp' | 'dcp';
   /** Devices in the group (send_recv: 2). Count. */
   groupSize: number;
   /** Per-device message size, by the convention above. Unit: bytes. */

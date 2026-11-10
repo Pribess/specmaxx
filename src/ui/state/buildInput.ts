@@ -111,7 +111,8 @@ export function buildSimInput(state: AppState, loaded: LoadedModel | null, draft
     quant,
     // The user's degrees; EP is the user's on a MoE model, else 1. `denseTpGroup` only when dense TP over the EP
     // group is on (MoE, DP attention + EP), so without it the input is exactly the one from before the layout. The
-    // EP balance knobs (ρ, EPLB replicas) only when the user set a non-default value on a MoE model.
+    // EP balance knobs (ρ, EPLB replicas) only when the user set a non-default value on a MoE model. `dcp` likewise
+    // only when DCP is on (> 1): with DCP off the input is exactly the one from before DCP.
     parallel: {
       tp: parallel.tp,
       pp: parallel.pp,
@@ -121,6 +122,7 @@ export function buildSimInput(state: AppState, loaded: LoadedModel | null, draft
       ...(parallel.epImbalance !== undefined ? { epImbalance: parallel.epImbalance } : {}),
       ...(parallel.epImbalanceScalesAllToAll === true ? { epImbalanceScalesAllToAll: true } : {}),
       ...(parallel.redundantExpertsPerRank !== undefined ? { redundantExpertsPerRank: parallel.redundantExpertsPerRank } : {}),
+      ...(parallel.dcp !== undefined && parallel.dcp > 1 ? { dcp: parallel.dcp } : {}),
     },
     workload: state.workload,
     hardware: hardware.stack,

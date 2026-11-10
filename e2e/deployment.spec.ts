@@ -1,6 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mockHf } from './hf-mock';
 
+/** The Hardware panel's Advanced block (the Parallelism panel has its own Advanced too). */
+function hardwareAdvanced(page: Page) {
+  return page.locator('details.advanced', { has: page.getByTestId('offload-advanced') });
+}
+
 /**
  * Deployment knobs on mocked Hub fixtures: speculative decoding on the bundled default model (Qwen/Qwen3.8-27B,
  * which ships an MTP head) and routed-expert offload on a MoE (Qwen/Qwen3.8-Flash-Next, 512 experts). Each knob shows
@@ -206,7 +211,7 @@ test('oet=ram places the token embeddings in host RAM: a tier bar segment, a chi
   expect(new URL(page.url()).search).toBe('?oet=ram');
   await page.reload();
   await expect(page.getByTestId('decode-tps')).toHaveText(/[1-9]/);
-  await page.locator('details.advanced > summary').click();
+  await hardwareAdvanced(page).locator('> summary').click();
   await expect(
     page.getByTestId('offload-advanced').getByRole('combobox', { name: 'Token embeddings' }),
   ).toHaveText('Host RAM');
@@ -222,7 +227,7 @@ test('a legacy offload-overlap URL is rewritten to the equivalent prefetch accur
   await expect(page.getByText('Ignored invalid URL values')).toHaveCount(0);
   await page.waitForTimeout(400);
   expect(new URL(page.url()).search).toBe('?m=Qwen/Qwen3.8-Flash-Next&ox=ram&opf=0');
-  await page.locator('details.advanced > summary').click();
+  await hardwareAdvanced(page).locator('> summary').click();
   await expect(page.getByTestId('offload-advanced')).toBeVisible();
   await expect(page.getByLabel('Prefetch accuracy %', { exact: true })).toHaveValue('0');
 });
@@ -275,7 +280,7 @@ for (const viewport of [
     await page.goto('/?m=Qwen/Qwen3.8-Flash-Next&ox=ssd');
     if (viewport.width < 600)
       await page.locator('.panel > summary').filter({ hasText: 'Hardware' }).click();
-    await page.locator('details.advanced > summary').click();
+    await hardwareAdvanced(page).locator('> summary').click();
     const rate = page.getByRole('combobox', { name: 'SSD read rate', exact: true });
     await expect(rate).toHaveText('Datasheet');
     await expect(page).not.toHaveURL(/osr=/);
@@ -284,7 +289,7 @@ for (const viewport of [
     await page.reload();
     if (viewport.width < 600)
       await page.locator('.panel > summary').filter({ hasText: 'Hardware' }).click();
-    await page.locator('details.advanced > summary').click();
+    await hardwareAdvanced(page).locator('> summary').click();
     await expect(rate).toHaveText('Sustained');
     await rate.scrollIntoViewIfNeeded();
     if (process.env.SSD_SCREENSHOTS_DIR) {
@@ -301,7 +306,7 @@ for (const viewport of [
     await page.goto('/?m=Qwen/Qwen3.8-Flash-Next&ox=ram');
     if (viewport.width < 600)
       await page.locator('.panel > summary').filter({ hasText: 'Hardware' }).click();
-    await page.locator('details.advanced > summary').click();
+    await hardwareAdvanced(page).locator('> summary').click();
     await expect(rate).toHaveCount(0);
   });
 }

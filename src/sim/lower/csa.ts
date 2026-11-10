@@ -14,6 +14,7 @@ import { bytesPerElement, type TensorFormat } from '../ir/dtype';
 import type { CsaAttentionBlock, CsaGlobalSpec, CsaSelection } from '../ir/model';
 import type { AttentionOp, KvSelection, Op } from '../ir/ops';
 import { actBpe, attentionMath, elementwise, linearGemm, normOp, shardHeads, stepTokens, tpAllReduce } from './common';
+import { dcpShardsBlock } from './dcp';
 import { indexerKeyStateBytes, lowerSparseSelection, sparseTopK } from './indexer';
 import type { LoweringContext } from './lower';
 
@@ -101,6 +102,8 @@ export function lowerCsa(block: CsaAttentionBlock, ctx: LoweringContext): Op[] {
   const Gl = shardHeads(block.outGroups, tp, `${block.name} outGroups`);
   const attn = { module: 'attention' } as const;
   const ops: Op[] = [];
+  // CSA with decode context parallelism (parallel.dcp > 1) is not modelled: this throws (lower/dcp.ts).
+  dcpShardsBlock(block, ctx);
 
   // Formula: q_a: n = rq, k = h (replicated) → rmsnorm(T·rq) → q_b: n = Hl·hd, k = rq → rope over T·Hl·dr
   // Formula: wkv: n = hd, k = h (replicated) → rmsnorm(T·hd) → rope over T·dr
@@ -168,6 +171,8 @@ export function lowerCsa(block: CsaAttentionBlock, ctx: LoweringContext): Op[] {
  */
 export function csaSequenceStateBytes(block: CsaAttentionBlock, ctx: LoweringContext, contextTokens: number): number {
   const hd = block.headDim;
+  // CSA with decode context parallelism (parallel.dcp > 1) is not modelled: this throws (lower/dcp.ts).
+  dcpShardsBlock(block, ctx);
   // Formula: S = min(ctx, W)·hd·bpe(kv) + [owner] (ceil(ctx/r)·hd·bpe(ckv) + [r > 1] 2·(coff·r)·(coff·hd)·4)
   //            + [owns keys] ceil(ctx/p)·hd_I·bpe(key)
   // See docs/simulation-model.md §8 "Memory fit"

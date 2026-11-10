@@ -134,6 +134,11 @@ export function ResultHero({
         ) : (
           <>
             <span className="keep-together">TP {state.parallel.tp}</span>
+            {state.parallel.dcp !== undefined && state.parallel.dcp > 1 && (
+              <>
+                , <span className="keep-together">DCP {state.parallel.dcp}</span>
+              </>
+            )}
             {state.parallel.dp > 1 && (
               <>
                 , <span className="keep-together">DP {state.parallel.dp}</span>

@@ -22,6 +22,7 @@ import {
   stepTokens,
   tpAllReduce,
 } from './common';
+import { dcpActive, dcpDegree, dcpGatherQ, dcpKvTokens, dcpReduceOut, dcpShardAttention, dcpShardsBlock } from './dcp';
 import { indexerSelection, lowerSparseSelection, sparseSelectionStateBytes } from './indexer';
 import type { LoweringContext } from './lower';
 
@@ -37,7 +38,9 @@ function gqaSelection(block: GqaAttentionBlock): KvSelection {
 
 /**
  * GQA attention ops, in order: qkv_proj → [kv_conv] → [rel_proj → rel_table] → [qk_norm] → [rope] →
- * [indexer ops] → attention → [sigmoid_mul gate] → o_proj → [TP all-reduce of T·h].
+ * [indexer ops] → [DCP Q all-gather] → attention → [DCP output reduce-scatter] → [sigmoid_mul gate] → o_proj →
+ * [TP all-reduce of T·h]. The DCP pair appears only for a full-attention block in a decode step with
+ * `parallel.dcp` d > 1 (lower/dcp.ts); the attention core then runs the d·Hl gathered heads over 1/d of the keys.
  */
 export function lowerGqa(block: GqaAttentionBlock, ctx: LoweringContext): Op[] {
   const tp = ctx.parallel.tp;
@@ -48,6 +51,9 @@ export function lowerGqa(block: GqaAttentionBlock, ctx: LoweringContext): Op[] {
   const KVl = shardKvHeads(block.kvHeads, tp, `${block.name} kvHeads`);
   const act = actBpe(ctx);
   const ops: Op[] = [];
+  // Throws for an unsupported block or a bad KV replication with d > 1 (any phase); true when this decode step
+  // shards the KV over tokens.
+  const dcpSharded = dcpShardsBlock(block, ctx) && dcpActive(ctx);
 
   // Formula: qkv_proj: m = T, n = (Hl·(gate ? 2 : 1) + 2·KVl)·hd, k = h
   // See docs/simulation-model.md §5 "TP sharding"
@@ -122,7 +128,15 @@ export function lowerGqa(block: GqaAttentionBlock, ctx: LoweringContext): Op[] {
     ...attentionMath(ctx),
     activationDtype: ctx.quant.activations,
   };
-  ops.push(attention);
+  if (dcpSharded) {
+    // Formula: S_q = T·(Hl·d)·hd·bpe(act); attention heads Hl·d over 1/d of the keys; S_o = T·(Hl·d)·(hd·reduceBpe + 4)
+    // See docs/simulation-model.md §5 "Decode context parallelism (DCP)"
+    ops.push(dcpGatherQ(T, Hl, hd, ctx));
+    ops.push(dcpShardAttention(attention, ctx));
+    ops.push(dcpReduceOut(T, Hl, hd, ctx));
+  } else {
+    ops.push(attention);
+  }
 
   if (block.outputGate) {
     const gateElems = T * Hl * hd;
@@ -145,15 +159,18 @@ export function lowerGqa(block: GqaAttentionBlock, ctx: LoweringContext): Op[] {
 
 /**
  * Per-sequence KV-cache bytes of a GQA block on one device for a context of `contextTokens`. A sliding-window
- * layer keeps only its last `slidingWindow` tokens; a sparse block adds the owned indexer key cache, and K/V convs
+ * layer keeps only its last `slidingWindow` tokens; a full-attention layer under decode context parallelism
+ * (d > 1) this rank's `ceil(ctx/d)` tokens; a sparse block adds the owned indexer key cache, and K/V convs
  * their rolling state. Unit: bytes.
  */
 export function gqaSequenceStateBytes(block: GqaAttentionBlock, ctx: LoweringContext, contextTokens: number): number {
   const KVl = shardKvHeads(block.kvHeads, ctx.parallel.tp, `${block.name} kvHeads`);
-  const cachedTokens = block.slidingWindow === undefined ? contextTokens : Math.min(contextTokens, block.slidingWindow);
-  // Formula: S = min(ctx, W)·2·KVl·hd·bpe(kv) [+ ceil(ctx/p)·hd_I·bpe(key) if it owns indexer keys]
-  //            [+ (K−1)·2·KVl·hd·bpe(act) with kvConvKernel]
-  // See docs/simulation-model.md §8 "Memory fit"
+  const fullTokens = dcpShardsBlock(block, ctx) ? dcpKvTokens(contextTokens, dcpDegree(ctx)) : contextTokens;
+  const cachedTokens = block.slidingWindow === undefined ? fullTokens : Math.min(contextTokens, block.slidingWindow);
+  // Formula: S = N·2·KVl·hd·bpe(kv) [+ ceil(ctx/p)·hd_I·bpe(key) if it owns indexer keys]
+  //            [+ (K−1)·2·KVl·hd·bpe(act) with kvConvKernel],
+  //          N = min(ctx, W) (window), ceil(ctx/d) (full attention under DCP), else ctx
+  // See docs/simulation-model.md §8 "Memory fit", §5 "Decode context parallelism (DCP)"
   const kvBytes = cachedTokens * 2 * KVl * block.headDim * bytesPerElement(ctx.quant.kvCache);
   const indexerBytes = block.sparse === undefined ? 0 : sparseSelectionStateBytes(block.sparse, ctx, contextTokens);
   const convBytes =

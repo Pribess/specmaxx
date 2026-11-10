@@ -814,4 +814,13 @@ export interface ParallelConfig {
    * The embedding stays per replica either way. See docs/simulation-model.md §5 "DP attention + EP".
    */
   denseTpGroup?: 'tp' | 'ep';
+  /**
+   * Decode context-parallel (DCP) degree d, a count of ranks. The decode KV cache of full-attention layers (MLA
+   * and full GQA) is sharded along the TOKEN axis over d consecutive ranks of each TP group: each rank stores and
+   * reads ceil(context / d) tokens of KV per sequence, and a Q all-gather plus a partial-output + log-sum-exp
+   * reduce-scatter over the DCP group follow each sharded attention layer. Adds no devices. Must divide tp, and
+   * for GQA also tp / kvHeads (vLLM: dcp in [1, tp / kvHeads]). Absent or 1 = unsharded, today's behaviour bit
+   * for bit. See docs/simulation-model.md §5 "Decode context parallelism (DCP)".
+   */
+  dcp?: number;
 }

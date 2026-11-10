@@ -16,6 +16,7 @@
  * | `fab` | cabling between machines: `switched`, `mesh`, `mesh2` (2 cables per pair), `ring`, `chain` (absent: the default for the link and counts) | `fab=ring` |
  * | `x`, `xi`, `xe` | spec edits on device / intra link / inter link, `path:value` comma list, SI units | `x=memory.bandwidthBytesPerSec:2e12` |
  * | `tp`, `pp`, `dp`, `ep` | parallel degrees (`ep` applies to MoE models only; old URLs with `dp` load it as written) | `tp=2&dp=2` |
+ * | `dcp` | decode context parallel degree: the KV cache split by token over `dcp` of the TP ranks (absent or 1: off; dropped with `lay=dep`) | `tp=8&dcp=8` |
  * | `lay` | parallel layout: `dep` = DP attention + EP (TP 1, DP = EP; MoE models only; absent: custom; dropped unless `tp` is 1 and `dp` equals `ep`) | `dp=72&ep=72&lay=dep` |
  * | `dn` | (with `lay=dep`) dense FFN layers and LM head: `tp` = TP over the EP group (absent: DP) | `dn=tp` |
  * | `epi` | EP load imbalance ρ (busiest EP rank's routed load ÷ mean), 1–{@link MAX_EP_IMBALANCE} (default 1.2, `DEFAULT_EP_IMBALANCE`; read by the engine only on MoE models at EP > 1) | `epi=1.5` |
@@ -113,7 +114,7 @@ export function latencyFloorSecFromMicros(us: number): number {
  */
 export const URL_KEYS = [
   'm', 'rev', 'w', 'bpw', 'hbpw', 'a', 'kv', 'lt', 'd', 'u', 'eng', 'cap', 'n', 'nodes', 'il', 'xl', 'fab', 'x', 'xi', 'xe',
-  'hr', 'hrc', 'ssd', 'hl', 'gpu', 'rr', 'tp', 'pp', 'dp', 'ep', 'lay', 'dn', 'epi', 'epa', 'rex', 'b', 'p', 'c', 'pc', 'ph', 'ov', 'fu', 'ar', 'lf', 'ed', 'oo',
+  'hr', 'hrc', 'ssd', 'hl', 'gpu', 'rr', 'tp', 'pp', 'dp', 'ep', 'dcp', 'lay', 'dn', 'epi', 'epa', 'rex', 'b', 'p', 'c', 'pc', 'ph', 'ov', 'fu', 'ar', 'lf', 'ed', 'oo',
   'ox', 'oxl', 'oxf', 'oxh', 'odl', 'odt', 'olt', 'ols', 'oet', 'oqd', 'osr', 'opf', 'sd', 'sdr', 'sdk', 'sdu', 'sda',
   'oxr', 'oxe',
   'olr', 'ole',
@@ -230,6 +231,7 @@ export function encodeState(s: AppState): string {
   if (hw.gpuUsableFraction !== undefined) put('gpu', Math.round(hw.gpuUsableFraction * 1e6) / 1e4);
   if (hw.runtimeReserveBytes !== undefined) put('rr', hw.runtimeReserveBytes / 1e9);
   for (const key of ['tp', 'pp', 'dp', 'ep'] as const) if (s.parallel[key] !== 1) put(key, s.parallel[key]);
+  if (s.parallel.dcp !== undefined && s.parallel.dcp > 1) put('dcp', s.parallel.dcp);
   if (s.parallelLayout === 'dpAttentionEp') put('lay', 'dep');
   if (s.parallelLayout === 'dpAttentionEp' && s.parallel.denseTpGroup === 'ep') put('dn', 'tp');
   // Kept in the state only when not the default (`normalizeEpBalance`).
@@ -539,6 +541,13 @@ export function decodeState(search: string): DecodedState {
   if (dn !== undefined) {
     if (dep && dn === 'tp') parallel.denseTpGroup = 'ep';
     else drop('dn', dn);
+  }
+  // DCP: 1 is the default (normalized away, not a dropped value); none in DP attention + EP (TP 1 there).
+  const dcp = get('dcp');
+  if (dcp !== undefined) {
+    const parsed = parseInteger(dcp, 1, MAX_VALUE);
+    if (parsed === undefined || dep) drop('dcp', dcp);
+    else if (parsed > 1) parallel.dcp = parsed;
   }
   // EP load imbalance ρ and EPLB replicas; a default value stays absent (`normalizeEpBalance`).
   const epi = get('epi');

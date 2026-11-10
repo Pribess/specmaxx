@@ -138,3 +138,56 @@ describe('ParallelPanel', () => {
     expect(screen.queryByRole('radiogroup', { name: 'Imbalance on all-to-all' })).toBeNull();
   });
 });
+
+describe('ParallelPanel: decode context parallelism', () => {
+  const KIMI_ID = 'moonshotai/Kimi-K3';
+  const k = mapHfModel(fixtureRepoFiles(KIMI_ID));
+  if (k.kind !== 'ok') throw new Error(k.kind);
+  const KIMI = loadedFromHf({ kind: 'hf', id: KIMI_ID }, k);
+  const QWEN_ID = 'Qwen/Qwen3.8-27B';
+  const q = mapHfModel(fixtureRepoFiles(QWEN_ID));
+  if (q.kind !== 'ok') throw new Error(q.kind);
+  const QWEN = loadedFromHf({ kind: 'hf', id: QWEN_ID }, q);
+  const advanced = () => screen.getByTestId('parallel-advanced');
+
+  it('the custom layout has an Advanced with the DCP field, its help and the valid values (MLA at TP 8)', () => {
+    panel(`m=${KIMI_ID}&d=b200&n=8&tp=8`, KIMI);
+    const details = advanced().closest('details.advanced') as HTMLDetailsElement;
+    expect(details.querySelector(':scope > summary')!.textContent).toBe('Advanced');
+    expect(details.open).toBe(false);
+    expect(advanced().querySelector('legend')!.textContent).toBe('Decode context parallelism');
+    expect((screen.getByRole('spinbutton', { name: 'DCP' }) as HTMLInputElement).value).toBe('1');
+    expect(screen.getByRole('button', { name: /DCP/ })).toBeTruthy();
+    expect(screen.getByText('Valid DCP: 1, 2, 4, 8')).toBeTruthy();
+    // Off: the panel value does not name DCP.
+    expect(screen.getByText('TP 8, PP 1, DP 1, EP 1')).toBeTruthy();
+  });
+
+  it('editing DCP dispatches it (1 turns it off); the panel value names it', () => {
+    const dispatch = panel(`m=${KIMI_ID}&d=b200&n=8&tp=8&dcp=4`, KIMI);
+    expect(screen.getByText('TP 8, PP 1, DP 1, EP 1, DCP 4')).toBeTruthy();
+    const field = screen.getByRole('spinbutton', { name: 'DCP' });
+    fireEvent.change(field, { target: { value: '8' } });
+    fireEvent.change(field, { target: { value: '1' } });
+    expect(dispatch.mock.calls.map((c) => c[0])).toEqual([
+      { type: 'setParallel', parallel: { dcp: 8 } },
+      { type: 'setParallel', parallel: { dcp: undefined } },
+    ]);
+  });
+
+  it('an invalid DCP shows its error on the field (GQA: 4 KV heads at TP 8 allow 1 and 2)', () => {
+    panel('d=b200&n=8&tp=8&dcp=4', QWEN);
+    const field = screen.getByRole('spinbutton', { name: 'DCP' });
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    expect(
+      screen.getByText('DCP 4 must divide TP ÷ KV heads = 2: only the GPUs holding copies of the same KV head can split it.'),
+    ).toBeTruthy();
+    expect(screen.getByText('Valid DCP: 1, 2')).toBeTruthy();
+  });
+
+  it('DP attention + EP has no Advanced (TP 1: nothing to split over)', () => {
+    panel(`m=${ID}&d=gb200&n=72&b=72&dp=72&ep=72&lay=dep`);
+    expect(screen.queryByTestId('parallel-advanced')).toBeNull();
+    expect(screen.queryByText('Advanced')).toBeNull();
+  });
+});
