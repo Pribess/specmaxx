@@ -87,25 +87,36 @@ function failingTierText(tiers: TierMemory[]): string {
  */
 export function HeroMemoryWarning({
   memory,
+  pool,
 }: {
   /** The memory report: stages and off-device tiers. */
   memory: Pick<MemorySummary, 'stages' | 'tiers'>;
+  /** With disaggregation on: the pool the report belongs to (`Prefill pool`, `Decode pool`), named in the label. */
+  pool?: string;
 }) {
   const verdict = memoryVerdict(memory);
   if (verdict.state === 'fits') return null;
+  const named = pool === undefined ? '' : `${pool}: `;
   const tierLabel =
     verdict.failingTiers.length > 0
-      ? `Does not fit: ${failingTierText(verdict.failingTiers)}`
+      ? `${named}Does not fit: ${failingTierText(verdict.failingTiers)}`
       : undefined;
+  const label =
+    tierLabel ??
+    (pool === undefined
+      ? undefined
+      : verdict.state === 'danger'
+        ? `${named}does not fit`
+        : `${named}high memory use`);
   return (
-    <a className="hero-memory-warning" href="#memory-fit" title={tierLabel ?? 'View memory fit'}>
+    <a className="hero-memory-warning" href="#memory-fit" title={label ?? 'View memory fit'}>
       <MemoryWarningIcon
         stage={
           verdict.state === 'danger' && verdict.worstStage?.fits !== false
             ? DANGER_STAGE
             : (verdict.worstStage ?? DANGER_STAGE)
         }
-        label={tierLabel}
+        label={label}
       />
     </a>
   );

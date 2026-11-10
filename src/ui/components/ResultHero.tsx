@@ -11,6 +11,9 @@ import {
   type BuildResult,
   type ResolvedHardware,
   type OffloadPlacement,
+  type MemorySuggestion,
+  type MemorySuggestions,
+  type PoolId,
   cablingName,
   hasMoe,
 } from '../state';
@@ -170,7 +173,8 @@ export function ResultHero({
   loaded,
   built,
   pending,
-  onPlaceTablesOnHost,
+  suggestions,
+  onSuggestion,
   roofline = true,
   figuresRef,
   pd,
@@ -181,8 +185,10 @@ export function ResultHero({
   loaded: LoadedModel | null;
   built: BuildResult;
   pending: boolean;
-  /** Moves an on-device n-gram lookup table to host RAM; shown as a button in the memory card when given. */
-  onPlaceTablesOnHost?: () => void;
+  /** One-click memory fixes per pool (the `prefill` key serves the single-pool card); shown in the memory card. */
+  suggestions?: Partial<Record<PoolId, MemorySuggestions>>;
+  /** Runs a suggestion of a pool. */
+  onSuggestion?: (suggestion: MemorySuggestion, pool: PoolId) => void;
   /** Show the roofline chart beside the figures (false: the stacked layout places it further down). */
   roofline?: boolean;
   /** The element holding the two figures, watched to show the mini result bar once it scrolls away. */
@@ -285,7 +291,12 @@ export function ResultHero({
                       <strong data-testid={`${phase}-tps`}>
                         <Num>{formatTokensPerSec(fig.tokensPerSec)}</Num>
                       </strong>
-                      <HeroMemoryWarning memory={src.memory} />
+                      <HeroMemoryWarning
+                        memory={src.memory}
+                        pool={
+                          pd ? (phase === 'prefill' ? 'Prefill pool' : 'Decode pool') : undefined
+                        }
+                      />
                       <span className="answer-unit">
                         tok/s @ {formatContextTokens(fig.contextTokens)}
                       </span>
@@ -427,7 +438,14 @@ export function ResultHero({
           <p className="theory">
             This is a theoretical maximum. <a href="./about.html">Read how the estimate works</a>
           </p>
-          <MemoryFit result={result} onPlaceTablesOnHost={onPlaceTablesOnHost} />
+          <MemoryFit
+            result={result}
+            pools={
+              pd ? { prefill: pd.summary.prefillPool, decode: pd.summary.decodePool } : undefined
+            }
+            suggestions={suggestions}
+            onSuggestion={onSuggestion}
+          />
         </>
       ) : (
         <div className="empty-result">

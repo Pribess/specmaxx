@@ -624,6 +624,35 @@ svg [data-chart-point]:focus-visible {
   color: var(--muted);
   font-size: var(--type-meta);
 }
+/* Disaggregation: one titled group per pool. */
+.memory-pool.titled + .memory-pool.titled {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--rule);
+}
+.memory-pool > h3 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--type-group);
+  line-height: 24px;
+  font-weight: 600;
+}
+/* One-click fixes: a button and its "?" each, wrapping on phones. */
+.memory-fixes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  margin-top: var(--space-4);
+}
+.memory-fix {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-label-icon);
+}
+.memory-fix-note {
+  color: var(--muted);
+  font-size: var(--type-meta);
+}
 #memory-fit:focus {
   outline: none;
 }

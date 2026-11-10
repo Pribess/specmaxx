@@ -22,6 +22,8 @@ import {
   type AppAction,
   type PoolAction,
   type PoolId,
+  type MemorySuggestion,
+  stateMemorySuggestions,
   drafterSource,
   type DrafterStatus,
   type LoadedModel,
@@ -260,13 +262,29 @@ export function App({
             pool: 'decode',
           }
         : { ...props, built: pdBuilt.prefill, pool: 'prefill' };
-  // The memory card's n-gram table segment: one click places the tables on host RAM (the SSD on unified memory).
-  const placeTablesOnHost = () => {
-    const unified = built.hardware?.device.device.memory.kind === 'unified';
-    dispatch({
-      type: 'setOffload',
-      offload: { ...state.deployment.offload, tables: { tier: unified ? 'nvme' : 'host_ram' } },
-    });
+  // The memory card's one-click fixes of each pool that does not fit (computed with the sim, so only when needed).
+  // They run the same actions as the manual controls; the decode pool's through `inPool`.
+  const memoryFixes = useMemo(
+    () =>
+      loaded !== null && runnable && simulation.key === query && simulation.result
+        ? stateMemorySuggestions(
+            state,
+            loaded,
+            drafter,
+            simulation.result.pd
+              ? {
+                  prefill: simulation.result.pd.summary.prefillPool,
+                  decode: simulation.result.pd.summary.decodePool,
+                }
+              : { prefill: simulation.result.summary },
+          )
+        : undefined,
+    [state, loaded, drafter, runnable, simulation, query],
+  );
+  const applySuggestion = (suggestion: MemorySuggestion, pool: PoolId) => {
+    for (const action of suggestion.actions) {
+      dispatch(pool === 'decode' ? { type: 'inPool', pool: 'decode', action } : action);
+    }
   };
   // The summary the memory card, breakdown, sweep and notes show: with disaggregation on, the edited pool's (the
   // prefill pool's run fits at P and shows only its prefill phase).
@@ -364,7 +382,8 @@ export function App({
       }
       result={result}
       pending={dim && simulation.key !== query}
-      onPlaceTablesOnHost={placeTablesOnHost}
+      suggestions={memoryFixes}
+      onSuggestion={applySuggestion}
       roofline={!stacked}
       figuresRef={setFigures}
       pd={

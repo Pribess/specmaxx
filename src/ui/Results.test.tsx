@@ -3,6 +3,7 @@ import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { ResultHero, BreakdownTable, MemoryFit, BatchSweepChart, RooflineChart } from './Results';
 import { specDecChipText } from './components/ResultHero';
+import { HeroMemoryWarning } from './components/MemoryWarning';
 import { DEFAULT_STATE, buildSimInput, formatTokensPerSec, reduce } from './state';
 import { BUNDLED_DEFAULT_MODEL } from './state/bundledModel';
 import { inlineRunner } from './sim/runner';
@@ -579,10 +580,10 @@ it('shows a Token embeddings segment in the host-RAM tier bar', async () => {
   expect(container.querySelector('.allocation-tier-embed')).toBeTruthy();
 });
 
-it('hatches an on-device n-gram table and offers to move it (to the SSD on unified memory)', async () => {
+it('hatches an on-device n-gram table and offers one-click fixes (to the SSD on unified memory)', async () => {
   const { summary } = await defaultResult();
   const stage = summary.memory.stages[0];
-  let placed = 0;
+  const placed: string[] = [];
   const table = {
     ...summary,
     memory: {
@@ -592,8 +593,25 @@ it('hatches an on-device n-gram table and offers to move it (to the SSD on unifi
       tiers: [],
     },
   };
+  const suggestions = {
+    prefill: {
+      suggestions: [
+        {
+          id: 'tables-nvme',
+          label: 'n-gram tables → SSD',
+          help: ['Moves the n-gram tables off the device to the SSD.'],
+          actions: [],
+          fits: true,
+        },
+      ],
+    },
+  };
   const { container } = render(
-    <MemoryFit result={table} onPlaceTablesOnHost={() => (placed += 1)} />,
+    <MemoryFit
+      result={table}
+      suggestions={suggestions}
+      onSuggestion={(s, pool) => placed.push(`${pool}:${s.id}`)}
+    />,
   );
   const legend = screen.getByTestId('memory-legend');
   expect(
@@ -601,11 +619,64 @@ it('hatches an on-device n-gram table and offers to move it (to the SSD on unifi
   ).toEqual(['Weights', 'n-gram table', 'KV + state', 'Activations']);
   expect(container.querySelector('.capacity-bar .allocation-table')).toBeTruthy();
   // On unified memory host RAM is the device pool, so the table moves to the SSD.
-  fireEvent.click(screen.getByRole('button', { name: 'Place on SSD' }));
-  expect(placed).toBe(1);
+  fireEvent.click(screen.getByRole('button', { name: 'n-gram tables → SSD' }));
+  expect(placed).toEqual(['prefill:tables-nvme']);
   // Unified memory: host RAM is the device pool, so no host-RAM tier or line ever shows.
   expect(screen.queryAllByTestId('memory-tier')).toHaveLength(0);
   expect(screen.queryByTestId('memory-unified-host')).toBeNull();
+});
+
+it('under disaggregation, shows both pools with their own bars and verdicts, and fixes apply to their pool', async () => {
+  const { summary } = await defaultResult();
+  const stage = summary.memory.stages[0];
+  const withStage = (totalBytes: number, fits: boolean) => ({
+    ...summary,
+    memory: { ...summary.memory, fits, tiers: [], stages: [{ ...stage, totalBytes, fits }] },
+  });
+  const fitting = withStage(0.5 * stage.capacityBytes, true);
+  const over = withStage(1.5 * stage.capacityBytes, false);
+  const ran: string[] = [];
+  render(
+    <MemoryFit
+      result={fitting}
+      pools={{ prefill: fitting, decode: over }}
+      suggestions={{
+        decode: {
+          suggestions: [
+            { id: 'kv', label: 'KV cache → host RAM', help: ['x'], actions: [], fits: true },
+          ],
+        },
+      }}
+      onSuggestion={(s, pool) => ran.push(`${pool}:${s.id}`)}
+    />,
+  );
+  const groups = screen.getAllByTestId('memory-pool');
+  expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['Prefill pool', 'Decode pool']);
+  for (const g of groups) {
+    expect(g.querySelectorAll('.capacity-bar')).toHaveLength(1);
+    expect(within(g).getAllByTestId('memory-verdict')).toHaveLength(1);
+  }
+  expect(within(groups[0]).getByTestId('memory-verdict').textContent).toMatch(/^Fits/);
+  expect(within(groups[1]).getByTestId('memory-verdict').textContent).toMatch(/^Does not fit/);
+  // Only the failing pool has fixes; the click names its pool.
+  expect(within(groups[0]).queryByTestId('memory-fixes')).toBeNull();
+  fireEvent.click(within(groups[1]).getByRole('button', { name: 'KV cache → host RAM' }));
+  expect(ran).toEqual(['decode:kv']);
+  // Chart tooltips name the pool.
+  fireEvent.focus(groups[1].querySelector('[data-chart-point]')!);
+  expect(screen.getByRole('tooltip').textContent).toMatch(/^Decode pool · Stage 1 · /);
+});
+
+it('the hero memory warning names the pool that does not fit', async () => {
+  const { summary } = await defaultResult();
+  const stage = summary.memory.stages[0];
+  const memory = {
+    ...summary.memory,
+    stages: [{ ...stage, totalBytes: 2 * stage.capacityBytes, fits: false }],
+  };
+  render(<HeroMemoryWarning memory={memory} pool="Decode pool" />);
+  expect(screen.getByRole('link').getAttribute('title')).toBe('Decode pool: does not fit');
+  expect(screen.getByRole('img').getAttribute('aria-label')).toBe('Decode pool: does not fit');
 });
 
 function rigText(state: ReturnType<typeof reduce>): string {

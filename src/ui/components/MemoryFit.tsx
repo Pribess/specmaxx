@@ -2,7 +2,10 @@ import type { CSSProperties } from 'react';
 import {
   formatBytes,
   formatContextTokens,
+  type MemorySuggestion,
+  type MemorySuggestions,
   type OffloadPlacement,
+  type PoolId,
   type ResultSummary,
   type StageMemory,
 } from '../state';
@@ -112,19 +115,49 @@ function tierState(tier: TierMemory): MemoryState {
   return tier.bytes / tier.capacityBytes > HIGH_MEMORY_UTILISATION ? 'warning' : 'fits';
 }
 
+/** Display name of a pool under prefill/decode disaggregation. */
+const POOL_NAME: Record<PoolId, string> = { prefill: 'Prefill pool', decode: 'Decode pool' };
+
+/** The one-click fixes row of a pool: a button with a "?" per suggestion, and the notice when a fix is missing. */
+function MemoryFixes({
+  fixes,
+  onSuggestion,
+}: {
+  fixes: MemorySuggestions;
+  onSuggestion?: (suggestion: MemorySuggestion) => void;
+}) {
+  if (fixes.suggestions.length === 0 && fixes.notice === undefined) return null;
+  return (
+    <div className="memory-fixes" data-testid="memory-fixes">
+      {fixes.suggestions.map((s) => (
+        <span className="memory-fix" key={s.id}>
+          <button type="button" className="chip" onClick={() => onSuggestion?.(s)}>
+            {s.label}
+          </button>
+          <HelpIcon term={s.label}>{helpLines(s.help)}</HelpIcon>
+        </span>
+      ))}
+      {fixes.notice !== undefined && <span className="memory-fix-note">{fixes.notice}</span>}
+    </div>
+  );
+}
+
 /**
- * Per-device capacity and its allocations, one bar per pipeline stage, then one bar per off-device tier (host RAM,
- * SSD, remote KV pool).
- * `onPlaceTablesOnHost`, when given, adds a button that moves an on-device n-gram table to host RAM.
+ * Per-device capacity and its allocations of one pool's (or the only) memory report: one bar per pipeline stage, then
+ * one bar per off-device tier (host RAM, SSD, remote KV pool), then the one-click fixes. `title` names the pool under
+ * disaggregation.
  */
-export function MemoryFit({
+function MemoryPool({
   result,
-  onPlaceTablesOnHost,
+  title,
+  fixes,
+  onSuggestion,
 }: {
   result: ResultSummary;
-  onPlaceTablesOnHost?: () => void;
+  title?: string;
+  fixes?: MemorySuggestions;
+  onSuggestion?: (suggestion: MemorySuggestion) => void;
 }) {
-  const unified = result.memory.kind === 'unified';
   // On unified memory no host_ram tier exists (host RAM is the device pool; the sim enforces it).
   const tierBars = result.memory.tiers ?? [];
   const bars = [
@@ -152,7 +185,7 @@ export function MemoryFit({
     Math.max(result.prefill.contextTokens, result.decode.contextTokens),
   );
   const label = ({ bar, segment }: (typeof points)[number]) =>
-    `${bar.name} · ${segment.label} · ${formatBytes(segment.bytes)} @ ${context}`;
+    `${title ? `${title} · ` : ''}${bar.name} · ${segment.label} · ${formatBytes(segment.bytes)} @ ${context}`;
   const renderBar = (
     barIndex: number,
     ariaLabel: string,
@@ -188,17 +221,14 @@ export function MemoryFit({
     </div>
   );
   return (
-    <section className="memory interactive-chart" data-chart="memory" id="memory-fit" tabIndex={-1}>
-      <h2>
-        Memory per device{' '}
-        <HelpIcon term="Memory fit">
-          {helpLines([
-            'Memory needed per device, sized for the larger of prefill and decode.',
-            'If it does not fit, the speed shown is only a theoretical ceiling.',
-            'Host RAM and SSD bars are per machine.',
-          ])}
-        </HelpIcon>
-      </h2>
+    <div
+      className={`memory-pool interactive-chart${title ? ' titled' : ''}`}
+      data-chart="memory"
+      data-testid={title ? 'memory-pool' : undefined}
+      role={title ? 'group' : undefined}
+      aria-label={title}
+    >
+      {title && <h3>{title}</h3>}
       {result.memory.stages.map((stage, stageIndex) => {
         const segments = bars[stageIndex].segments;
         const state = memoryState(stage);
@@ -255,15 +285,6 @@ export function MemoryFit({
                   <strong>
                     <Num>{formatBytes(segment.bytes)}</Num>
                   </strong>
-                  {segment.key === 'table' && onPlaceTablesOnHost && (
-                    <button
-                      type="button"
-                      className="quiet legend-action"
-                      onClick={onPlaceTablesOnHost}
-                    >
-                      {unified ? 'Place on SSD' : 'Place on host RAM'}
-                    </button>
-                  )}
                 </li>
               ))}
             </ul>
@@ -319,6 +340,7 @@ export function MemoryFit({
           </div>
         );
       })}
+      {fixes && <MemoryFixes fixes={fixes} onSuggestion={onSuggestion} />}
       <p className="memory-limit">
         max{' '}
         {Number.isFinite(result.memory.maxSequencesPerReplica)
@@ -327,6 +349,58 @@ export function MemoryFit({
         sequences per replica @ {context}
       </p>
       {active && <ChartTooltip id={chart.id}>{label(active)}</ChartTooltip>}
+    </div>
+  );
+}
+
+/**
+ * The memory card: per-device capacity and its allocations, one bar per pipeline stage, then one bar per off-device
+ * tier (host RAM, SSD). With disaggregation on (`pools`), a "Prefill pool" and a "Decode pool" group each show their
+ * own bars and verdict, sized for that pool's phase and context. `suggestions` (per pool; the key `prefill` also
+ * serves the single-pool card) adds one-click fixes under a pool's bars; `onSuggestion` runs one.
+ */
+export function MemoryFit({
+  result,
+  pools,
+  suggestions,
+  onSuggestion,
+}: {
+  /** The single-pool report (the card as before); ignored while `pools` is given. */
+  result: ResultSummary;
+  /** With disaggregation on: each pool's own report. */
+  pools?: Record<PoolId, ResultSummary>;
+  suggestions?: Partial<Record<PoolId, MemorySuggestions>>;
+  onSuggestion?: (suggestion: MemorySuggestion, pool: PoolId) => void;
+}) {
+  return (
+    <section className="memory" id="memory-fit" tabIndex={-1}>
+      <h2>
+        Memory per device{' '}
+        <HelpIcon term="Memory fit">
+          {helpLines([
+            'Memory needed per device, sized for the larger of prefill and decode.',
+            'If it does not fit, the speed shown is only a theoretical ceiling.',
+            'Host RAM and SSD bars are per machine.',
+          ])}
+        </HelpIcon>
+      </h2>
+      {pools ? (
+        (['prefill', 'decode'] as const).map((pool) => (
+          <MemoryPool
+            key={pool}
+            result={pools[pool]}
+            title={POOL_NAME[pool]}
+            fixes={suggestions?.[pool]}
+            onSuggestion={(s) => onSuggestion?.(s, pool)}
+          />
+        ))
+      ) : (
+        <MemoryPool
+          result={result}
+          fixes={suggestions?.prefill}
+          onSuggestion={(s) => onSuggestion?.(s, 'prefill')}
+        />
+      )}
     </section>
   );
 }

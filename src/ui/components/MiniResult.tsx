@@ -30,6 +30,14 @@ export function MiniResult({
     memoryVerdict(src.prefill.memory).state,
     memoryVerdict(src.decode.memory).state,
   ];
+  // With disaggregation on, the text names the pool(s) that do not fit.
+  const failing = (['prefill', 'decode'] as const).filter((_, i) => verdicts[i] === 'danger');
+  const dangerText =
+    pd === undefined
+      ? 'Does not fit'
+      : failing.length === 2
+        ? 'Both pools do not fit'
+        : `${failing[0] === 'prefill' ? 'Prefill' : 'Decode'} pool does not fit`;
   const fit = verdicts.includes('danger')
     ? 'danger'
     : verdicts.includes('warning')
@@ -73,7 +81,7 @@ export function MiniResult({
         </span>
       )}
       <span className="mini-fit">
-        {fit === 'danger' ? 'Does not fit' : fit === 'warning' ? 'Tight fit' : 'Fits'}
+        {fit === 'danger' ? dangerText : fit === 'warning' ? 'Tight fit' : 'Fits'}
       </span>
     </div>
   );

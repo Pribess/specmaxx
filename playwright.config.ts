@@ -10,7 +10,8 @@ import { defineConfig, devices } from '@playwright/test';
  *   8 × B300, and the GQA limit on Qwen3.8-27B); the deployment test turns on speculative decoding and
  *   expert offload; the layout test checks the desktop split (splitter drag, keyboard, reset, persistence) and the
  *   phone stacking order; the gated-mirror test loads a gated shortlist model from its mirror without a token; the
- *   disaggregation test runs prefill and decode pools in DeepSeek's 32 : 144 shape with a KV link.
+ *   disaggregation test runs prefill and decode pools in DeepSeek's 32 : 144 shape with a KV link; the
+ *   memory-fixes test clicks the memory card's one-click fixes, alone and per pool under disaggregation.
  * - `screenshots` (`bun run screenshots`): writes docs/screenshots/*.png (or to `$SCREENSHOTS_DIR`).
  * - `redesign` (`bun run screenshots:redesign`): viewport-only before/after states (`$REDESIGN_DIR`).
  * The HF Hub is mocked per test (no real network). `@playwright/test` is pinned to 1.64.1, whose
@@ -31,7 +32,7 @@ export default defineConfig({
     {
       name: 'smoke',
       testMatch:
-        /(smoke|fabric|network|rack-scale|dp-attention|dcp|deployment|kv-offload|layout|help|gated-mirror|disaggregation)\.spec\.ts/,
+        /(smoke|fabric|network|rack-scale|dp-attention|dcp|deployment|kv-offload|layout|help|gated-mirror|disaggregation|memory-fixes)\.spec\.ts/,
     },
     { name: 'screenshots', testMatch: /screenshots\.spec\.ts/ },
     { name: 'redesign', testMatch: /redesign\.spec\.ts/ },
