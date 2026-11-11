@@ -1,5 +1,6 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
+import { prerenderAboutDocs } from './vite/prerenderDocs.ts';
 import { stripProvenance } from './vite/stripProvenance.ts';
 
 /**
@@ -19,6 +20,7 @@ export default defineConfig({
   plugins: [
     react(),
     stripProvenance(),
+    prerenderAboutDocs(),
     {
       name: 'preload-sim-worker',
       transformIndexHtml: {
@@ -49,7 +51,7 @@ export default defineConfig({
     rollupOptions: { treeshake: TREESHAKE },
   },
   build: {
-    // Two HTML entries: the estimator and the About page (renders docs/simulation-model.md).
+    // Two HTML entries: the estimator and the About page (prerendered docs; see vite/prerenderDocs.ts).
     rollupOptions: { input: { main: 'index.html', about: 'about.html' }, treeshake: TREESHAKE },
   },
   test: {

@@ -20,7 +20,8 @@ The only public URL is https://cro.sh/specmaxx/ (route `cro.sh/specmaxx*` in zon
 `bun run deploy:assets` ([scripts/stage-deploy.mjs](../scripts/stage-deploy.mjs)) also writes `deploy/_headers`, which
 Workers Static Assets reads from the root of the assets directory (so it cannot live in `public/`):
 
-- `/specmaxx/assets/*` (hashed JS, CSS, fonts): `Cache-Control: public, max-age=31536000, immutable`. The script checks
+- `/specmaxx/assets/*` (hashed JS, CSS, fonts, and the About page's reference documents): `Cache-Control: public,
+  max-age=31536000, immutable`. The script checks
   that every file in `dist/assets/` has a content hash in its name; if one does not, it lists the hashed files one by
   one instead of the splat, so the unhashed file keeps revalidating.
 - HTML (`/specmaxx/`, `index.html`, `about`, `about.html`): `max-age=0, must-revalidate`.
@@ -38,24 +39,44 @@ curl -sI https://cro.sh/specmaxx/ | grep -i cache-control                # ... m
 ## Bundle-size budget
 
 `bun run check:bundle` ([scripts/check-bundle-size.mjs](../scripts/check-bundle-size.mjs)) runs after `bun run build`
-in `bun run check` and in CI. It prints raw, gzip and brotli sizes of every JS chunk in `dist/assets/` and checks
-raw **and gzip** limits independently (decimal kB):
+in `bun run check` and in CI. It prints raw, gzip and brotli sizes of every JS chunk and every prerendered About
+document (`.htm`) in `dist/assets/` and checks raw **and gzip** limits independently (decimal kB):
 
-| Group                                        |  Raw | Gzip |
-| -------------------------------------------- | ---: | ---: |
-| `main` (estimator entry)                     |  620 |  190 |
-| `worker` (simulation worker)                 |  175 |   52 |
-| `about` (About page)                         |  595 |  201 |
-| `total` (all JS, including the lazy sidecar) | 1890 |  600 |
+| Group                                               |  Raw | Gzip |
+| --------------------------------------------------- | ---: | ---: |
+| `main` (estimator entry)                            |  620 |  190 |
+| `worker` (simulation worker)                        |  175 |   52 |
+| `about` (About page entry, with the method doc)     |  100 |   35 |
+| `doc:simulation-model` (fetched on demand)          |  446 |  153 |
+| `doc:sanity-check` (fetched on demand; optional)    |   56 |   19 |
+| `total` (all JS and documents, including lazy ones) | 1890 |  600 |
 
 Main/worker have tighter limits to protect initial loading; the other limits leave about 5–10% headroom. To raise one on
-purpose, edit `LIMITS_KB` in the script in the same change and explain why.
+purpose, edit `LIMITS_KB` in the script in the same change and explain why. `doc:sanity-check` is skipped when
+`docs/sanity-check.md` is not in the repository.
 
 `vite.config.ts` marks `src/sim/` and `src/ui/state/` as free of side effects (`treeshake.moduleSideEffects`, for the
 app and for the worker build), so the bundler drops the unused parts of barrel files. Without it the worker also
 bundled the whole preset catalog, which it never reads. A module there that must run for its side effects (a registry
 filled by importing it) has to be taken out of that rule. (`package.json` `sideEffects` is not used: it also drops
 CSS imports unless every pattern matches.)
+
+## About page documents
+
+The About page ships no Markdown parser. [vite/prerenderDocs.ts](../vite/prerenderDocs.ts) renders the docs with
+`marked` at build time (helpers in [src/about/markdown.ts](../src/about/markdown.ts)) and provides
+`virtual:about-docs`: the method's HTML and table of contents, inlined in the About chunk, and per reference document
+its URL and the list of its element ids. The reference documents are emitted as hashed assets
+(`assets/simulation-model-<hash>.htm`, `.htm` rather than `.html` so `auto-trailing-slash` does not redirect them) and
+fetched when the reference opens or when the URL hash names one of their ids. The dev server serves them from
+`/__about-docs/<slug>.htm`, rendered per request.
+
+For a deep link (`about.html#4-hardware`) the plugin also puts a small inline script in about.html's `<head>`, right
+after `<meta charset>`. It holds the ids of each reference document (about 3 kB, 1.6 kB gzip) and adds
+`<link rel="preload" as="fetch" crossorigin="anonymous">` for the document the hash points into, so its download
+starts before the page's JS runs; the page's `fetch` (mode cors, credentials same-origin) reuses it, and fetches the
+other document only after that one has rendered. The site sets no Content-Security-Policy; one that blocks inline
+scripts would need a hash for this script (it is stable for a given set of docs).
 
 ## Preset provenance sidecar
 

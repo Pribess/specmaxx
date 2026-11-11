@@ -175,6 +175,23 @@
 #sanity-check {
   margin-top: var(--space-8);
 }
+/* Loading or error state of a reference document fetched on demand. */
+.about-status {
+  margin: 0 0 var(--space-6);
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: var(--type-body);
+}
+.about-status button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
 
 @media (max-width: 700px) {
   .about-header {

@@ -1,3 +1,5 @@
+// Build-time only: vite/prerenderDocs.ts and the tests import this module; the About page never does (it ships
+// prerendered HTML, so `marked` stays out of its bundle). The runtime half is src/about/segments.ts.
 import { Marked, Renderer } from 'marked';
 
 /** GitHub-style fragment for a heading; duplicate allocation happens per document. */
@@ -53,24 +55,34 @@ export function renderMarkdown(
   return markdown.parse(source, { async: false });
 }
 
-/** One piece of rendered Markdown: prose HTML, or one table to show in its own scroll region. */
-export interface HtmlSegment {
-  kind: 'html' | 'table';
-  html: string;
+/** One entry of a table of contents: a heading's fragment id and its plain-text title. */
+export interface TocEntry {
+  id: string;
+  title: string;
+}
+
+/** Decodes the few entities marked emits in heading text, so a title can be shown as plain text. */
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+/** The `## ` sections of rendered Markdown, in document order (the About page's table of contents). */
+export function tableOfContents(html: string): TocEntry[] {
+  return Array.from(html.matchAll(/<h2 id="([^"]+)">(.*?)<\/h2>/g), (match) => ({
+    id: match[1],
+    title: decodeEntities(match[2].replace(/<[^>]+>/g, '')),
+  }));
 }
 
 /**
- * Splits rendered Markdown at its tables, so each table can sit in a horizontally scrolling ScrollArea
- * (wide tables scroll sideways with a themed scrollbar instead of a native one). GFM tables never nest.
+ * Every element id in rendered Markdown (headings, plus any raw HTML ids), in document order. The About page
+ * ships these per lazily loaded document, so a URL hash tells which document to fetch before it is loaded.
  */
-export function splitTables(html: string): HtmlSegment[] {
-  const segments: HtmlSegment[] = [];
-  let at = 0;
-  for (const match of html.matchAll(/<table>[\s\S]*?<\/table>/g)) {
-    if (match.index > at) segments.push({ kind: 'html', html: html.slice(at, match.index) });
-    segments.push({ kind: 'table', html: match[0] });
-    at = match.index + match[0].length;
-  }
-  if (at < html.length) segments.push({ kind: 'html', html: html.slice(at) });
-  return segments;
+export function elementIds(html: string): string[] {
+  return Array.from(html.matchAll(/<[a-zA-Z][^>]*?\sid="([^"]+)"/g), (match) => match[1]);
 }
