@@ -6,6 +6,7 @@
  */
 
 import type { MathFormat } from '../ir/dtype';
+import { hasStrippedProvenance } from './provenance';
 import {
   applyDeviceModifiers,
   applyLinkModifiers,
@@ -75,7 +76,8 @@ function leafErrors(
     if (!Number.isFinite(leaf.value) || leaf.value < 0) {
       errors.push(`${label}: ${leaf.path} must be finite and ≥ 0 (got ${leaf.value})`);
     }
-    if (!isPathCovered(leaf.path, covers)) {
+    // Bundled presets were citation-checked in source tests. Never skip physical checks.
+    if (!hasStrippedProvenance(obj) && !isPathCovered(leaf.path, covers)) {
       errors.push(
         `${label}: ${leaf.path} is not covered by any sources[].fields or estimated[].field`,
       );

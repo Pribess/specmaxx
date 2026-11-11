@@ -1,5 +1,6 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
+import { stripProvenance } from './vite/stripProvenance.ts';
 
 /**
  * The simulation core and the UI state core are pure modules: no top-level effects, only declarations. Telling the
@@ -17,6 +18,7 @@ export default defineConfig({
   base: './',
   plugins: [
     react(),
+    stripProvenance(),
     {
       name: 'preload-sim-worker',
       transformIndexHtml: {
@@ -41,7 +43,11 @@ export default defineConfig({
     },
   ],
   // Module workers (`new Worker(new URL(...), { type: 'module' })`) are bundled as ES modules.
-  worker: { format: 'es', rollupOptions: { treeshake: TREESHAKE } },
+  worker: {
+    format: 'es',
+    plugins: () => [stripProvenance()],
+    rollupOptions: { treeshake: TREESHAKE },
+  },
   build: {
     // Two HTML entries: the estimator and the About page (renders docs/simulation-model.md).
     rollupOptions: { input: { main: 'index.html', about: 'about.html' }, treeshake: TREESHAKE },

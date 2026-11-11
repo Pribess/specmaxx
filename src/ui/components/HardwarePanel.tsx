@@ -1,3 +1,6 @@
+import { useMemo, useState } from 'react';
+import { COMMUNITY_UNLOCKS } from 'virtual:community-unlocks';
+import { loadHardwareProvenance, type HardwareProvenance } from '../state/provenance';
 import { DEVICE_PRESET_GROUPS, deviceUnlocks } from '../../sim/hw/presets';
 import { POPULAR_SETUPS, setupLabel } from '../../sim/hw/presets/catalog';
 import {
@@ -37,6 +40,20 @@ const deviceOptions: PickerOption[] = [
 
 export function HardwarePanel(props: Props) {
   const { state, built, loaded } = props;
+  const [provenance, setProvenance] = useState<HardwareProvenance>();
+  const [provenanceError, setProvenanceError] = useState(false);
+  const loadSources = () => {
+    setProvenanceError(false);
+    void loadHardwareProvenance().then(setProvenance, () => setProvenanceError(true));
+  };
+  // Resolve edits and unlocks against full originals for citation validation, not a stripped copy.
+  const editorHardware = useMemo(
+    () =>
+      provenance && built.hardware
+        ? provenance.resolveHardware(state.hw, built.hardware.stack.host !== undefined)
+        : undefined,
+    [provenance, state.hw, built.hardware],
+  );
   /**
    * Dispatches hardware actions, then picks TP and PP that use all devices of the resulting rig
    * (TP × PP × DP must equal the device count), keeping the user's DP and EP while they stay valid.
@@ -114,7 +131,13 @@ export function HardwarePanel(props: Props) {
       )}
       <SetupRow state={state} built={built} dispatch={dispatch} />
       <OffloadSection {...props} />
-      <details className="advanced">
+      <details
+        className="advanced"
+        onToggle={(event) => {
+          if (event.target === event.currentTarget && event.currentTarget.open && !provenance)
+            loadSources();
+        }}
+      >
         <summary>Advanced</summary>
         <OffloadAdvancedFields {...props} />
         <MemoryFitFields {...props} />
@@ -140,9 +163,7 @@ export function HardwarePanel(props: Props) {
                 </label>
               )}
               {axis.options.map((o) => {
-                const community = [...o.deviceModifiers, ...(o.intraNodeLinkModifiers ?? [])].some(
-                  (m) => m.sources?.some((s) => s.kind === 'community'),
-                );
+                const community = COMMUNITY_UNLOCKS.has(`${device.base.id}/${axis.id}/${o.id}`);
                 return (
                   <label className="check" key={o.id}>
                     <input
@@ -182,7 +203,19 @@ export function HardwarePanel(props: Props) {
             ])}
           />
         )}
-        <CustomSpecEditor {...props} />
+        {editorHardware && (
+          <CustomSpecEditor {...props} built={{ ...built, hardware: editorHardware }} />
+        )}
+        {!provenance && (
+          <details className="spec-editor" open>
+            <summary>Edit spec numbers</summary>
+            {provenanceError ? (
+              <button onClick={loadSources}>Retry loading sources</button>
+            ) : (
+              <span role="status">Loading sources…</span>
+            )}
+          </details>
+        )}
       </details>
     </Panel>
   );

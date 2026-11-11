@@ -38,16 +38,53 @@ curl -sI https://cro.sh/specmaxx/ | grep -i cache-control                # ... m
 ## Bundle-size budget
 
 `bun run check:bundle` ([scripts/check-bundle-size.mjs](../scripts/check-bundle-size.mjs)) runs after `bun run build`
-in `bun run check` and in CI. It prints the raw and gzip size of every JS chunk in `dist/assets/` and fails when the
-raw size of a group goes over its limit: `main` (estimator entry chunk), `worker` (simulation worker), `about` (About
-page chunk) or `total` (all JS). The limits are about 10% above the sizes when they were set. To raise one on purpose,
-edit `LIMITS_KB` in the script in the same change and say why in the commit message.
+in `bun run check` and in CI. It prints raw, gzip and brotli sizes of every JS chunk in `dist/assets/` and checks
+raw **and gzip** limits independently (decimal kB):
+
+| Group                                        |  Raw | Gzip |
+| -------------------------------------------- | ---: | ---: |
+| `main` (estimator entry)                     |  620 |  190 |
+| `worker` (simulation worker)                 |  175 |   52 |
+| `about` (About page)                         |  595 |  201 |
+| `total` (all JS, including the lazy sidecar) | 1890 |  600 |
+
+Main/worker have tighter limits to protect initial loading; the other limits leave about 5–10% headroom. To raise one on
+purpose, edit `LIMITS_KB` in the script in the same change and explain why.
 
 `vite.config.ts` marks `src/sim/` and `src/ui/state/` as free of side effects (`treeshake.moduleSideEffects`, for the
 app and for the worker build), so the bundler drops the unused parts of barrel files. Without it the worker also
 bundled the whole preset catalog, which it never reads. A module there that must run for its side effects (a registry
 filled by importing it) has to be taken out of that rule. (`package.json` `sideEffects` is not used: it also drops
 CSS imports unless every pattern matches.)
+
+## Preset provenance sidecar
+
+Preset files in `src/sim/hw/presets/` remain the reviewed, fully cited source of truth. The small
+[Vite plugin](../vite/stripProvenance.ts) runs only during a production build, in **both** the main and worker
+module graphs. It parses TypeScript object literals, empties `sources` and `estimated`, and clears
+`estimatedReason`. Standalone citation records (`url` + `title`) and helper estimate `reason` strings are emptied
+too, so private SFU/source helpers do not retain their payloads. Dead citation constants then disappear through tree
+shaking (some unused helper URL arguments may survive conservative optimization). It does not rewrite physical
+numbers or other data. Modifier `note` and unlock descriptions stay because they are user-visible labels/warnings.
+Its pure data equivalent is [`strip(full)`](../src/sim/hw/provenance.ts).
+
+An explicit `provenanceStripped: true` marker distinguishes trusted build-generated presets from unsourced custom
+specs. The shared validators still check **all physical numbers and structural constraints**; only citation coverage
+checks wait for the full data. Source tests, including `presets.test.ts`, run on the original files and still enforce
+cite-every-number. The build integration test compares actual bundled exports with `strip(full)`, including generated
+host links, and compares the worker runner's complete output for default and PD-disaggregated + offload scenarios.
+
+Opening Hardware → Advanced dynamically imports `virtual:hardware-provenance` through
+[`loadHardwareProvenance`](../src/ui/state/provenance.ts). The plugin serves a separate full-query preset graph,
+including its original factory functions, so the editor rebuilds hardware with full citations **before** validating
+it. Unlock modifiers, generated host links and user-edit estimates therefore retain their original provenance;
+uncovered editor fields are still errors. Requests are shared, and a failed request offers a retry. Simulation never
+waits for the sidecar. A generated tiny set of community-option flags preserves the community badge without loading
+citations. Dev/Vitest do not strip anything; the same on-demand editor path remains usable there.
+
+The sidecar deliberately includes the full preset data and necessary resolver code, rather than a hand-maintained
+citation-only file. This duplicates some numeric data in the lazy chunk, but avoids splitting any reviewed presets
+or changing helper-generated provenance. It is not preloaded on the default path; its bytes count toward `total`.
 
 ## Release
 

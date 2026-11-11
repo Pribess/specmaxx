@@ -7,6 +7,7 @@
  */
 
 import type { AccumulateType, MathFormat } from '../ir/dtype';
+import { hasStrippedProvenance } from './provenance';
 import type {
   ComputeEngine,
   DeviceSpec,
@@ -181,9 +182,11 @@ function peakMatches(
 }
 
 /** Errors in the provenance of a modifier (sources non-empty, or an estimatedReason). */
+// Only trusted build-generated presets may omit citations; custom modifiers must still cite numbers.
 function provenanceErrors(mod: ModifierProvenance, label: string): string[] {
   const errors: string[] = [];
   if (mod.note.trim() === '') errors.push(`${label}: note is empty`);
+  if (hasStrippedProvenance(mod)) return errors;
   if (
     mod.sources.length === 0 &&
     (mod.estimatedReason === undefined || mod.estimatedReason.trim() === '')
