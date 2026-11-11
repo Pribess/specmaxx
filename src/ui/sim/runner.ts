@@ -83,6 +83,12 @@ export const inlineRunner: SimRunner = {
   },
 };
 
+let earlyWorker: Worker | undefined;
+
+/** Start downloading the module worker before React renders; the first runner takes ownership. */
+export function startSimWorker(): void {
+  earlyWorker ??= new Worker(new URL('./sim.worker.ts', import.meta.url), { type: 'module' });
+}
 /** Lazy worker creation also lets component tests inject the inline runner. */
 export function workerRunner(): SimRunner {
   let worker: Worker | undefined;
@@ -94,14 +100,26 @@ export function workerRunner(): SimRunner {
   return {
     run(input, notes, disaggregated) {
       if (!worker) {
-        worker = new Worker(new URL('./sim.worker.ts', import.meta.url), { type: 'module' });
+        startSimWorker();
+        worker = earlyWorker!;
+        earlyWorker = undefined;
         worker.onmessage = (
-          event: MessageEvent<{ id: number; result?: RunResult; error?: string }>,
+          event: MessageEvent<{
+            id: number;
+            result?: RunResult;
+            error?: string;
+            superseded?: boolean;
+          }>,
         ) => {
           const p = pending.get(event.data.id);
           pending.delete(event.data.id);
           if (event.data.result) p?.resolve(event.data.result);
-          else p?.reject(new Error(event.data.error ?? 'Simulation failed.'));
+          else
+            p?.reject(
+              new Error(
+                event.data.superseded ? 'Superseded' : (event.data.error ?? 'Simulation failed.'),
+              ),
+            );
         };
         worker.onerror = () => {
           for (const p of pending.values())

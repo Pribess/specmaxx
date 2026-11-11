@@ -15,7 +15,31 @@ export default defineConfig({
   // Relative asset URLs, so the same build works at a site root (localhost:5173/) and under a path prefix
   // (cro.sh/specmaxx/); see docs/deploy.md.
   base: './',
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: 'preload-sim-worker',
+      transformIndexHtml: {
+        order: 'post',
+        handler(_html, context) {
+          if (context.path !== '/index.html' || !context.bundle) return [];
+          const worker = Object.values(context.bundle).find((file) =>
+            /^assets\/sim\.worker-.*\.js$/.test(file.fileName),
+          );
+          if (!worker) throw new Error('Missing simulation worker asset');
+          // Cold Slow 4G: ~550ms earlier results for ~300ms FCP. Low/high measured alike;
+          // prefer low so the browser may favor render-critical resources on other links.
+          return [
+            {
+              tag: 'link',
+              attrs: { rel: 'modulepreload', href: `./${worker.fileName}`, fetchpriority: 'low' },
+              injectTo: 'head',
+            },
+          ];
+        },
+      },
+    },
+  ],
   // Module workers (`new Worker(new URL(...), { type: 'module' })`) are bundled as ES modules.
   worker: { format: 'es', rollupOptions: { treeshake: TREESHAKE } },
   build: {

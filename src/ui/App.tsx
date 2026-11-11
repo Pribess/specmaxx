@@ -1,3 +1,4 @@
+import { sameModel } from './state/sameModel';
 import { useEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from 'react';
 import { loadHfModel } from '../hf/load';
 import { getHfToken } from '../hf/token';
@@ -161,9 +162,22 @@ export function App({
     loader(choice.id, { revision: choice.revision, token: getHfToken() })
       .then((result) => {
         if (!current) return;
-        if (result.kind === 'ok')
-          setModelState({ key: modelKey(choice), loaded: loadedFromHf(choice, result) });
-        else {
+        if (result.kind === 'ok') {
+          const next = loadedFromHf(choice, result);
+          setModelState((previous) => {
+            const active =
+              previous.key === next.key
+                ? (previous.loaded ??
+                  (next.key === BUNDLED_DEFAULT_MODEL.key ? BUNDLED_DEFAULT_MODEL : undefined))
+                : undefined;
+            // Preserve identity: neither buildSimInput nor the memory-fix probe needs to run again.
+            return active && sameModel(active, next)
+              ? previous.loaded === active
+                ? previous
+                : { key: next.key, loaded: active }
+              : { key: next.key, loaded: next };
+          });
+        } else {
           const error =
             result.kind === 'unsupported'
               ? `Unsupported architecture: ${result.modelType ?? result.architecture ?? 'unknown'}. Supported: ${result.supported.join(', ')}. ${result.reason ?? ''}`

@@ -1,3 +1,4 @@
+import { ResultSkeleton } from './ResultSkeleton';
 import { Fragment, type Ref } from 'react';
 import {
   formatTokensPerSec,
@@ -503,12 +504,10 @@ export function ResultHero({
             onSuggestion={onSuggestion}
           />
         </>
+      ) : built.kind === 'issues' ? (
+        <div className="empty-result">Resolve the input errors to calculate a ceiling.</div>
       ) : (
-        <div className="empty-result">
-          {built.kind === 'issues'
-            ? 'Resolve the input errors to calculate a ceiling.'
-            : 'Calculating the hardware ceiling…'}
-        </div>
+        <ResultSkeleton roofline={roofline} />
       )}
     </section>
   );
