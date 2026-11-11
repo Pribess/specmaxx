@@ -365,13 +365,20 @@ export interface EmbeddingOp {
   name: string;
   /** Tokens embedded on this device in this step. Unit: tokens. */
   tokens: number;
-  /** Actual table rows read; absent = tokens. Masked row-parallel lookups may read fewer rows than they output. */
+  /** Actual table rows read by this device in this step; absent = tokens. Masked outputs may contain more rows. Unit: rows. */
   rowsRead?: number;
-  /** Useful rows read from peer HBM within this gather, including scales. Absent = local only. Unit: bytes. */
+  /**
+   * Useful peer-HBM payload received by this device in this step, including row scales. Balanced ownership means
+   * the same payload is served outbound; each direction is costed against the per-direction link bandwidth once.
+   * Absent = local only. Unit: bytes. See docs/simulation-model.md §5 "Lookup tables across DP".
+   */
   peerReadBytes?: number;
   /** Hidden size (row length). Unit: elements. */
   hidden: number;
-  /** Vocabulary rows held by this device (`ceil(vocab / tp)`). Count. */
+  /**
+   * Table rows resident on this device: normally ceil(vocab/tp); shared n-gram tables use
+   * `lower/ngram.ts:tableShardRows` (row or head ownership over TP×DP). Unit: rows.
+   */
   vocabShard: number;
   /** Storage format of the embedding table. */
   weight: TensorFormat;
@@ -402,6 +409,8 @@ export interface CollectiveOp {
    * its links come from `engine/placement.ts: expertTpGroupSpan`), or decode context-parallel (`dcp`: the d
    * consecutive ranks of a TP group that share one token-sharded KV cache; a contiguous group placed like TP,
    * `engine/placement.ts: groupSpan`; docs/simulation-model.md §5 "Decode context parallelism (DCP)").
+   * Shared lookup exchanges use `dp` (same TP index, stride tp) and `tp_dp` (the contiguous TP×DP ranks of one
+   * stage); paths from `engine/placement.ts:lookupTableCollectivePaths`, docs §5 "Lookup tables across DP".
    */
   group: 'tp' | 'ep' | 'pp' | 'etp' | 'dcp' | 'dp' | 'tp_dp';
   /** Devices in the group (send_recv: 2). Count. */

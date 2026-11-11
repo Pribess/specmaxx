@@ -769,7 +769,7 @@ export function OffloadAdvancedFields(props: PanelProps) {
                 : 'Only a few rows are read per token, so an SSD delay matters.',
             ])}
           />
-          {designOffDevice && tables === undefined && (
+          {designOffDevice && tables?.tier === undefined && (
             <button
               type="button"
               className="chip"
@@ -781,7 +781,7 @@ export function OffloadAdvancedFields(props: PanelProps) {
           )}
         </div>
       )}
-      {hasLookupTables(model) && (
+      {hasLookupTables(model) && (state.parallel.dp > 1 || (props.otherPoolDp ?? 1) > 1) && (
         <Picker
           label="Share lookup tables across DP"
           value={tables?.tier === undefined && tables?.acrossDp === true ? 'on' : 'off'}
@@ -792,13 +792,11 @@ export function OffloadAdvancedFields(props: PanelProps) {
           disabled={tables?.tier !== undefined}
           onChange={(v) => setOffload({ ...offload, tables: { ...tables, acrossDp: v === 'on' } })}
           help={helpLines([
-            'Shares the tables between DP replicas instead of storing one copy per replica.',
+            props.pool === undefined
+              ? 'Shares the tables between DP replicas instead of storing one copy per replica.'
+              : 'Shares tables separately in each pool with DP above 1.',
             'Saves device memory but adds lookup traffic between devices.',
-            tables?.tier !== undefined
-              ? 'Available only with Lookup tables set to Device.'
-              : state.parallel.dp === 1
-                ? 'DP is 1, so this currently has no effect.'
-                : 'Token embeddings and projections are unchanged.',
+            'Set Lookup tables to Device to enable sharing.',
           ])}
         />
       )}

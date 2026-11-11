@@ -312,7 +312,12 @@ function simulatePhase(
     : {};
   const lookupPaths =
     lookupTableConfig(input.deployment?.offload).acrossDp === true && input.parallel.dp > 1
-      ? lookupTableCollectivePaths(input.parallel, topology, base.interStaging)
+      ? lookupTableCollectivePaths(
+          input.parallel,
+          topology,
+          base.interStaging,
+          options.inNetworkReduction,
+        )
       : {};
   const stages = lowered.stages.map((stage) => {
     const ppPath: CollectivePath =

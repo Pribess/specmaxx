@@ -17,7 +17,7 @@ import {
   validateLinkModifiers,
   validateTopology,
 } from '../hw/validate';
-import { applyDeviceModifiers } from '../hw/modifiers';
+import { applyDeviceModifiers, applyLinkModifiers } from '../hw/modifiers';
 import { deviceHostLink } from '../hw/presets/links';
 import { A2A_FORMATS, isA2aFormat } from '../ir/a2aFormat';
 import type { ModelSpec } from '../ir/model';
@@ -37,7 +37,12 @@ import {
   lookupTableCollectivePaths,
   lookupTablesUsePeerReads,
 } from './placement';
-import { expertRules, lookupTableConfig, lookupTableRules } from './offloadRules';
+import {
+  expertRules,
+  kvCacheMovesAnything,
+  lookupTableConfig,
+  lookupTableRules,
+} from './offloadRules';
 import type { KvCacheOffloadConfig, LayerRange, SimInput } from './types';
 
 /**
@@ -341,12 +346,20 @@ export function validateInput(input: SimInput): string[] {
   if (
     lookupTableConfig(input.deployment?.offload).acrossDp === true &&
     parallel.dp > 1 &&
-    placementErrors.length === 0
+    errors.length === 0
   ) {
     const label = 'deployment.offload.lookupTables.acrossDp';
     try {
-      lookupTableCollectivePaths(parallel, topology);
-      const peer = lookupTablesUsePeerReads(parallel, topology);
+      // Use the same modified links as simulation; changing P2P can change the table ownership layout.
+      const effectiveTopology = { ...topology };
+      for (const level of ['intraNode', 'interNode'] as const) {
+        const link = topology[level];
+        const mods = hardware.linkModifiers?.[level] ?? [];
+        if (link !== undefined && mods.length > 0)
+          effectiveTopology[level] = applyLinkModifiers(link, mods);
+      }
+      lookupTableCollectivePaths(parallel, effectiveTopology);
+      const peer = lookupTablesUsePeerReads(parallel, effectiveTopology);
       const hasHeadTables = model.layers.some((l) =>
         l.blocks.some((b) => b.kind === 'ngram_embedding' && b.headRows !== undefined),
       );
@@ -423,19 +436,6 @@ function inRange(x: number, lo: number, hi: number, hiOpen = false): boolean {
  */
 export const KV_CACHE_NO_OFFLOADABLE_ERROR =
   'deployment.offload.kvCache: the model has no offloadable KV cache (only sliding-window, recurrent or CSA state)';
-
-/**
- * True if a KV-cache placement moves anything off the device before the unified-memory fold-in: `f_dev < 1`, or a
- * prefix share `f_pre < 1` with a prefix-cache hit (`prefixCacheHitRatio > 0`).
- */
-function kvCacheMovesAnything(
-  kv: KvCacheOffloadConfig | undefined,
-  prefixCacheHitRatio: number | undefined,
-): boolean {
-  if (kv === undefined) return false;
-  const fPre = kv.prefixDeviceFraction ?? kv.deviceFraction;
-  return kv.deviceFraction < 1 || ((prefixCacheHitRatio ?? 0) > 0 && fPre < 1);
-}
 
 /**
  * Errors of `deployment.offload.kvCache` (docs/simulation-model.md §12 "KV cache off-device"): `deviceFraction`,
@@ -636,6 +636,14 @@ export function deploymentErrors(input: SimInput): string[] {
       offload.lookupTables !== undefined &&
       !Array.isArray(offload.lookupTables) &&
       !('tier' in offload.lookupTables);
+    if (wrapped) {
+      for (const key of Object.keys(tableConfig)) {
+        if (key !== 'acrossDp' && key !== 'placements')
+          errors.push(
+            `deployment.offload.lookupTables.${key}: unknown key (expected acrossDp or placements)`,
+          );
+      }
+    }
     const tablePrefix = wrapped
       ? 'deployment.offload.lookupTables.placements'
       : 'deployment.offload.lookupTables';

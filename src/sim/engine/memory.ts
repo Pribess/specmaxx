@@ -266,7 +266,8 @@ function stageKvOffloadableBytesPerSeq(
 }
 
 /**
- * Peak transient activation bytes of stage `s`: the largest activation read + write of any single op of that
+ * Peak transient activation bytes of stage `s`: the largest activation read + write or explicit collective
+ * workspace of any single op of that
  * stage over the given lowered phases (the inputs and outputs of the op that is running). Unit: bytes.
  */
 export function stageActivationPeakBytes(lowered: LoweredModel[], s: number): number {
@@ -301,7 +302,8 @@ export function stageLookupTableBytes(model: ModelSpec, ctx: LoweringContext, s:
       if (block.kind === 'ngram_embedding') bytes += ngramTableShardBytes(block, ctx);
     }
   }
-  // Formula: W_tables,s = Σ_{on-device tables of s} ceil(rows/tp)·d·bpe(lookup)
+  // Formula: W_tables,s = Σ_{on-device tables of s} ngramTableShardBytes(block, ctx)
+  // The same ownership as lowering (TP×DP with sharing); docs §5 "Lookup tables across DP".
   return bytes;
 }
 

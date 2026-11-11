@@ -52,6 +52,21 @@ const FLASH_STATE: AppState = {
 };
 
 describe('deployment normalizers', () => {
+  it('a sharing URL on a model without tables explains sharing, not placement', () => {
+    const state = reduce(DEFAULT_STATE, {
+      type: 'setOffload',
+      offload: { tables: { acrossDp: true } },
+    });
+    const built = buildSimInput(state, BUNDLED_DEFAULT_MODEL);
+    expect(built.kind).toBe('ok');
+    expect(built.issues).toContainEqual({
+      field: 'offload',
+      level: 'warning',
+      message: 'The model has no n-gram lookup tables; sharing has no effect.',
+    });
+    if (built.kind === 'ok') expect(built.input.deployment?.offload?.lookupTables).toBeUndefined();
+  });
+
   it('drop default values, and drop a queue depth when nothing is offloaded', () => {
     expect(
       normalizeOffload({
@@ -405,6 +420,50 @@ describe('buildSimInput: deployment', () => {
       { tier: 'host_ram', layers: { from: 0, to: 14 }, scaleLayout: 'separate' },
       { tier: 'nvme', layers: { from: 14, to: L }, scaleLayout: 'separate' },
     ]);
+  });
+
+  it.each(['host_ram', 'nvme', 'remote_pool'] as const)(
+    'shared tables preserve the selected host for KV-only %s offload',
+    (tier) => {
+      const s = reduce(FLASH_STATE, {
+        type: 'setOffload',
+        offload: {
+          tables: { acrossDp: true },
+          kvCache: {
+            tier,
+            deviceFraction: 0.5,
+            ...(tier === 'remote_pool' ? { poolLinkId: 'infiniband-hdr200-one-nic-per-gpu' } : {}),
+          },
+          queueDepth: 8,
+        },
+      });
+      const built = buildSimInput(s, FLASH);
+      expect(built.kind).toBe('ok');
+      if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));
+      expect(built.input.hardware.host).toBeDefined();
+      expect(built.input.deployment?.offload?.kvCache?.deviceFraction).toBe(0.5);
+      expect(built.input.deployment?.offload?.queueDepth).toBe(8);
+      expect(built.input.deployment?.offload?.lookupTables).toEqual({ acrossDp: true });
+    },
+  );
+
+  it('shared tables with prefix-only KV offload resolve a host only for a cache-hit workload', () => {
+    const state = reduce(FLASH_STATE, {
+      type: 'setOffload',
+      offload: {
+        tables: { acrossDp: true },
+        kvCache: { tier: 'host_ram', prefixDeviceFraction: 0.25 },
+      },
+    });
+    for (const hit of [0, 0.5]) {
+      const built = buildSimInput(
+        { ...state, workload: { ...state.workload, prefixCacheHitRatio: hit } },
+        FLASH,
+      );
+      expect(built.kind).toBe('ok');
+      if (built.kind !== 'ok') throw new Error(JSON.stringify(built.issues));
+      expect(built.input.hardware.host !== undefined).toBe(hit > 0);
+    }
   });
 
   it('shared device tables survive normalization without a host and are not auto-offloaded with experts', () => {

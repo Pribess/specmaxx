@@ -5,7 +5,13 @@
  * rules over disjoint layer ranges. These helpers give every reader the list form, so a single object and a one-rule
  * list are the same input by construction. Pure; no validation (see `validate.ts`).
  */
-import type { LookupTableConfig, LookupTableRule, OffloadConfig, RoutedExpertRule } from './types';
+import type {
+  KvCacheOffloadConfig,
+  LookupTableConfig,
+  LookupTableRule,
+  OffloadConfig,
+  RoutedExpertRule,
+} from './types';
 
 /**
  * The config's routed-expert rules as a list: absent → `[]`, one object → `[it]`, a list → itself, in the order given
@@ -33,12 +39,34 @@ export function lookupTableConfig(config: OffloadConfig | undefined): LookupTabl
   return tables as LookupTableConfig;
 }
 
-/** Whether a config actually places weights off-device; a sharing-only table policy does not need a host. */
-export function hasOffDeviceWeights(config: OffloadConfig | undefined): boolean {
+/**
+ * True if a KV-cache placement moves anything off the device before the unified-memory fold-in: `f_dev < 1`, or a
+ * prefix share `f_pre < 1` with a prefix-cache hit (`prefixCacheHitRatio > 0`).
+ * See docs/simulation-model.md §12 "KV cache off-device".
+ */
+export function kvCacheMovesAnything(
+  kv: KvCacheOffloadConfig | undefined,
+  prefixCacheHitRatio: number | undefined,
+): boolean {
+  if (kv === undefined) return false;
+  const fPre = kv.prefixDeviceFraction ?? kv.deviceFraction;
+  return kv.deviceFraction < 1 || ((prefixCacheHitRatio ?? 0) > 0 && fPre < 1);
+}
+
+/**
+ * Whether placements use an off-device tier (weights, live KV or a cached prefix), before the unified-memory
+ * fold-in. A sharing-only table policy needs no host. Remote KV still needs the dedicated device's host attachment.
+ * See docs/simulation-model.md §12 "Placement", "KV cache off-device" and "Remote KV pool".
+ */
+export function hasOffDevicePlacement(
+  config: OffloadConfig | undefined,
+  prefixCacheHitRatio = 0,
+): boolean {
   return (
     expertRules(config).length > 0 ||
     lookupTableRules(config).some((r) => r.tier !== 'device') ||
-    (config?.embeddings !== undefined && config.embeddings.tier !== 'device')
+    (config?.embeddings !== undefined && config.embeddings.tier !== 'device') ||
+    kvCacheMovesAnything(config?.kvCache, prefixCacheHitRatio)
   );
 }
 

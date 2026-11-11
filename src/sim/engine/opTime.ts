@@ -52,7 +52,9 @@ export interface OpTimeContext {
    * expert-TP group (`placement.ts: expertTpCollectivePath`), and the decode context-parallel group (the d
    * consecutive ranks of a TP group, `collectivePath(groupSpan(dcp))`). `etp` is set only when the model lowers
    * expert-TP collectives (a MoE `expertOutputNorm` with etp > 1), `dcp` only when the phase lowers DCP collectives
-   * (`parallel.dcp` > 1, decode); an `etp` or `dcp` op without its path is an error.
+   * (`parallel.dcp` > 1, decode). Shared lookup tables add `dp` (strided) and `tp_dp` (contiguous), from
+   * `placement.ts:lookupTableCollectivePaths`. Any collective without its group's path is an error.
+   * See docs/simulation-model.md §5 "Lookup tables across DP".
    */
   collectivePaths: {
     tp: CollectivePath;
@@ -404,8 +406,8 @@ function vectorOpTime(
 /** An embedding gather: no FLOP, memory time only. */
 function memoryOnlyOpTime(op: Op, ctx: OpTimeContext): OpResult {
   const bytes = opBytes(op);
-  // Formula: t = bytes / memBW
-  // See docs/simulation-model.md §7 ("Per-op time")
+  // Formula: t = max(bytes/memBW, peerReadBytes/B_peer); absent peerReadBytes = bytes/memBW unchanged.
+  // See docs/simulation-model.md §7 "Per-op time", §5 "Lookup tables across DP".
   let memorySec = bytes.totalBytes / ctx.memBandwidthBytesPerSec;
   if (op.kind === 'embedding' && op.peerReadBytes !== undefined) {
     const path = ctx.collectivePaths.dp;

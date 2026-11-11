@@ -4,7 +4,7 @@
  * What DP is in the engine. DP runs `dp` independent replicas of the whole model (each its own TP × PP group), so
  * the devices used are `tp·pp·dp` (placement.ts rank layout `rank = tpIdx + tp·(dpIdx + dp·ppIdx)`). The global
  * batch splits evenly: each replica serves `B_r = batch / dp` sequences (validate.ts rejects a batch DP does not
- * divide). The replicas never talk to each other (no collective crosses them, except a MoE mode-B EP group), so
+ * divide). Without cross-replica EP or lookup-table sharing the replicas never talk to each other, so
  * one replica at `B_r` runs exactly like a single model instance at `B_r`, and:
  *   aggregate tok/s(dp, batch) = dp · tok/s(one replica at batch/dp)        (pipeline.ts: tokens/s = dp·B_r/cycle)
  *   per-sequence tok/s(dp, batch) = per-sequence tok/s(one replica at batch/dp)
@@ -23,7 +23,7 @@
  * See docs/simulation-model.md §7 "Pipeline and DP" and docs/modeling-method.md "Multiple devices".
  */
 import { describe, expect, it } from 'vitest';
-import { ETHERNET_10G_TCP, PCIE_5_X16_DIRECT } from '../hw/presets/links';
+import { ETHERNET_10G_TCP, PCIE_5_X16_DIRECT, NVLINK_2_HCM_8, NVLINK_4 } from '../hw/presets/links';
 import { RTX_5090 } from '../hw/presets/nvidia';
 import { DDR5_6000_2CH } from '../hw/presets/storage';
 import { SYNTH_NVLINK } from '../__fixtures__/synthetic';
@@ -202,6 +202,155 @@ describe('DP with speculative decoding, offload and MoE', () => {
       run(FLASH_NEXT, { dp: 2 }, 2, hardware, { offload: { lookupTables: { placements } } }),
     ).toEqual(legacy);
   });
+
+  it.each([FLASH_NEXT, ENGRAM])(
+    'lookup collectives use the existing TP overlap fraction: $model.name',
+    (m) => {
+      const input: SimInput = {
+        ...m,
+        parallel: { tp: 1, dp: 2, pp: 1, ep: 1 },
+        workload: { batch: 2, promptLen: 128, decodeContextLen: 256 },
+        hardware: box(2),
+        deployment: SHARED_TABLES,
+        options: { collectiveAlgorithm: 'ring' },
+      };
+      const runWith = (options: SimInput['options']) =>
+        simulate({ ...input, options: { ...input.options, ...options } });
+      const none = runWith({ overlap: 'none' });
+      const tpNone = runWith({ overlapByClass: { tp: 0 } });
+      const half = runWith({ overlapByClass: { tp: 0.5 } });
+      const full = runWith({ overlapByClass: { tp: 1 } });
+      const epNone = runWith({ overlapByClass: { ep: 0 } });
+      for (const phase of ['prefill', 'decode'] as const) {
+        expect(tpNone[phase].stages).toEqual(none[phase].stages);
+        expect(epNone[phase].stages).toEqual(full[phase].stages);
+        expect(full[phase].tokensPerSec).toBeGreaterThanOrEqual(half[phase].tokensPerSec);
+        expect(half[phase].tokensPerSec).toBeGreaterThanOrEqual(tpNone[phase].tokensPerSec);
+        expect(full[phase].stages[0].commLatencySec).toBe(tpNone[phase].stages[0].commLatencySec);
+      }
+      expect(tpNone.memory).toEqual(full.memory);
+    },
+  );
+
+  it.each([NVLINK_2_HCM_8, { ...NVLINK_4, fullyConnectedDevices: undefined }])(
+    'partial or unknown peer connectivity uses Engram collectives: $name',
+    (intraNode) => {
+      const hardware = box(8);
+      hardware.topology = { ...hardware.topology, intraNode };
+      const shared = run(ENGRAM, { dp: 8 }, 8, hardware, SHARED_TABLES);
+      for (const phase of [shared.prefill, shared.decode]) {
+        const ops = phase.stages.flatMap((s) => s.layers.flatMap((l) => l.ops));
+        expect(ops.some((o) => o.op.kind === 'collective' && o.op.group === 'dp')).toBe(true);
+        expect(ops.some((o) => o.op.kind === 'embedding' && o.op.peerReadBytes !== undefined)).toBe(
+          false,
+        );
+      }
+      expect(shared.warnings.some((w) => w.includes('peer-HBM'))).toBe(false);
+      expect(
+        run(ENGRAM, { dp: 8 }, 8, hardware, { offload: { lookupTables: { acrossDp: false } } }),
+      ).toEqual(run(ENGRAM, { dp: 8 }, 8, hardware));
+    },
+  );
+
+  it('peer-HBM gather time is unchanged by collective overlap overrides', () => {
+    const hardware = box(2);
+    hardware.topology = { ...hardware.topology, intraNode: SYNTH_NVLINK };
+    const input: SimInput = {
+      ...ENGRAM,
+      parallel: { tp: 1, dp: 2, pp: 1, ep: 1 },
+      workload: { batch: 2, promptLen: 128, decodeContextLen: 256 },
+      hardware,
+      deployment: SHARED_TABLES,
+    };
+    const plain = simulate(input);
+    const serial = simulate({ ...input, options: { overlapByClass: { tp: 0 } } });
+    expect(serial.decode.stages).toEqual(plain.decode.stages);
+    expect(serial.prefill.stages).toEqual(plain.prefill.stages);
+  });
+
+  it.each([FLASH_NEXT, ENGRAM])('sharing runs with PP2 inside one domain: $model.name', (m) => {
+    const plain = run(m, { pp: 2, dp: 2 }, 4, box(4));
+    const shared = run(m, { pp: 2, dp: 2 }, 4, box(4), SHARED_TABLES);
+    expect(shared.memory.perStage).toHaveLength(2);
+    expect(shared.decode.stages).toHaveLength(2);
+    expect(shared.prefill.tokensPerSec).toBeGreaterThan(0);
+    expect(shared.decode.tokensPerSec).toBeGreaterThan(0);
+    expect(plain.memory.perStage.some((s) => (s.lookupTableBytes ?? 0) > 0)).toBe(true);
+    shared.memory.perStage.forEach((stage, i) => {
+      const before = plain.memory.perStage[i];
+      if ((before.lookupTableBytes ?? 0) > 0)
+        expect(stage.lookupTableBytes).toBeLessThan(before.lookupTableBytes!);
+      else expect(stage.lookupTableBytes).toBe(before.lookupTableBytes);
+      expect(stage.weightBytes - (stage.lookupTableBytes ?? 0)).toBe(
+        before.weightBytes - (before.lookupTableBytes ?? 0),
+      );
+    });
+  });
+
+  it.each(['chunked', 'chunked + TBO', 'chunked + MTP'])(
+    'lookup sharing preserves chunk/prefix contexts and workspace peaks: %s',
+    (mode) => {
+      const mtp = mode === 'chunked + MTP';
+      const input: SimInput = {
+        ...FLASH_NEXT,
+        parallel: { tp: 1, dp: 2, pp: 2, ep: 2, chunkedPipelinePrefill: true },
+        workload: {
+          batch: 16,
+          promptLen: 128,
+          decodeContextLen: 256,
+          prefillChunkTokens: 32,
+          prefixCacheHitRatio: 0.5,
+        },
+        hardware: box(4),
+        deployment: {
+          ...SHARED_TABLES,
+          ...(mode === 'chunked + TBO' ? { twoBatchOverlap: true } : {}),
+          ...(mtp
+            ? {
+                speculative: {
+                  method: 'mtp' as const,
+                  draftLength: 2,
+                  acceptance: { kind: 'iid' as const, alpha: 0.8 },
+                },
+              }
+            : {}),
+        },
+      };
+      const shared = simulate(input);
+      const plain = simulate({ ...input, deployment: { ...input.deployment, offload: undefined } });
+      expect(shared.prefill.chunkedPipeline).toBeDefined();
+      const g = input.model.layers
+        .flatMap((l) => l.blocks)
+        .reduce((n, b) => n + (b.kind === 'ngram_embedding' ? b.rowsPerToken : 0), 0);
+      for (const phase of ['prefill', 'decode'] as const) {
+        const ops = shared[phase].stages.flatMap((s) => s.layers.flatMap((l) => l.ops));
+        const ids = ops.flatMap(({ op }) =>
+          op.kind === 'collective' && op.name.endsWith('.dp_ids') ? [op] : [],
+        );
+        const tokens = shared[phase].microbatchSize * (phase === 'prefill' ? 64 : mtp ? 3 : 1);
+        expect(ids.reduce((bytes, op) => bytes + op.messageBytes, 0)).toBe(tokens * 2 * g * 8);
+        expect(shared[phase].tokensPerSec).toBeGreaterThan(0);
+        if (mtp) {
+          const draft = (result: SimResult) =>
+            result[phase].stages.flatMap((s) =>
+              s.layers
+                .filter((l) => l.name.startsWith('draft.'))
+                .flatMap((l) => l.ops.map((o) => o.op)),
+            );
+          expect(draft(shared).length).toBeGreaterThan(0);
+          expect(draft(shared)).toEqual(draft(plain));
+        }
+      }
+      shared.memory.perStage.forEach((stage, i) => {
+        expect(stage.lookupTableBytes).toBe(plain.memory.perStage[i].lookupTableBytes / 2);
+        for (const layer of shared.decode.stages[i].layers)
+          for (const { op } of layer.ops) {
+            if (op.kind === 'collective' && op.workspaceBytes !== undefined)
+              expect(stage.activationPeakBytes).toBeGreaterThanOrEqual(op.workspaceBytes);
+          }
+      });
+    },
+  );
 
   it('PLE sharing cuts only table residency, adds inter-node traffic, and needs no offload host', () => {
     const hardware = overEthernet(2);

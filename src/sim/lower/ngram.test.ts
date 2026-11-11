@@ -236,32 +236,41 @@ describe('U-16 n-gram tables off-device: read layouts, tier bytes and PCIe bytes
       );
     });
 
-    it('PLE TP 2 × DP 2 gathers int64 IDs and reduces masked full-token outputs, without dividing traffic by DP', () => {
-      const block = PLE.model.layers[1].blocks.find((b) => b.kind === 'ngram_embedding')!;
-      const ctx: LoweringContext = {
-        ...decodeCtx(PLE.quant),
-        seqs: 3,
-        parallel: { tp: 2, pp: 1, dp: 2, ep: 1 },
-        lookupTables: { peerReads: false },
-      };
-      const ops = lowerNgram(block, ctx);
-      expect(ngramTableShardBytes(block, ctx)).toBe(102_400_000_000 / 4);
-      expect(ops[0]).toMatchObject({
-        group: 'dp',
-        collective: 'all_gather',
-        messageBytes: 768,
-        dtype: 'int64',
-      });
-      expect(ops[1]).toMatchObject({ kind: 'embedding', tokens: 96, rowsRead: 24 });
-      expect(opBytes(ops[1])).toMatchObject({ weightBytes: 7_680, activationWriteBytes: 30_720 });
-      expect(ops[2]).toMatchObject({
-        group: 'tp_dp',
-        groupSize: 4,
-        collective: 'all_reduce',
-        messageBytes: 30_720,
-        workspaceBytes: 62_208,
-      });
-    });
+    it.each(['bf16', 'fp8_e4m3'] as const)(
+      'PLE TP 2 × DP 2: %s activations keep reduction buffers at least 16-bit',
+      (activations) => {
+        const block = PLE.model.layers[1].blocks.find((b) => b.kind === 'ngram_embedding')!;
+        const ctx: LoweringContext = {
+          ...decodeCtx({ ...PLE.quant, activations }),
+          seqs: 3,
+          parallel: { tp: 2, pp: 1, dp: 2, ep: 1 },
+          lookupTables: { peerReads: false },
+        };
+        const ops = lowerNgram(block, ctx);
+        expect(ngramTableShardBytes(block, ctx)).toBe(102_400_000_000 / 4);
+        expect(ops[0]).toMatchObject({
+          group: 'dp',
+          collective: 'all_gather',
+          messageBytes: 768,
+          dtype: 'int64',
+        });
+        expect(ops[1]).toMatchObject({
+          kind: 'embedding',
+          tokens: 96,
+          rowsRead: 24,
+          outputDtype: 'bf16',
+        });
+        expect(opBytes(ops[1])).toMatchObject({ weightBytes: 7_680, activationWriteBytes: 30_720 });
+        expect(ops[2]).toMatchObject({
+          group: 'tp_dp',
+          groupSize: 4,
+          collective: 'all_reduce',
+          dtype: 'bf16',
+          messageBytes: 30_720,
+          workspaceBytes: 62_208,
+        });
+      },
+    );
   });
 
   describe('quant.lookupTables (the lookup-table format picker)', () => {

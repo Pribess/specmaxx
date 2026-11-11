@@ -137,13 +137,25 @@ export function expertTpCollectivePath(
 /**
  * DP peers have the same TP index: rank = tpIdx + tp·(dpIdx + dp·ppIdx). This is the same strided geometry
  * as expertTpGroupSpan with parent size tp·dp and stride tp, NOT the same communication group as expert-TP.
+ * Returns the strided DP path and contiguous TP×DP path, with the same staging, NIC sharing and in-network
+ * capabilities as {@link collectivePath}. A whole run inside one node need not tile that node's unused devices.
+ * See docs/simulation-model.md §5 "Lookup tables across DP".
  */
 export function lookupTableCollectivePaths(
   par: ParallelConfig,
   topo: TopologySpec,
   staging?: HostStaging,
-) {
-  const span = expertTpGroupSpan({ tp: par.tp * par.dp, ep: par.tp }, topo);
+  inNetwork: InNetworkSwitch = 'off',
+): { dp: CollectivePath; tp_dp: CollectivePath } {
+  // Formula: N = tp·dp; a wholly intra-node run (N·pp ≤ devicesPerNode) has spans (dp, 1) and (N, 1).
+  const n = par.tp * par.dp;
+  const withinNode = n * par.pp <= topo.devicesPerNode;
+  const span = withinNode
+    ? { n: par.dp, devicesPerNodeInGroup: par.dp, nodesSpanned: 1, nodeStride: 1 }
+    : expertTpGroupSpan({ tp: n, ep: par.tp }, topo);
+  const combined = withinNode
+    ? { n, devicesPerNodeInGroup: n, nodesSpanned: 1 }
+    : groupSpan(n, topo);
   const shape = topo.interNodeFabric;
   if (span.nodeStride > 1 && (shape?.kind === 'ring' || shape?.kind === 'chain')) {
     throw new Error(
@@ -151,19 +163,24 @@ export function lookupTableCollectivePaths(
     );
   }
   return {
-    dp: collectivePath(span, topo, staging),
-    tp_dp: collectivePath(groupSpan(par.tp * par.dp, topo), topo, staging),
+    dp: collectivePath(span, topo, staging, inNetwork),
+    tp_dp: collectivePath(combined, topo, staging, inNetwork),
   };
 }
 
-/** Direct peer-HBM lookup is modeled only for TP 1 inside a single direct NVLink domain. */
+/**
+ * Direct peer-HBM lookup: TP1 inside one direct NVLink domain whose full connectivity and size are established
+ * by the link profile. Unknown/partial connectivity or an oversized node uses the collective path instead;
+ * neither `p2p: 'direct'` nor NVLS proves full connectivity. See docs/simulation-model.md §5 "Lookup tables across DP".
+ */
 export function lookupTablesUsePeerReads(par: ParallelConfig, topo: TopologySpec): boolean {
   const link = topo.intraNode;
   return (
     par.tp === 1 &&
     par.dp > 1 &&
-    groupSpan(par.dp, topo).nodesSpanned === 1 &&
+    par.tp * par.dp * par.pp <= topo.devicesPerNode &&
     link?.p2p === 'direct' &&
+    topo.devicesPerNode <= (link.fullyConnectedDevices ?? 0) &&
     (link.kind === 'nvlink' || link.kind === 'nvlink_bridge')
   );
 }
@@ -344,7 +361,8 @@ export function ppSendPath(
 /**
  * True when some communication of `par` on `topo` crosses nodes: a TP or EP group spans more than one node, or a
  * pipeline boundary (incl. the decode loop-back from the last stage to stage 0) is inter-node. Used to report host
- * staging only for runs that have inter-node messages. Assumes {@link checkPlacement} found no errors.
+ * staging only for runs that have inter-node messages, including lookup exchanges when `sharedLookupTables` is on.
+ * Assumes {@link checkPlacement} found no errors.
  */
 export function hasInterNodeTraffic(
   par: ParallelConfig,

@@ -73,7 +73,7 @@ export function computedPromptTokens(
 /**
  * Overlap class of a collective (docs/simulation-model.md §7 "Stage time and overlap"), by its
  * `CollectiveOp.group` (`engine/overlap.ts: overlapClassOf`):
- * - `'tp'`: tensor- and context-parallel collectives (groups `tp`, `etp`, `dcp`): all-reduces, all-gathers;
+ * - `'tp'`: tensor-, context- and lookup-table collectives (groups `tp`, `etp`, `dcp`, `dp`, `tp_dp`);
  * - `'ep'`: collectives over the EP group (group `ep`): the MoE dispatch/combine all-to-alls, and with DP attention the
  *   dense all-gather / reduce-scatter and the head's sample all-to-all;
  * - `'pp'`: the activation send to the next pipeline stage (`StageResult.sendToNext`, group `pp`).
@@ -95,7 +95,7 @@ export interface SimOptions {
   /**
    * Per-collective overlap (docs/simulation-model.md §7 "Stage time and overlap"): for each overlap class c, the
    * fraction f_c of the class's collective bandwidth (β) time that may run concurrently with the stage's compute
-   * (`tp`: TP / expert-TP / DCP collectives; `ep`: the EP all-to-alls and the other EP-group collectives; `pp`: the
+   * (`tp`: TP / expert-TP / DCP / lookup collectives; `ep`: the EP all-to-alls and other EP-group collectives; `pp`: the
    * share of the send to the next stage that leaves the stage and goes on the latency path). α is never hidden, and
    * hidden time never exceeds compute: `t_core,s = lat_s + max(compute_s, Σ_c f_c·bw_c,s) + Σ_c (1 − f_c)·bw_c,s +
    * (1 − f_pp)·p2p_s`. An absent class takes the default: 1 for `ep` in a step two-batch overlap splits, else 1 under
@@ -159,7 +159,7 @@ export interface EngineDispatchOverlay {
  * a knob on, the result is still the hardware/math upper bound given the knob's stated parameters.
  */
 export interface DeploymentConfig {
-  /** Weight groups placed off-device (host RAM or NVMe) and streamed per step. Absent = everything on the device. */
+  /** Storage placement and lookup-table sharing. Absent = device-resident, unshared tables. */
   offload?: OffloadConfig;
   /** Speculative decoding (draft + verify). Absent = off. */
   speculative?: SpecDecodeConfig;
@@ -207,7 +207,7 @@ export type HitRatioModel =
   | { kind: 'skewed_fine_grained' }
   | { kind: 'custom'; h: number };
 
-/** Weight offloading (design doc §2): which groups live off-device, where, and how their misses are read. */
+/** Storage placement (design doc §2), fetch policy, and device-resident lookup-table sharing (docs §5). */
 export interface OffloadConfig {
   /**
    * `'transfer'` (default): missed weights stream to the device, which computes. `'cpu_compute'`: the host computes
@@ -243,10 +243,10 @@ export interface OffloadConfig {
    */
   routedExperts?: RoutedExpertRule | readonly RoutedExpertRule[];
   /**
-   * n-gram lookup-table placement (Qwen PLE, DeepSeek Engram; design doc §2.10); absent = `'device'` (identity). One
-   * rule, or a list of rules over disjoint layer ranges (tables live in specific layers, e.g. Engram layers 1 and 14:
-   * one in host RAM, one on the SSD); layers no rule covers keep their tables on the device. The single object is the
-   * one-rule list (same meaning, bit-identical results); `[]` = none. See design doc §2.11.
+   * n-gram lookup-table policy (Qwen PLE, DeepSeek Engram): `acrossDp` shares device tables; `placements` holds
+   * one rule or a list over disjoint layer ranges. Layers no rule covers keep their tables on the device. Fetches
+   * read individual rows, never the whole table. Legacy rule / rule-list inputs mean `{ placements }`, sharing off;
+   * absent / `[]` = device, unshared. See LookupTableConfig, docs §5 "Lookup tables across DP", design doc §2.11.
    */
   lookupTables?: LookupTableConfig | LookupTableRule | readonly LookupTableRule[];
   /**

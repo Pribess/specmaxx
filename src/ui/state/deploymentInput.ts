@@ -18,7 +18,7 @@ import type {
   SpecDecodeConfig,
 } from '../../sim/engine/types';
 import { defaultDraftLength, presetAcceptance, type SpecUseCase } from '../../sim/engine/specdec';
-import { hasOffDeviceWeights } from '../../sim/engine/offloadRules';
+import { hasOffDevicePlacement } from '../../sim/engine/offloadRules';
 import type { BlockDraftSpec, ModelSpec } from '../../sim/ir/model';
 import { modelHasOffloadableKv, modelHasTopKKv } from '../../sim/lower/kvOffload';
 import { hypotheticalDrafter, knownDrafters } from '../../sim/models/hf/drafter';
@@ -324,7 +324,12 @@ export function deploymentConfig(
     }
     if (o.tables !== undefined) {
       if (!hasLookupTables(model))
-        warn('offload', 'The model has no n-gram lookup tables; their placement has no effect.');
+        warn(
+          'offload',
+          o.tables.acrossDp === true
+            ? 'The model has no n-gram lookup tables; sharing has no effect.'
+            : 'The model has no n-gram lookup tables; their placement has no effect.',
+        );
       else if (o.tables.tier !== undefined) {
         const split = o.tables.tier === 'split';
         const chosenLayout = o.tables.scaleLayout;
@@ -373,7 +378,7 @@ export function deploymentConfig(
       }
     }
     const configured = Object.keys(out).length > 0;
-    const offDevice = hasOffDeviceWeights(out);
+    const offDevice = hasOffDevicePlacement(out, state.workload.prefixCacheHitRatio);
     if (configured)
       offload = {
         ...out,

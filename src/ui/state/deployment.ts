@@ -68,7 +68,7 @@ export type HitRatioChoice = 'uniform' | 'skewed_classic' | 'skewed_fine_grained
 /** Layout of a block-scaled table's scales (engine `lookupTables.placements[].scaleLayout`). */
 export type ScaleLayoutChoice = 'separate' | 'pinned_host' | 'interleaved';
 
-/** Weight offloading choices; `{}` = everything on the device. */
+/** Storage placement and lookup-table sharing choices; `{}` = device-resident, unshared tables. */
 export interface OffloadChoice {
   /** Routed experts of MoE layers kept on a tier; absent = on the device. */
   experts?: {
@@ -197,7 +197,7 @@ export interface SpecDecChoice {
 
 /** The deployment-scenario choices; `{}` = every knob off. */
 export interface DeploymentChoice {
-  /** Weight offloading; absent or `{}` = off. */
+  /** Storage placement and lookup-table sharing; absent or `{}` = defaults. */
   offload?: OffloadChoice;
   /** Speculative decoding; absent = off. */
   specDec?: SpecDecChoice;
