@@ -15,6 +15,26 @@ The only public URL is https://cro.sh/specmaxx/ (route `cro.sh/specmaxx*` in zon
 - `/specmaxx` redirects to `/specmaxx/` and `/specmaxx/about.html` to `/specmaxx/about`
   (`html_handling: "auto-trailing-slash"`). Unknown paths return 404 (`not_found_handling: "none"`, no SPA fallback).
 
+## Caching
+
+`bun run deploy:assets` ([scripts/stage-deploy.mjs](../scripts/stage-deploy.mjs)) also writes `deploy/_headers`, which
+Workers Static Assets reads from the root of the assets directory (so it cannot live in `public/`):
+
+- `/specmaxx/assets/*` (hashed JS, CSS, fonts): `Cache-Control: public, max-age=31536000, immutable`. The script checks
+  that every file in `dist/assets/` has a content hash in its name; if one does not, it lists the hashed files one by
+  one instead of the splat, so the unhashed file keeps revalidating.
+- HTML (`/specmaxx/`, `index.html`, `about`, `about.html`): `max-age=0, must-revalidate`.
+
+A warm repeat visit then revalidates only the HTML. `index.html` also preconnects to `https://huggingface.co` (with
+`crossorigin`, since the fetches are CORS) and has a `dns-prefetch` fallback.
+
+After deploying, check:
+
+```sh
+curl -sI https://cro.sh/specmaxx/assets/<file> | grep -i cache-control   # ... max-age=31536000, immutable
+curl -sI https://cro.sh/specmaxx/ | grep -i cache-control                # ... max-age=0, must-revalidate
+```
+
 ## Bundle-size budget
 
 `bun run check:bundle` ([scripts/check-bundle-size.mjs](../scripts/check-bundle-size.mjs)) runs after `bun run build`
